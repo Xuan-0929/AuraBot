@@ -2,7 +2,7 @@
 
 > **For agentic workers:** REQUIRED SUB-SKILL: Use superpowers:subagent-driven-development (recommended) or superpowers:executing-plans to implement this plan task-by-task. Steps use checkbox (`- [ ]`) syntax for tracking.
 
-**Goal:** Build the first usable AuraBot desktop MVP that validates three core hypotheses: natural chat timing beats fixed timeout, mixed memory beats flat memory, and a chat-first companion can still control background tasks without losing “alive” feeling.
+**Goal:** Build the first usable AuraBot desktop MVP that validates four core hypotheses: a Live2D-first desktop companion shell feels less like a tool UI, natural chat timing beats fixed timeout, mixed memory beats flat memory, and a chat-first companion can still control background tasks without losing “alive” feeling.
 
 **Architecture:** Use an Electron desktop shell with a React renderer, a Node/TypeScript orchestration core, and a local SQLite store. Keep one user-facing main chat session per active profile, route background work into task sessions with capped depth, and separate lightweight gate/classification logic from main response generation to reduce cost and context pollution.
 
@@ -12,7 +12,7 @@
 
 ## 1. This Plan Covers
 
-This document is the execution-facing breakdown of the PRD at [AuraBot 产品需求文档](/Users/xuan/Documents/New%20project%204/docs/aurabot-product-requirements.md).
+This document is the execution-facing breakdown of the PRD at [AuraBot 产品需求文档](/Users/xuan/.codex/worktrees/8fcd/New%20project%204/docs/PRD-v1.md).
 
 It does not try to build the entire AuraBot vision in one pass. It narrows the first implementation to a testable MVP plus the minimum scaffolding needed not to paint the codebase into a corner.
 
@@ -20,7 +20,7 @@ It does not try to build the entire AuraBot vision in one pass. It narrows the f
 
 ### 2.1 Must Ship in MVP
 
-1. Desktop chat shell with one active AuraBot profile.
+1. Live2D-first desktop companion shell with one active AuraBot profile: the default surface is a small desktop pet, and the full console opens only after clicking the character.
 2. Soul/persona config loading for that profile.
 3. Main chat session lifecycle and message persistence.
 4. Lightweight gate/classifier that decides:
@@ -34,8 +34,8 @@ It does not try to build the entire AuraBot vision in one pass. It narrows the f
    - summary + relation-based lookup
 7. Task delegation v1:
    - create task from main chat
-   - view task status from main UI
-   - interrupt or revise task from main UI
+   - view task status as a lightweight console status strip
+   - interrupt or revise tasks through the main chat thread
 8. Local event logging and basic observability for debugging response timing and memory writes.
 
 ### 2.2 Can Land Right After MVP
@@ -48,7 +48,7 @@ It does not try to build the entire AuraBot vision in one pass. It narrows the f
 ### 2.3 Explicitly Out of Scope for MVP
 
 1. Game integration.
-2. Live2D polish beyond a placeholder surface.
+2. Production Live2D asset polish beyond mounting a verified official sample model.
 3. Profile-to-profile interaction.
 4. Unlimited recursive task spawning.
 5. Full-blown plugin marketplace.
@@ -63,6 +63,7 @@ The PRD contains several big ideas. For implementation, each one should be trans
 | 图状记忆 | Store memory nodes plus explicit relation edges; support bounded graph traversal |
 | 分层记忆 | Keep a compact summary layer before loading detailed nodes |
 | 聊天优先 | Reserve a single main chat session as the user-facing control plane |
+| Live2D 桌宠壳层 | Make a small always-on-top desktop pet the first visual surface; open the full console only on character click |
 | 助手能力 | Spawn task sessions that report back into the main session |
 | 可控子任务 | Main session can inspect, interrupt, or revise child tasks |
 | 阶段性交付 | Ship chat core before external channels and ecosystem integrations |
@@ -190,14 +191,19 @@ AuraBot/
           store.ts
           routes.tsx
         features/
+          live2d/
+            Live2DModelCanvas.tsx
+          pet/
+            DesktopPet.tsx
+          console/
+            ConsoleWindow.tsx
           chat/
             ChatWindow.tsx
             MessageList.tsx
             Composer.tsx
             useChatController.ts
           tasks/
-            TaskPanel.tsx
-            TaskDetail.tsx
+            TaskStatusOverlay.tsx
           profiles/
             ProfileSwitcher.tsx
           settings/
@@ -280,18 +286,19 @@ AuraBot/
 
 ### Milestone A: Skeleton and Local Runtime
 
-**Outcome:** The app boots locally, persists state, and has typed boundaries between UI and orchestration.
+**Outcome:** The app boots locally into a Live2D-first desktop pet, persists state, and has typed boundaries between UI and orchestration.
 
 **Success criteria:**
 
-1. Desktop app opens a main window.
-2. Renderer can send a typed message to the main process.
-3. SQLite database initializes with migrations.
-4. Test tooling runs.
+1. Desktop app opens a small transparent pet window with a visible Live2D model surface.
+2. Clicking the character opens a normal console window for the main conversation.
+3. Renderer can send a typed message to the main process.
+4. SQLite database initializes with migrations.
+5. Test tooling runs.
 
 ### Milestone B: Chat Core
 
-**Outcome:** The user can chat with a single AuraBot profile and see persisted messages and agent status.
+**Outcome:** The user can chat with a single AuraBot profile through the console opened from the desktop pet and see persisted messages plus agent status.
 
 **Success criteria:**
 
@@ -352,8 +359,8 @@ AuraBot/
 7. Message persistence
 8. Mixed memory v1
 9. Task spawn from chat
-10. Task status panel
-11. Task interrupt/revise
+10. Task status strip in the console
+11. Task interrupt/revise through main chat
 12. Debug event log
 
 ### P1
@@ -387,7 +394,7 @@ Why:
 
 1. If AuraBot is both companion and assistant, the user must be able to ask “做到哪了” in the main UI.
 2. This does not require exposing raw child-session internals in MVP.
-3. A task summary and interrupt/revise controls are enough for the first build.
+3. A task summary plus interrupt/revise chat commands are enough for the first build.
 
 ### 8.3 Memory Writes Must Be Serialized
 
@@ -446,27 +453,34 @@ Suggested edge types:
 
 ## 10. UI Surfaces Required in MVP
 
-### 10.1 Main Chat Window
+### 10.1 Desktop Pet Surface
 
 Must show:
 
-1. Message stream
-2. Input box
-3. Send action
-4. Agent status
-5. Lightweight memory-aware or task-aware system hints when useful
+1. A verified Live2D model surface in a small transparent always-on-top window.
+2. A click target on the character that opens the console window.
+3. Lightweight agent status.
+4. No chat input, task buttons, or full dashboard controls on the pet surface.
 
-### 10.2 Task Panel
+### 10.2 Console Conversation Window
+
+Must show:
+
+1. Main message stream.
+2. Input box and send action.
+3. Agent status.
+4. Lightweight memory-aware or task-aware system hints when useful.
+
+### 10.3 Task Status Strip
 
 Must show:
 
 1. Task title
 2. Status: queued, running, waiting, completed, failed, interrupted
 3. Short latest progress text
-4. Interrupt action
-5. Revise action
+4. No direct task-control buttons; query, interrupt, start, and revise happen through the main chat thread.
 
-### 10.3 Settings Surface
+### 10.4 Settings Surface
 
 Must show:
 
@@ -498,185 +512,99 @@ Must show:
 2. User mentions a future event and AuraBot can later recall it
 3. User assigns a task and then interrupts it from the main UI
 
-## 12. Recommended Build Order
+## 12. Current Implementation Status
 
-### Task 1: Bootstrap the Desktop Workspace
+当前执行状态详见：[AuraBot 当前开发状态](/Users/xuan/.codex/worktrees/8fcd/New%20project%204/docs/aurabot-development-status.md)。
 
-**Files:**
-- Create: `package.json`
-- Create: `electron.vite.config.ts`
-- Create: `tsconfig.json`
-- Create: `src/main/index.ts`
-- Create: `src/renderer/src/main.tsx`
-- Create: `src/shared/contracts/ipc.ts`
-- Test: `tests/e2e/app-launch.spec.ts`
+| 原计划任务 | 当前状态 | 说明 |
+| --- | --- | --- |
+| Task 1: Bootstrap the Desktop Workspace | 已完成 | `pnpm`、Electron/Vite/React/TypeScript、typed IPC、Vitest、Playwright 均已落地。 |
+| Task 2: Add Local Storage and Repositories | 已完成 | SQLite migrations 和 profile/session/message/memory/task repositories 已落地并有集成测试。 |
+| Task 3: Build the Main Chat UI Shell | 已完成并调整形态 | 不再是传统主聊天窗口；当前为桌面小人 + 点击打开控制台视窗。 |
+| Task 4: Add Profile and Soul Loading | 部分完成 | 默认 profile/soul 已可 seed；还缺专门的 soul schema 单元测试和 Profile UI。 |
+| Task 5: Implement the Gate Evaluator | 已完成 MVP | 支持碎片等待、完整回复、chat/task/task_control 分类和事件日志。 |
+| Task 6: Implement the Main Chat Orchestrator | 已完成 MVP | 支持消息持久化、gate 分流、memory 写入/召回、task 控制；还缺真实流式生成取消。 |
+| Task 7: Add Mixed Memory v1 | 已完成 MVP | 支持 preference/event/follow_up，摘要层、关系边和 bounded graph traversal。 |
+| Task 8: Add the Task Engine and Console Task Status Strip | 已完成 MVP | 支持主聊天创建、查询、打断、修改、启动任务；任务条只展示状态，不放控制按钮。 |
+| Task 9: Add Debugging and Event Log Surfaces | 部分完成 | `event_logs` 已记录关键事件；还缺 settings/debug 视窗和日志开关。 |
+| Task 10: Hardening Pass and MVP Demo Flow | 部分完成 | e2e、截图、`README.md` 和本地使用说明已覆盖；还缺打包/发布说明。 |
 
-- [ ] Initialize an Electron + React + TypeScript workspace with `pnpm`.
-- [ ] Add a single empty main window and confirm the renderer mounts.
-- [ ] Add typed IPC contracts before adding any feature-specific handlers.
-- [ ] Wire Vitest and Playwright so the workspace has both unit and e2e test entry points.
-- [ ] Commit the bootstrap once the app launches and tests can be invoked.
+## 13. Verified Evidence
 
-### Task 2: Add Local Storage and Repositories
+最近一次完整验证记录：
 
-**Files:**
-- Create: `src/core/storage/db.ts`
-- Create: `src/core/storage/migrations.ts`
-- Create: `src/core/storage/repositories/profileRepository.ts`
-- Create: `src/core/storage/repositories/sessionRepository.ts`
-- Create: `src/core/storage/repositories/messageRepository.ts`
-- Test: `tests/integration/storage/db-init.spec.ts`
+1. `corepack pnpm test`：9 个 test files、22 个 tests 通过。
+2. `corepack pnpm typecheck`：通过。
+3. `corepack pnpm build`：通过。
+4. `corepack pnpm test:e2e`：6 个 e2e tests 通过。
+5. Live2D canvas 检查：`renderState=ready`，WebGL 非透明像素 `20780`。
 
-- [ ] Add SQLite bootstrap and migration support.
-- [ ] Define the first schema for profiles, sessions, and messages.
-- [ ] Create repository wrappers instead of sprinkling SQL through orchestrators.
-- [ ] Add one integration test that boots an empty DB and verifies required tables exist.
-- [ ] Commit the storage foundation before moving into chat logic.
+当前可视化产物：
 
-### Task 3: Build the Main Chat UI Shell
+1. `artifacts/desktop-pet.png`
+2. `artifacts/console-window.png`
 
-**Files:**
-- Create: `src/renderer/src/features/chat/ChatWindow.tsx`
-- Create: `src/renderer/src/features/chat/MessageList.tsx`
-- Create: `src/renderer/src/features/chat/Composer.tsx`
-- Create: `src/renderer/src/features/status/AgentStatusBar.tsx`
-- Test: `tests/e2e/chat-shell.spec.ts`
+## 14. Recommended Immediate Next Work
 
-- [ ] Create a three-part chat shell: message list, composer, status bar.
-- [ ] Persist sent messages through IPC instead of local component state only.
-- [ ] Show agent status as part of the shell from day one.
-- [ ] Add one e2e test that types a message and confirms it appears after reload.
-- [ ] Commit the UI shell as the first user-visible milestone.
+### Next 1: Live2D 桌宠行为层
 
-### Task 4: Add Profile and Soul Loading
+先让小人真正像桌面伴侣，而不是静态模型挂载。
 
-**Files:**
-- Create: `src/core/profiles/profileService.ts`
-- Create: `src/core/profiles/soulService.ts`
-- Create: `src/shared/schemas/profile.ts`
-- Create: `src/shared/schemas/config.ts`
-- Test: `tests/unit/core/profiles/soulService.spec.ts`
+建议交付：
 
-- [ ] Define the profile and soul schema using Zod.
-- [ ] Add one default profile seed so the app works without manual setup.
-- [ ] Load soul content into the chat orchestration context.
-- [ ] Add a unit test that rejects malformed soul config and accepts valid config.
-- [ ] Commit once the app can boot with a stable default persona.
+1. 将 agent status 映射到 Live2D motion/expression。
+2. 区分拖拽和点击，避免移动小人时误开控制台。
+3. 保存桌宠窗口位置。
+4. 控制台已存在时点击小人只 focus。
+5. 预留主动提醒气泡或通知入口。
 
-### Task 5: Implement the Gate Evaluator
+### Next 2: 真实模型适配层
 
-**Files:**
-- Create: `src/core/orchestration/gateEvaluator.ts`
-- Create: `src/core/llm/gateModel.ts`
-- Create: `src/shared/contracts/chat.ts`
-- Test: `tests/unit/core/orchestration/gateEvaluator.spec.ts`
+把 deterministic MVP 替换成可配置模型调用，同时保留测试稳定性。
 
-- [ ] Define a typed gate output contract with fields for reply decision, task classification, and confidence.
-- [ ] Implement the first gate pass with a provider-backed model adapter plus a deterministic fallback rule path.
-- [ ] Record the reason for each gate decision in event logs for debugging.
-- [ ] Add tests covering fragmented messages, immediate replies, and clear task requests.
-- [ ] Commit once gate output is stable and inspectable.
+建议交付：
 
-### Task 6: Implement the Main Chat Orchestrator
+1. 新增 provider config：`API Base URL`、`API Key`、`chatModel`、`gateModel`、enable switch。
+2. 定义 `gateModel` / `chatModel` adapter interface。
+3. 保留 deterministic adapter 作为无 key fallback 和测试 adapter。
+4. 加入流式回复和用户新消息中断生成。
 
-**Files:**
-- Create: `src/core/orchestration/chatOrchestrator.ts`
-- Create: `src/core/llm/chatModel.ts`
-- Create: `src/core/orchestration/responsePlanner.ts`
-- Test: `tests/integration/orchestration/chat-pipeline.spec.ts`
+### Next 3: Memory v2
 
-- [ ] Build a pipeline from user message -> context assembly -> model reply -> persistence.
-- [ ] Keep gate evaluation and final response generation in separate code paths.
-- [ ] Support generation cancellation when the user sends a new message mid-reply.
-- [ ] Add one integration test for multi-message coalescing and one for interruption.
-- [ ] Commit when the app can hold a stable, persisted conversation.
+让 memory 更像联想，而不只是规则概念命中。
 
-### Task 7: Add Mixed Memory v1
+建议交付：
 
-**Files:**
-- Create: `src/core/memory/memoryService.ts`
-- Create: `src/core/memory/memoryWriter.ts`
-- Create: `src/core/memory/memoryRetriever.ts`
-- Create: `src/core/memory/memorySummaryService.ts`
-- Create: `src/core/memory/graphTraversal.ts`
-- Test: `tests/integration/memory/memory-roundtrip.spec.ts`
+1. 用 LLM 或 embedding 替换轻量概念抽取层。
+2. 增加重复记忆合并和旧记忆更新策略。
+3. 时间驱动记忆接入到期前后提醒。
+4. 做一个记忆调试视图，显示写入、召回和边跳转。
+5. 构造固定对话集，比较关键词召回和图状联想召回。
 
-- [ ] Define memory node types for `trait`, `preference`, `event`, and `follow_up`.
-- [ ] Add a serialized write queue for memory writes.
-- [ ] Implement summary-first retrieval plus bounded related-node expansion.
-- [ ] Add one integration test where an event memory is stored and later recalled.
-- [ ] Commit only after retrieval traces are visible in logs.
+### Next 4: Task Executor v2
 
-### Task 8: Add the Task Engine and Task Panel
+从 deterministic runner 进入真实可执行代理。
 
-**Files:**
-- Create: `src/core/tasks/taskService.ts`
-- Create: `src/core/tasks/taskRunner.ts`
-- Create: `src/core/tasks/taskRegistry.ts`
-- Create: `src/core/tasks/taskInterruption.ts`
-- Create: `src/renderer/src/features/tasks/TaskPanel.tsx`
-- Create: `src/renderer/src/features/tasks/TaskDetail.tsx`
-- Test: `tests/integration/tasks/task-lifecycle.spec.ts`
+建议交付：
 
-- [ ] Add task creation from gate-classified task requests.
-- [ ] Create child task sessions linked to the main session.
-- [ ] Show task progress in the renderer with minimal but clear lifecycle states.
-- [ ] Add interrupt and revise controls from the main UI.
-- [ ] Commit when one real task flow can run end-to-end.
+1. 设计真实 `TaskRegistry` 类型和输入输出协议。
+2. 接入至少一个实际工具型任务。
+3. 明确 task artifact 写入和主线程回流格式。
+4. 支持取消信号贯穿 runner。
+5. 继续保持控制面在主聊天线程，不新增任务按钮面板。
 
-### Task 9: Add Debugging and Event Log Surfaces
+### Next 5: Handoff and Push Prep
 
-**Files:**
-- Create: `src/core/telemetry/logger.ts`
-- Create: `src/core/telemetry/eventLogService.ts`
-- Create: `src/renderer/src/features/settings/SettingsPanel.tsx`
-- Test: `tests/integration/orchestration/event-log.spec.ts`
+建议在 push 前补齐：
 
-- [ ] Log gate decisions, task lifecycle changes, memory writes, and cancellations.
-- [ ] Add a developer toggle to expose or hide debug traces.
-- [ ] Ensure logs never become the only source of user-facing state.
-- [ ] Add one test that verifies key orchestration events are written during a chat + task flow.
-- [ ] Commit the observability layer before phase-two features.
+1. `README.md` 已补。
+2. `artifacts/*.png` 已确认可以提交。
+3. push 前再跑一轮 fresh `test / typecheck / build / test:e2e`。
 
-### Task 10: Hardening Pass and MVP Demo Flow
+## 15. Push Decision
 
-**Files:**
-- Modify: `tests/e2e/chat-flow.spec.ts`
-- Modify: `tests/e2e/task-flow.spec.ts`
-- Modify: `README.md`
-- Modify: `docs/aurabot-product-requirements.md`
+当前不自动 push。建议先 review 本文档更新：
 
-- [ ] Add one demo-ready chat flow covering fragmented messages and natural reply timing.
-- [ ] Add one demo-ready task flow covering task creation and interruption.
-- [ ] Document local setup, seeded profile behavior, and debug switches.
-- [ ] Update the PRD with implementation notes only if the prototype proves or disproves a major assumption.
-- [ ] Commit the MVP hardening pass as the handoff-ready checkpoint.
-
-## 13. Spike Tasks Before or During Implementation
-
-These are short research spikes, not large engineering streams:
-
-1. Compare `Electron` vs `Tauri` one last time only if package size becomes a top-level concern.
-2. Validate whether gate decisions can be partly heuristic to reduce model cost.
-3. Prototype memory retrieval with and without relation edges on the same chat transcript.
-4. Decide whether task progress lives only in the main chat or also gets a detail drawer.
-
-## 14. What to Watch Closely During MVP
-
-1. If the gate model is too slow, the whole “自然等待用户说完” story collapses.
-2. If graph memory retrieval is too noisy, the product will feel random instead of alive.
-3. If task control from main chat is too weak, the assistant side feels fake.
-4. If task UI becomes too heavy, the companion side feels like a dashboard product.
-
-## 15. Shipping Standard for MVP
-
-Do not call the MVP successful unless all of the following are true:
-
-1. A user can chat through one desktop UI without obvious fixed-timeout awkwardness.
-2. AuraBot can remember at least one stable preference and one future event, then recall both later.
-3. AuraBot can create at least one background task from chat and let the user interrupt it.
-4. Logs make it possible to explain why AuraBot replied, waited, wrote memory, or spawned a task.
-
-## 16. Recommended Immediate Next Step
-
-If implementation starts now, begin with `Task 1` through `Task 3` only. That gives a visible shell, a persistent chat surface, and a stable technical skeleton before memory and orchestration complexity arrive.
+1. 如果当前状态和下一步优先级符合预期，再提交并 push。
+2. 如果下一步想先做模型 API、memory v2 或 Live2D 行为层中的某一项，先调整文档再 push。
+3. 截图已确认可以进入仓库，push 前应一并 stage `artifacts/desktop-pet.png` 和 `artifacts/console-window.png`。

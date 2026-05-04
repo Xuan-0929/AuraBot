@@ -1,0 +1,47 @@
+{
+  "name": "aurabot",
+  "version": "0.1.0",
+  "private": true,
+  "type": "module",
+  "description": "Desktop-first companion AI MVP with chat, timing, memory, and task foundations.",
+  "main": "out/main/index.js",
+  "packageManager": "pnpm@10.33.2",
+  "scripts": {
+    "dev": "electron-rebuild -f -w better-sqlite3 && electron-vite dev",
+    "build": "tsc --noEmit && electron-vite build",
+    "rebuild:node": "corepack pnpm rebuild better-sqlite3",
+    "rebuild:native": "electron-rebuild -f -w better-sqlite3",
+    "typecheck": "tsc --noEmit",
+    "test": "corepack pnpm rebuild:node && vitest run",
+    "test:unit": "corepack pnpm rebuild:node && vitest run tests/unit",
+    "test:integration": "corepack pnpm rebuild:node && vitest run tests/integration",
+    "test:e2e": "electron-rebuild -f -w better-sqlite3 && electron-vite build && playwright test"
+  },
+  "dependencies": {
+    "better-sqlite3": "^12.9.0",
+    "live2dcubismcore": "1.0.2",
+    "p-queue": "^9.2.0",
+    "pixi-live2d-display": "0.4.0",
+    "pixi.js": "6.5.10",
+    "react": "^19.2.5",
+    "react-dom": "^19.2.5",
+    "zod": "^4.4.2",
+    "zustand": "^5.0.12"
+  },
+  "devDependencies": {
+    "@electron/rebuild": "^4.0.4",
+    "@playwright/test": "^1.59.1",
+    "@swc/core": "^1.15.3",
+    "@types/better-sqlite3": "^7.6.13",
+    "@types/node": "^20.19.25",
+    "@types/react": "^19.2.7",
+    "@types/react-dom": "^19.2.3",
+    "@vitejs/plugin-react": "^5.2.0",
+    "electron": "^41.5.0",
+    "electron-vite": "^5.0.0",
+    "jsdom": "^28.0.1",
+    "typescript": "^6.0.3",
+    "vite": "^7.3.2",
+    "vitest": "^4.1.5"
+  }
+}

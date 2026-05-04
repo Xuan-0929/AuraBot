@@ -1,0 +1,39 @@
+import { mkdtempSync, rmSync } from "node:fs";
+import { tmpdir } from "node:os";
+import { join } from "node:path";
+import { ChatOrchestrator } from "../../src/core/orchestration/chatOrchestrator";
+import { createServices, type AppServices } from "../../src/core/bootstrap/createServices";
+
+interface TestServiceHandle {
+  dir: string;
+  services: AppServices;
+}
+
+const serviceHandles: TestServiceHandle[] = [];
+
+export function createTestServices(prefix: string): AppServices {
+  const dir = mkdtempSync(join(tmpdir(), prefix));
+  const services = createServices(dir);
+  serviceHandles.push({ dir, services });
+
+  return services;
+}
+
+export function createTestOrchestrator(prefix: string): {
+  services: AppServices;
+  orchestrator: ChatOrchestrator;
+} {
+  const services = createTestServices(prefix);
+
+  return {
+    services,
+    orchestrator: new ChatOrchestrator(services)
+  };
+}
+
+export function cleanupTestServices(): void {
+  for (const handle of serviceHandles.splice(0)) {
+    handle.services.database.close();
+    rmSync(handle.dir, { force: true, recursive: true });
+  }
+}

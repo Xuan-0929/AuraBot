@@ -3,3 +3,14 @@
 
 # superpowers
 **/superpowers
+
+node_modules/
+out/
+dist/
+coverage/
+test-results/
+playwright-report/
+*.log
+*.sqlite
+*.sqlite-shm
+*.sqlite-wal

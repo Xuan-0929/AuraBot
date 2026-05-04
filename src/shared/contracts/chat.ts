@@ -1,0 +1,38 @@
+import type { Message } from "../schemas/message";
+import type { Profile } from "../schemas/profile";
+import type { Task } from "../schemas/task";
+
+export type AgentStatus = "idle" | "listening" | "thinking" | "replying" | "tasking";
+export type ReplyDecision = "reply" | "wait";
+export type InputKind = "chat" | "task" | "task_control";
+export type MemoryDecision = "write_now" | "defer" | "skip";
+
+export interface GateDecision {
+  replyDecision: ReplyDecision;
+  inputKind: InputKind;
+  memoryDecision: MemoryDecision;
+  confidence: number;
+  reason: string;
+  coalescedText: string;
+}
+
+export interface SendChatMessageInput {
+  content: string;
+}
+
+export interface SendChatMessageResult {
+  userMessage: Message;
+  assistantMessage?: Message;
+  agentStatus: AgentStatus;
+  gateDecision?: GateDecision;
+  createdTask?: Task;
+  updatedTask?: Task;
+}
+
+export interface AppInitialState {
+  profile: Profile;
+  mainSessionId: string;
+  messages: Message[];
+  tasks: Task[];
+  agentStatus: AgentStatus;
+}

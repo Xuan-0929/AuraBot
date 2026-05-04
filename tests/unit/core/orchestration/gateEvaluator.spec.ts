@@ -1,0 +1,73 @@
+import { describe, expect, it } from "vitest";
+import { evaluateGate } from "../../../../src/core/orchestration/gateEvaluator";
+
+describe("evaluateGate", () => {
+  it("waits on short fragmented chat input and defers memory writes", () => {
+    const decision = evaluateGate({
+      currentMessage: "然后我觉得",
+      recentUserMessages: []
+    });
+
+    expect(decision.replyDecision).toBe("wait");
+    expect(decision.memoryDecision).toBe("defer");
+    expect(decision.inputKind).toBe("chat");
+    expect(decision.reason).toContain("fragment");
+  });
+
+  it("replies and allows memory write when the utterance has a clear boundary", () => {
+    const decision = evaluateGate({
+      currentMessage: "我喜欢吃火锅。",
+      recentUserMessages: []
+    });
+
+    expect(decision.replyDecision).toBe("reply");
+    expect(decision.memoryDecision).toBe("write_now");
+    expect(decision.inputKind).toBe("chat");
+    expect(decision.confidence).toBeGreaterThanOrEqual(0.7);
+  });
+
+  it("classifies clear task requests separately from chat", () => {
+    const decision = evaluateGate({
+      currentMessage: "帮我整理一份明天会议的清单。",
+      recentUserMessages: []
+    });
+
+    expect(decision.replyDecision).toBe("reply");
+    expect(decision.memoryDecision).toBe("skip");
+    expect(decision.inputKind).toBe("task");
+  });
+
+  it("classifies conversational task controls separately from new task requests", () => {
+    const decision = evaluateGate({
+      currentMessage: "先停掉这个任务。",
+      recentUserMessages: []
+    });
+
+    expect(decision.replyDecision).toBe("reply");
+    expect(decision.memoryDecision).toBe("skip");
+    expect(decision.inputKind).toBe("task_control");
+  });
+
+  it("classifies main-chat task start commands as task controls", () => {
+    const decision = evaluateGate({
+      currentMessage: "开始做这个任务。",
+      recentUserMessages: []
+    });
+
+    expect(decision.replyDecision).toBe("reply");
+    expect(decision.memoryDecision).toBe("skip");
+    expect(decision.inputKind).toBe("task_control");
+  });
+
+  it("replies to a follow-up when recent fragments form enough context", () => {
+    const decision = evaluateGate({
+      currentMessage: "我喜欢吃火锅。",
+      recentUserMessages: ["我昨天想了想", "还是得告诉你"]
+    });
+
+    expect(decision.replyDecision).toBe("reply");
+    expect(decision.memoryDecision).toBe("write_now");
+    expect(decision.coalescedText).toContain("我昨天想了想");
+    expect(decision.coalescedText).toContain("火锅");
+  });
+});
