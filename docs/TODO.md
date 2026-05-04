@@ -20,7 +20,7 @@ It does not try to build the entire AuraBot vision in one pass. It narrows the f
 
 ### 2.1 Must Ship in MVP
 
-1. Live2D-first desktop companion shell with one active AuraBot profile: the default surface is a small desktop pet, and the full console opens only after clicking the character.
+1. Live2D-first desktop companion shell with one active AuraBot profile: the default surface is a small desktop pet, and hover controls open the full console when needed.
 2. Soul/persona config loading for that profile.
 3. Main chat session lifecycle and message persistence.
 4. Lightweight gate/classifier that decides:
@@ -63,7 +63,7 @@ The PRD contains several big ideas. For implementation, each one should be trans
 | 图状记忆 | Store memory nodes plus explicit relation edges; support bounded graph traversal |
 | 分层记忆 | Keep a compact summary layer before loading detailed nodes |
 | 聊天优先 | Reserve a single main chat session as the user-facing control plane |
-| Live2D 桌宠壳层 | Make a small always-on-top desktop pet the first visual surface; open the full console only on character click |
+| Live2D 桌宠壳层 | Make a small always-on-top desktop pet the first visual surface; expose hover controls for drag, voice, and console |
 | 助手能力 | Spawn task sessions that report back into the main session |
 | 可控子任务 | Main session can inspect, interrupt, or revise child tasks |
 | 阶段性交付 | Ship chat core before external channels and ecosystem integrations |
@@ -291,7 +291,7 @@ AuraBot/
 **Success criteria:**
 
 1. Desktop app opens a small transparent pet window with a visible Live2D model surface.
-2. Clicking the character opens a normal console window for the main conversation.
+2. Hovering the character reveals a console control that opens a normal console window for the main conversation.
 3. Renderer can send a typed message to the main process.
 4. SQLite database initializes with migrations.
 5. Test tooling runs.
@@ -458,8 +458,8 @@ Suggested edge types:
 Must show:
 
 1. A verified Live2D model surface in a small transparent always-on-top window.
-2. A click target on the character that opens the console window.
-3. Lightweight agent status.
+2. Hover controls below the character for drag, voice input, and console opening.
+3. Temporary message bubbles for task completion and pet-voice replies.
 4. No chat input, task buttons, or full dashboard controls on the pet surface.
 
 ### 10.2 Console Conversation Window
@@ -520,7 +520,7 @@ Must show:
 | --- | --- | --- |
 | Task 1: Bootstrap the Desktop Workspace | 已完成 | `pnpm`、Electron/Vite/React/TypeScript、typed IPC、Vitest、Playwright 均已落地。 |
 | Task 2: Add Local Storage and Repositories | 已完成 | SQLite migrations 和 profile/session/message/memory/task repositories 已落地并有集成测试。 |
-| Task 3: Build the Main Chat UI Shell | 已完成并调整形态 | 不再是传统主聊天窗口；当前为桌面小人 + 点击打开控制台视窗。 |
+| Task 3: Build the Main Chat UI Shell | 已完成并调整形态 | 不再是传统主聊天窗口；当前为桌面小人 + 悬浮控制打开控制台视窗。 |
 | Task 4: Add Profile and Soul Loading | 部分完成 | 默认 profile/soul 已可 seed；还缺专门的 soul schema 单元测试和 Profile UI。 |
 | Task 5: Implement the Gate Evaluator | 已完成 MVP | 支持碎片等待、完整回复、chat/task/task_control 分类和事件日志。 |
 | Task 6: Implement the Main Chat Orchestrator | 已完成 MVP | 支持消息持久化、gate 分流、memory 写入/召回、task 控制；还缺真实流式生成取消。 |
@@ -533,11 +533,11 @@ Must show:
 
 最近一次完整验证记录：
 
-1. `corepack pnpm test`：9 个 test files、22 个 tests 通过。
+1. `corepack pnpm test`：15 个 test files、43 个 tests 通过。
 2. `corepack pnpm typecheck`：通过。
 3. `corepack pnpm build`：通过。
-4. `corepack pnpm test:e2e`：6 个 e2e tests 通过。
-5. Live2D canvas 检查：`renderState=ready`，WebGL 非透明像素 `20780`。
+4. `corepack pnpm test:e2e`：8 个 e2e tests 通过。
+5. Live2D 冷启动检查：`dev:clean` 可见渲染 Hiyori，`renderState=ready`，`motionGroup=Idle`。
 
 当前可视化产物：
 
@@ -552,11 +552,11 @@ Must show:
 
 建议交付：
 
-1. 将 agent status 映射到 Live2D motion/expression。
-2. 区分拖拽和点击，避免移动小人时误开控制台。
-3. 保存桌宠窗口位置。
-4. 控制台已存在时点击小人只 focus。
-5. 预留主动提醒气泡或通知入口。
+1. 继续打磨 agent status 到 Live2D motion/expression 的映射质量。
+2. 继续细化点击穿透 hit testing，让主体穿透和控制区点击可以同时稳定成立。
+3. 接入稳定 STT adapter，替换当前浏览器原生语音识别 MVP。
+4. 将主动提醒/主动对话触发接入当前桌宠气泡通道。
+5. 增加开发期诊断面板，展示 Live2D renderState、motion、窗口 bounds、click-through 状态。
 
 ### Next 2: 真实模型适配层
 

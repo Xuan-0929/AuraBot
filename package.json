@@ -8,6 +8,8 @@
   "packageManager": "pnpm@10.33.2",
   "scripts": {
     "dev": "electron-rebuild -f -w better-sqlite3 && electron-vite dev",
+    "dev:clean": "node scripts/run-clean.mjs dev",
+    "start:clean": "corepack pnpm build && node scripts/run-clean.mjs start",
     "build": "tsc --noEmit && electron-vite build",
     "rebuild:node": "corepack pnpm rebuild better-sqlite3",
     "rebuild:native": "electron-rebuild -f -w better-sqlite3",

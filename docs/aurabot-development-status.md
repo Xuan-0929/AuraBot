@@ -8,11 +8,13 @@
 
 AuraBot 当前已经从“传统聊天界面”收敛为桌宠优先形态：
 
-1. 默认启动一个透明、置顶的小型桌面 Live2D 小人窗口。
-2. 用户点击小人后，打开独立控制台视窗进行完整主线程对话。
-3. 任务创建、查询、打断、修改、启动都通过控制台里的主聊天线程完成。
-4. 控制台只展示轻量任务状态条，不提供任务控制按钮。
-5. 记忆系统当前是本地 deterministic 的“分层摘要 + 图状联想” MVP。
+1. 默认启动一个透明、置顶的小型桌面 Live2D 小人窗口，平时只展示小人本体。
+2. 鼠标悬浮到小人上时，小人下方浮现半透明 `Drag / Voice / Console` 控制。
+3. 用户点击控制台按钮后，打开或聚焦独立控制台视窗进行完整主线程对话。
+4. 任务创建、查询、打断、修改、启动都通过控制台里的主聊天线程完成。
+5. 控制台只展示轻量任务状态条，不提供任务控制按钮。
+6. 任务完成和桌宠语音回复可以通过小人气泡临时浮现。
+7. 记忆系统当前是本地 deterministic 的“分层摘要 + 图状联想” MVP。
 
 ## 已完成
 
@@ -21,13 +23,14 @@ AuraBot 当前已经从“传统聊天界面”收敛为桌宠优先形态：
 | Electron 项目骨架 | 已完成 | `Electron + React + TypeScript + Vite + pnpm` 已可构建和运行。 |
 | 双窗口桌宠壳层 | 已完成 | `createPetWindow()` 默认创建桌面小人，`openConsoleWindow()` 按需打开控制台。 |
 | Live2D 真实模型 | 已完成 | 已接入官方样例 `Hiyori`，Cubism Core 本地打包，不依赖启动时 CDN。 |
+| Live2D 桌宠交互层 | 部分完成 | 悬浮控制条、拖拽按钮、控制台按钮、点击穿透设置、任务完成气泡、位置持久化、状态 motion 映射已接入。 |
 | SQLite 数据层 | 已完成 | 已有 profiles、souls、sessions、messages、memory、tasks、event_logs 等表。 |
 | 单主聊天线程 | 已完成 MVP | 主 session 持久化消息，控制台负责完整对话。 |
 | Gate/触发判断 | 已完成 MVP | 可判断碎片输入等待、完整输入回复、聊天/任务/任务控制分类。 |
 | 记忆 v1 | 已完成 MVP | 支持 preference、event、follow_up 写入，摘要层和关系边召回。 |
 | 任务 v1 | 已完成 MVP | 可从主聊天创建任务、查询状态、打断、修改、启动并完成 deterministic runner。 |
 | 事件日志 | 部分完成 | 已写入 gate、memory、task、chat 关键日志；还没有调试视窗或日志开关。 |
-| E2E 演示流 | 已完成 MVP | 桌宠启动、点击开控制台、记忆、碎片等待、任务控制路径都有 e2e 覆盖。 |
+| E2E 演示流 | 已完成 MVP | 桌宠启动、悬浮控制开控制台、桌宠设置同步、位置持久化、状态同步、记忆、碎片等待、任务控制路径都有 e2e 覆盖。 |
 
 ## 最近一次验证记录
 
@@ -35,11 +38,11 @@ AuraBot 当前已经从“传统聊天界面”收敛为桌宠优先形态：
 
 | 命令/检查 | 结果 |
 | --- | --- |
-| `corepack pnpm test` | 9 个 test files、22 个 tests 通过 |
+| `corepack pnpm test` | 15 个 test files、43 个 tests 通过 |
 | `corepack pnpm typecheck` | 通过 |
 | `corepack pnpm build` | 通过 |
-| `corepack pnpm test:e2e` | 6 个 e2e tests 通过 |
-| Live2D canvas 检查 | `renderState=ready`，WebGL 非透明像素 `20780` |
+| `corepack pnpm test:e2e` | 8 个 e2e tests 通过 |
+| Live2D 冷启动检查 | `dev:clean` 可见渲染 Hiyori，`renderState=ready`，`motionGroup=Idle` |
 
 可视化产物：
 
@@ -51,8 +54,9 @@ AuraBot 当前已经从“传统聊天界面”收敛为桌宠优先形态：
 1. Chat/Gate/Response 仍是 deterministic MVP，不是真实 LLM 对话能力。
 2. 记忆抽取和联想是规则实现，没有 embedding，也没有 LLM 参与候选边判断。
 3. 任务 runner 是 deterministic，占位验证任务生命周期，不是真实工具执行代理。
-4. Live2D 还没有根据状态驱动表情和动作，只完成真实模型挂载、缩放、点击打开控制台。
-5. 还没有设置视窗、Profile 切换 UI、定时任务、桌面通知、打包发布、开机自启。
+4. Live2D 状态行为当前复用 Hiyori 现有 motion group，还没有定制表情资源或更细的动画状态机。
+5. 语音输入当前走 Chromium 原生 `SpeechRecognition`，运行时不支持时只显示轻提示；还没有稳定 STT adapter。
+6. 还没有 Profile 切换 UI、定时任务、桌面通知、打包发布、开机自启。
 
 ## 下一步推荐
 
@@ -62,11 +66,11 @@ AuraBot 当前已经从“传统聊天界面”收敛为桌宠优先形态：
 
 建议任务：
 
-1. 将 `idle / listening / thinking / replying / tasking` 映射到 Live2D motion 或 expression。
-2. 区分拖拽小人和点击小人，避免拖动时误开控制台。
-3. 保存桌宠窗口位置，下次启动回到用户放置的位置。
-4. 控制台已存在时点击小人只 focus，不重复创建窗口。
-5. 为后续主动提醒预留轻量气泡或系统通知入口。
+1. 继续细化状态动作：为 `idle / listening / thinking / replying / tasking` 选择更贴切的 motion 和后续 expression 资源。
+2. 继续细化点击穿透：小人主体可穿透，悬浮控制区仍可稳定点击。
+3. 接入稳定 STT adapter，替换当前浏览器原生语音识别 MVP。
+4. 为真正的主动提醒/主动对话补后台触发入口，并复用当前气泡通道。
+5. 增加开发期诊断面板，展示 Live2D `renderState`、motion、窗口 bounds、click-through 状态。
 
 ### 2. 真实模型适配层
 

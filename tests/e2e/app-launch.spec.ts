@@ -7,8 +7,18 @@ async function launchAuraBot(): Promise<{
   electronApp: ElectronApplication;
   petWindow: Page;
   userDataDir: string;
+}>;
+async function launchAuraBot(userDataDir: string): Promise<{
+  electronApp: ElectronApplication;
+  petWindow: Page;
+  userDataDir: string;
+}>;
+async function launchAuraBot(inputUserDataDir?: string): Promise<{
+  electronApp: ElectronApplication;
+  petWindow: Page;
+  userDataDir: string;
 }> {
-  const userDataDir = mkdtempSync(join(tmpdir(), "aurabot-e2e-"));
+  const userDataDir = inputUserDataDir ?? mkdtempSync(join(tmpdir(), "aurabot-e2e-"));
   const electronApp = await electron.launch({
     args: [join(process.cwd(), "out/main/index.js")],
     env: {
@@ -26,15 +36,20 @@ async function cleanupAuraBot(electronApp: ElectronApplication, userDataDir: str
   rmSync(userDataDir, { force: true, recursive: true });
 }
 
+async function getPetWindowBounds(electronApp: ElectronApplication) {
+  return electronApp.evaluate(({ BrowserWindow }) => BrowserWindow.getAllWindows()[0].getBounds());
+}
+
 async function openConsole(electronApp: ElectronApplication, petWindow: Page): Promise<Page> {
   const consolePromise = electronApp.waitForEvent("window");
-  await petWindow.getByLabel("Open AuraBot console").click();
+  await petWindow.getByTestId("live2d-model-surface").hover();
+  await petWindow.getByRole("button", { name: "Open AuraBot console" }).click();
   const consoleWindow = await consolePromise;
   await consoleWindow.getByLabel("AuraBot console window").waitFor({ state: "visible" });
   return consoleWindow;
 }
 
-test("launches as a small desktop pet and opens console only after clicking the character", async () => {
+test("launches as a small desktop pet and opens console from the hover control", async () => {
   const { electronApp, petWindow, userDataDir } = await launchAuraBot();
 
   try {
@@ -47,6 +62,60 @@ test("launches as a small desktop pet and opens console only after clicking the 
     await expect(consoleWindow.getByLabel("Agent status")).toContainText("Idle");
   } finally {
     await cleanupAuraBot(electronApp, userDataDir);
+  }
+});
+
+test("reveals pet quick controls and syncs click-through settings from the console", async () => {
+  const { electronApp, petWindow, userDataDir } = await launchAuraBot();
+
+  try {
+    await petWindow.mouse.move(4, 4);
+    await expect(petWindow.getByLabel("Pet quick controls")).toHaveAttribute("data-visible", "false");
+    await expect(petWindow.getByTestId("live2d-model-surface")).toHaveCSS("opacity", "1");
+
+    await petWindow.getByTestId("live2d-model-surface").hover();
+    await expect(petWindow.getByLabel("Pet quick controls")).toHaveAttribute("data-visible", "true");
+    await expect(petWindow.getByTestId("live2d-model-surface")).toHaveCSS("opacity", "1");
+
+    await petWindow.getByRole("button", { name: "Drag pet" }).hover();
+    await expect(petWindow.getByLabel("Pet quick controls")).toHaveAttribute("data-visible", "true");
+    await expect(petWindow.getByTestId("live2d-model-surface")).toHaveCSS("opacity", "1");
+    await expect(petWindow.getByRole("button", { name: "Drag pet" })).not.toHaveCSS("-webkit-app-region", "drag");
+
+    const consoleWindow = await openConsole(electronApp, petWindow);
+
+    await expect(consoleWindow.getByLabel("Hide character on hover")).toHaveCount(0);
+
+    await consoleWindow.getByLabel("Click through character").check();
+    await expect(petWindow.getByLabel("Desktop Live2D pet")).toHaveAttribute("data-click-through", "true");
+    await petWindow.getByRole("button", { name: "Drag pet" }).hover();
+    await expect(petWindow.getByLabel("Pet quick controls")).toHaveAttribute("data-visible", "true");
+  } finally {
+    await cleanupAuraBot(electronApp, userDataDir);
+  }
+});
+
+test("persists the dragged pet window position across launches", async () => {
+  const userDataDir = mkdtempSync(join(tmpdir(), "aurabot-e2e-position-"));
+  let launched = await launchAuraBot(userDataDir);
+
+  try {
+    const initialBounds = await getPetWindowBounds(launched.electronApp);
+    await launched.petWindow.evaluate(() => window.aurabot.movePetWindowBy({ x: -48, y: -36 }));
+    const movedBounds = await getPetWindowBounds(launched.electronApp);
+
+    expect(movedBounds.x).toBe(initialBounds.x - 48);
+    expect(movedBounds.y).toBe(initialBounds.y - 36);
+
+    await launched.electronApp.close();
+
+    launched = await launchAuraBot(userDataDir);
+    const restoredBounds = await getPetWindowBounds(launched.electronApp);
+
+    expect(restoredBounds.x).toBe(movedBounds.x);
+    expect(restoredBounds.y).toBe(movedBounds.y);
+  } finally {
+    await cleanupAuraBot(launched.electronApp, userDataDir);
   }
 });
 
@@ -96,6 +165,8 @@ test("creates a visible queued task from a task-like chat request", async () => 
 
     await expect(consoleWindow.getByText(/我先把这个任务排上/)).toBeVisible();
     await expect(consoleWindow.getByLabel("Agent status")).toContainText("Tasking");
+    await expect(petWindow.getByLabel("Desktop Live2D pet")).toHaveAttribute("data-agent-status", "tasking");
+    await expect(petWindow.locator(".live2d-canvas-host")).toHaveAttribute("data-motion-group", "TapBody");
     await expect(consoleWindow.locator(".task-status-card").filter({ hasText: "明天会议" })).toContainText("queued");
     await expect(consoleWindow.locator(".task-panel")).toHaveCount(0);
   } finally {
@@ -146,6 +217,7 @@ test("starts a queued task from the main chat and reports completion", async () 
     await consoleWindow.getByRole("button", { name: "Send" }).click();
     await expect(consoleWindow.getByText(/完成/)).toBeVisible();
     await expect(consoleWindow.locator(".task-status-card").filter({ hasText: "明天会议" })).toContainText("completed");
+    await expect(petWindow.getByLabel("Pet message")).toContainText("任务完成");
 
     await input.fill("这个任务做到哪了？");
     await consoleWindow.getByRole("button", { name: "Send" }).click();

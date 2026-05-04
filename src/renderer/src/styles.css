@@ -40,7 +40,6 @@ textarea {
   height: 100vh;
   overflow: hidden;
   background: transparent;
-  -webkit-app-region: drag;
 }
 
 .desktop-pet-model-button {
@@ -52,7 +51,14 @@ textarea {
   border: 0;
   background: transparent;
   cursor: pointer;
+  transition:
+    transform 160ms ease,
+    opacity 160ms ease;
   -webkit-app-region: no-drag;
+}
+
+.desktop-pet-model-button:hover {
+  transform: translateY(-2px);
 }
 
 .desktop-pet-model-shell {
@@ -61,13 +67,103 @@ textarea {
   width: 100%;
   height: 100%;
   filter: drop-shadow(0 10px 8px rgba(23, 34, 38, 0.16));
+  opacity: 1;
+  transition:
+    opacity 140ms ease,
+    filter 140ms ease;
 }
 
-.desktop-pet-status {
+.desktop-pet[data-agent-status="thinking"] .desktop-pet-model-shell,
+.desktop-pet[data-agent-status="replying"] .desktop-pet-model-shell {
+  filter: drop-shadow(0 10px 10px rgba(188, 101, 65, 0.26));
+}
+
+.desktop-pet[data-agent-status="tasking"] .desktop-pet-model-shell {
+  filter: drop-shadow(0 10px 12px rgba(47, 98, 107, 0.3));
+}
+
+.desktop-pet[data-agent-status="listening"] .desktop-pet-model-shell {
+  filter: drop-shadow(0 10px 10px rgba(76, 132, 96, 0.24));
+}
+
+.pet-message-bubble {
   position: absolute;
-  left: 12px;
-  top: 12px;
+  left: 50%;
+  top: 14px;
+  z-index: 3;
+  width: min(248px, calc(100vw - 24px));
+  max-height: 96px;
+  overflow: hidden;
+  padding: 10px 12px;
+  border: 1px solid rgba(36, 59, 65, 0.16);
+  border-radius: 8px;
+  background: rgba(255, 255, 255, 0.82);
+  box-shadow: 0 16px 34px rgba(32, 45, 48, 0.18);
+  color: #253233;
+  font-size: 13px;
+  line-height: 1.45;
   pointer-events: none;
+  transform: translateX(-50%);
+}
+
+.pet-quick-controls {
+  position: absolute;
+  left: 50%;
+  bottom: 14px;
+  z-index: 4;
+  display: inline-flex;
+  align-items: center;
+  gap: 7px;
+  padding: 6px;
+  border: 1px solid rgba(36, 59, 65, 0.14);
+  border-radius: 8px;
+  background: rgba(255, 255, 255, 0.46);
+  box-shadow: 0 12px 26px rgba(38, 52, 55, 0.16);
+  opacity: 0;
+  pointer-events: none;
+  transform: translate(-50%, 8px);
+  transition:
+    opacity 150ms ease,
+    transform 150ms ease,
+    background 150ms ease;
+  -webkit-app-region: no-drag;
+}
+
+.pet-quick-controls[data-visible="true"] {
+  opacity: 1;
+  pointer-events: auto;
+  transform: translate(-50%, 0);
+}
+
+.pet-action-button {
+  min-width: 50px;
+  min-height: 32px;
+  padding: 0 9px;
+  border: 1px solid rgba(36, 59, 65, 0.16);
+  border-radius: 8px;
+  background: rgba(250, 253, 252, 0.64);
+  color: #243235;
+  cursor: pointer;
+  font-size: 12px;
+  font-weight: 800;
+  letter-spacing: 0;
+  box-shadow: 0 8px 18px rgba(38, 52, 55, 0.12);
+  -webkit-app-region: no-drag;
+}
+
+.pet-action-button:hover,
+.pet-action-button[data-active="true"] {
+  background: rgba(235, 248, 244, 0.9);
+  border-color: rgba(43, 113, 98, 0.3);
+}
+
+.pet-action-drag {
+  cursor: grab;
+}
+
+.pet-action-drag:active,
+.pet-action-drag[data-dragging="true"] {
+  cursor: grabbing;
 }
 
 .live2d-canvas-host {
@@ -80,6 +176,20 @@ textarea {
   display: block;
   width: 100%;
   height: 100%;
+}
+
+.live2d-debug-badge {
+  position: absolute;
+  left: 8px;
+  top: 8px;
+  padding: 5px 7px;
+  border: 1px solid rgba(34, 52, 56, 0.18);
+  border-radius: 8px;
+  background: rgba(255, 255, 255, 0.72);
+  color: #263435;
+  font-size: 11px;
+  font-weight: 800;
+  pointer-events: none;
 }
 
 .live2d-canvas-host[data-render-state="fallback"] .live2d-canvas {
@@ -174,6 +284,14 @@ textarea {
   margin-bottom: 12px;
 }
 
+.console-header-tools {
+  display: flex;
+  flex-wrap: wrap;
+  justify-content: flex-end;
+  gap: 8px;
+  max-width: min(100%, 520px);
+}
+
 .console-header h1 {
   margin: 0 0 4px;
   color: #263334;
@@ -185,6 +303,41 @@ textarea {
   margin: 0;
   color: #5f6969;
   font-size: 13px;
+}
+
+.pet-settings-panel {
+  display: flex;
+  align-items: center;
+  flex-wrap: wrap;
+  gap: 8px;
+  min-height: 34px;
+  padding: 6px 8px;
+  border: 1px solid rgba(41, 65, 67, 0.16);
+  border-radius: 8px;
+  background: rgba(255, 255, 255, 0.72);
+  box-shadow: 0 5px 14px rgba(63, 76, 77, 0.1);
+}
+
+.pet-settings-title {
+  color: #435051;
+  font-size: 12px;
+  font-weight: 900;
+}
+
+.pet-settings-option {
+  display: inline-flex;
+  align-items: center;
+  gap: 5px;
+  color: #425051;
+  font-size: 12px;
+  font-weight: 700;
+  white-space: nowrap;
+}
+
+.pet-settings-option input {
+  width: 14px;
+  height: 14px;
+  accent-color: #2f626b;
 }
 
 .console-chat {

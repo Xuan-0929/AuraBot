@@ -1,4 +1,5 @@
 import type { Message } from "../schemas/message";
+import type { PetSettings } from "../schemas/petSettings";
 import type { Profile } from "../schemas/profile";
 import type { Task } from "../schemas/task";
 
@@ -18,6 +19,7 @@ export interface GateDecision {
 
 export interface SendChatMessageInput {
   content: string;
+  source?: "console" | "pet_voice";
 }
 
 export interface SendChatMessageResult {
@@ -35,4 +37,6 @@ export interface AppInitialState {
   messages: Message[];
   tasks: Task[];
   agentStatus: AgentStatus;
+  petSettings: PetSettings;
+  debugPetOverlay: boolean;
 }

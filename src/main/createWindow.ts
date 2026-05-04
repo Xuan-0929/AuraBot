@@ -1,17 +1,50 @@
 import { join } from "node:path";
-import { BrowserWindow } from "electron";
+import { BrowserWindow, screen } from "electron";
+import { IPC_CHANNELS } from "../shared/contracts/ipc";
+import type { AgentStatus } from "../shared/contracts/chat";
+import type { PetActivity } from "../shared/contracts/pet";
+import { DEFAULT_PET_SETTINGS, type PetSettings } from "../shared/schemas/petSettings";
+import { clampWindowBoundsToWorkArea, placeWindowNearPet, type WindowRectangle } from "./windowPlacement";
 
 let petWindow: BrowserWindow | undefined;
 let consoleWindow: BrowserWindow | undefined;
+let currentPetSettings: PetSettings = { ...DEFAULT_PET_SETTINGS };
+let onPetBoundsChanged: ((bounds: WindowRectangle) => void) | undefined;
 
-export function createPetWindow(): BrowserWindow {
+const PET_WINDOW_SIZE = {
+  width: 300,
+  height: 430
+};
+
+const CONSOLE_WINDOW_SIZE = {
+  width: 920,
+  height: 700
+};
+
+export interface CreatePetWindowOptions {
+  settings?: PetSettings;
+  savedBounds?: WindowRectangle;
+  onBoundsChanged?: (bounds: WindowRectangle) => void;
+}
+
+export function createPetWindow(options: CreatePetWindowOptions = {}): BrowserWindow {
+  const settings = options.settings ?? currentPetSettings;
+
+  currentPetSettings = settings;
+  onPetBoundsChanged = options.onBoundsChanged ?? onPetBoundsChanged;
+
   if (petWindow && !petWindow.isDestroyed()) {
+    applyPetSettings(settings);
     return petWindow;
   }
 
+  const initialBounds = getInitialPetBounds(options.savedBounds);
+
   petWindow = new BrowserWindow({
-    width: 300,
-    height: 430,
+    x: initialBounds.x,
+    y: initialBounds.y,
+    width: initialBounds.width,
+    height: initialBounds.height,
     minWidth: 240,
     minHeight: 320,
     frame: false,
@@ -29,6 +62,7 @@ export function createPetWindow(): BrowserWindow {
     petWindow = undefined;
   });
   loadRenderer(petWindow, "pet");
+  applyPetSettings(settings);
 
   return petWindow;
 }
@@ -41,8 +75,8 @@ export function openConsoleWindow(): BrowserWindow {
   }
 
   consoleWindow = new BrowserWindow({
-    width: 920,
-    height: 700,
+    width: CONSOLE_WINDOW_SIZE.width,
+    height: CONSOLE_WINDOW_SIZE.height,
     minWidth: 720,
     minHeight: 540,
     title: "AuraBot Console",
@@ -50,6 +84,7 @@ export function openConsoleWindow(): BrowserWindow {
     show: false,
     webPreferences: sharedWebPreferences()
   });
+  positionConsoleNearPet(consoleWindow);
   consoleWindow.on("ready-to-show", () => {
     consoleWindow?.show();
     consoleWindow?.focus();
@@ -60,6 +95,48 @@ export function openConsoleWindow(): BrowserWindow {
   loadRenderer(consoleWindow, "console");
 
   return consoleWindow;
+}
+
+export function applyPetSettings(settings: PetSettings): void {
+  currentPetSettings = settings;
+  setPetMousePassthrough(settings.clickThroughPet);
+  broadcastPetSettings(settings);
+}
+
+export function setPetMousePassthrough(enabled: boolean): void {
+  if (!petWindow || petWindow.isDestroyed()) {
+    return;
+  }
+
+  petWindow.setIgnoreMouseEvents(enabled, { forward: true });
+}
+
+export function movePetWindowBy(delta: { x: number; y: number }): void {
+  if (!petWindow || petWindow.isDestroyed()) {
+    return;
+  }
+
+  const bounds = petWindow.getBounds();
+  const nextBounds = clampPetBoundsToVisibleWorkArea({
+    ...bounds,
+    x: bounds.x + Math.round(delta.x),
+    y: bounds.y + Math.round(delta.y)
+  });
+
+  petWindow.setPosition(nextBounds.x, nextBounds.y);
+  notifyPetBoundsChanged();
+}
+
+export function broadcastPetActivity(activity: PetActivity): void {
+  sendToRenderer(IPC_CHANNELS.petActivity, activity);
+}
+
+export function broadcastAgentStatus(status: AgentStatus): void {
+  sendToRenderer(IPC_CHANNELS.agentStatusChanged, status);
+}
+
+export function broadcastPetSettings(settings: PetSettings): void {
+  sendToRenderer(IPC_CHANNELS.petSettingsChanged, settings);
 }
 
 function sharedWebPreferences() {
@@ -77,5 +154,67 @@ function loadRenderer(window: BrowserWindow, route: "pet" | "console"): void {
     void window.loadURL(`${devServerUrl}#${route}`);
   } else {
     void window.loadFile(join(__dirname, "../renderer/index.html"), { hash: route });
+  }
+}
+
+function getInitialPetBounds(savedBounds?: WindowRectangle): WindowRectangle {
+  const fallbackBounds = {
+    width: PET_WINDOW_SIZE.width,
+    height: PET_WINDOW_SIZE.height,
+    x: 0,
+    y: 0
+  };
+  const primaryWorkArea = screen.getPrimaryDisplay().workArea;
+  const defaultBounds = {
+    ...fallbackBounds,
+    x: primaryWorkArea.x + primaryWorkArea.width - PET_WINDOW_SIZE.width - 32,
+    y: primaryWorkArea.y + primaryWorkArea.height - PET_WINDOW_SIZE.height - 32
+  };
+
+  return clampPetBoundsToVisibleWorkArea(savedBounds ?? defaultBounds);
+}
+
+function clampPetBoundsToVisibleWorkArea(bounds: WindowRectangle): WindowRectangle {
+  const display = screen.getDisplayMatching(bounds);
+
+  return clampWindowBoundsToWorkArea({
+    bounds,
+    workArea: display.workArea
+  });
+}
+
+function notifyPetBoundsChanged(): void {
+  if (!petWindow || petWindow.isDestroyed()) {
+    return;
+  }
+
+  onPetBoundsChanged?.(petWindow.getBounds());
+}
+
+function positionConsoleNearPet(window: BrowserWindow): void {
+  const targetSize = window.getBounds();
+  const petBounds = petWindow && !petWindow.isDestroyed() ? petWindow.getBounds() : undefined;
+  const display = petBounds ? screen.getDisplayMatching(petBounds) : screen.getPrimaryDisplay();
+
+  if (!petBounds) {
+    const x = display.workArea.x + display.workArea.width - targetSize.width - 12;
+    const y = display.workArea.y + display.workArea.height - targetSize.height - 12;
+    window.setPosition(x, y);
+    return;
+  }
+
+  const position = placeWindowNearPet({
+    petBounds,
+    targetSize,
+    workArea: display.workArea
+  });
+  window.setPosition(position.x, position.y);
+}
+
+function sendToRenderer(channel: string, payload: unknown): void {
+  for (const window of [petWindow, consoleWindow]) {
+    if (window && !window.isDestroyed()) {
+      window.webContents.send(channel, payload);
+    }
   }
 }
