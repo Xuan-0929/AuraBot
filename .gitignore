@@ -3,3 +3,8 @@
 
 # superpowers
 **/superpowers
+!docs/superpowers/
+!docs/superpowers/specs/
+!docs/superpowers/specs/aurabot-product-requirements.md
+!docs/superpowers/plans/
+!docs/superpowers/plans/aurabot-mvp-implementation-plan.md
