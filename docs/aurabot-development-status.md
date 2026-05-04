@@ -26,7 +26,7 @@ AuraBot 当前已经从“传统聊天界面”收敛为桌宠优先形态：
 | Live2D 桌宠交互层 | 部分完成 | 悬浮控制条、拖拽按钮、控制台按钮、点击穿透设置、任务完成气泡、位置持久化、状态 motion 映射已接入。 |
 | SQLite 数据层 | 已完成 | 已有 profiles、souls、sessions、messages、memory、tasks、event_logs 等表。 |
 | 单主聊天线程 | 已完成 MVP | 主 session 持久化消息，控制台负责完整对话。 |
-| 模型适配层 | 部分完成 | 已有 `gateModel` / `chatModel` 注入接口、OpenAI-compatible provider、JSON/env 配置和 deterministic fallback；还缺流式与中断。 |
+| 模型适配层 | 部分完成 | 已有 `gateModel` / `chatModel` 注入接口、OpenAI-compatible provider、userData/系统级 JSON 配置、env 配置和 deterministic fallback；还缺流式与中断。 |
 | Gate/触发判断 | 已完成 MVP | 可判断碎片输入等待、完整输入回复、话题是否结束、聊天/任务/任务控制分类。 |
 | 记忆 v1 | 已完成 MVP | 支持 preference、event、follow_up 写入，摘要层和关系边召回。 |
 | 任务 v1 | 已完成 MVP | 可从主聊天创建任务、按聊天 hint 命中特定任务、查询状态、打断、修改、启动并完成 deterministic runner。 |
@@ -39,7 +39,7 @@ AuraBot 当前已经从“传统聊天界面”收敛为桌宠优先形态：
 
 | 命令/检查 | 结果 |
 | --- | --- |
-| `corepack pnpm test` | 20 个 test files、53 个 tests 通过 |
+| `corepack pnpm test` | 20 个 test files、56 个 tests 通过 |
 | `corepack pnpm typecheck` | 通过 |
 | `corepack pnpm build` | 通过 |
 | `corepack pnpm test:e2e` | 9 个 e2e tests 通过 |
@@ -52,7 +52,7 @@ AuraBot 当前已经从“传统聊天界面”收敛为桌宠优先形态：
 
 ## 当前边界
 
-1. 模型角色默认仍走 deterministic fallback；外部模型调用需要本地 `aurabot.config.json` 或环境变量。
+1. 模型角色默认仍走 deterministic fallback；外部模型调用需要本地 `aurabot.config.json` / `config.json`、macOS 系统级 `/Library/Application Support/AuraBot/config.json`，或环境变量。
 2. 模型回复目前是非流式；还没有用户新消息打断 in-flight generation。
 3. 记忆抽取和联想是规则实现，没有 embedding，也没有 LLM 参与候选边判断。
 4. 任务 runner 是 deterministic，占位验证任务生命周期，不是真实工具执行代理。

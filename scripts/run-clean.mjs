@@ -7,7 +7,7 @@ const mode = process.argv[2];
 
 if (mode === "--help" || mode === "-h" || !["dev", "start"].includes(mode)) {
   console.log("Usage: node scripts/run-clean.mjs <dev|start>");
-  console.log("Creates a temporary AURABOT_USER_DATA_DIR and enables AURABOT_DEBUG_PET=1.");
+  console.log("Creates a temporary AURABOT_USER_DATA_DIR, enables AURABOT_DEBUG_PET=1, and skips system config.");
   process.exit(mode ? 0 : 1);
 }
 
@@ -24,7 +24,8 @@ const child = spawn(command, args, {
   env: {
     ...process.env,
     AURABOT_USER_DATA_DIR: userDataDir,
-    AURABOT_DEBUG_PET: "1"
+    AURABOT_DEBUG_PET: "1",
+    AURABOT_DISABLE_SYSTEM_CONFIG: "1"
   },
   stdio: "inherit"
 });

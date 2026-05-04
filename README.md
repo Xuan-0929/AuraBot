@@ -67,6 +67,8 @@ Run with clean temporary user data and a small Live2D debug badge:
 corepack pnpm dev:clean
 ```
 
+Clean launches skip the macOS system-level AuraBot config file so model/API tests stay isolated.
+
 Run the production build with clean temporary user data:
 
 ```bash
@@ -82,10 +84,18 @@ AuraBot now has two separate model roles:
 | `gateModel` | Lightweight, fast, low-cost model for reply timing, topic-ended judgment, chat/task classification, and task-control detection. |
 | `chatModel` | Stronger reasoning model for final user-facing conversation. |
 
-Without config, both roles use local deterministic fallback. To enable an OpenAI-compatible provider, create this local file in the Electron user data directory:
+Without config, both roles use local deterministic fallback. To enable an OpenAI-compatible provider, create either file in the Electron user data directory:
 
 ```text
 aurabot.config.json
+config.json
+```
+
+On macOS, normal launches also read system-level config from:
+
+```text
+/Library/Application Support/AuraBot/aurabot.config.json
+/Library/Application Support/AuraBot/config.json
 ```
 
 Example:
@@ -156,7 +166,7 @@ The last verified local run recorded:
 
 | Check | Result |
 | --- | --- |
-| `corepack pnpm test` | 20 test files, 53 tests passed |
+| `corepack pnpm test` | 20 test files, 56 tests passed |
 | `corepack pnpm typecheck` | passed |
 | `corepack pnpm build` | passed |
 | `corepack pnpm test:e2e` | 9 tests passed |

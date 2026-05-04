@@ -1,5 +1,5 @@
 import { z } from "zod";
-import type { GateDecision } from "../../shared/contracts/chat";
+import type { GateDecision, InputKind, MemoryDecision, ReplyDecision } from "../../shared/contracts/chat";
 import type { GateEvaluationInput } from "../orchestration/gateEvaluator";
 import { evaluateGate } from "../orchestration/gateEvaluator";
 import type { ModelRoleConfig } from "../../shared/schemas/config";
@@ -25,6 +25,31 @@ const gateDecisionSchema = z.object({
   topicEnded: z.boolean().optional()
 });
 
+const providerGateDecisionSchema = z
+  .object({
+    shouldReply: z.boolean().optional(),
+    isTask: z.boolean().optional(),
+    isTaskControl: z.boolean().optional(),
+    memory: z
+      .object({
+        shouldWrite: z.boolean().optional()
+      })
+      .optional(),
+    isTopicEnded: z.boolean().optional(),
+    confidence: z.number().min(0).max(1).optional(),
+    reason: z.string().min(1).optional()
+  })
+  .passthrough()
+  .refine(
+    (value) =>
+      value.shouldReply !== undefined ||
+      value.isTask !== undefined ||
+      value.isTaskControl !== undefined ||
+      value.memory?.shouldWrite !== undefined ||
+      value.isTopicEnded !== undefined,
+    "Provider gate decision did not include recognizable fields"
+  );
+
 export class ModelBackedGateModel {
   constructor(private readonly options: ModelBackedGateModelOptions) {}
 
@@ -40,14 +65,7 @@ export class ModelBackedGateModel {
         timeoutMs: this.options.config?.timeoutMs,
         messages: buildGatePrompt(input)
       });
-      const decision = gateDecisionSchema.parse(parseJsonFromModel(content));
-
-      return {
-        ...decision,
-        topicEnded:
-          decision.topicEnded ??
-          (decision.replyDecision === "reply" && decision.memoryDecision !== "defer")
-      };
+      return normalizeGateDecision(parseJsonFromModel(content), input);
     } catch (error) {
       return fallback.evaluate(input);
     }
@@ -59,7 +77,7 @@ function buildGatePrompt(input: GateEvaluationInput): ChatCompletionRequest["mes
     {
       role: "system",
       content:
-        "你是 AuraBot 的轻量判断模型。只返回 JSON，不要解释。判断用户输入是否该回复、是否是任务、是否是任务控制、记忆决策、话题是否结束。"
+        "你是 AuraBot 的轻量判断模型。只返回 JSON，不要解释。字段必须是 replyDecision(reply|wait), inputKind(chat|task|task_control), memoryDecision(write_now|defer|skip), confidence(0-1), reason, coalescedText, topicEnded。判断用户输入是否该回复、是否是任务、是否是任务控制、记忆决策、话题是否结束。普通聊天里 topicEnded=false 时 replyDecision 必须是 wait，memoryDecision 必须是 defer。"
     },
     {
       role: "user",
@@ -80,4 +98,125 @@ function parseJsonFromModel(content: string): unknown {
   }
 
   throw new Error("Gate model did not return JSON");
+}
+
+function normalizeGateDecision(rawDecision: unknown, input: GateEvaluationInput): GateDecision {
+  const directDecision = gateDecisionSchema.safeParse(rawDecision);
+
+  if (directDecision.success) {
+    return normalizeDirectGateDecision(directDecision.data);
+  }
+
+  const providerDecision = providerGateDecisionSchema.parse(rawDecision);
+  const inputKind = normalizeInputKind(providerDecision);
+  const topicEnded = providerDecision.isTopicEnded ?? inferTopicEnded(inputKind, providerDecision.shouldReply);
+  const replyDecision = normalizeReplyDecision({
+    inputKind,
+    shouldReply: providerDecision.shouldReply,
+    topicEnded: providerDecision.isTopicEnded
+  });
+  const memoryDecision = normalizeMemoryDecision({
+    inputKind,
+    replyDecision,
+    shouldWrite: providerDecision.memory?.shouldWrite
+  });
+
+  return {
+    replyDecision,
+    inputKind,
+    memoryDecision,
+    confidence: providerDecision.confidence ?? estimateNormalizedConfidence({ inputKind, replyDecision, memoryDecision }),
+    reason: providerDecision.reason ?? "model-gate: normalized provider schema",
+    coalescedText: buildCoalescedText(input),
+    topicEnded
+  };
+}
+
+function normalizeDirectGateDecision(decision: z.infer<typeof gateDecisionSchema>): GateDecision {
+  const topicEnded =
+    decision.topicEnded ?? (decision.replyDecision === "reply" && decision.memoryDecision !== "defer");
+
+  if (decision.inputKind === "chat" && topicEnded === false) {
+    return {
+      ...decision,
+      replyDecision: "wait",
+      memoryDecision: "defer",
+      reason:
+        decision.replyDecision === "wait" && decision.memoryDecision === "defer"
+          ? decision.reason
+          : "model-gate: chat topic still open",
+      topicEnded
+    };
+  }
+
+  return {
+    ...decision,
+    topicEnded
+  };
+}
+
+function normalizeInputKind(providerDecision: z.infer<typeof providerGateDecisionSchema>): InputKind {
+  if (providerDecision.isTaskControl) {
+    return "task_control";
+  }
+
+  return providerDecision.isTask ? "task" : "chat";
+}
+
+function normalizeReplyDecision(input: {
+  inputKind: InputKind;
+  shouldReply?: boolean;
+  topicEnded?: boolean;
+}): ReplyDecision {
+  if (input.inputKind === "chat" && input.topicEnded === false) {
+    return "wait";
+  }
+
+  const shouldReply = input.shouldReply ?? (input.inputKind !== "chat");
+
+  return shouldReply ? "reply" : "wait";
+}
+
+function normalizeMemoryDecision(input: {
+  inputKind: InputKind;
+  replyDecision: ReplyDecision;
+  shouldWrite?: boolean;
+}): MemoryDecision {
+  if (input.inputKind === "task" || input.inputKind === "task_control") {
+    return "skip";
+  }
+
+  if (input.replyDecision === "wait") {
+    return "defer";
+  }
+
+  return input.shouldWrite ? "write_now" : "skip";
+}
+
+function inferTopicEnded(inputKind: InputKind, shouldReply?: boolean): boolean {
+  if (inputKind === "task" || inputKind === "task_control") {
+    return true;
+  }
+
+  return shouldReply === true;
+}
+
+function estimateNormalizedConfidence(input: {
+  inputKind: InputKind;
+  replyDecision: ReplyDecision;
+  memoryDecision: MemoryDecision;
+}): number {
+  if (input.inputKind === "task" || input.inputKind === "task_control") {
+    return 0.82;
+  }
+
+  if (input.replyDecision === "wait") {
+    return 0.7;
+  }
+
+  return input.memoryDecision === "write_now" ? 0.76 : 0.72;
+}
+
+function buildCoalescedText(input: GateEvaluationInput): string {
+  return [...input.recentUserMessages, input.currentMessage].map((message) => message.trim()).filter(Boolean).join("\n");
 }

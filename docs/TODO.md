@@ -533,7 +533,7 @@ Must show:
 
 最近一次完整验证记录：
 
-1. `corepack pnpm test`：20 个 test files、53 个 tests 通过。
+1. `corepack pnpm test`：20 个 test files、56 个 tests 通过。
 2. `corepack pnpm typecheck`：通过。
 3. `corepack pnpm build`：通过。
 4. `corepack pnpm test:e2e`：9 个 e2e tests 通过。

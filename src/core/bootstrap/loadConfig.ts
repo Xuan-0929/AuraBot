@@ -30,13 +30,34 @@ export function loadConfig(userDataPath: string): AppConfig {
 }
 
 function loadConfigFile(userDataPath: string): AppConfigInput {
-  const configPath = join(userDataPath, "aurabot.config.json");
+  const configPath = getConfigCandidatePaths(userDataPath).find((candidatePath) => existsSync(candidatePath));
 
-  if (!existsSync(configPath)) {
+  if (!configPath) {
     return {};
   }
 
   return JSON.parse(readFileSync(configPath, "utf8")) as AppConfigInput;
+}
+
+function getConfigCandidatePaths(userDataPath: string): string[] {
+  return [
+    join(userDataPath, "aurabot.config.json"),
+    join(userDataPath, "config.json"),
+    ...(shouldLoadSystemConfig()
+      ? [
+          "/Library/Application Support/AuraBot/aurabot.config.json",
+          "/Library/Application Support/AuraBot/config.json"
+        ]
+      : [])
+  ];
+}
+
+function shouldLoadSystemConfig(): boolean {
+  return (
+    process.platform === "darwin" &&
+    process.env.NODE_ENV !== "test" &&
+    process.env.AURABOT_DISABLE_SYSTEM_CONFIG !== "1"
+  );
 }
 
 function mergeConfig(defaults: AppConfig, override: AppConfigInput): AppConfigInput {

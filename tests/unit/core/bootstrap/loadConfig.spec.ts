@@ -85,6 +85,33 @@ describe("loadConfig", () => {
     });
   });
 
+  it("also accepts config.json in the app user data directory", () => {
+    const userDataPath = createUserDataDir();
+    writeFileSync(
+      join(userDataPath, "config.json"),
+      JSON.stringify({
+        gateModel: {
+          provider: "openai-compatible",
+          baseUrl: "https://api.example.com/v1",
+          apiKey: "gate-key",
+          model: "fast-gate-model",
+          enabled: true
+        }
+      }),
+      "utf8"
+    );
+
+    const config = loadConfig(userDataPath);
+
+    expect(config.gateModel).toMatchObject({
+      provider: "openai-compatible",
+      baseUrl: "https://api.example.com/v1",
+      apiKey: "gate-key",
+      model: "fast-gate-model",
+      enabled: true
+    });
+  });
+
   it("allows environment variables to override model roles for clean dev launches", () => {
     const userDataPath = createUserDataDir();
     process.env.AURABOT_MODEL_PROVIDER = "openai-compatible";
