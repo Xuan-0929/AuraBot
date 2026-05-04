@@ -19,6 +19,7 @@ export function evaluateGate(input: GateEvaluationInput): GateDecision {
   const inputKind = classifyInputKind(currentMessage);
   const replyDecision = decideReply(currentMessage, coalescedText, inputKind);
   const memoryDecision = decideMemory(currentMessage, coalescedText, inputKind, replyDecision);
+  const topicEnded = decideTopicEnded(currentMessage, inputKind, replyDecision, memoryDecision);
   const confidence = estimateConfidence({ currentMessage, inputKind, replyDecision, memoryDecision });
 
   return {
@@ -27,8 +28,26 @@ export function evaluateGate(input: GateEvaluationInput): GateDecision {
     memoryDecision,
     confidence,
     reason: explainDecision({ currentMessage, inputKind, replyDecision, memoryDecision }),
-    coalescedText
+    coalescedText,
+    topicEnded
   };
+}
+
+function decideTopicEnded(
+  message: string,
+  inputKind: InputKind,
+  replyDecision: ReplyDecision,
+  memoryDecision: MemoryDecision
+): boolean {
+  if (inputKind === "task" || inputKind === "task_control") {
+    return true;
+  }
+
+  if (replyDecision === "wait") {
+    return false;
+  }
+
+  return CLEAR_BOUNDARY_PATTERN.test(message) || QUESTION_PATTERN.test(message) || memoryDecision === "write_now";
 }
 
 function classifyInputKind(message: string): InputKind {

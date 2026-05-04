@@ -26,7 +26,8 @@ AuraBot 当前已经从“传统聊天界面”收敛为桌宠优先形态：
 | Live2D 桌宠交互层 | 部分完成 | 悬浮控制条、拖拽按钮、控制台按钮、点击穿透设置、任务完成气泡、位置持久化、状态 motion 映射已接入。 |
 | SQLite 数据层 | 已完成 | 已有 profiles、souls、sessions、messages、memory、tasks、event_logs 等表。 |
 | 单主聊天线程 | 已完成 MVP | 主 session 持久化消息，控制台负责完整对话。 |
-| Gate/触发判断 | 已完成 MVP | 可判断碎片输入等待、完整输入回复、聊天/任务/任务控制分类。 |
+| 模型适配层 | 部分完成 | 已有 `gateModel` / `chatModel` 注入接口、OpenAI-compatible provider、JSON/env 配置和 deterministic fallback；还缺流式与中断。 |
+| Gate/触发判断 | 已完成 MVP | 可判断碎片输入等待、完整输入回复、话题是否结束、聊天/任务/任务控制分类。 |
 | 记忆 v1 | 已完成 MVP | 支持 preference、event、follow_up 写入，摘要层和关系边召回。 |
 | 任务 v1 | 已完成 MVP | 可从主聊天创建任务、按聊天 hint 命中特定任务、查询状态、打断、修改、启动并完成 deterministic runner。 |
 | 事件日志 | 部分完成 | 已写入 gate、memory、task、chat 关键日志；还没有调试视窗或日志开关。 |
@@ -38,7 +39,7 @@ AuraBot 当前已经从“传统聊天界面”收敛为桌宠优先形态：
 
 | 命令/检查 | 结果 |
 | --- | --- |
-| `corepack pnpm test` | 16 个 test files、47 个 tests 通过 |
+| `corepack pnpm test` | 20 个 test files、53 个 tests 通过 |
 | `corepack pnpm typecheck` | 通过 |
 | `corepack pnpm build` | 通过 |
 | `corepack pnpm test:e2e` | 9 个 e2e tests 通过 |
@@ -51,12 +52,13 @@ AuraBot 当前已经从“传统聊天界面”收敛为桌宠优先形态：
 
 ## 当前边界
 
-1. Chat/Gate/Response 仍是 deterministic MVP，不是真实 LLM 对话能力。
-2. 记忆抽取和联想是规则实现，没有 embedding，也没有 LLM 参与候选边判断。
-3. 任务 runner 是 deterministic，占位验证任务生命周期，不是真实工具执行代理。
-4. Live2D 状态行为当前复用 Hiyori 现有 motion group，还没有定制表情资源或更细的动画状态机。
-5. 语音输入当前走 Chromium 原生 `SpeechRecognition`，运行时不支持时只显示轻提示；还没有稳定 STT adapter。
-6. 还没有 Profile 切换 UI、定时任务、桌面通知、打包发布、开机自启。
+1. 模型角色默认仍走 deterministic fallback；外部模型调用需要本地 `aurabot.config.json` 或环境变量。
+2. 模型回复目前是非流式；还没有用户新消息打断 in-flight generation。
+3. 记忆抽取和联想是规则实现，没有 embedding，也没有 LLM 参与候选边判断。
+4. 任务 runner 是 deterministic，占位验证任务生命周期，不是真实工具执行代理。
+5. Live2D 状态行为当前复用 Hiyori 现有 motion group，还没有定制表情资源或更细的动画状态机。
+6. 语音输入当前走 Chromium 原生 `SpeechRecognition`，运行时不支持时只显示轻提示；还没有稳定 STT adapter。
+7. 还没有 Profile 切换 UI、定时任务、桌面通知、打包发布、开机自启。
 
 ## 下一步推荐
 
@@ -74,15 +76,15 @@ AuraBot 当前已经从“传统聊天界面”收敛为桌宠优先形态：
 
 ### 2. 真实模型适配层
 
-目标：把 deterministic chat 替换成可配置模型调用，但保留本地测试稳定性。
+目标：把已接入的可配置模型调用打磨成可长期运行的模型层。
 
 建议任务：
 
-1. 新增 provider 配置：`API Base URL`、`API Key`、`chatModel`、`gateModel`、启用开关。
-2. 把 `gateModel` 和 `chatModel` 做成可注入接口。
-3. 保留 deterministic adapter 作为测试和无 key fallback。
-4. 支持流式回复和用户新消息打断生成。
-5. 在控制台或设置视窗暴露当前模型连接状态。
+1. 增加流式回复，把 `replying` 状态和消息逐字/逐段展示接起来。
+2. 支持用户新消息打断当前强模型生成。
+3. 为 provider 调用增加重试、超时、失败事件日志和可见错误提示。
+4. 在控制台或设置视窗暴露当前模型连接状态。
+5. 为 gate 模型输出增加线上样本日志，后续评估“是否抢话/是否漏接/任务误判”。
 
 ### 3. 记忆 v2
 

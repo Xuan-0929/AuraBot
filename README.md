@@ -33,7 +33,8 @@ Console window:
 | Voice input MVP | Pet hover control can use browser SpeechRecognition when the runtime supports it. |
 | Local storage | SQLite stores profiles, souls, sessions, messages, memory, tasks, and event logs. |
 | Main chat thread | Console messages persist through typed IPC into the main process. |
-| Gate logic | Fragmented messages can wait; complete chat, task requests, and task controls are classified. |
+| Model roles | `gateModel` and `chatModel` are injectable; both default to local deterministic fallback and can use OpenAI-compatible APIs. |
+| Gate logic | Fragmented messages can wait; complete chat, task requests, task controls, and topic endings are classified. |
 | Memory v1 | Preference, event, and follow-up memories can be written and recalled through relation edges. |
 | Task v1 | Tasks can be created, queried, interrupted, revised, started, and completed from main chat. |
 | Verification | Unit, integration, build, and e2e checks are wired. |
@@ -72,6 +73,59 @@ Run the production build with clean temporary user data:
 corepack pnpm start:clean
 ```
 
+## External Model API
+
+AuraBot now has two separate model roles:
+
+| Role | Intended model |
+| --- | --- |
+| `gateModel` | Lightweight, fast, low-cost model for reply timing, topic-ended judgment, chat/task classification, and task-control detection. |
+| `chatModel` | Stronger reasoning model for final user-facing conversation. |
+
+Without config, both roles use local deterministic fallback. To enable an OpenAI-compatible provider, create this local file in the Electron user data directory:
+
+```text
+aurabot.config.json
+```
+
+Example:
+
+```json
+{
+  "gateModel": {
+    "enabled": true,
+    "provider": "openai-compatible",
+    "baseUrl": "https://api.example.com/v1",
+    "apiKey": "your-api-key",
+    "model": "your-lightweight-model",
+    "temperature": 0
+  },
+  "chatModel": {
+    "enabled": true,
+    "provider": "openai-compatible",
+    "baseUrl": "https://api.example.com/v1",
+    "apiKey": "your-api-key",
+    "model": "your-strong-reasoning-model",
+    "temperature": 0.7
+  }
+}
+```
+
+For temporary development launches, environment variables can override the file:
+
+```bash
+AURABOT_MODEL_PROVIDER=openai-compatible \
+AURABOT_MODEL_BASE_URL=https://api.example.com/v1 \
+AURABOT_MODEL_API_KEY=your-api-key \
+AURABOT_GATE_MODEL_ENABLED=1 \
+AURABOT_GATE_MODEL_NAME=your-lightweight-model \
+AURABOT_CHAT_MODEL_ENABLED=1 \
+AURABOT_CHAT_MODEL_NAME=your-strong-reasoning-model \
+corepack pnpm dev:clean
+```
+
+Keep API keys local and out of git.
+
 ## Verification Commands
 
 Run all unit and integration tests:
@@ -102,7 +156,7 @@ The last verified local run recorded:
 
 | Check | Result |
 | --- | --- |
-| `corepack pnpm test` | 16 test files, 47 tests passed |
+| `corepack pnpm test` | 20 test files, 53 tests passed |
 | `corepack pnpm typecheck` | passed |
 | `corepack pnpm build` | passed |
 | `corepack pnpm test:e2e` | 9 tests passed |
@@ -137,6 +191,7 @@ src/
   core/
     bootstrap/               # service wiring
     orchestration/           # gate and chat pipeline
+    llm/                     # model-role interfaces and OpenAI-compatible adapters
     memory/                  # memory write, retrieval, associations
     tasks/                   # task lifecycle and deterministic runner
     storage/                 # SQLite migrations and repositories
@@ -173,19 +228,20 @@ The Cubism Core runtime is bundled through `live2dcubismcore@1.0.2`; app startup
 
 This is still an MVP skeleton, not a production companion:
 
-1. Chat, gate, and response behavior are deterministic local logic.
-2. Memory extraction and relation building are rule-based, not embedding or LLM powered.
-3. The task runner validates lifecycle behavior but does not yet call real external tools.
-4. Live2D status behavior uses the bundled Hiyori motion groups; custom expressions and richer animation tuning are not implemented yet.
-5. Voice input currently depends on Chromium's `SpeechRecognition`; a stable local or model-backed STT adapter is still needed.
-6. Profile switching, scheduled jobs, desktop notifications, packaging, and auto-start are not implemented yet.
+1. Model roles default to deterministic local fallback; external calls require local config or environment variables.
+2. Model replies are non-streaming; user-message interruption of an in-flight generation is not implemented yet.
+3. Memory extraction and relation building are rule-based, not embedding or LLM powered.
+4. The task runner validates lifecycle behavior but does not yet call real external tools.
+5. Live2D status behavior uses the bundled Hiyori motion groups; custom expressions and richer animation tuning are not implemented yet.
+6. Voice input currently depends on Chromium's `SpeechRecognition`; a stable local or model-backed STT adapter is still needed.
+7. Profile switching, scheduled jobs, desktop notifications, packaging, and auto-start are not implemented yet.
 
 ## Next Recommended Work
 
 The current priority order is:
 
 1. Live2D desktop-pet behavior layer: tune status motions, add richer expression assets, and keep hardening click-through hit testing.
-2. Real model adapter layer: add provider config, injectable `gateModel` and `chatModel`, deterministic fallback, streaming replies, and interruption.
+2. Real model adapter layer v2: add streaming replies, in-flight interruption, retry/backoff, and a visible model connection status.
 3. Memory v2: replace concept extraction, merge duplicate memories, add time-driven reminders, and build a memory debug view.
 4. Task executor v2: add real task types, artifact handling, tool execution, and cancellation signals while keeping control in main chat.
 5. Main-thread task control v2: extend the current hint-based router with richer references like "第一个", "刚才那个", and task aliases.

@@ -8,8 +8,8 @@ import type { TaskService } from "../tasks/taskService";
 import type { ProfileService } from "../profiles/profileService";
 import type { EventLogService } from "../telemetry/eventLogService";
 import { parseTaskControlRequest } from "../tasks/taskControlRouter";
-import { evaluateGate } from "./gateEvaluator";
-import { planAssistantResponse } from "./responsePlanner";
+import type { GateModel } from "../llm/gateModel";
+import type { ChatModel } from "../llm/chatModel";
 
 export interface ChatOrchestratorDependencies {
   profileService: ProfileService;
@@ -18,6 +18,8 @@ export interface ChatOrchestratorDependencies {
   memoryService: MemoryService;
   taskService: TaskService;
   eventLogService: EventLogService;
+  gateModel: GateModel;
+  chatModel: ChatModel;
 }
 
 export class ChatOrchestrator {
@@ -37,7 +39,7 @@ export class ChatOrchestrator {
       .listRecentUserMessages(mainSession.id, 4)
       .filter((message) => message.id !== userMessage.id)
       .map((message) => message.content);
-    const gateDecision = evaluateGate({
+    const gateDecision = await this.dependencies.gateModel.evaluate({
       currentMessage: input.content,
       recentUserMessages
     });
@@ -49,7 +51,8 @@ export class ChatOrchestrator {
       inputKind: gateDecision.inputKind,
       memoryDecision: gateDecision.memoryDecision,
       confidence: gateDecision.confidence,
-      reason: gateDecision.reason
+      reason: gateDecision.reason,
+      topicEnded: gateDecision.topicEnded
     });
 
     if (gateDecision.replyDecision === "wait") {
@@ -144,10 +147,11 @@ export class ChatOrchestrator {
       sessionId: mainSession.id,
       profileId: profile.id,
       role: "assistant",
-      content: planAssistantResponse({
+      content: await this.dependencies.chatModel.generateReply({
         userContent: semanticSegment,
         writtenMemories,
-        recalledMemories: shouldAskMemoryRecall(semanticSegment) ? memoryContext.nodes : recalledMemories
+        recalledMemories: shouldAskMemoryRecall(semanticSegment) ? memoryContext.nodes : recalledMemories,
+        gateDecision
       })
     });
 

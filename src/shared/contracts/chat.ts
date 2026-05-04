@@ -15,6 +15,7 @@ export interface GateDecision {
   confidence: number;
   reason: string;
   coalescedText: string;
+  topicEnded: boolean;
 }
 
 export interface SendChatMessageInput {

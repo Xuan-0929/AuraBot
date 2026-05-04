@@ -12,6 +12,7 @@ describe("evaluateGate", () => {
     expect(decision.memoryDecision).toBe("defer");
     expect(decision.inputKind).toBe("chat");
     expect(decision.reason).toContain("fragment");
+    expect(decision.topicEnded).toBe(false);
   });
 
   it("replies and allows memory write when the utterance has a clear boundary", () => {
@@ -24,6 +25,7 @@ describe("evaluateGate", () => {
     expect(decision.memoryDecision).toBe("write_now");
     expect(decision.inputKind).toBe("chat");
     expect(decision.confidence).toBeGreaterThanOrEqual(0.7);
+    expect(decision.topicEnded).toBe(true);
   });
 
   it("classifies clear task requests separately from chat", () => {

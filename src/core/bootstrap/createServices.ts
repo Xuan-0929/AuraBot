@@ -11,6 +11,8 @@ import { TaskService } from "../tasks/taskService";
 import { DeterministicTaskRunner } from "../tasks/taskRunner";
 import { EventLogService } from "../telemetry/eventLogService";
 import { ProfileService } from "../profiles/profileService";
+import { createChatModel, type ChatModel } from "../llm/chatModel";
+import { createGateModel, type GateModel } from "../llm/gateModel";
 
 export interface AppServices {
   database: AppDatabase;
@@ -20,6 +22,8 @@ export interface AppServices {
   memoryService: MemoryService;
   taskService: TaskService;
   eventLogService: EventLogService;
+  gateModel: GateModel;
+  chatModel: ChatModel;
   chatOrchestrator: ChatOrchestrator;
 }
 
@@ -33,6 +37,8 @@ export function createServices(userDataPath: string): AppServices {
   const eventLogService = new EventLogService(database);
   const taskRepository = new TaskRepository(database);
   const taskRunner = new DeterministicTaskRunner(taskRepository, eventLogService);
+  const gateModel = createGateModel(config.gateModel);
+  const chatModel = createChatModel(config.chatModel);
 
   const services = {
     database,
@@ -41,7 +47,9 @@ export function createServices(userDataPath: string): AppServices {
     messageRepository: new MessageRepository(database),
     memoryService: new MemoryService(memoryRepository),
     taskService: new TaskService(taskRepository, sessionRepository, eventLogService, taskRunner),
-    eventLogService
+    eventLogService,
+    gateModel,
+    chatModel
   };
 
   return {
