@@ -12,7 +12,7 @@
 
 ## 1. This Plan Covers
 
-This document is the execution-facing breakdown of the PRD at [AuraBot 产品需求文档](/Users/xuan/Documents/New%20project%204/docs/superpowers/specs/aurabot-product-requirements.md).
+This document is the execution-facing breakdown of the PRD at [AuraBot 产品需求文档](/Users/xuan/Documents/New%20project%204/docs/aurabot-product-requirements.md).
 
 It does not try to build the entire AuraBot vision in one pass. It narrows the first implementation to a testable MVP plus the minimum scaffolding needed not to paint the codebase into a corner.
 
@@ -644,7 +644,7 @@ Must show:
 - Modify: `tests/e2e/chat-flow.spec.ts`
 - Modify: `tests/e2e/task-flow.spec.ts`
 - Modify: `README.md`
-- Modify: `docs/superpowers/specs/aurabot-product-requirements.md`
+- Modify: `docs/aurabot-product-requirements.md`
 
 - [ ] Add one demo-ready chat flow covering fragmented messages and natural reply timing.
 - [ ] Add one demo-ready task flow covering task creation and interruption.
