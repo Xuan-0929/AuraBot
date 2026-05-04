@@ -523,9 +523,9 @@ Must show:
 | Task 3: Build the Main Chat UI Shell | 已完成并调整形态 | 不再是传统主聊天窗口；当前为桌面小人 + 悬浮控制打开控制台视窗。 |
 | Task 4: Add Profile and Soul Loading | 部分完成 | 默认 profile/soul 已可 seed；还缺专门的 soul schema 单元测试和 Profile UI。 |
 | Task 5: Implement the Gate Evaluator | 已完成 MVP | 支持碎片等待、完整回复、chat/task/task_control 分类和事件日志。 |
-| Task 6: Implement the Main Chat Orchestrator | 已完成 MVP | 支持消息持久化、gate 分流、memory 写入/召回、task 控制；还缺真实流式生成取消。 |
+| Task 6: Implement the Main Chat Orchestrator | 已完成 MVP | 支持消息持久化、gate 分流、memory 写入/召回、按聊天 hint 控制特定 task；还缺真实流式生成取消。 |
 | Task 7: Add Mixed Memory v1 | 已完成 MVP | 支持 preference/event/follow_up，摘要层、关系边和 bounded graph traversal。 |
-| Task 8: Add the Task Engine and Console Task Status Strip | 已完成 MVP | 支持主聊天创建、查询、打断、修改、启动任务；任务条只展示状态，不放控制按钮。 |
+| Task 8: Add the Task Engine and Console Task Status Strip | 已完成 MVP | 支持主聊天创建、按目标 hint 查询/打断/修改/启动任务；任务条只展示状态，不放控制按钮。 |
 | Task 9: Add Debugging and Event Log Surfaces | 部分完成 | `event_logs` 已记录关键事件；还缺 settings/debug 视窗和日志开关。 |
 | Task 10: Hardening Pass and MVP Demo Flow | 部分完成 | e2e、截图、`README.md` 和本地使用说明已覆盖；还缺打包/发布说明。 |
 
@@ -533,10 +533,10 @@ Must show:
 
 最近一次完整验证记录：
 
-1. `corepack pnpm test`：15 个 test files、43 个 tests 通过。
+1. `corepack pnpm test`：16 个 test files、47 个 tests 通过。
 2. `corepack pnpm typecheck`：通过。
 3. `corepack pnpm build`：通过。
-4. `corepack pnpm test:e2e`：8 个 e2e tests 通过。
+4. `corepack pnpm test:e2e`：9 个 e2e tests 通过。
 5. Live2D 冷启动检查：`dev:clean` 可见渲染 Hiyori，`renderState=ready`，`motionGroup=Idle`。
 
 当前可视化产物：

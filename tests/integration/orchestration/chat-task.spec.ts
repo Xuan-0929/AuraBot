@@ -56,4 +56,30 @@ describe("chat task integration", () => {
     expect(query.assistantMessage?.content).toContain("明天会议");
     expect(tasks[0]?.latestProgress).toContain("完成");
   });
+
+  it("uses task hints in the main chat to query, revise, and interrupt a specific task", async () => {
+    const { services, orchestrator } = createTestOrchestrator("aurabot-chat-task-");
+
+    const createdMeeting = await orchestrator.sendMessage({ content: "帮我整理一份明天会议的清单。" });
+    const createdWeekly = await orchestrator.sendMessage({ content: "帮我生成一份周报初稿。" });
+
+    expect(createdWeekly.createdTask?.title).toBe("帮我生成一份周报初稿。");
+
+    const queryMeeting = await orchestrator.sendMessage({ content: "会议那个任务做到哪了？" });
+    const reviseMeeting = await orchestrator.sendMessage({ content: "把会议任务改成整理后天路演的清单。" });
+    const interruptWeekly = await orchestrator.sendMessage({ content: "停掉周报任务。" });
+    const profile = services.profileService.getOrSeedActiveProfile();
+    const tasks = services.taskService.listTasksForProfile(profile.id);
+    const meetingTask = tasks.find((task) => task.id === createdMeeting.createdTask?.id);
+    const weeklyTask = tasks.find((task) => task.id === createdWeekly.createdTask?.id);
+
+    expect(queryMeeting.assistantMessage?.content).toContain("明天会议");
+    expect(reviseMeeting.updatedTask?.id).toBe(createdMeeting.createdTask?.id);
+    expect(reviseMeeting.updatedTask?.title).toBe("整理后天路演的清单。");
+    expect(interruptWeekly.updatedTask?.id).toBe(createdWeekly.createdTask?.id);
+    expect(interruptWeekly.updatedTask?.status).toBe("interrupted");
+    expect(meetingTask?.title).toBe("整理后天路演的清单。");
+    expect(meetingTask?.status).toBe("queued");
+    expect(weeklyTask?.status).toBe("interrupted");
+  });
 });

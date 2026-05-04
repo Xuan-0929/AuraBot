@@ -3,6 +3,7 @@ import type { TaskRunner } from "./taskRunner";
 import type { SessionRepository } from "../storage/repositories/sessionRepository";
 import type { TaskRepository } from "../storage/repositories/taskRepository";
 import type { EventLogService } from "../telemetry/eventLogService";
+import { selectTaskForControl } from "./taskControlRouter";
 
 export interface CreateTaskFromChatInput {
   profileId: string;
@@ -15,10 +16,24 @@ export interface InterruptLatestActiveTaskInput {
   reason: string;
 }
 
+export interface InterruptTaskFromChatInput {
+  profileId: string;
+  reason: string;
+  taskId?: string;
+  targetHint?: string;
+}
+
 export interface ReviseTaskFromChatInput {
   profileId: string;
   taskId?: string;
+  targetHint?: string;
   title: string;
+}
+
+export interface RunTaskFromChatInput {
+  profileId: string;
+  taskId?: string;
+  targetHint?: string;
 }
 
 export class TaskService {
@@ -64,8 +79,50 @@ export class TaskService {
     return this.taskRepository.getLatestByProfile(profileId);
   }
 
+  findTaskForChatControl(input: {
+    profileId: string;
+    targetHint?: string;
+    activeOnly?: boolean;
+  }): Task | undefined {
+    return selectTaskForControl({
+      tasks: this.taskRepository.listByProfile(input.profileId),
+      targetHint: input.targetHint,
+      activeOnly: input.activeOnly
+    });
+  }
+
   interruptLatestActiveTask(input: InterruptLatestActiveTaskInput): Task | undefined {
     const task = this.taskRepository.getLatestActiveByProfile(input.profileId);
+
+    return this.interruptResolvedTask({
+      profileId: input.profileId,
+      task,
+      reason: input.reason
+    });
+  }
+
+  interruptTaskFromChat(input: InterruptTaskFromChatInput): Task | undefined {
+    const task = input.taskId
+      ? this.taskRepository.getById(input.taskId)
+      : this.findTaskForChatControl({
+          profileId: input.profileId,
+          targetHint: input.targetHint,
+          activeOnly: true
+        });
+
+    return this.interruptResolvedTask({
+      profileId: input.profileId,
+      task,
+      reason: input.reason
+    });
+  }
+
+  private interruptResolvedTask(input: {
+    profileId: string;
+    task?: Task;
+    reason: string;
+  }): Task | undefined {
+    const task = input.task;
 
     if (!task) {
       return undefined;
@@ -92,7 +149,10 @@ export class TaskService {
   reviseTaskFromChat(input: ReviseTaskFromChatInput): Task | undefined {
     const task = input.taskId
       ? this.taskRepository.getById(input.taskId)
-      : this.taskRepository.getLatestByProfile(input.profileId);
+      : this.findTaskForChatControl({
+          profileId: input.profileId,
+          targetHint: input.targetHint
+        });
 
     if (!task) {
       return undefined;
@@ -118,6 +178,22 @@ export class TaskService {
 
   async runLatestQueuedTask(profileId: string): Promise<Task | undefined> {
     const task = this.taskRepository.getLatestActiveByProfile(profileId);
+
+    if (!task || task.status !== "queued") {
+      return task;
+    }
+
+    return this.taskRunner.run(task);
+  }
+
+  async runTaskFromChat(input: RunTaskFromChatInput): Promise<Task | undefined> {
+    const task = input.taskId
+      ? this.taskRepository.getById(input.taskId)
+      : this.findTaskForChatControl({
+          profileId: input.profileId,
+          targetHint: input.targetHint,
+          activeOnly: true
+        });
 
     if (!task || task.status !== "queued") {
       return task;

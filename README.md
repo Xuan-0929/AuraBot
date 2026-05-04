@@ -102,10 +102,10 @@ The last verified local run recorded:
 
 | Check | Result |
 | --- | --- |
-| `corepack pnpm test` | 15 test files, 43 tests passed |
+| `corepack pnpm test` | 16 test files, 47 tests passed |
 | `corepack pnpm typecheck` | passed |
 | `corepack pnpm build` | passed |
-| `corepack pnpm test:e2e` | 8 tests passed |
+| `corepack pnpm test:e2e` | 9 tests passed |
 | Live2D cold-start check | `dev:clean` renders the Hiyori model with `renderState=ready` and `motionGroup=Idle` |
 
 ## Project Layout
@@ -188,5 +188,6 @@ The current priority order is:
 2. Real model adapter layer: add provider config, injectable `gateModel` and `chatModel`, deterministic fallback, streaming replies, and interruption.
 3. Memory v2: replace concept extraction, merge duplicate memories, add time-driven reminders, and build a memory debug view.
 4. Task executor v2: add real task types, artifact handling, tool execution, and cancellation signals while keeping control in main chat.
+5. Main-thread task control v2: extend the current hint-based router with richer references like "第一个", "刚才那个", and task aliases.
 
 See [AuraBot 当前开发状态](docs/aurabot-development-status.md) for the live status board.

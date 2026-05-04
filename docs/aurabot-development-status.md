@@ -28,7 +28,7 @@ AuraBot 当前已经从“传统聊天界面”收敛为桌宠优先形态：
 | 单主聊天线程 | 已完成 MVP | 主 session 持久化消息，控制台负责完整对话。 |
 | Gate/触发判断 | 已完成 MVP | 可判断碎片输入等待、完整输入回复、聊天/任务/任务控制分类。 |
 | 记忆 v1 | 已完成 MVP | 支持 preference、event、follow_up 写入，摘要层和关系边召回。 |
-| 任务 v1 | 已完成 MVP | 可从主聊天创建任务、查询状态、打断、修改、启动并完成 deterministic runner。 |
+| 任务 v1 | 已完成 MVP | 可从主聊天创建任务、按聊天 hint 命中特定任务、查询状态、打断、修改、启动并完成 deterministic runner。 |
 | 事件日志 | 部分完成 | 已写入 gate、memory、task、chat 关键日志；还没有调试视窗或日志开关。 |
 | E2E 演示流 | 已完成 MVP | 桌宠启动、悬浮控制开控制台、桌宠设置同步、位置持久化、状态同步、记忆、碎片等待、任务控制路径都有 e2e 覆盖。 |
 
@@ -38,10 +38,10 @@ AuraBot 当前已经从“传统聊天界面”收敛为桌宠优先形态：
 
 | 命令/检查 | 结果 |
 | --- | --- |
-| `corepack pnpm test` | 15 个 test files、43 个 tests 通过 |
+| `corepack pnpm test` | 16 个 test files、47 个 tests 通过 |
 | `corepack pnpm typecheck` | 通过 |
 | `corepack pnpm build` | 通过 |
-| `corepack pnpm test:e2e` | 8 个 e2e tests 通过 |
+| `corepack pnpm test:e2e` | 9 个 e2e tests 通过 |
 | Live2D 冷启动检查 | `dev:clean` 可见渲染 Hiyori，`renderState=ready`，`motionGroup=Idle` |
 
 可视化产物：

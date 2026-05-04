@@ -7,6 +7,7 @@ import type { SessionRepository } from "../storage/repositories/sessionRepositor
 import type { TaskService } from "../tasks/taskService";
 import type { ProfileService } from "../profiles/profileService";
 import type { EventLogService } from "../telemetry/eventLogService";
+import { parseTaskControlRequest } from "../tasks/taskControlRouter";
 import { evaluateGate } from "./gateEvaluator";
 import { planAssistantResponse } from "./responsePlanner";
 
@@ -68,7 +69,7 @@ export class ChatOrchestrator {
       };
     }
 
-    const semanticSegment = gateDecision.coalescedText;
+    const semanticSegment = gateDecision.inputKind === "chat" ? gateDecision.coalescedText : input.content.trim();
     if (gateDecision.inputKind === "task") {
       const createdTask = this.dependencies.taskService.createTaskFromChat({
         profileId: profile.id,
@@ -211,38 +212,49 @@ export class ChatOrchestrator {
     userMessageId: string;
     content: string;
   }) {
-    const action = classifyTaskControlAction(input.content);
-    const latestTask = this.dependencies.taskService.getLatestTaskForProfile(input.profileId);
+    const request = parseTaskControlRequest(input.content);
+    const selectedTask = this.dependencies.taskService.findTaskForChatControl({
+      profileId: input.profileId,
+      targetHint: request.targetHint,
+      activeOnly: request.action === "start" || request.action === "interrupt"
+    });
     let updatedTask;
     let responseContent: string;
 
-    if (!latestTask) {
-      responseContent = "我这边还没有正在跟的任务。";
-    } else if (action === "query") {
-      responseContent = `这个任务现在是 ${latestTask.status}：${latestTask.title}`;
-    } else if (action === "start") {
-      if (latestTask.status !== "queued") {
-        updatedTask = latestTask;
-        responseContent = `这个任务现在是 ${latestTask.status}，不用重复开始：${latestTask.title}`;
+    if (!selectedTask) {
+      responseContent = request.targetHint
+        ? `我没有找到和「${request.targetHint}」匹配的任务。`
+        : "我这边还没有正在跟的任务。";
+    } else if (request.action === "query") {
+      responseContent = `这个任务现在是 ${selectedTask.status}：${selectedTask.title}`;
+    } else if (request.action === "start") {
+      if (selectedTask.status !== "queued") {
+        updatedTask = selectedTask;
+        responseContent = `这个任务现在是 ${selectedTask.status}，不用重复开始：${selectedTask.title}`;
       } else {
-        updatedTask = await this.dependencies.taskService.runLatestQueuedTask(input.profileId);
+        updatedTask = await this.dependencies.taskService.runTaskFromChat({
+          profileId: input.profileId,
+          taskId: selectedTask.id
+        });
         responseContent = updatedTask
           ? `这个任务我跑完了：${updatedTask.latestProgress}`
           : "我没有找到可开始的排队任务。";
       }
-    } else if (action === "interrupt") {
-      updatedTask = this.dependencies.taskService.interruptLatestActiveTask({
+    } else if (request.action === "interrupt") {
+      updatedTask = this.dependencies.taskService.interruptTaskFromChat({
         profileId: input.profileId,
+        taskId: selectedTask.id,
         reason: "用户在主聊天线程要求停掉"
       });
       responseContent = updatedTask
         ? `行，我先把这个任务停下：${updatedTask.title}`
-        : `这个任务现在是 ${latestTask.status}，没有可打断的运行态。`;
+        : `这个任务现在是 ${selectedTask.status}，没有可打断的运行态。`;
     } else {
+      const revisedTitle = request.revisedTitle ?? input.content;
       updatedTask = this.dependencies.taskService.reviseTaskFromChat({
         profileId: input.profileId,
-        taskId: latestTask.id,
-        title: input.content
+        taskId: selectedTask.id,
+        title: revisedTitle
       });
       responseContent = updatedTask
         ? `我把任务方向改成：${updatedTask.title}`
@@ -263,7 +275,8 @@ export class ChatOrchestrator {
       assistantMessageId: assistantMessage.id,
       writtenMemoryIds: [],
       updatedTaskId: updatedTask?.id ?? null,
-      taskControlAction: action,
+      taskControlAction: request.action,
+      taskControlTargetHint: request.targetHint ?? null,
       gateDecision: "reply"
     });
 
@@ -272,22 +285,4 @@ export class ChatOrchestrator {
       updatedTask
     };
   }
-}
-
-type TaskControlAction = "query" | "start" | "interrupt" | "revise";
-
-function classifyTaskControlAction(content: string): TaskControlAction {
-  if (/(开始做|开始执行|执行一下|执行这个任务|执行任务|去做|跑一下)/.test(content)) {
-    return "start";
-  }
-
-  if (/(做到哪|进度|怎么样|状态)/.test(content)) {
-    return "query";
-  }
-
-  if (/(停掉|取消|打断|中止|暂停|先停)/.test(content)) {
-    return "interrupt";
-  }
-
-  return "revise";
 }

@@ -202,6 +202,36 @@ test("controls a task through the main chat instead of task panel buttons", asyn
   }
 });
 
+test("targets a specific task through main chat wording when multiple tasks exist", async () => {
+  const { electronApp, petWindow, userDataDir } = await launchAuraBot();
+
+  try {
+    const consoleWindow = await openConsole(electronApp, petWindow);
+    const input = consoleWindow.getByPlaceholder("Say something");
+
+    await input.fill("帮我整理一份明天会议的清单。");
+    await consoleWindow.getByRole("button", { name: "Send" }).click();
+    await expect(consoleWindow.locator(".task-status-card").filter({ hasText: "明天会议" })).toContainText("queued");
+
+    await input.fill("帮我生成一份周报初稿。");
+    await consoleWindow.getByRole("button", { name: "Send" }).click();
+    await expect(consoleWindow.locator(".task-status-card").filter({ hasText: "周报" })).toContainText("queued");
+
+    await input.fill("把会议任务改成整理后天路演的清单。");
+    await consoleWindow.getByRole("button", { name: "Send" }).click();
+    await expect(consoleWindow.locator(".task-status-card").filter({ hasText: "后天路演" })).toContainText("queued");
+    await expect(consoleWindow.locator(".task-status-card").filter({ hasText: "周报" })).toContainText("queued");
+
+    await input.fill("停掉周报任务。");
+    await consoleWindow.getByRole("button", { name: "Send" }).click();
+    await expect(consoleWindow.locator(".task-status-card").filter({ hasText: "周报" })).toContainText("interrupted");
+    await expect(consoleWindow.locator(".task-status-card").filter({ hasText: "后天路演" })).toContainText("queued");
+    await expect(consoleWindow.locator(".task-panel")).toHaveCount(0);
+  } finally {
+    await cleanupAuraBot(electronApp, userDataDir);
+  }
+});
+
 test("starts a queued task from the main chat and reports completion", async () => {
   const { electronApp, petWindow, userDataDir } = await launchAuraBot();
 
