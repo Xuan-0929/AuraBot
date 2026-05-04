@@ -1,5 +1,5 @@
 import { create } from "zustand";
-import type { AgentStatus, AppInitialState } from "../../../shared/contracts/chat";
+import type { AgentStatus, AppInitialState, SendChatMessageResult } from "../../../shared/contracts/chat";
 import type { PetActivity } from "../../../shared/contracts/pet";
 import type { Message } from "../../../shared/schemas/message";
 import { DEFAULT_PET_SETTINGS, type PetSettings, type PetSettingsPatch } from "../../../shared/schemas/petSettings";
@@ -26,7 +26,7 @@ interface AuraBotStore {
   clearPetActivity(id?: string): void;
 }
 
-export const useAuraBotStore = create<AuraBotStore>((set) => ({
+export const useAuraBotStore = create<AuraBotStore>((set, get) => ({
   messages: [],
   tasks: [],
   agentStatus: "idle",
@@ -73,18 +73,36 @@ export const useAuraBotStore = create<AuraBotStore>((set) => ({
       return;
     }
 
-    set({ agentStatus: "thinking" });
-    const result = await window.aurabot.sendChatMessage({ content: trimmed, source });
+    const { mainSessionId, profile } = get();
+    const pendingUserMessage: Message = {
+      id: `local-pending-${Date.now()}-${Math.random().toString(36).slice(2, 8)}`,
+      sessionId: mainSessionId ?? "main-session-pending",
+      profileId: profile?.id ?? "profile-pending",
+      role: "user",
+      content: trimmed,
+      createdAt: new Date().toISOString()
+    };
 
     set((current) => ({
-      messages: [
-        ...current.messages,
-        result.userMessage,
-        ...(result.assistantMessage ? [result.assistantMessage] : [])
-      ],
-      tasks: updateTasks(current.tasks, result.createdTask ?? result.updatedTask),
-      agentStatus: result.agentStatus
+      agentStatus: "thinking",
+      messages: [...current.messages, pendingUserMessage]
     }));
+
+    try {
+      const result = await window.aurabot.sendChatMessage({ content: trimmed, source });
+
+      set((current) => ({
+        messages: reconcileMessages(current.messages, pendingUserMessage.id, result),
+        tasks: updateTasks(current.tasks, result.createdTask ?? result.updatedTask),
+        agentStatus: result.agentStatus
+      }));
+    } catch (error) {
+      set((current) => ({
+        messages: current.messages.filter((message) => message.id !== pendingUserMessage.id),
+        agentStatus: "idle"
+      }));
+      throw error;
+    }
   },
   showPetNotice(message: string) {
     set({
@@ -119,4 +137,20 @@ function updateTasks(tasks: Task[], changedTask?: Task): Task[] {
   }
 
   return tasks.map((task) => (task.id === changedTask.id ? changedTask : task));
+}
+
+function reconcileMessages(messages: Message[], pendingMessageId: string, result: SendChatMessageResult): Message[] {
+  const nextMessages = messages.map((message) => (message.id === pendingMessageId ? result.userMessage : message));
+
+  if (!nextMessages.some((message) => message.id === result.userMessage.id)) {
+    nextMessages.push(result.userMessage);
+  }
+
+  const { assistantMessage } = result;
+
+  if (assistantMessage && !nextMessages.some((message) => message.id === assistantMessage.id)) {
+    nextMessages.push(assistantMessage);
+  }
+
+  return nextMessages;
 }

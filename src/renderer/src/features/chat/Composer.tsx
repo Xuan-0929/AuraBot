@@ -10,9 +10,12 @@ export function Composer({ onSend }: { onSend(content: string): Promise<void> })
     }
 
     setSubmitting(true);
+    setContent("");
     try {
       await onSend(nextContent);
-      setContent("");
+    } catch (error) {
+      setContent((currentContent) => currentContent || nextContent);
+      throw error;
     } finally {
       setSubmitting(false);
     }

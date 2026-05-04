@@ -11,10 +11,11 @@ AuraBot 当前已经从“传统聊天界面”收敛为桌宠优先形态：
 1. 默认启动一个透明、置顶的小型桌面 Live2D 小人窗口，平时只展示小人本体。
 2. 鼠标悬浮到小人上时，小人下方浮现半透明 `Drag / Voice / Console` 控制。
 3. 用户点击控制台按钮后，打开或聚焦独立控制台视窗进行完整主线程对话。
-4. 任务创建、查询、打断、修改、启动都通过控制台里的主聊天线程完成。
-5. 控制台只展示轻量任务状态条，不提供任务控制按钮。
-6. 任务完成和桌宠语音回复可以通过小人气泡临时浮现。
-7. 记忆系统当前是本地 deterministic 的“分层摘要 + 图状联想” MVP。
+4. 控制台输入 `Enter` 直接发送，`Ctrl+Enter` 换行；用户消息和输入框清空都先本地即时完成，gate/模型结果随后回填。
+5. 任务创建、查询、打断、修改、启动都通过控制台里的主聊天线程完成。
+6. 控制台只展示轻量任务状态条，不提供任务控制按钮。
+7. 任务完成和桌宠语音回复可以通过小人气泡临时浮现。
+8. 记忆系统当前是本地 deterministic 的“分层摘要 + 图状联想” MVP。
 
 ## 已完成
 
@@ -25,7 +26,7 @@ AuraBot 当前已经从“传统聊天界面”收敛为桌宠优先形态：
 | Live2D 真实模型 | 已完成 | 已接入官方样例 `Hiyori`，Cubism Core 本地打包，不依赖启动时 CDN。 |
 | Live2D 桌宠交互层 | 部分完成 | 悬浮控制条、拖拽按钮、控制台按钮、点击穿透设置、任务完成气泡、位置持久化、状态 motion 映射已接入。 |
 | SQLite 数据层 | 已完成 | 已有 profiles、souls、sessions、messages、memory、tasks、event_logs 等表。 |
-| 单主聊天线程 | 已完成 MVP | 主 session 持久化消息，控制台负责完整对话。 |
+| 单主聊天线程 | 已完成 MVP | 主 session 持久化消息，控制台负责完整对话；用户消息乐观上屏，不再等待 gate/chat 模型返回。 |
 | 模型适配层 | 部分完成 | 已有 `gateModel` / `chatModel` 注入接口、OpenAI-compatible provider、userData/系统级 JSON 配置、env 配置和 deterministic fallback；还缺流式与中断。 |
 | Gate/触发判断 | 已完成 MVP | 可判断碎片输入等待、完整输入回复、话题是否结束、聊天/任务/任务控制分类。 |
 | 记忆 v1 | 已完成 MVP | 支持 preference、event、follow_up 写入，摘要层和关系边召回。 |
@@ -39,7 +40,7 @@ AuraBot 当前已经从“传统聊天界面”收敛为桌宠优先形态：
 
 | 命令/检查 | 结果 |
 | --- | --- |
-| `corepack pnpm test` | 20 个 test files、56 个 tests 通过 |
+| `corepack pnpm test` | 22 个 test files、58 个 tests 通过 |
 | `corepack pnpm typecheck` | 通过 |
 | `corepack pnpm build` | 通过 |
 | `corepack pnpm test:e2e` | 11 个 e2e tests 通过 |
@@ -53,7 +54,7 @@ AuraBot 当前已经从“传统聊天界面”收敛为桌宠优先形态：
 ## 当前边界
 
 1. 模型角色默认仍走 deterministic fallback；外部模型调用需要本地 `aurabot.config.json` / `config.json`、macOS 系统级 `/Library/Application Support/AuraBot/config.json`，或环境变量。
-2. 模型回复目前是非流式；还没有用户新消息打断 in-flight generation。
+2. 用户消息已经即时显示，但模型回复目前仍是非流式；还没有用户新消息打断 in-flight generation。
 3. 记忆抽取和联想是规则实现，没有 embedding，也没有 LLM 参与候选边判断。
 4. 任务 runner 是 deterministic，占位验证任务生命周期，不是真实工具执行代理。
 5. Live2D 状态行为当前复用 Hiyori 现有 motion group，还没有定制表情资源或更细的动画状态机。
@@ -80,7 +81,7 @@ AuraBot 当前已经从“传统聊天界面”收敛为桌宠优先形态：
 
 建议任务：
 
-1. 增加流式回复，把 `replying` 状态和消息逐字/逐段展示接起来。
+1. 增加流式回复，把 `replying` 状态和消息逐字/逐段展示接起来；用户消息即时显示已完成。
 2. 支持用户新消息打断当前强模型生成。
 3. 为 provider 调用增加重试、超时、失败事件日志和可见错误提示。
 4. 在控制台或设置视窗暴露当前模型连接状态。

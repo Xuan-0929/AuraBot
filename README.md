@@ -1,5 +1,7 @@
 # AuraBot
 
+[中文 README](README.zh-CN.md)
+
 AuraBot is a desktop-first companion AI MVP. The product shape is not a traditional always-open chat app: the default surface is a small Live2D desktop pet, and hovering the character reveals lightweight controls for drag, voice input, and the full console conversation.
 
 The current build validates the first useful loop:
@@ -59,7 +61,17 @@ Run the desktop app in development mode:
 corepack pnpm dev
 ```
 
-The app should open a small transparent Live2D pet window. Hover the character and click `Console` to open the console.
+The app should open a small transparent Live2D pet window. The bundled Hiyori model is loaded from:
+
+```text
+src/renderer/public/assets/live2d/hiyori/Hiyori.model3.json
+```
+
+Hover the character and click `Console` to open the console window. In the console composer:
+
+1. `Enter` sends the message.
+2. `Ctrl+Enter` inserts a line break.
+3. The user message is added to the conversation immediately; gate/model work continues in the background and assistant/task output arrives later.
 
 Run with clean temporary user data and a small Live2D debug badge:
 
@@ -67,7 +79,7 @@ Run with clean temporary user data and a small Live2D debug badge:
 corepack pnpm dev:clean
 ```
 
-Clean launches skip the macOS system-level AuraBot config file so model/API tests stay isolated.
+Clean launches create a temporary user data directory, set `AURABOT_DEBUG_PET=1`, and skip the macOS system-level AuraBot config file. Use this mode when checking whether the desktop pet and Live2D model can render without your local API config influencing the run.
 
 Run the production build with clean temporary user data:
 
@@ -98,6 +110,19 @@ On macOS, normal launches also read system-level config from:
 /Library/Application Support/AuraBot/config.json
 ```
 
+For day-to-day local testing on macOS, the simplest normal path is:
+
+```text
+/Library/Application Support/AuraBot/config.json
+```
+
+Create or edit it with your preferred editor, for example:
+
+```bash
+sudo mkdir -p "/Library/Application Support/AuraBot"
+sudo nano "/Library/Application Support/AuraBot/config.json"
+```
+
 Example:
 
 ```json
@@ -108,7 +133,8 @@ Example:
     "baseUrl": "https://api.example.com/v1",
     "apiKey": "your-api-key",
     "model": "your-lightweight-model",
-    "temperature": 0
+    "temperature": 0,
+    "timeoutMs": 8000
   },
   "chatModel": {
     "enabled": true,
@@ -116,10 +142,13 @@ Example:
     "baseUrl": "https://api.example.com/v1",
     "apiKey": "your-api-key",
     "model": "your-strong-reasoning-model",
-    "temperature": 0.7
+    "temperature": 0.7,
+    "timeoutMs": 30000
   }
 }
 ```
+
+Use the provider API root as `baseUrl`, usually ending in `/v1`. Do not point `baseUrl` directly at `/chat/completions`; AuraBot appends the chat completions path itself.
 
 For temporary development launches, environment variables can override the file:
 
@@ -129,12 +158,14 @@ AURABOT_MODEL_BASE_URL=https://api.example.com/v1 \
 AURABOT_MODEL_API_KEY=your-api-key \
 AURABOT_GATE_MODEL_ENABLED=1 \
 AURABOT_GATE_MODEL_NAME=your-lightweight-model \
+AURABOT_GATE_MODEL_TIMEOUT_MS=8000 \
 AURABOT_CHAT_MODEL_ENABLED=1 \
 AURABOT_CHAT_MODEL_NAME=your-strong-reasoning-model \
+AURABOT_CHAT_MODEL_TIMEOUT_MS=30000 \
 corepack pnpm dev:clean
 ```
 
-Keep API keys local and out of git.
+Keep API keys local and out of git. `corepack pnpm dev` reads the normal system-level config above; `corepack pnpm dev:clean` ignores it unless you pass env vars.
 
 ## Verification Commands
 
@@ -166,7 +197,7 @@ The last verified local run recorded:
 
 | Check | Result |
 | --- | --- |
-| `corepack pnpm test` | 20 test files, 56 tests passed |
+| `corepack pnpm test` | 22 test files, 58 tests passed |
 | `corepack pnpm typecheck` | passed |
 | `corepack pnpm build` | passed |
 | `corepack pnpm test:e2e` | 11 tests passed |
@@ -222,9 +253,35 @@ docs/
   aurabot-memory-structure.md
 ```
 
-## Live2D Asset
+## Live2D Model Loading
 
-The current pet model is Hiyori from Live2D's official Cubism Web Samples.
+The current pet model is Hiyori from Live2D's official Cubism Web Samples. No extra download is needed for the current checkout.
+
+Runtime model URL:
+
+```text
+assets/live2d/hiyori/Hiyori.model3.json
+```
+
+Renderer constant:
+
+```text
+src/renderer/src/features/pet/DesktopPet.tsx
+```
+
+Current code:
+
+```ts
+const MODEL_PATH = "assets/live2d/hiyori/Hiyori.model3.json";
+```
+
+To replace the model:
+
+1. Put the Cubism 4 model folder under `src/renderer/public/assets/live2d/<model-name>/`.
+2. Keep the model's `*.model3.json`, textures, motions, physics, and expression files in the relative layout expected by that manifest.
+3. Update `MODEL_PATH` in `src/renderer/src/features/pet/DesktopPet.tsx`.
+4. Add or update a `SOURCE.md` in the model folder with source and license notes.
+5. Start with `corepack pnpm dev:clean`; the debug badge should show `ready` when the model loads.
 
 Source metadata is kept at:
 
@@ -239,7 +296,7 @@ The Cubism Core runtime is bundled through `live2dcubismcore@1.0.2`; app startup
 This is still an MVP skeleton, not a production companion:
 
 1. Model roles default to deterministic local fallback; external calls require local config or environment variables.
-2. Model replies are non-streaming; user-message interruption of an in-flight generation is not implemented yet.
+2. User messages now render immediately, but model replies are still non-streaming and user-message interruption of an in-flight generation is not implemented yet.
 3. Memory extraction and relation building are rule-based, not embedding or LLM powered.
 4. The task runner validates lifecycle behavior but does not yet call real external tools.
 5. Live2D status behavior uses the bundled Hiyori motion groups; custom expressions and richer animation tuning are not implemented yet.

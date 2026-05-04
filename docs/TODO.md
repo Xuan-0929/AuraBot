@@ -523,7 +523,7 @@ Must show:
 | Task 3: Build the Main Chat UI Shell | 已完成并调整形态 | 不再是传统主聊天窗口；当前为桌面小人 + 悬浮控制打开控制台视窗。 |
 | Task 4: Add Profile and Soul Loading | 部分完成 | 默认 profile/soul 已可 seed；还缺专门的 soul schema 单元测试和 Profile UI。 |
 | Task 5: Implement the Gate Evaluator | 已完成 MVP | 支持碎片等待、完整回复、话题结束、chat/task/task_control 分类和事件日志；可由轻量外部模型接管。 |
-| Task 6: Implement the Main Chat Orchestrator | 已完成 MVP | 支持消息持久化、注入式 gate/chat model、memory 写入/召回、按聊天 hint 控制特定 task；还缺真实流式生成取消。 |
+| Task 6: Implement the Main Chat Orchestrator | 已完成 MVP | 支持消息持久化、控制台用户消息乐观上屏、注入式 gate/chat model、memory 写入/召回、按聊天 hint 控制特定 task；还缺真实流式生成取消。 |
 | Task 7: Add Mixed Memory v1 | 已完成 MVP | 支持 preference/event/follow_up，摘要层、关系边和 bounded graph traversal。 |
 | Task 8: Add the Task Engine and Console Task Status Strip | 已完成 MVP | 支持主聊天创建、按目标 hint 查询/打断/修改/启动任务；任务条只展示状态，不放控制按钮。 |
 | Task 9: Add Debugging and Event Log Surfaces | 部分完成 | `event_logs` 已记录关键事件；还缺 settings/debug 视窗和日志开关。 |
@@ -533,7 +533,7 @@ Must show:
 
 最近一次完整验证记录：
 
-1. `corepack pnpm test`：20 个 test files、56 个 tests 通过。
+1. `corepack pnpm test`：22 个 test files、58 个 tests 通过。
 2. `corepack pnpm typecheck`：通过。
 3. `corepack pnpm build`：通过。
 4. `corepack pnpm test:e2e`：11 个 e2e tests 通过。
@@ -567,8 +567,9 @@ Must show:
 1. 已完成：provider config 支持 `API Base URL`、`API Key`、`chatModel`、`gateModel`、enable switch。
 2. 已完成：定义 `gateModel` / `chatModel` adapter interface，并接入 OpenAI-compatible provider。
 3. 已完成：保留 deterministic adapter 作为无 key fallback 和测试 adapter。
-4. 下一步：加入流式回复和用户新消息中断生成。
-5. 下一步：增加 provider 重试、超时、失败事件日志和连接状态展示。
+4. 已完成：控制台用户消息和输入框清空本地即时提交，不再等待 gate/chat 模型返回。
+5. 下一步：加入流式回复和用户新消息中断生成。
+6. 下一步：增加 provider 重试、超时、失败事件日志和连接状态展示。
 
 ### Next 3: Memory v2
 
