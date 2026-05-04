@@ -169,7 +169,7 @@ The last verified local run recorded:
 | `corepack pnpm test` | 20 test files, 56 tests passed |
 | `corepack pnpm typecheck` | passed |
 | `corepack pnpm build` | passed |
-| `corepack pnpm test:e2e` | 10 tests passed |
+| `corepack pnpm test:e2e` | 11 tests passed |
 | Live2D cold-start check | `dev:clean` renders the Hiyori model with `renderState=ready` and `motionGroup=Idle` |
 
 ## Project Layout

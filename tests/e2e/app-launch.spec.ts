@@ -136,6 +136,32 @@ test("persists a chat message and shows a memory-aware acknowledgement in the co
   }
 });
 
+test("sends console input with Enter and inserts line breaks with Ctrl+Enter", async () => {
+  const { electronApp, petWindow, userDataDir } = await launchAuraBot();
+
+  try {
+    const consoleWindow = await openConsole(electronApp, petWindow);
+    const input = consoleWindow.getByPlaceholder("Say something");
+
+    await input.fill("我喜欢吃火锅。");
+    await input.press("Enter");
+    await expect(consoleWindow.locator(".message-user").filter({ hasText: "我喜欢吃火锅。" })).toBeVisible();
+    await expect(input).toHaveValue("");
+
+    await input.fill("第一行");
+    await input.press("Control+Enter");
+    await input.type("第二行");
+    await expect(input).toHaveValue("第一行\n第二行");
+    await expect(consoleWindow.locator(".message-user").filter({ hasText: /第一行\s*第二行/ })).toHaveCount(0);
+
+    await input.press("Enter");
+    await expect(consoleWindow.locator(".message-user").filter({ hasText: /第一行\s*第二行/ })).toBeVisible();
+    await expect(input).toHaveValue("");
+  } finally {
+    await cleanupAuraBot(electronApp, userDataDir);
+  }
+});
+
 test("waits on fragmented input and replies after the thought is completed", async () => {
   const { electronApp, petWindow, userDataDir } = await launchAuraBot();
 
