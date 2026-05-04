@@ -10,12 +10,24 @@ export const modelRoleConfigSchema = z.object({
   timeoutMs: z.number().int().positive().optional()
 });
 
+export const taskRunnerConfigSchema = z.object({
+  provider: z.enum(["deterministic", "codex"]).default("deterministic"),
+  codexCommand: z.string().min(1).optional(),
+  workingDirectory: z.string().min(1).optional(),
+  model: z.string().min(1).optional(),
+  sandbox: z.enum(["read-only", "workspace-write", "danger-full-access"]).default("workspace-write"),
+  approvalPolicy: z.enum(["untrusted", "on-request", "never", "on-failure"]).default("never"),
+  timeoutMs: z.number().int().positive().default(300000)
+});
+
 export const appConfigSchema = z.object({
   storagePath: z.string().min(1),
   debugLogging: z.boolean().default(true),
   gateModel: modelRoleConfigSchema,
-  chatModel: modelRoleConfigSchema
+  chatModel: modelRoleConfigSchema,
+  taskRunner: taskRunnerConfigSchema
 });
 
 export type ModelRoleConfig = z.infer<typeof modelRoleConfigSchema>;
+export type TaskRunnerConfig = z.infer<typeof taskRunnerConfigSchema>;
 export type AppConfig = z.infer<typeof appConfigSchema>;

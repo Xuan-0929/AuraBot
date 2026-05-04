@@ -2,8 +2,10 @@ import { join } from "node:path";
 import { BrowserWindow, screen } from "electron";
 import { IPC_CHANNELS } from "../shared/contracts/ipc";
 import type { AgentStatus } from "../shared/contracts/chat";
+import type { Message } from "../shared/schemas/message";
 import type { PetActivity } from "../shared/contracts/pet";
 import { DEFAULT_PET_SETTINGS, type PetSettings } from "../shared/schemas/petSettings";
+import type { Task } from "../shared/schemas/task";
 import { clampWindowBoundsToWorkArea, placeWindowNearPet, type WindowRectangle } from "./windowPlacement";
 
 let petWindow: BrowserWindow | undefined;
@@ -133,6 +135,14 @@ export function broadcastPetActivity(activity: PetActivity): void {
 
 export function broadcastAgentStatus(status: AgentStatus): void {
   sendToRenderer(IPC_CHANNELS.agentStatusChanged, status);
+}
+
+export function broadcastChatMessage(message: Message): void {
+  sendToRenderer(IPC_CHANNELS.chatMessageCreated, message);
+}
+
+export function broadcastTaskChanged(task: Task): void {
+  sendToRenderer(IPC_CHANNELS.taskChanged, task);
 }
 
 export function broadcastPetSettings(settings: PetSettings): void {

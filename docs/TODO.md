@@ -525,7 +525,7 @@ Must show:
 | Task 5: Implement the Gate Evaluator | 已完成 MVP | 支持碎片等待、完整回复、话题结束、chat/task/task_control 分类和事件日志；可由轻量外部模型接管。 |
 | Task 6: Implement the Main Chat Orchestrator | 已完成 MVP | 支持消息持久化、控制台用户消息乐观上屏、注入式 gate/chat model、memory 写入/召回、按聊天 hint 控制特定 task；还缺真实流式生成取消。 |
 | Task 7: Add Mixed Memory v1 | 已完成 MVP | 支持 preference/event/follow_up，摘要层、关系边和 bounded graph traversal。 |
-| Task 8: Add the Task Engine and Console Task Status Strip | 已完成 MVP | 支持主聊天创建、按目标 hint 查询/打断/修改/启动任务；任务条只展示状态，不放控制按钮。 |
+| Task 8: Add the Task Engine and Console Task Status Strip | 已完成 MVP | 支持主聊天创建、按目标 hint 查询/打断/修改/启动任务；任务条只展示状态，不放控制按钮；显式配置后可调用本机 Codex 子任务 runner。 |
 | Task 9: Add Debugging and Event Log Surfaces | 部分完成 | `event_logs` 已记录关键事件；还缺 settings/debug 视窗和日志开关。 |
 | Task 10: Hardening Pass and MVP Demo Flow | 部分完成 | e2e、截图、`README.md` 和本地使用说明已覆盖；还缺打包/发布说明。 |
 
@@ -533,7 +533,7 @@ Must show:
 
 最近一次完整验证记录：
 
-1. `corepack pnpm test`：22 个 test files、58 个 tests 通过。
+1. `corepack pnpm test`：23 个 test files、74 个 tests 通过。
 2. `corepack pnpm typecheck`：通过。
 3. `corepack pnpm build`：通过。
 4. `corepack pnpm test:e2e`：11 个 e2e tests 通过。
@@ -589,11 +589,13 @@ Must show:
 
 建议交付：
 
-1. 设计真实 `TaskRegistry` 类型和输入输出协议。
-2. 接入至少一个实际工具型任务。
-3. 明确 task artifact 写入和主线程回流格式。
-4. 支持取消信号贯穿 runner。
-5. 继续保持控制面在主聊天线程，不新增任务按钮面板。
+1. 已完成：opt-in Codex 子任务 runner，可在创建任务后后台调用本机 `codex exec`，实时广播 JSONL 进度，查询时暴露最近进展，并把最终结果回流主聊天。
+2. 下一步：设计真实 `TaskRegistry` 类型和输入输出协议。
+3. 下一步：明确 task artifact 写入和主线程回流格式。
+4. 已完成：主聊天打断任务会取消底层 runner / Codex 子进程，避免只改 UI 状态。
+5. 已完成：服务启动时会把上次遗留的 running/waiting 任务标记为失联失败，避免永久卡在运行态。
+6. 下一步：补真正 resume 和更完整的 artifact 回流协议。
+7. 继续保持控制面在主聊天线程，不新增任务按钮面板。
 
 ### Next 5: Handoff and Push Prep
 

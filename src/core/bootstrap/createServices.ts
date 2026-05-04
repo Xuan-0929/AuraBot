@@ -9,12 +9,18 @@ import { SessionRepository } from "../storage/repositories/sessionRepository";
 import { TaskRepository } from "../storage/repositories/taskRepository";
 import { TaskService } from "../tasks/taskService";
 import { DeterministicTaskRunner } from "../tasks/taskRunner";
+import { CliCodexAgentClient, CodexTaskRunner } from "../tasks/codexTaskRunner";
 import { EventLogService } from "../telemetry/eventLogService";
 import { ProfileService } from "../profiles/profileService";
 import { createChatModel, type ChatModel } from "../llm/chatModel";
 import { createGateModel, type GateModel } from "../llm/gateModel";
+import type { AppConfig, TaskRunnerConfig } from "../../shared/schemas/config";
+import type { TaskRunner } from "../tasks/taskRunner";
+import { existsSync } from "node:fs";
+import { join } from "node:path";
 
 export interface AppServices {
+  config: AppConfig;
   database: AppDatabase;
   profileService: ProfileService;
   sessionRepository: SessionRepository;
@@ -36,11 +42,16 @@ export function createServices(userDataPath: string): AppServices {
   const sessionRepository = new SessionRepository(database);
   const eventLogService = new EventLogService(database);
   const taskRepository = new TaskRepository(database);
-  const taskRunner = new DeterministicTaskRunner(taskRepository, eventLogService);
+  const taskRunner = createTaskRunner(config.taskRunner, {
+    userDataPath,
+    taskRepository,
+    eventLogService
+  });
   const gateModel = createGateModel(config.gateModel);
   const chatModel = createChatModel(config.chatModel);
 
   const services = {
+    config,
     database,
     profileService,
     sessionRepository,
@@ -51,9 +62,39 @@ export function createServices(userDataPath: string): AppServices {
     gateModel,
     chatModel
   };
+  services.taskService.recoverOrphanedActiveTasks();
 
   return {
     ...services,
     chatOrchestrator: new ChatOrchestrator(services)
   };
+}
+
+function createTaskRunner(
+  config: TaskRunnerConfig,
+  dependencies: {
+    userDataPath: string;
+    taskRepository: TaskRepository;
+    eventLogService: EventLogService;
+  }
+): TaskRunner {
+  if (config.provider !== "codex") {
+    return new DeterministicTaskRunner(dependencies.taskRepository, dependencies.eventLogService);
+  }
+
+  return new CodexTaskRunner(dependencies.taskRepository, dependencies.eventLogService, new CliCodexAgentClient(), {
+    command: config.codexCommand ?? getDefaultCodexCommand(),
+    workingDirectory: config.workingDirectory ?? process.cwd(),
+    model: config.model,
+    sandbox: config.sandbox,
+    approvalPolicy: config.approvalPolicy,
+    timeoutMs: config.timeoutMs,
+    outputDirectory: join(dependencies.userDataPath, "task-agent-output")
+  });
+}
+
+function getDefaultCodexCommand(): string {
+  const appBundledCodex = "/Applications/Codex.app/Contents/Resources/codex";
+
+  return existsSync(appBundledCodex) ? appBundledCodex : "codex";
 }

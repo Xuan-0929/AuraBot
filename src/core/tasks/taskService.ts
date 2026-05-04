@@ -36,6 +36,11 @@ export interface RunTaskFromChatInput {
   targetHint?: string;
 }
 
+export interface RunTaskInBackgroundInput extends RunTaskFromChatInput {
+  onProgress?: (task: Task) => void;
+  onSettled?: (task: Task) => void;
+}
+
 export class TaskService {
   constructor(
     private readonly taskRepository: TaskRepository,
@@ -69,6 +74,42 @@ export class TaskService {
     });
 
     return task;
+  }
+
+  recoverOrphanedActiveTasks(): Task[] {
+    const activeTasks = this.taskRepository.listByStatuses(["running", "waiting"]);
+    const recoveredTasks: Task[] = [];
+
+    for (const task of activeTasks) {
+      const summary = `任务在上次应用退出时失联，已标记失败：${task.title}`;
+      this.taskRepository.appendEvent({
+        taskId: task.id,
+        eventType: "task.recovered_orphaned",
+        summary,
+        payload: {
+          previousStatus: task.status,
+          previousProgress: task.latestProgress
+        }
+      });
+      const recovered = this.taskRepository.updateStatus({
+        taskId: task.id,
+        status: "failed",
+        latestProgress: summary
+      });
+
+      if (recovered) {
+        this.eventLogService.record("task.recovered_orphaned", {
+          profileId: recovered.profileId,
+          taskId: recovered.id,
+          title: recovered.title,
+          previousStatus: task.status,
+          status: recovered.status
+        });
+        recoveredTasks.push(recovered);
+      }
+    }
+
+    return recoveredTasks;
   }
 
   listTasksForProfile(profileId: string): Task[] {
@@ -135,11 +176,13 @@ export class TaskService {
     });
 
     if (interrupted) {
+      const runnerCancelled = this.taskRunner.cancel?.(interrupted.id) ?? false;
       this.eventLogService.record("task.interrupted", {
         profileId: input.profileId,
         taskId: interrupted.id,
         reason: input.reason,
-        status: interrupted.status
+        status: interrupted.status,
+        runnerCancelled
       });
     }
 
@@ -200,6 +243,56 @@ export class TaskService {
     }
 
     return this.taskRunner.run(task);
+  }
+
+  runTaskInBackground(input: RunTaskInBackgroundInput): Task | undefined {
+    const task = input.taskId
+      ? this.taskRepository.getById(input.taskId)
+      : this.findTaskForChatControl({
+          profileId: input.profileId,
+          targetHint: input.targetHint,
+          activeOnly: true
+        });
+
+    if (!task || task.status !== "queued") {
+      return task;
+    }
+
+    const runPromise = this.taskRunner.run(task, {
+      onProgress: input.onProgress
+    });
+    const startedTask = this.taskRepository.getById(task.id);
+    void runPromise.then((settledTask) => {
+      if (settledTask) {
+        input.onSettled?.(settledTask);
+      }
+    }).catch((error) => {
+      const message = error instanceof Error ? error.message : String(error);
+      const failedSummary = `任务执行异常：${message}`;
+      this.taskRepository.appendEvent({
+        taskId: task.id,
+        eventType: "task.failed",
+        summary: failedSummary
+      });
+      const failedTask = this.taskRepository.updateStatus({
+        taskId: task.id,
+        status: "failed",
+        latestProgress: failedSummary
+      });
+
+      if (failedTask) {
+        this.eventLogService.record("task.failed", {
+          profileId: failedTask.profileId,
+          taskId: failedTask.id,
+          title: failedTask.title,
+          status: failedTask.status,
+          reason: message
+        });
+        input.onSettled?.(failedTask);
+      }
+    });
+
+    return startedTask;
   }
 
   listTaskEvents(taskId: string): TaskEvent[] {

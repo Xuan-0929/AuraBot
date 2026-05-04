@@ -1,5 +1,6 @@
 import type { SendChatMessageInput, SendChatMessageResult } from "../../shared/contracts/chat";
 import type { MemoryNode } from "../../shared/schemas/memory";
+import type { Task } from "../../shared/schemas/task";
 import { extractMemoryCandidates, shouldAskMemoryRecall } from "../memory/memoryExtractor";
 import type { MemoryService } from "../memory/memoryService";
 import type { MessageRepository } from "../storage/repositories/messageRepository";
@@ -230,7 +231,7 @@ export class ChatOrchestrator {
         ? `我没有找到和「${request.targetHint}」匹配的任务。`
         : "我这边还没有正在跟的任务。";
     } else if (request.action === "query") {
-      responseContent = `这个任务现在是 ${selectedTask.status}：${selectedTask.title}`;
+      responseContent = this.buildTaskStatusResponse(selectedTask);
     } else if (request.action === "start") {
       if (selectedTask.status !== "queued") {
         updatedTask = selectedTask;
@@ -240,9 +241,15 @@ export class ChatOrchestrator {
           profileId: input.profileId,
           taskId: selectedTask.id
         });
-        responseContent = updatedTask
-          ? `这个任务我跑完了：${updatedTask.latestProgress}`
-          : "我没有找到可开始的排队任务。";
+        if (!updatedTask) {
+          responseContent = "我没有找到可开始的排队任务。";
+        } else if (updatedTask.status === "completed") {
+          responseContent = `这个任务我跑完了：${updatedTask.latestProgress}`;
+        } else if (updatedTask.status === "failed") {
+          responseContent = `这个任务跑失败了：${updatedTask.latestProgress}`;
+        } else {
+          responseContent = `这个任务现在是 ${updatedTask.status}：${updatedTask.latestProgress}`;
+        }
       }
     } else if (request.action === "interrupt") {
       updatedTask = this.dependencies.taskService.interruptTaskFromChat({
@@ -288,5 +295,50 @@ export class ChatOrchestrator {
       assistantMessage,
       updatedTask
     };
+  }
+
+  private buildTaskStatusResponse(task: Task) {
+    const events = this.dependencies.taskService.listTaskEvents(task.id);
+    const latestEvent = events.at(-1);
+    const details = [
+      `这个任务现在是 ${task.status}：${task.title}`,
+      `最近进展：${task.latestProgress}`
+    ];
+
+    if (latestEvent) {
+      details.push(`最近事件：${latestEvent.summary}`);
+      details.push(...this.formatTaskEventDetails(latestEvent));
+    }
+
+    if (task.status === "running") {
+      details.push("我会在这个子任务完成、失败或异常时自动回到主聊天。");
+    }
+
+    if (task.status === "queued") {
+      details.push("它还没进入执行态；如果需要立刻执行，可以说“开始做这个任务”。");
+    }
+
+    return details.join("\n");
+  }
+
+  private formatTaskEventDetails(event: { payload: Record<string, unknown> }): string[] {
+    const details: string[] = [];
+    const cwd = typeof event.payload.cwd === "string" ? event.payload.cwd : undefined;
+    const outputFile = typeof event.payload.outputFile === "string" ? event.payload.outputFile : undefined;
+    const sandbox = typeof event.payload.sandbox === "string" ? event.payload.sandbox : undefined;
+
+    if (cwd) {
+      details.push(`运行目录：${cwd}`);
+    }
+
+    if (outputFile) {
+      details.push(`输出文件：${outputFile}`);
+    }
+
+    if (sandbox) {
+      details.push(`sandbox：${sandbox}`);
+    }
+
+    return details;
   }
 }

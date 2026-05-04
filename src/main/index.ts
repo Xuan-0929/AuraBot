@@ -3,7 +3,9 @@ import { createServices, type AppServices } from "../core/bootstrap/createServic
 import {
   applyPetSettings,
   broadcastAgentStatus,
+  broadcastChatMessage,
   broadcastPetActivity,
+  broadcastTaskChanged,
   createPetWindow,
   movePetWindowBy,
   openConsoleWindow,
@@ -44,7 +46,9 @@ async function bootstrap(): Promise<void> {
     setPetMousePassthrough,
     movePetWindowBy,
     broadcastPetActivity,
-    broadcastAgentStatus
+    broadcastAgentStatus,
+    broadcastChatMessage,
+    broadcastTaskChanged
   });
   createPetWindow({
     settings: petSettingsStore.get(),

@@ -41,7 +41,10 @@ function applyMigrations(database: AppDatabase): void {
         continue;
       }
 
-      database.exec(migration.up);
+      if (migration.up.trim()) {
+        database.exec(migration.up);
+      }
+      migration.after?.(database);
       database.prepare("insert into schema_migrations (id, name, applied_at) values (?, ?, ?)").run(
         migration.id,
         migration.name,

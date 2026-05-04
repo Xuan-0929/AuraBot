@@ -38,7 +38,7 @@ AuraBot 是一个桌面优先的陪伴型 AI MVP。它不是传统意义上常�
 | 模型角色 | `gateModel` 和 `chatModel` 可注入；默认走本地 deterministic fallback，也可以接 OpenAI-compatible API。 |
 | Gate 逻辑 | 可判断碎片输入等待、完整聊天、任务请求、任务控制和话题结束。 |
 | 记忆 v1 | 支持 preference、event、follow-up 记忆写入，并可通过关系边召回。 |
-| 任务 v1 | 可以在主聊天里创建、查询、打断、修改、启动并完成任务。 |
+| 任务 v1 | 可以在主聊天里创建、查询、打断、修改、启动并完成任务；显式配置后可调用本机 Codex 子任务 runner 执行真实委派任务。 |
 | 验证 | Unit、integration、build 和 e2e 检查都已接入。 |
 
 ## 快速启动
@@ -144,6 +144,14 @@ sudo nano "/Library/Application Support/AuraBot/config.json"
     "model": "your-strong-reasoning-model",
     "temperature": 0.7,
     "timeoutMs": 30000
+  },
+  "taskRunner": {
+    "provider": "codex",
+    "codexCommand": "/Applications/Codex.app/Contents/Resources/codex",
+    "workingDirectory": "/path/to/AuraBot",
+    "sandbox": "workspace-write",
+    "approvalPolicy": "never",
+    "timeoutMs": 300000
   }
 }
 ```
@@ -162,10 +170,41 @@ AURABOT_GATE_MODEL_TIMEOUT_MS=8000 \
 AURABOT_CHAT_MODEL_ENABLED=1 \
 AURABOT_CHAT_MODEL_NAME=your-strong-reasoning-model \
 AURABOT_CHAT_MODEL_TIMEOUT_MS=30000 \
+AURABOT_TASK_RUNNER=codex \
+AURABOT_CODEX_COMMAND=/Applications/Codex.app/Contents/Resources/codex \
+AURABOT_CODEX_WORKDIR=/path/to/AuraBot \
+AURABOT_CODEX_SANDBOX=workspace-write \
+AURABOT_CODEX_APPROVAL_POLICY=never \
 corepack pnpm dev:clean
 ```
 
 API key 只放本地，不要提交进 git。`corepack pnpm dev` 会读取正常系统级配置；`corepack pnpm dev:clean` 默认忽略系统级配置，除非你显式传入环境变量。
+
+## Codex 子任务 Runner
+
+任务执行默认使用 deterministic runner，保证测试和 demo 稳定。如果要让 AuraBot 把排队任务委派给本机 Codex CLI，在配置里把 `taskRunner.provider` 设成 `codex`，或在环境变量里设置 `AURABOT_TASK_RUNNER=codex`。
+
+当前主聊天流程：
+
+1. 说一个任务型请求，例如 `帮我做一份 GitHub 周报。`
+2. AuraBot 创建一个子任务 session，主聊天仍作为控制面。
+3. 当 `taskRunner.provider` 是 `codex` 时，AuraBot 会立刻在后台启动 child runner，任务条会从 `queued` 进入 `running`。
+4. task runner 用子进程调用 `codex exec`，并把任务 prompt 传给 Codex。
+5. 执行过程中，Codex JSONL 进度会写入任务并广播到控制台任务条；你问 `这个任务做到哪了？`，主聊天会返回状态、最近进展和最近 task event。
+6. Codex 通过 `--output-last-message` 写出最终结果；AuraBot 把结果写入 task events，并在子任务结束后回到主控制台里回复你。
+
+默认 deterministic runner 仍会让新任务停在 `queued`，直到主聊天说 `开始做这个任务。`。这样测试和 demo 行为更稳定。
+
+默认 Codex 执行设置偏保守：
+
+| 字段 | 默认值 |
+| --- | --- |
+| `sandbox` | `workspace-write` |
+| `approvalPolicy` | `never` |
+| `timeoutMs` | `300000` |
+| `workingDirectory` | 未配置时使用当前进程工作目录 |
+
+runner 会记录 `task.agent.started`、`task.agent.progress`、`task.agent.completed` 和 `task.agent.failed` 事件。子任务失败时，主聊天会明确回复任务失败，不会假装已经完成。
 
 ## 验证命令
 
@@ -197,7 +236,7 @@ corepack pnpm test:e2e
 
 | 检查 | 结果 |
 | --- | --- |
-| `corepack pnpm test` | 22 个 test files、58 个 tests 通过 |
+| `corepack pnpm test` | 23 个 test files、74 个 tests 通过 |
 | `corepack pnpm typecheck` | 通过 |
 | `corepack pnpm build` | 通过 |
 | `corepack pnpm test:e2e` | 11 个 e2e tests 通过 |
@@ -298,7 +337,7 @@ Cubism Core runtime 通过 `live2dcubismcore@1.0.2` 本地打包，应用启动�
 1. 模型角色默认走 deterministic local fallback；外部调用需要本地配置文件或环境变量。
 2. 用户消息已经能即时显示，但模型回复仍是非流式，也还没有支持用户新消息打断 in-flight generation。
 3. 记忆抽取和关系建立仍是规则实现，不是 embedding 或 LLM 驱动。
-4. 任务 runner 目前验证生命周期行为，还没有调用真实外部工具。
+4. 任务 runner 显式配置后可以调用本机 Codex、广播 JSONL 子任务进度，在主聊天打断时取消子进程，并在启动时把失联运行态任务标记为失败；真正 resume 和更完整的 artifact 管理还没有实现。
 5. Live2D 状态行为复用 Hiyori 内置 motion group，还没有定制表情资源或更细的动画状态机。
 6. 语音输入依赖 Chromium 的 `SpeechRecognition`；还需要稳定的本地或模型 STT adapter。
 7. Profile 切换、定时任务、桌面通知、打包发布和开机自启还没有实现。

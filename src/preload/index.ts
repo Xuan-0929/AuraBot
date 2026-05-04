@@ -1,8 +1,10 @@
 import { contextBridge, ipcRenderer } from "electron";
 import { IPC_CHANNELS, type AuraBotApi } from "../shared/contracts/ipc";
 import type { AgentStatus, SendChatMessageInput } from "../shared/contracts/chat";
+import type { Message } from "../shared/schemas/message";
 import type { PetActivity } from "../shared/contracts/pet";
 import type { PetSettings, PetSettingsPatch } from "../shared/schemas/petSettings";
+import type { Task } from "../shared/schemas/task";
 
 const api: AuraBotApi = {
   getInitialState: () => ipcRenderer.invoke(IPC_CHANNELS.getInitialState),
@@ -33,6 +35,20 @@ const api: AuraBotApi = {
     ipcRenderer.on(IPC_CHANNELS.agentStatusChanged, handler);
 
     return () => ipcRenderer.removeListener(IPC_CHANNELS.agentStatusChanged, handler);
+  },
+  onChatMessageCreated: (listener: (message: Message) => void) => {
+    const handler = (_event: Electron.IpcRendererEvent, message: Message) => listener(message);
+
+    ipcRenderer.on(IPC_CHANNELS.chatMessageCreated, handler);
+
+    return () => ipcRenderer.removeListener(IPC_CHANNELS.chatMessageCreated, handler);
+  },
+  onTaskChanged: (listener: (task: Task) => void) => {
+    const handler = (_event: Electron.IpcRendererEvent, task: Task) => listener(task);
+
+    ipcRenderer.on(IPC_CHANNELS.taskChanged, handler);
+
+    return () => ipcRenderer.removeListener(IPC_CHANNELS.taskChanged, handler);
   },
   sendChatMessage: (input: SendChatMessageInput) => ipcRenderer.invoke(IPC_CHANNELS.sendChatMessage, input),
   getEventLogs: () => ipcRenderer.invoke(IPC_CHANNELS.getEventLogs)

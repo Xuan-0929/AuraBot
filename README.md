@@ -38,7 +38,7 @@ Console window:
 | Model roles | `gateModel` and `chatModel` are injectable; both default to local deterministic fallback and can use OpenAI-compatible APIs. |
 | Gate logic | Fragmented messages can wait; complete chat, task requests, task controls, and topic endings are classified. |
 | Memory v1 | Preference, event, and follow-up memories can be written and recalled through relation edges. |
-| Task v1 | Tasks can be created, queried, interrupted, revised, started, and completed from main chat. |
+| Task v1 | Tasks can be created, queried, interrupted, revised, started, and completed from main chat; an opt-in Codex child runner can execute real delegated tasks. |
 | Verification | Unit, integration, build, and e2e checks are wired. |
 
 ## Quick Start
@@ -144,6 +144,14 @@ Example:
     "model": "your-strong-reasoning-model",
     "temperature": 0.7,
     "timeoutMs": 30000
+  },
+  "taskRunner": {
+    "provider": "codex",
+    "codexCommand": "/Applications/Codex.app/Contents/Resources/codex",
+    "workingDirectory": "/path/to/AuraBot",
+    "sandbox": "workspace-write",
+    "approvalPolicy": "never",
+    "timeoutMs": 300000
   }
 }
 ```
@@ -162,10 +170,41 @@ AURABOT_GATE_MODEL_TIMEOUT_MS=8000 \
 AURABOT_CHAT_MODEL_ENABLED=1 \
 AURABOT_CHAT_MODEL_NAME=your-strong-reasoning-model \
 AURABOT_CHAT_MODEL_TIMEOUT_MS=30000 \
+AURABOT_TASK_RUNNER=codex \
+AURABOT_CODEX_COMMAND=/Applications/Codex.app/Contents/Resources/codex \
+AURABOT_CODEX_WORKDIR=/path/to/AuraBot \
+AURABOT_CODEX_SANDBOX=workspace-write \
+AURABOT_CODEX_APPROVAL_POLICY=never \
 corepack pnpm dev:clean
 ```
 
 Keep API keys local and out of git. `corepack pnpm dev` reads the normal system-level config above; `corepack pnpm dev:clean` ignores it unless you pass env vars.
+
+## Codex Child Task Runner
+
+Task execution defaults to the deterministic runner used by tests and demos. To let AuraBot delegate a queued task to the local Codex CLI, set `taskRunner.provider` to `codex` in config or `AURABOT_TASK_RUNNER=codex` in the environment.
+
+Current main-chat flow:
+
+1. Say something task-like, for example `帮我做一份 GitHub 周报。`
+2. AuraBot creates a child task session and keeps the main chat as the control plane.
+3. When `taskRunner.provider` is `codex`, AuraBot immediately starts the child runner in the background and the task status strip moves from `queued` to `running`.
+4. The task runner invokes `codex exec` with the task prompt in a child process.
+5. While it runs, Codex JSONL progress updates are stored on the task and broadcast to the console status strip; asking `这个任务做到哪了？` returns the status, latest progress, and latest task event.
+6. Codex writes its final message through `--output-last-message`; AuraBot stores it in task events and replies in the main console when the child task settles.
+
+When the default deterministic runner is active, newly created tasks remain `queued` until the main chat says `开始做这个任务。`. This keeps local tests and demos predictable.
+
+Default Codex execution settings are intentionally conservative:
+
+| Field | Default |
+| --- | --- |
+| `sandbox` | `workspace-write` |
+| `approvalPolicy` | `never` |
+| `timeoutMs` | `300000` |
+| `workingDirectory` | current process working directory unless configured |
+
+The runner records `task.agent.started`, `task.agent.progress`, `task.agent.completed`, and `task.agent.failed` events. Failed child runs are reported as failed in the main chat instead of being treated as completed work.
 
 ## Verification Commands
 
@@ -197,7 +236,7 @@ The last verified local run recorded:
 
 | Check | Result |
 | --- | --- |
-| `corepack pnpm test` | 22 test files, 58 tests passed |
+| `corepack pnpm test` | 23 test files, 74 tests passed |
 | `corepack pnpm typecheck` | passed |
 | `corepack pnpm build` | passed |
 | `corepack pnpm test:e2e` | 11 tests passed |
@@ -298,7 +337,7 @@ This is still an MVP skeleton, not a production companion:
 1. Model roles default to deterministic local fallback; external calls require local config or environment variables.
 2. User messages now render immediately, but model replies are still non-streaming and user-message interruption of an in-flight generation is not implemented yet.
 3. Memory extraction and relation building are rule-based, not embedding or LLM powered.
-4. The task runner validates lifecycle behavior but does not yet call real external tools.
+4. The task runner can call local Codex when explicitly configured, broadcasts JSONL child progress, cancels the child process when interrupted, and marks orphaned running tasks failed on startup; true resume and richer artifact handling are not implemented yet.
 5. Live2D status behavior uses the bundled Hiyori motion groups; custom expressions and richer animation tuning are not implemented yet.
 6. Voice input currently depends on Chromium's `SpeechRecognition`; a stable local or model-backed STT adapter is still needed.
 7. Profile switching, scheduled jobs, desktop notifications, packaging, and auto-start are not implemented yet.

@@ -3,7 +3,12 @@ import type { TaskRepository } from "../storage/repositories/taskRepository";
 import type { EventLogService } from "../telemetry/eventLogService";
 
 export interface TaskRunner {
-  run(task: Task): Promise<Task | undefined>;
+  run(task: Task, observer?: TaskRunnerObserver): Promise<Task | undefined>;
+  cancel?(taskId: string): boolean;
+}
+
+export interface TaskRunnerObserver {
+  onProgress?: (task: Task) => void;
 }
 
 export class DeterministicTaskRunner implements TaskRunner {
@@ -12,18 +17,22 @@ export class DeterministicTaskRunner implements TaskRunner {
     private readonly eventLogService: EventLogService
   ) {}
 
-  async run(task: Task): Promise<Task | undefined> {
+  async run(task: Task, observer?: TaskRunnerObserver): Promise<Task | undefined> {
     const runningSummary = `开始处理：${task.title}`;
     this.taskRepository.appendEvent({
       taskId: task.id,
       eventType: "task.running",
       summary: runningSummary
     });
-    this.taskRepository.updateStatus({
+    const running = this.taskRepository.updateStatus({
       taskId: task.id,
       status: "running",
       latestProgress: runningSummary
     });
+
+    if (running) {
+      observer?.onProgress?.(running);
+    }
 
     const progressSummary = `已拆出任务步骤，正在整理：${task.title}`;
     this.taskRepository.appendEvent({
@@ -35,11 +44,15 @@ export class DeterministicTaskRunner implements TaskRunner {
         totalSteps: 1
       }
     });
-    this.taskRepository.updateStatus({
+    const progressed = this.taskRepository.updateStatus({
       taskId: task.id,
       status: "running",
       latestProgress: progressSummary
     });
+
+    if (progressed) {
+      observer?.onProgress?.(progressed);
+    }
 
     const completedSummary = `已完成：${task.title}`;
     this.taskRepository.appendEvent({

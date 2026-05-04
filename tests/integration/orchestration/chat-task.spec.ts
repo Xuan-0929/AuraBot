@@ -1,5 +1,8 @@
 import { afterEach, describe, expect, it } from "vitest";
-import { cleanupTestServices, createTestOrchestrator } from "../../helpers/testServices";
+import { ChatOrchestrator } from "../../../src/core/orchestration/chatOrchestrator";
+import { TaskRepository } from "../../../src/core/storage/repositories/taskRepository";
+import { TaskService } from "../../../src/core/tasks/taskService";
+import { cleanupTestServices, createTestOrchestrator, createTestServices } from "../../helpers/testServices";
 
 afterEach(cleanupTestServices);
 
@@ -32,6 +35,8 @@ describe("chat task integration", () => {
 
     expect(query.gateDecision?.inputKind).toBe("task_control");
     expect(query.assistantMessage?.content).toContain("queued");
+    expect(query.assistantMessage?.content).toContain("最近进展");
+    expect(query.assistantMessage?.content).toContain("Task queued from main chat.");
     expect(interrupt.updatedTask?.status).toBe("interrupted");
     expect(interrupt.assistantMessage?.content).toContain("停下");
     expect(revise.updatedTask?.status).toBe("queued");
@@ -55,6 +60,67 @@ describe("chat task integration", () => {
     expect(query.assistantMessage?.content).toContain("completed");
     expect(query.assistantMessage?.content).toContain("明天会议");
     expect(tasks[0]?.latestProgress).toContain("完成");
+  });
+
+  it("reports child agent execution details when querying a running task", async () => {
+    const { services, orchestrator } = createTestOrchestrator("aurabot-chat-task-");
+    const taskRepository = new TaskRepository(services.database);
+
+    const created = await orchestrator.sendMessage({ content: "帮我做一份 GitHub 周报。" });
+    expect(created.createdTask).toBeDefined();
+    taskRepository.appendEvent({
+      taskId: created.createdTask!.id,
+      eventType: "task.agent.started",
+      summary: "Codex 子任务已启动：帮我做一份 GitHub 周报。",
+      payload: {
+        cwd: "/Users/xuan/project",
+        outputFile: "/Users/xuan/output/task.md",
+        sandbox: "workspace-write"
+      }
+    });
+    taskRepository.updateStatus({
+      taskId: created.createdTask!.id,
+      status: "running",
+      latestProgress: "开始调用 Codex 子任务：帮我做一份 GitHub 周报。"
+    });
+
+    const query = await orchestrator.sendMessage({ content: "这个任务做到哪了？" });
+
+    expect(query.assistantMessage?.content).toContain("running");
+    expect(query.assistantMessage?.content).toContain("最近事件：Codex 子任务已启动");
+    expect(query.assistantMessage?.content).toContain("运行目录：/Users/xuan/project");
+    expect(query.assistantMessage?.content).toContain("输出文件：/Users/xuan/output/task.md");
+    expect(query.assistantMessage?.content).toContain("sandbox：workspace-write");
+    expect(query.assistantMessage?.content).toContain("自动回到主聊天");
+  });
+
+  it("reports a child task runner failure back through the main chat", async () => {
+    const services = createTestServices("aurabot-chat-task-");
+    const taskRepository = new TaskRepository(services.database);
+    const taskService = new TaskService(
+      taskRepository,
+      services.sessionRepository,
+      services.eventLogService,
+      {
+        run: async (task) =>
+          taskRepository.updateStatus({
+            taskId: task.id,
+            status: "failed",
+            latestProgress: "Codex 子任务失败：codex exited 1"
+          })
+      }
+    );
+    const orchestrator = new ChatOrchestrator({
+      ...services,
+      taskService
+    });
+
+    await orchestrator.sendMessage({ content: "帮我做一份 GitHub 周报。" });
+    const start = await orchestrator.sendMessage({ content: "开始做这个任务。" });
+
+    expect(start.updatedTask?.status).toBe("failed");
+    expect(start.assistantMessage?.content).toContain("这个任务跑失败了");
+    expect(start.assistantMessage?.content).toContain("codex exited 1");
   });
 
   it("uses task hints in the main chat to query, revise, and interrupt a specific task", async () => {

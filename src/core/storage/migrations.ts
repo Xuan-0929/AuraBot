@@ -2,6 +2,7 @@ export interface Migration {
   id: number;
   name: string;
   up: string;
+  after?: (database: import("./db").AppDatabase) => void;
 }
 
 export const MIGRATIONS: Migration[] = [
@@ -150,5 +151,20 @@ export const MIGRATIONS: Migration[] = [
         created_at text not null
       );
     `
+  },
+  {
+    id: 2,
+    name: "add_task_session_id_to_existing_task_tables",
+    up: "",
+    after(database) {
+      const columns = database
+        .prepare("pragma table_info(tasks)")
+        .all()
+        .map((row) => (row as { name: string }).name);
+
+      if (!columns.includes("session_id")) {
+        database.exec("alter table tasks add column session_id text");
+      }
+    }
   }
 ];

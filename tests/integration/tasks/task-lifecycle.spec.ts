@@ -1,4 +1,10 @@
+import { mkdtempSync, rmSync } from "node:fs";
+import { tmpdir } from "node:os";
+import { join } from "node:path";
 import { afterEach, describe, expect, it } from "vitest";
+import { createServices } from "../../../src/core/bootstrap/createServices";
+import { TaskRepository } from "../../../src/core/storage/repositories/taskRepository";
+import { TaskService } from "../../../src/core/tasks/taskService";
 import { cleanupTestServices, createTestServices } from "../../helpers/testServices";
 
 afterEach(cleanupTestServices);
@@ -81,5 +87,215 @@ describe("task lifecycle", () => {
     ]);
     expect(events[1]?.summary).toContain("明天会议");
     expect(eventLogs.some((log) => log.eventType === "task.completed")).toBe(true);
+  });
+
+  it("starts a queued task in the background and exposes running progress immediately", async () => {
+    const services = createTestServices("aurabot-task-");
+    const profile = services.profileService.getOrSeedActiveProfile();
+    const mainSession = services.sessionRepository.getOrCreateMainSession(profile.id);
+    const task = services.taskService.createTaskFromChat({
+      profileId: profile.id,
+      parentSessionId: mainSession.id,
+      title: "帮我整理一份明天会议的清单。"
+    });
+
+    const started = services.taskService.runTaskInBackground({
+      profileId: profile.id,
+      taskId: task.id
+    });
+
+    expect(started?.status).not.toBe("queued");
+    expect(started?.latestProgress).not.toBe("Task queued from main chat.");
+  });
+
+  it("notifies callers when a background task reports progress", async () => {
+    const services = createTestServices("aurabot-task-");
+    const taskRepository = new TaskRepository(services.database);
+    const taskService = new TaskService(
+      taskRepository,
+      services.sessionRepository,
+      services.eventLogService,
+      {
+        run: async (task, observer) => {
+          const running = taskRepository.updateStatus({
+            taskId: task.id,
+            status: "running",
+            latestProgress: "Codex 子任务开始处理任务。"
+          });
+
+          if (running) {
+            observer?.onProgress?.(running);
+          }
+
+          return taskRepository.updateStatus({
+            taskId: task.id,
+            status: "completed",
+            latestProgress: "已完成：GitHub 周报"
+          });
+        }
+      }
+    );
+    const profile = services.profileService.getOrSeedActiveProfile();
+    const mainSession = services.sessionRepository.getOrCreateMainSession(profile.id);
+    const task = taskService.createTaskFromChat({
+      profileId: profile.id,
+      parentSessionId: mainSession.id,
+      title: "帮我写一份 GitHub 周报。"
+    });
+    const progress: string[] = [];
+
+    taskService.runTaskInBackground({
+      profileId: profile.id,
+      taskId: task.id,
+      onProgress: (changedTask) => progress.push(changedTask.latestProgress)
+    });
+    await new Promise((resolve) => setTimeout(resolve, 0));
+
+    expect(progress).toEqual(["Codex 子任务开始处理任务。"]);
+  });
+
+  it("cancels the underlying runner when a running background task is interrupted", async () => {
+    const services = createTestServices("aurabot-task-");
+    const taskRepository = new TaskRepository(services.database);
+    let cancelledTaskId: string | undefined;
+    const taskService = new TaskService(
+      taskRepository,
+      services.sessionRepository,
+      services.eventLogService,
+      {
+        run: async (task, observer) => {
+          const running = taskRepository.updateStatus({
+            taskId: task.id,
+            status: "running",
+            latestProgress: "Codex 子任务开始处理任务。"
+          });
+
+          if (running) {
+            observer?.onProgress?.(running);
+          }
+
+          return new Promise(() => undefined);
+        },
+        cancel: (taskId) => {
+          cancelledTaskId = taskId;
+
+          return true;
+        }
+      }
+    );
+    const profile = services.profileService.getOrSeedActiveProfile();
+    const mainSession = services.sessionRepository.getOrCreateMainSession(profile.id);
+    const task = taskService.createTaskFromChat({
+      profileId: profile.id,
+      parentSessionId: mainSession.id,
+      title: "帮我写一份 GitHub 周报。"
+    });
+
+    taskService.runTaskInBackground({
+      profileId: profile.id,
+      taskId: task.id
+    });
+    await new Promise((resolve) => setTimeout(resolve, 0));
+    const interrupted = taskService.interruptLatestActiveTask({
+      profileId: profile.id,
+      reason: "用户在主聊天线程要求停掉"
+    });
+
+    expect(interrupted?.status).toBe("interrupted");
+    expect(cancelledTaskId).toBe(task.id);
+  });
+
+  it("recovers orphaned running tasks as failed when services start again", () => {
+    const userDataDir = mkdtempSync(join(tmpdir(), "aurabot-task-recovery-"));
+    let firstServices = createServices(userDataDir);
+
+    try {
+      const profile = firstServices.profileService.getOrSeedActiveProfile();
+      const mainSession = firstServices.sessionRepository.getOrCreateMainSession(profile.id);
+      const queuedTask = firstServices.taskService.createTaskFromChat({
+        profileId: profile.id,
+        parentSessionId: mainSession.id,
+        title: "排队任务"
+      });
+      const runningTask = firstServices.taskService.createTaskFromChat({
+        profileId: profile.id,
+        parentSessionId: mainSession.id,
+        title: "运行中任务"
+      });
+      const waitingTask = firstServices.taskService.createTaskFromChat({
+        profileId: profile.id,
+        parentSessionId: mainSession.id,
+        title: "等待中任务"
+      });
+      const taskRepository = new TaskRepository(firstServices.database);
+      taskRepository.updateStatus({
+        taskId: runningTask.id,
+        status: "running",
+        latestProgress: "Codex 子任务开始处理任务。"
+      });
+      taskRepository.updateStatus({
+        taskId: waitingTask.id,
+        status: "waiting",
+        latestProgress: "等待外部子任务。"
+      });
+      firstServices.database.close();
+
+      const recoveredServices = createServices(userDataDir);
+      firstServices = recoveredServices;
+      const recoveredTasks = recoveredServices.taskService.listTasksForProfile(profile.id);
+      const recoveredQueued = recoveredTasks.find((task) => task.id === queuedTask.id);
+      const recoveredRunning = recoveredTasks.find((task) => task.id === runningTask.id);
+      const recoveredWaiting = recoveredTasks.find((task) => task.id === waitingTask.id);
+      const runningEvents = recoveredServices.taskService.listTaskEvents(runningTask.id);
+      const eventLogs = recoveredServices.eventLogService.list(20);
+
+      expect(recoveredQueued?.status).toBe("queued");
+      expect(recoveredRunning?.status).toBe("failed");
+      expect(recoveredRunning?.latestProgress).toContain("上次应用退出");
+      expect(recoveredWaiting?.status).toBe("failed");
+      expect(runningEvents.at(-1)?.eventType).toBe("task.recovered_orphaned");
+      expect(eventLogs.some((log) => log.eventType === "task.recovered_orphaned")).toBe(true);
+    } finally {
+      firstServices.database.close();
+      rmSync(userDataDir, { force: true, recursive: true });
+    }
+  });
+
+  it("marks background tasks failed when the runner rejects unexpectedly", async () => {
+    const services = createTestServices("aurabot-task-");
+    const taskRepository = new TaskRepository(services.database);
+    const taskService = new TaskService(
+      taskRepository,
+      services.sessionRepository,
+      services.eventLogService,
+      {
+        run: async () => {
+          throw new Error("runner crashed before reporting progress");
+        }
+      }
+    );
+    const profile = services.profileService.getOrSeedActiveProfile();
+    const mainSession = services.sessionRepository.getOrCreateMainSession(profile.id);
+    const task = taskService.createTaskFromChat({
+      profileId: profile.id,
+      parentSessionId: mainSession.id,
+      title: "帮我整理一份明天会议的清单。"
+    });
+    let settledTaskId: string | undefined;
+
+    taskService.runTaskInBackground({
+      profileId: profile.id,
+      taskId: task.id,
+      onSettled: (settledTask) => {
+        settledTaskId = settledTask.id;
+      }
+    });
+    await new Promise((resolve) => setTimeout(resolve, 0));
+
+    const failed = taskRepository.getById(task.id);
+
+    expect(failed?.status).toBe("failed");
+    expect(failed?.latestProgress).toContain("runner crashed");
+    expect(settledTaskId).toBe(task.id);
   });
 });

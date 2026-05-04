@@ -46,11 +46,27 @@ export const useAuraBotStore = create<AuraBotStore>((set, get) => ({
     const unsubscribeAgentStatus = window.aurabot.onAgentStatusChanged((agentStatus) => {
       set({ agentStatus });
     });
+    const unsubscribeChatMessage = window.aurabot.onChatMessageCreated((message) => {
+      set((current) => {
+        if (current.messages.some((existingMessage) => existingMessage.id === message.id)) {
+          return {};
+        }
+
+        return { messages: [...current.messages, message] };
+      });
+    });
+    const unsubscribeTaskChanged = window.aurabot.onTaskChanged((task) => {
+      set((current) => ({
+        tasks: updateTasks(current.tasks, task)
+      }));
+    });
 
     return () => {
       unsubscribeSettings();
       unsubscribeActivity();
       unsubscribeAgentStatus();
+      unsubscribeChatMessage();
+      unsubscribeTaskChanged();
     };
   },
   async openConsoleWindow() {

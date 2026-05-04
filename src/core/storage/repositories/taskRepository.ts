@@ -70,6 +70,20 @@ export class TaskRepository {
     ).map(mapTask);
   }
 
+  listByStatuses(statuses: TaskStatus[]): Task[] {
+    if (statuses.length === 0) {
+      return [];
+    }
+
+    const placeholders = statuses.map(() => "?").join(", ");
+
+    return (
+      this.database
+        .prepare(`select * from tasks where status in (${placeholders}) order by updated_at asc`)
+        .all(...statuses) as TaskRow[]
+    ).map(mapTask);
+  }
+
   getLatestByProfile(profileId: string): Task | undefined {
     const row = this.database
       .prepare("select * from tasks where profile_id = ? order by created_at desc limit 1")

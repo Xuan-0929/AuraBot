@@ -12,7 +12,10 @@ export function TaskStatusOverlay({ tasks }: { tasks: Task[] }) {
       {visibleTasks.map((task) => (
         <div className="task-status-card" key={task.id}>
           <span className={`task-status-dot task-status-dot-${task.status}`} />
-          <span className="task-status-title">{task.title}</span>
+          <span className="task-status-copy">
+            <span className="task-status-title">{task.title}</span>
+            <span className="task-status-progress">{task.latestProgress}</span>
+          </span>
           <span className="task-status-value">{task.status}</span>
         </div>
       ))}

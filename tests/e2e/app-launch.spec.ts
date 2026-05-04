@@ -302,7 +302,7 @@ test("starts a queued task from the main chat and reports completion", async () 
 
     await input.fill("开始做这个任务。");
     await consoleWindow.getByRole("button", { name: "Send" }).click();
-    await expect(consoleWindow.getByText(/完成/)).toBeVisible();
+    await expect(consoleWindow.locator(".message-assistant").filter({ hasText: /这个任务我跑完了/ })).toBeVisible();
     await expect(consoleWindow.locator(".task-status-card").filter({ hasText: "明天会议" })).toContainText("completed");
     await expect(petWindow.getByLabel("Pet message")).toContainText("任务完成");
 

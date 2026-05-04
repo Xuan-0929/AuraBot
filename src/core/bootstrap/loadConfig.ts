@@ -2,9 +2,10 @@ import { join } from "node:path";
 import { existsSync, readFileSync } from "node:fs";
 import { appConfigSchema, type AppConfig } from "../../shared/schemas/config";
 
-type AppConfigInput = Partial<Omit<AppConfig, "gateModel" | "chatModel">> & {
+type AppConfigInput = Partial<Omit<AppConfig, "gateModel" | "chatModel" | "taskRunner">> & {
   gateModel?: Partial<AppConfig["gateModel"]>;
   chatModel?: Partial<AppConfig["chatModel"]>;
+  taskRunner?: Partial<AppConfig["taskRunner"]>;
 };
 
 export function loadConfig(userDataPath: string): AppConfig {
@@ -20,6 +21,12 @@ export function loadConfig(userDataPath: string): AppConfig {
       provider: "local-stub",
       model: "chat-stub",
       enabled: false
+    },
+    taskRunner: {
+      provider: "deterministic",
+      sandbox: "workspace-write",
+      approvalPolicy: "never",
+      timeoutMs: 300000
     }
   };
   const fileConfig = loadConfigFile(userDataPath);
@@ -71,6 +78,10 @@ function mergeConfig(defaults: AppConfig, override: AppConfigInput): AppConfigIn
     chatModel: {
       ...defaults.chatModel,
       ...override.chatModel
+    },
+    taskRunner: {
+      ...defaults.taskRunner,
+      ...override.taskRunner
     }
   };
 }
@@ -84,7 +95,8 @@ function loadEnvironmentConfig(): AppConfigInput {
 
   return {
     gateModel: readModelRoleEnvironment("GATE", common),
-    chatModel: readModelRoleEnvironment("CHAT", common)
+    chatModel: readModelRoleEnvironment("CHAT", common),
+    taskRunner: readTaskRunnerEnvironment()
   };
 }
 
@@ -123,6 +135,32 @@ function parseNumberEnvironment(value: string | undefined): number | undefined {
   const parsed = Number(value);
 
   return Number.isFinite(parsed) ? parsed : undefined;
+}
+
+function readTaskRunnerEnvironment(): AppConfigInput["taskRunner"] {
+  return removeUndefinedValues({
+    provider: readTaskRunnerProviderEnvironment(),
+    codexCommand: process.env.AURABOT_CODEX_COMMAND,
+    workingDirectory: process.env.AURABOT_CODEX_WORKDIR,
+    model: process.env.AURABOT_CODEX_MODEL,
+    sandbox: readCodexSandboxEnvironment(),
+    approvalPolicy: readCodexApprovalPolicyEnvironment(),
+    timeoutMs: parseNumberEnvironment(process.env.AURABOT_CODEX_TIMEOUT_MS)
+  });
+}
+
+function readTaskRunnerProviderEnvironment(): AppConfig["taskRunner"]["provider"] | undefined {
+  const value = process.env.AURABOT_TASK_RUNNER_PROVIDER ?? process.env.AURABOT_TASK_RUNNER;
+
+  return value as AppConfig["taskRunner"]["provider"] | undefined;
+}
+
+function readCodexSandboxEnvironment(): AppConfig["taskRunner"]["sandbox"] | undefined {
+  return process.env.AURABOT_CODEX_SANDBOX as AppConfig["taskRunner"]["sandbox"] | undefined;
+}
+
+function readCodexApprovalPolicyEnvironment(): AppConfig["taskRunner"]["approvalPolicy"] | undefined {
+  return process.env.AURABOT_CODEX_APPROVAL_POLICY as AppConfig["taskRunner"]["approvalPolicy"] | undefined;
 }
 
 function removeUndefinedValues<T extends Record<string, unknown>>(value: T): Partial<T> {

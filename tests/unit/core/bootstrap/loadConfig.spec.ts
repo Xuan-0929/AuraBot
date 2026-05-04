@@ -37,6 +37,11 @@ describe("loadConfig", () => {
       model: "chat-stub",
       enabled: false
     });
+    expect(config.taskRunner).toMatchObject({
+      provider: "deterministic",
+      sandbox: "workspace-write",
+      approvalPolicy: "never"
+    });
     expect(config.storagePath).toBe(join(userDataPath, "aurabot.sqlite"));
   });
 
@@ -139,6 +144,39 @@ describe("loadConfig", () => {
       model: "strong-chat-model",
       enabled: true,
       temperature: 0.8
+    });
+  });
+
+  it("loads a Codex task runner config from config and environment overrides", () => {
+    const userDataPath = createUserDataDir();
+    writeFileSync(
+      join(userDataPath, "config.json"),
+      JSON.stringify({
+        taskRunner: {
+          provider: "codex",
+          codexCommand: "/usr/local/bin/codex",
+          workingDirectory: "/Users/xuan/project",
+          sandbox: "read-only",
+          approvalPolicy: "on-request",
+          timeoutMs: 120000
+        }
+      }),
+      "utf8"
+    );
+    process.env.AURABOT_CODEX_MODEL = "gpt-5.4";
+    process.env.AURABOT_CODEX_SANDBOX = "workspace-write";
+    process.env.AURABOT_CODEX_APPROVAL_POLICY = "never";
+
+    const config = loadConfig(userDataPath);
+
+    expect(config.taskRunner).toMatchObject({
+      provider: "codex",
+      codexCommand: "/usr/local/bin/codex",
+      workingDirectory: "/Users/xuan/project",
+      model: "gpt-5.4",
+      sandbox: "workspace-write",
+      approvalPolicy: "never",
+      timeoutMs: 120000
     });
   });
 });

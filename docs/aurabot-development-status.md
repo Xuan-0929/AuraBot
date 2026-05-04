@@ -30,7 +30,7 @@ AuraBot 当前已经从“传统聊天界面”收敛为桌宠优先形态：
 | 模型适配层 | 部分完成 | 已有 `gateModel` / `chatModel` 注入接口、OpenAI-compatible provider、userData/系统级 JSON 配置、env 配置和 deterministic fallback；还缺流式与中断。 |
 | Gate/触发判断 | 已完成 MVP | 可判断碎片输入等待、完整输入回复、话题是否结束、聊天/任务/任务控制分类。 |
 | 记忆 v1 | 已完成 MVP | 支持 preference、event、follow_up 写入，摘要层和关系边召回。 |
-| 任务 v1 | 已完成 MVP | 可从主聊天创建任务、按聊天 hint 命中特定任务、查询状态、打断、修改、启动并完成 deterministic runner。 |
+| 任务 v1 | 已完成 MVP | 可从主聊天创建任务、按聊天 hint 命中特定任务、查询状态、打断、修改、启动；默认 deterministic runner，显式配置后可调用本机 Codex 子任务 runner。 |
 | 事件日志 | 部分完成 | 已写入 gate、memory、task、chat 关键日志；还没有调试视窗或日志开关。 |
 | E2E 演示流 | 已完成 MVP | 桌宠启动、悬浮控制开控制台、桌宠设置同步、位置持久化、状态同步、记忆、碎片等待、任务控制路径都有 e2e 覆盖。 |
 
@@ -40,7 +40,7 @@ AuraBot 当前已经从“传统聊天界面”收敛为桌宠优先形态：
 
 | 命令/检查 | 结果 |
 | --- | --- |
-| `corepack pnpm test` | 22 个 test files、58 个 tests 通过 |
+| `corepack pnpm test` | 23 个 test files、74 个 tests 通过 |
 | `corepack pnpm typecheck` | 通过 |
 | `corepack pnpm build` | 通过 |
 | `corepack pnpm test:e2e` | 11 个 e2e tests 通过 |
@@ -56,7 +56,7 @@ AuraBot 当前已经从“传统聊天界面”收敛为桌宠优先形态：
 1. 模型角色默认仍走 deterministic fallback；外部模型调用需要本地 `aurabot.config.json` / `config.json`、macOS 系统级 `/Library/Application Support/AuraBot/config.json`，或环境变量。
 2. 用户消息已经即时显示，但模型回复目前仍是非流式；还没有用户新消息打断 in-flight generation。
 3. 记忆抽取和联想是规则实现，没有 embedding，也没有 LLM 参与候选边判断。
-4. 任务 runner 是 deterministic，占位验证任务生命周期，不是真实工具执行代理。
+4. 任务 runner 可显式配置为本机 Codex 子任务执行器，能广播 JSONL 子任务进度，在主聊天打断时取消子进程，并在启动时把失联运行态任务标记为失败；还没有真正 resume。
 5. Live2D 状态行为当前复用 Hiyori 现有 motion group，还没有定制表情资源或更细的动画状态机。
 6. 语音输入当前走 Chromium 原生 `SpeechRecognition`，运行时不支持时只显示轻提示；还没有稳定 STT adapter。
 7. 还没有 Profile 切换 UI、定时任务、桌面通知、打包发布、开机自启。
@@ -105,11 +105,12 @@ AuraBot 当前已经从“传统聊天界面”收敛为桌宠优先形态：
 
 建议任务：
 
-1. 设计 `TaskRegistry` 的真实任务类型和输入输出协议。
-2. 接入至少一个实际工具型任务，例如文件整理、网页搜集或摘要生成。
-3. 明确任务 artifact 写入和回流主线程的格式。
-4. 支持任务取消信号贯穿 runner，而不是只改状态。
-5. 保持控制面在主聊天线程，不新增任务控制按钮面板。
+1. 已接入 opt-in Codex 子任务 runner，支持创建任务后后台把 task prompt 交给本机 `codex exec`，实时广播 JSONL 进度，查询时显示最近进展，打断时取消子进程，并把最终结果回流主聊天。
+2. 下一步设计 `TaskRegistry` 的真实任务类型和输入输出协议。
+3. 明确 task artifact 写入和回流主线程的格式。
+4. 已完成：启动时会把上次遗留的 running/waiting 任务标记为失联失败，避免永久卡在运行态。
+5. 下一步设计真正 resume 策略和结构化 artifact 回流。
+6. 保持控制面在主聊天线程，不新增任务控制按钮面板。
 
 ### 5. 文档和交付整理
 
@@ -117,14 +118,16 @@ AuraBot 当前已经从“传统聊天界面”收敛为桌宠优先形态：
 
 当前状态：
 
-1. `README.md` 已补，包含本地安装、运行、验证、截图路径、当前边界和下一步。
-2. `artifacts/desktop-pet.png` 与 `artifacts/console-window.png` 已确认可以随本次提交进入仓库。
-3. push 前仍建议再跑一轮 fresh `test / typecheck / build / test:e2e`。
+1. `README.md` 和 `README.zh-CN.md` 已补，包含本地安装、运行、验证、模型配置、Codex 子任务 runner 配置、截图路径、当前边界和下一步。
+2. `docs/TODO.md` 已同步任务执行 v2 当前进展：opt-in Codex 子任务 runner、JSONL 进度广播、打断取消子进程、失联运行态任务失败式恢复，以及后续 resume / artifact 协议。
+3. `docs/github-weekly-report-2026-05-04.md` 是本轮真实子任务生成的周报产物，已标明生成时状态，适合作为 runner 验证 artifact 一起提交。
 
-## Push 建议
+## Push 准备
 
-当前先不要自动 push。建议先 review 本状态文档和 MVP 计划更新：
+当前准备提交并 push 当前分支 `codex/aurabot-memory-skeleton`。提交范围应包含：
 
-1. 如果认可当前形态，就提交并 push 当前分支。
-2. 如果要先调整下一步优先级，先改文档再 push。
-3. 本次截图已确认可以提交，push 前需要把 `artifacts/desktop-pet.png` 和 `artifacts/console-window.png` 一起 stage。
+1. Codex 子任务 runner 及其单元测试。
+2. 任务服务、IPC、renderer store、任务状态条和配置加载的配套改动。
+3. SQLite 迁移兼容补丁和启动期失联任务恢复。
+4. README / 中文 README / TODO / 当前开发状态文档更新。
+5. 本轮真实子任务生成的 GitHub 周报 artifact。
