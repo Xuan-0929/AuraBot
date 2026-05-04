@@ -9,6 +9,7 @@ export interface ChatModelInput {
   userContent: string;
   writtenMemories: MemoryNode[];
   recalledMemories: MemoryNode[];
+  dueFollowUps?: MemoryNode[];
   gateDecision: GateDecision;
 }
 
@@ -23,7 +24,8 @@ export class DeterministicChatModel implements ChatModel {
     return planAssistantResponse({
       userContent: input.userContent,
       writtenMemories: input.writtenMemories,
-      recalledMemories: input.recalledMemories
+      recalledMemories: input.recalledMemories,
+      dueFollowUps: input.dueFollowUps
     });
   }
 }

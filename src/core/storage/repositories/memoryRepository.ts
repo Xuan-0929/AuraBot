@@ -127,6 +127,74 @@ export class MemoryRepository {
     return nodeId;
   }
 
+  updateNodeFromWriteRequest(input: {
+    profileId: string;
+    nodeId: string;
+    node: MemoryWriteRequest["node"];
+  }): string {
+    const now = new Date().toISOString();
+
+    const write = this.database.transaction(() => {
+      this.database
+        .prepare(
+          `
+          update memory_nodes
+          set content = @content,
+              importance = max(importance, @importance),
+              starts_at = coalesce(@startsAt, starts_at),
+              ends_at = coalesce(@endsAt, ends_at),
+              updated_at = @updatedAt
+          where id = @nodeId
+            and profile_id = @profileId
+            and state != 'archived'
+        `
+        )
+        .run({
+          nodeId: input.nodeId,
+          profileId: input.profileId,
+          content: input.node.content,
+          importance: input.node.importance,
+          startsAt: input.node.startsAt ?? null,
+          endsAt: input.node.endsAt ?? null,
+          updatedAt: now
+        });
+
+      this.upsertSummary({
+        profileId: input.profileId,
+        topic: input.node.type,
+        content: input.node.content,
+        updatedAt: now
+      });
+    });
+
+    write();
+    return input.nodeId;
+  }
+
+  updateNodeState(input: {
+    profileId: string;
+    nodeId: string;
+    state: MemoryNode["state"];
+  }): void {
+    this.database
+      .prepare(
+        `
+        update memory_nodes
+        set state = @state,
+            updated_at = @updatedAt
+        where id = @nodeId
+          and profile_id = @profileId
+          and state != 'archived'
+      `
+      )
+      .run({
+        profileId: input.profileId,
+        nodeId: input.nodeId,
+        state: input.state,
+        updatedAt: new Date().toISOString()
+      });
+  }
+
   getNodesByIds(ids: string[]): MemoryNode[] {
     if (ids.length === 0) {
       return [];

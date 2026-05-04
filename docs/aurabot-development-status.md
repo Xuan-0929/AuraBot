@@ -27,9 +27,9 @@ AuraBot 当前已经从“传统聊天界面”收敛为桌宠优先形态：
 | Live2D 桌宠交互层 | 部分完成 | 悬浮控制条、拖拽按钮、控制台按钮、点击穿透设置、任务完成气泡、位置持久化、状态 motion 映射已接入。 |
 | SQLite 数据层 | 已完成 | 已有 profiles、souls、sessions、messages、memory、tasks、event_logs 等表。 |
 | 单主聊天线程 | 已完成 MVP | 主 session 持久化消息，控制台负责完整对话；用户消息乐观上屏，不再等待 gate/chat 模型返回。 |
-| 模型适配层 | 部分完成 | 已有 `gateModel` / `chatModel` 注入接口、OpenAI-compatible provider、userData/系统级 JSON 配置、env 配置和 deterministic fallback；还缺流式与中断。 |
+| 模型适配层 | 部分完成 | 已有 `gateModel` / `chatModel` / `memoryModel` 注入接口、OpenAI-compatible provider、userData/系统级 JSON 配置、env 配置和 deterministic fallback；还缺流式与中断。 |
 | Gate/触发判断 | 已完成 MVP | 可判断碎片输入等待、完整输入回复、话题是否结束、聊天/任务/任务控制分类。 |
-| 记忆 v1 | 已完成 MVP | 支持 preference、event、follow_up 写入，摘要层和关系边召回。 |
+| 记忆 v1/v2 写入层 | 部分完成 | 支持 preference、event、follow_up 写入，摘要层和关系边召回；显式配置 `memoryModel` 后可用 API 做结构化记忆抽取、重复记忆合并和候选关系边判断。 |
 | 任务 v1 | 已完成 MVP | 可从主聊天创建任务、按聊天 hint 命中特定任务、查询状态、打断、修改、启动；默认 deterministic runner，显式配置后可调用本机 Codex 子任务 runner。 |
 | 事件日志 | 部分完成 | 已写入 gate、memory、task、chat 关键日志；还没有调试视窗或日志开关。 |
 | E2E 演示流 | 已完成 MVP | 桌宠启动、悬浮控制开控制台、桌宠设置同步、位置持久化、状态同步、记忆、碎片等待、任务控制路径都有 e2e 覆盖。 |
@@ -55,7 +55,7 @@ AuraBot 当前已经从“传统聊天界面”收敛为桌宠优先形态：
 
 1. 模型角色默认仍走 deterministic fallback；外部模型调用需要本地 `aurabot.config.json` / `config.json`、macOS 系统级 `/Library/Application Support/AuraBot/config.json`，或环境变量。
 2. 用户消息已经即时显示，但模型回复目前仍是非流式；还没有用户新消息打断 in-flight generation。
-3. 记忆抽取和联想是规则实现，没有 embedding，也没有 LLM 参与候选边判断。
+3. 记忆写入层可由 `memoryModel` 接管抽取、合并和候选边判断；召回层也可由 `memoryModel` 生成语义检索词、目标类型和重排 seed node。到期 `follow_up` 可在下一次主聊天回复中触发并标记完成；还没有后台 scheduler 或 embedding。
 4. 任务 runner 可显式配置为本机 Codex 子任务执行器，能广播 JSONL 子任务进度，在主聊天打断时取消子进程，并在启动时把失联运行态任务标记为失败；还没有真正 resume。
 5. Live2D 状态行为当前复用 Hiyori 现有 motion group，还没有定制表情资源或更细的动画状态机。
 6. 语音输入当前走 Chromium 原生 `SpeechRecognition`，运行时不支持时只显示轻提示；还没有稳定 STT adapter。
@@ -93,11 +93,14 @@ AuraBot 当前已经从“传统聊天界面”收敛为桌宠优先形态：
 
 建议任务：
 
-1. 用 LLM 或 embedding 替换当前轻量概念抽取层。
-2. 增加重复记忆合并和旧记忆更新策略。
-3. 为时间驱动记忆增加到期前后触发机制。
-4. 增加记忆调试视图：本轮写入了什么、召回了什么、沿哪些边跳转。
-5. 构造固定对话集，比较“关键词召回”和“图状联想召回”的差异。
+1. 已完成第一步：显式配置 `memoryModel` 后，可用 LLM 替换记忆抽取，并保留 deterministic fallback。
+2. 已完成第一步：写入队列可通过 merge planner 更新重复记忆，而不是只按完全相同 content 去重。
+3. 已完成第一步：候选关系边可通过 relation planner 由 API 判断，并限制 target node 必须来自已有节点。
+4. 已完成第一步：召回阶段可通过 recall planner 获取 query terms、target types 和 ranked node ids，减少只靠关键词命中。
+5. 已完成第一步：到期 `follow_up` 会在下一次主聊天回复中提醒，并在触发后标记为 `completed`。
+6. 下一步：为时间驱动记忆增加后台 scheduler 和桌宠气泡主动触发。
+7. 下一步：增加记忆调试视图：本轮写入了什么、召回了什么、沿哪些边跳转。
+8. 下一步：构造固定对话集，比较“关键词召回”和“图状联想召回”的差异。
 
 ### 4. 任务执行 v2
 

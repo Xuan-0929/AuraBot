@@ -1,19 +1,61 @@
 import type { MemoryWriteRequest } from "../../shared/schemas/memory";
 import type { MemoryNode } from "../../shared/schemas/memory";
 import type { MemoryRepository } from "../storage/repositories/memoryRepository";
-import { buildAssociativeMemoryEdges, deriveMemoryConcepts } from "./memoryAssociations";
+import { deriveMemoryConcepts } from "./memoryAssociations";
 import { retrieveMemoryContext, type RetrievedMemoryContext } from "./memoryRetriever";
 import { MemoryWriteQueue } from "./memoryWriter";
+import {
+  DeterministicMemoryMergePlanner,
+  DeterministicMemoryRecallPlanner,
+  DeterministicMemoryRelationPlanner,
+  type MemoryMergePlanner,
+  type MemoryRecallPlan,
+  type MemoryRecallPlanner,
+  type MemoryRelationPlanner
+} from "./modelBackedMemoryModel";
+
+export interface MemoryServiceOptions {
+  mergePlanner?: MemoryMergePlanner;
+  relationPlanner?: MemoryRelationPlanner;
+  recallPlanner?: MemoryRecallPlanner;
+}
 
 export class MemoryService {
   private readonly writeQueue = new MemoryWriteQueue();
+  private readonly mergePlanner: MemoryMergePlanner;
+  private readonly relationPlanner: MemoryRelationPlanner;
+  private readonly recallPlanner: MemoryRecallPlanner;
 
-  constructor(private readonly memoryRepository: MemoryRepository) {}
+  constructor(
+    private readonly memoryRepository: MemoryRepository,
+    options: MemoryServiceOptions = {}
+  ) {
+    this.mergePlanner = options.mergePlanner ?? new DeterministicMemoryMergePlanner();
+    this.relationPlanner = options.relationPlanner ?? new DeterministicMemoryRelationPlanner();
+    this.recallPlanner = options.recallPlanner ?? new DeterministicMemoryRecallPlanner();
+  }
 
   enqueueWrite(request: MemoryWriteRequest): Promise<string> {
-    return this.writeQueue.enqueue(() => {
+    return this.writeQueue.enqueue(async () => {
       const context = this.memoryRepository.getMemoryContext(request.profileId);
-      const associativeEdges = buildAssociativeMemoryEdges({
+      const mergeDecision = await this.mergePlanner.plan({
+        candidate: request.node,
+        existingNodes: context.nodes
+      });
+
+      if (mergeDecision.action === "update_existing") {
+        return this.memoryRepository.updateNodeFromWriteRequest({
+          profileId: request.profileId,
+          nodeId: mergeDecision.targetNodeId,
+          node: {
+            ...request.node,
+            content: mergeDecision.mergedContent,
+            importance: mergeDecision.importance
+          }
+        });
+      }
+
+      const associativeEdges = await this.relationPlanner.plan({
         newNode: request.node,
         existingNodes: context.nodes
       });
@@ -29,14 +71,49 @@ export class MemoryService {
     return this.memoryRepository.getMemoryContext(profileId);
   }
 
-  retrieveRelevant(profileId: string, query: string): RetrievedMemoryContext {
+  retrieveDueFollowUps(profileId: string, nowIso: string, lookaheadMs = 0): MemoryNode[] {
+    const cutoff = new Date(new Date(nowIso).getTime() + lookaheadMs);
     const context = this.memoryRepository.getMemoryContext(profileId);
-    const seedNodeIds = context.nodes
-      .map((node) => ({ node, score: scoreMemoryNode(node, query) }))
+
+    return context.nodes.filter((node) => {
+      if (node.type !== "follow_up" || node.state !== "active" || !node.startsAt) {
+        return false;
+      }
+
+      const startsAt = new Date(node.startsAt);
+
+      return Number.isFinite(startsAt.getTime()) && startsAt.getTime() <= cutoff.getTime();
+    });
+  }
+
+  completeFollowUps(profileId: string, nodeIds: string[]): void {
+    for (const nodeId of dedupeIds(nodeIds)) {
+      this.memoryRepository.updateNodeState({
+        profileId,
+        nodeId,
+        state: "completed"
+      });
+    }
+  }
+
+  async retrieveRelevant(profileId: string, query: string): Promise<RetrievedMemoryContext> {
+    const context = this.memoryRepository.getMemoryContext(profileId);
+    const recallPlan = await this.recallPlanner.plan({
+      query,
+      nodes: context.nodes,
+      summaries: context.summaries
+    });
+    const queryForScoring = buildRecallScoringQuery(query, recallPlan);
+    const rankedNodeIds = recallPlan.rankedNodeIds.filter((nodeId) =>
+      context.nodes.some((node) => node.id === nodeId)
+    );
+    const scoredNodeIds = context.nodes
+      .map((node) => ({ node, score: scoreMemoryNode(node, queryForScoring, recallPlan) }))
       .filter((item) => item.score > 0)
       .sort((left, right) => right.score - left.score)
       .slice(0, 4)
       .map((item) => item.node.id);
+    const seedNodeIds = dedupeIds([...rankedNodeIds, ...scoredNodeIds]).slice(0, 4);
 
     if (seedNodeIds.length === 0) {
       return {
@@ -56,7 +133,7 @@ export class MemoryService {
   }
 }
 
-function scoreMemoryNode(node: MemoryNode, query: string): number {
+function scoreMemoryNode(node: MemoryNode, query: string, recallPlan?: MemoryRecallPlan): number {
   let score = 0;
   const queryTokens = extractRecallTokens(query);
   const nodeConcepts = deriveMemoryConcepts(node.content);
@@ -83,7 +160,19 @@ function scoreMemoryNode(node: MemoryNode, query: string): number {
     score += 3;
   }
 
+  if (recallPlan?.targetTypes.includes(node.type)) {
+    score += 1;
+  }
+
   return score * (1 + node.importance);
+}
+
+function buildRecallScoringQuery(query: string, recallPlan: MemoryRecallPlan): string {
+  return [query, ...recallPlan.queryTerms].join(" ");
+}
+
+function dedupeIds(ids: string[]): string[] {
+  return [...new Set(ids)];
 }
 
 function extractRecallTokens(query: string): string[] {

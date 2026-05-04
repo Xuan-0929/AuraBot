@@ -2,9 +2,10 @@ import { join } from "node:path";
 import { existsSync, readFileSync } from "node:fs";
 import { appConfigSchema, type AppConfig } from "../../shared/schemas/config";
 
-type AppConfigInput = Partial<Omit<AppConfig, "gateModel" | "chatModel" | "taskRunner">> & {
+type AppConfigInput = Partial<Omit<AppConfig, "gateModel" | "chatModel" | "memoryModel" | "taskRunner">> & {
   gateModel?: Partial<AppConfig["gateModel"]>;
   chatModel?: Partial<AppConfig["chatModel"]>;
+  memoryModel?: Partial<AppConfig["memoryModel"]>;
   taskRunner?: Partial<AppConfig["taskRunner"]>;
 };
 
@@ -20,6 +21,11 @@ export function loadConfig(userDataPath: string): AppConfig {
     chatModel: {
       provider: "local-stub",
       model: "chat-stub",
+      enabled: false
+    },
+    memoryModel: {
+      provider: "local-stub",
+      model: "memory-stub",
       enabled: false
     },
     taskRunner: {
@@ -79,6 +85,10 @@ function mergeConfig(defaults: AppConfig, override: AppConfigInput): AppConfigIn
       ...defaults.chatModel,
       ...override.chatModel
     },
+    memoryModel: {
+      ...defaults.memoryModel,
+      ...override.memoryModel
+    },
     taskRunner: {
       ...defaults.taskRunner,
       ...override.taskRunner
@@ -96,12 +106,13 @@ function loadEnvironmentConfig(): AppConfigInput {
   return {
     gateModel: readModelRoleEnvironment("GATE", common),
     chatModel: readModelRoleEnvironment("CHAT", common),
+    memoryModel: readModelRoleEnvironment("MEMORY", common),
     taskRunner: readTaskRunnerEnvironment()
   };
 }
 
 function readModelRoleEnvironment(
-  role: "GATE" | "CHAT",
+  role: "GATE" | "CHAT" | "MEMORY",
   common: {
     provider?: string;
     baseUrl?: string;

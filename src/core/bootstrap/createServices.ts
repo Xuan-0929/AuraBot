@@ -14,6 +14,13 @@ import { EventLogService } from "../telemetry/eventLogService";
 import { ProfileService } from "../profiles/profileService";
 import { createChatModel, type ChatModel } from "../llm/chatModel";
 import { createGateModel, type GateModel } from "../llm/gateModel";
+import type { MemoryExtractor } from "../memory/memoryExtractor";
+import {
+  createMemoryExtractor,
+  createMemoryMergePlanner,
+  createMemoryRecallPlanner,
+  createMemoryRelationPlanner
+} from "../memory/modelBackedMemoryModel";
 import type { AppConfig, TaskRunnerConfig } from "../../shared/schemas/config";
 import type { TaskRunner } from "../tasks/taskRunner";
 import { existsSync } from "node:fs";
@@ -25,6 +32,7 @@ export interface AppServices {
   profileService: ProfileService;
   sessionRepository: SessionRepository;
   messageRepository: MessageRepository;
+  memoryExtractor: MemoryExtractor;
   memoryService: MemoryService;
   taskService: TaskService;
   eventLogService: EventLogService;
@@ -49,6 +57,10 @@ export function createServices(userDataPath: string): AppServices {
   });
   const gateModel = createGateModel(config.gateModel);
   const chatModel = createChatModel(config.chatModel);
+  const memoryExtractor = createMemoryExtractor(config.memoryModel);
+  const memoryMergePlanner = createMemoryMergePlanner(config.memoryModel);
+  const memoryRelationPlanner = createMemoryRelationPlanner(config.memoryModel);
+  const memoryRecallPlanner = createMemoryRecallPlanner(config.memoryModel);
 
   const services = {
     config,
@@ -56,7 +68,12 @@ export function createServices(userDataPath: string): AppServices {
     profileService,
     sessionRepository,
     messageRepository: new MessageRepository(database),
-    memoryService: new MemoryService(memoryRepository),
+    memoryExtractor,
+    memoryService: new MemoryService(memoryRepository, {
+      mergePlanner: memoryMergePlanner,
+      relationPlanner: memoryRelationPlanner,
+      recallPlanner: memoryRecallPlanner
+    }),
     taskService: new TaskService(taskRepository, sessionRepository, eventLogService, taskRunner),
     eventLogService,
     gateModel,

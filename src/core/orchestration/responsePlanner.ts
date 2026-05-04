@@ -5,11 +5,17 @@ export interface PlanAssistantResponseInput {
   userContent: string;
   writtenMemories: MemoryNode[];
   recalledMemories: MemoryNode[];
+  dueFollowUps?: MemoryNode[];
 }
 
 export function planAssistantResponse(input: PlanAssistantResponseInput): string {
+  const dueFollowUps = dedupeMemories(input.dueFollowUps ?? []);
   const recalled = dedupeMemories(input.recalledMemories);
   const written = dedupeMemories(input.writtenMemories);
+
+  if (dueFollowUps.length > 0) {
+    return `我提醒你一下：${formatMemoryList(dueFollowUps)}。`;
+  }
 
   if (recalled.length > 0 && shouldAskMemoryRecall(input.userContent)) {
     return `我记得：${formatMemoryList(recalled)}。`;

@@ -1,7 +1,7 @@
 import type { SendChatMessageInput, SendChatMessageResult } from "../../shared/contracts/chat";
 import type { MemoryNode } from "../../shared/schemas/memory";
 import type { Task } from "../../shared/schemas/task";
-import { extractMemoryCandidates, shouldAskMemoryRecall } from "../memory/memoryExtractor";
+import { shouldAskMemoryRecall, type MemoryExtractor } from "../memory/memoryExtractor";
 import type { MemoryService } from "../memory/memoryService";
 import type { MessageRepository } from "../storage/repositories/messageRepository";
 import type { SessionRepository } from "../storage/repositories/sessionRepository";
@@ -16,6 +16,7 @@ export interface ChatOrchestratorDependencies {
   profileService: ProfileService;
   sessionRepository: SessionRepository;
   messageRepository: MessageRepository;
+  memoryExtractor: MemoryExtractor;
   memoryService: MemoryService;
   taskService: TaskService;
   eventLogService: EventLogService;
@@ -131,9 +132,16 @@ export class ChatOrchestrator {
             content: semanticSegment
           })
         : [];
-    const memoryContext = this.dependencies.memoryService.retrieveRelevant(profile.id, semanticSegment);
+    const memoryContext = await this.dependencies.memoryService.retrieveRelevant(profile.id, semanticSegment);
+    const dueFollowUps = this.dependencies.memoryService.retrieveDueFollowUps(
+      profile.id,
+      new Date().toISOString()
+    );
     const writtenMemories = memoryContext.nodes.filter((node) => writtenMemoryIds.includes(node.id));
-    const recalledMemories = memoryContext.nodes.filter((node) => !writtenMemoryIds.includes(node.id));
+    const recalledMemories = dedupeMemoryNodes([
+      ...dueFollowUps,
+      ...memoryContext.nodes.filter((node) => !writtenMemoryIds.includes(node.id))
+    ]);
 
     if (memoryContext.nodes.length > 0 && shouldAskMemoryRecall(semanticSegment)) {
       this.dependencies.eventLogService.record("memory.recall_used", {
@@ -152,9 +160,22 @@ export class ChatOrchestrator {
         userContent: semanticSegment,
         writtenMemories,
         recalledMemories: shouldAskMemoryRecall(semanticSegment) ? memoryContext.nodes : recalledMemories,
+        dueFollowUps,
         gateDecision
       })
     });
+
+    if (dueFollowUps.length > 0) {
+      this.dependencies.memoryService.completeFollowUps(
+        profile.id,
+        dueFollowUps.map((memory) => memory.id)
+      );
+      this.dependencies.eventLogService.record("memory.follow_up_triggered", {
+        profileId: profile.id,
+        sessionId: mainSession.id,
+        nodeIds: dueFollowUps.map((memory) => memory.id)
+      });
+    }
 
     this.dependencies.eventLogService.record("chat.message_persisted", {
       profileId: profile.id,
@@ -178,7 +199,11 @@ export class ChatOrchestrator {
     sessionId: string;
     content: string;
   }): Promise<string[]> {
-    const candidates = extractMemoryCandidates(input.content);
+    const candidates = await this.dependencies.memoryExtractor.extract({
+      message: input.content,
+      nowIso: new Date().toISOString(),
+      timezone: Intl.DateTimeFormat().resolvedOptions().timeZone || "UTC"
+    });
     const writtenIds: string[] = [];
     let mostRecentEventId: string | undefined;
 
@@ -341,4 +366,20 @@ export class ChatOrchestrator {
 
     return details;
   }
+}
+
+function dedupeMemoryNodes(memories: MemoryNode[]): MemoryNode[] {
+  const seen = new Set<string>();
+  const result: MemoryNode[] = [];
+
+  for (const memory of memories) {
+    if (seen.has(memory.id)) {
+      continue;
+    }
+
+    seen.add(memory.id);
+    result.push(memory);
+  }
+
+  return result;
 }

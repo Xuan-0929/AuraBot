@@ -35,7 +35,7 @@ AuraBot 是一个桌面优先的陪伴型 AI MVP。它不是传统意义上常�
 | 语音输入 MVP | 运行时支持浏览器 `SpeechRecognition` 时，桌宠悬浮按钮可以语音输入。 |
 | 本地存储 | SQLite 存储 profiles、souls、sessions、messages、memory、tasks 和 event logs。 |
 | 主聊天线程 | 控制台消息通过 typed IPC 进入主进程并持久化。 |
-| 模型角色 | `gateModel` 和 `chatModel` 可注入；默认走本地 deterministic fallback，也可以接 OpenAI-compatible API。 |
+| 模型角色 | `gateModel`、`chatModel` 和 `memoryModel` 可注入；默认走本地 deterministic fallback，也可以接 OpenAI-compatible API。 |
 | Gate 逻辑 | 可判断碎片输入等待、完整聊天、任务请求、任务控制和话题结束。 |
 | 记忆 v1 | 支持 preference、event、follow-up 记忆写入，并可通过关系边召回。 |
 | 任务 v1 | 可以在主聊天里创建、查询、打断、修改、启动并完成任务；显式配置后可调用本机 Codex 子任务 runner 执行真实委派任务。 |
@@ -89,14 +89,15 @@ corepack pnpm start:clean
 
 ## 外部模型 API
 
-AuraBot 当前有两个独立模型角色：
+AuraBot 当前有三个独立模型角色：
 
 | 角色 | 推荐模型 |
 | --- | --- |
 | `gateModel` | 轻量、快速、低成本模型，用于回复时机、话题结束判断、聊天/任务分类和任务控制检测。 |
 | `chatModel` | 推理能力更强的模型，用于最终面向用户的对话回复。 |
+| `memoryModel` | 结构化输出稳定的模型，用于记忆抽取、重复记忆合并和候选关系边判断。 |
 
-没有配置时，这两个角色都会走本地 deterministic fallback。要启用 OpenAI-compatible provider，可以在 Electron user data 目录创建下面任意一个文件：
+没有配置时，这三个角色都会走本地 deterministic fallback。要启用 OpenAI-compatible provider，可以在 Electron user data 目录创建下面任意一个文件：
 
 ```text
 aurabot.config.json
@@ -145,6 +146,15 @@ sudo nano "/Library/Application Support/AuraBot/config.json"
     "temperature": 0.7,
     "timeoutMs": 30000
   },
+  "memoryModel": {
+    "enabled": true,
+    "provider": "openai-compatible",
+    "baseUrl": "https://api.example.com/v1",
+    "apiKey": "your-api-key",
+    "model": "your-structured-memory-model",
+    "temperature": 0,
+    "timeoutMs": 12000
+  },
   "taskRunner": {
     "provider": "codex",
     "codexCommand": "/Applications/Codex.app/Contents/Resources/codex",
@@ -170,6 +180,9 @@ AURABOT_GATE_MODEL_TIMEOUT_MS=8000 \
 AURABOT_CHAT_MODEL_ENABLED=1 \
 AURABOT_CHAT_MODEL_NAME=your-strong-reasoning-model \
 AURABOT_CHAT_MODEL_TIMEOUT_MS=30000 \
+AURABOT_MEMORY_MODEL_ENABLED=1 \
+AURABOT_MEMORY_MODEL_NAME=your-structured-memory-model \
+AURABOT_MEMORY_MODEL_TIMEOUT_MS=12000 \
 AURABOT_TASK_RUNNER=codex \
 AURABOT_CODEX_COMMAND=/Applications/Codex.app/Contents/Resources/codex \
 AURABOT_CODEX_WORKDIR=/path/to/AuraBot \
@@ -336,7 +349,7 @@ Cubism Core runtime 通过 `live2dcubismcore@1.0.2` 本地打包，应用启动�
 
 1. 模型角色默认走 deterministic local fallback；外部调用需要本地配置文件或环境变量。
 2. 用户消息已经能即时显示，但模型回复仍是非流式，也还没有支持用户新消息打断 in-flight generation。
-3. 记忆抽取和关系建立仍是规则实现，不是 embedding 或 LLM 驱动。
+3. 记忆层配置 `memoryModel` 后可用 API 做结构化抽取、重复记忆合并、候选关系边判断、召回语义检索词生成和 seed node 重排；还没有 embedding。
 4. 任务 runner 显式配置后可以调用本机 Codex、广播 JSONL 子任务进度，在主聊天打断时取消子进程，并在启动时把失联运行态任务标记为失败；真正 resume 和更完整的 artifact 管理还没有实现。
 5. Live2D 状态行为复用 Hiyori 内置 motion group，还没有定制表情资源或更细的动画状态机。
 6. 语音输入依赖 Chromium 的 `SpeechRecognition`；还需要稳定的本地或模型 STT adapter。
@@ -348,7 +361,7 @@ Cubism Core runtime 通过 `live2dcubismcore@1.0.2` 本地打包，应用启动�
 
 1. Live2D 桌宠行为层：细化状态动作，补更丰富表情资源，继续打磨点击穿透 hit testing。
 2. 真实模型适配层 v2：增加流式回复、in-flight 中断、retry/backoff 和可见模型连接状态。
-3. Memory v2：替换概念抽取、合并重复记忆、增加时间驱动提醒，并做记忆调试视图。
+3. Memory v2：把当前主聊天触发式 follow-up 扩展成后台 scheduler + 桌宠气泡主动提醒，并补记忆调试视图和固定评估语料。
 4. Task executor v2：增加真实任务类型、artifact 处理、工具执行和取消信号，同时保持主聊天控制面。
 5. 主线程任务控制 v2：扩展当前 hint router，支持“第一个”“刚才那个”和任务别名等更自然的引用。
 

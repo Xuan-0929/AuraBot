@@ -50,6 +50,7 @@ function buildChatPrompt(input: ChatModelInput): ChatCompletionRequest["messages
         userContent: input.userContent,
         writtenMemories: summarizeMemories(input.writtenMemories),
         recalledMemories: summarizeMemories(input.recalledMemories),
+        dueFollowUps: summarizeMemories(input.dueFollowUps ?? []),
         gateDecision: input.gateDecision
       })
     }
@@ -66,6 +67,12 @@ function summarizeMemories(memories: MemoryNode[]): Array<{ type: string; conten
 function buildDeterministicFallback(input: ChatModelInput): string {
   const recalled = input.recalledMemories;
   const written = input.writtenMemories;
+  const dueFollowUps = input.dueFollowUps ?? [];
+
+  if (dueFollowUps.length > 0) {
+    const joined = dueFollowUps.map((memory) => memory.content).join("；");
+    return `我提醒你一下：${joined}。`;
+  }
 
   if (recalled.length > 0 || written.length > 0) {
     const joined = [...recalled, ...written].map((memory) => memory.content).join("；");

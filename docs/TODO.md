@@ -564,8 +564,8 @@ Must show:
 
 建议交付：
 
-1. 已完成：provider config 支持 `API Base URL`、`API Key`、`chatModel`、`gateModel`、enable switch。
-2. 已完成：定义 `gateModel` / `chatModel` adapter interface，并接入 OpenAI-compatible provider。
+1. 已完成：provider config 支持 `API Base URL`、`API Key`、`chatModel`、`gateModel`、`memoryModel`、enable switch。
+2. 已完成：定义 `gateModel` / `chatModel` / `memoryModel` adapter interface，并接入 OpenAI-compatible provider。
 3. 已完成：保留 deterministic adapter 作为无 key fallback 和测试 adapter。
 4. 已完成：控制台用户消息和输入框清空本地即时提交，不再等待 gate/chat 模型返回。
 5. 下一步：加入流式回复和用户新消息中断生成。
@@ -577,11 +577,14 @@ Must show:
 
 建议交付：
 
-1. 用 LLM 或 embedding 替换轻量概念抽取层。
-2. 增加重复记忆合并和旧记忆更新策略。
-3. 时间驱动记忆接入到期前后提醒。
-4. 做一个记忆调试视图，显示写入、召回和边跳转。
-5. 构造固定对话集，比较关键词召回和图状联想召回。
+1. 已完成第一步：`memoryModel` 可接管结构化记忆抽取，并在失败时回退本地规则。
+2. 已完成第一步：写入队列支持 merge planner，重复语义记忆可更新旧节点。
+3. 已完成第一步：候选关系边支持 relation planner，并过滤模型发明的 node id。
+4. 已完成第一步：召回阶段支持 recall planner，可用模型生成语义检索词、目标记忆类型和重排 seed node。
+5. 已完成第一步：到期 `follow_up` 会在下一次主聊天回复中提醒，并在触发后标记为 `completed`。
+6. 下一步：把主聊天触发式 follow-up 扩展成后台 scheduler + 桌宠气泡主动提醒。
+7. 下一步：做一个记忆调试视图，显示写入、召回和边跳转。
+8. 下一步：构造固定对话集，比较关键词召回和图状联想召回。
 
 ### Next 4: Task Executor v2
 

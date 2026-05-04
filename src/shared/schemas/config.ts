@@ -25,6 +25,7 @@ export const appConfigSchema = z.object({
   debugLogging: z.boolean().default(true),
   gateModel: modelRoleConfigSchema,
   chatModel: modelRoleConfigSchema,
+  memoryModel: modelRoleConfigSchema,
   taskRunner: taskRunnerConfigSchema
 });
 

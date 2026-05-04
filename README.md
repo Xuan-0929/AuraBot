@@ -35,7 +35,7 @@ Console window:
 | Voice input MVP | Pet hover control can use browser SpeechRecognition when the runtime supports it. |
 | Local storage | SQLite stores profiles, souls, sessions, messages, memory, tasks, and event logs. |
 | Main chat thread | Console messages persist through typed IPC into the main process. |
-| Model roles | `gateModel` and `chatModel` are injectable; both default to local deterministic fallback and can use OpenAI-compatible APIs. |
+| Model roles | `gateModel`, `chatModel`, and `memoryModel` are injectable; all default to local deterministic fallback and can use OpenAI-compatible APIs. |
 | Gate logic | Fragmented messages can wait; complete chat, task requests, task controls, and topic endings are classified. |
 | Memory v1 | Preference, event, and follow-up memories can be written and recalled through relation edges. |
 | Task v1 | Tasks can be created, queried, interrupted, revised, started, and completed from main chat; an opt-in Codex child runner can execute real delegated tasks. |
@@ -89,14 +89,15 @@ corepack pnpm start:clean
 
 ## External Model API
 
-AuraBot now has two separate model roles:
+AuraBot now has three separate model roles:
 
 | Role | Intended model |
 | --- | --- |
 | `gateModel` | Lightweight, fast, low-cost model for reply timing, topic-ended judgment, chat/task classification, and task-control detection. |
 | `chatModel` | Stronger reasoning model for final user-facing conversation. |
+| `memoryModel` | Structured-output model for memory extraction, duplicate-memory merging, and candidate relation-edge planning. |
 
-Without config, both roles use local deterministic fallback. To enable an OpenAI-compatible provider, create either file in the Electron user data directory:
+Without config, all three roles use local deterministic fallback. To enable an OpenAI-compatible provider, create either file in the Electron user data directory:
 
 ```text
 aurabot.config.json
@@ -145,6 +146,15 @@ Example:
     "temperature": 0.7,
     "timeoutMs": 30000
   },
+  "memoryModel": {
+    "enabled": true,
+    "provider": "openai-compatible",
+    "baseUrl": "https://api.example.com/v1",
+    "apiKey": "your-api-key",
+    "model": "your-structured-memory-model",
+    "temperature": 0,
+    "timeoutMs": 12000
+  },
   "taskRunner": {
     "provider": "codex",
     "codexCommand": "/Applications/Codex.app/Contents/Resources/codex",
@@ -170,6 +180,9 @@ AURABOT_GATE_MODEL_TIMEOUT_MS=8000 \
 AURABOT_CHAT_MODEL_ENABLED=1 \
 AURABOT_CHAT_MODEL_NAME=your-strong-reasoning-model \
 AURABOT_CHAT_MODEL_TIMEOUT_MS=30000 \
+AURABOT_MEMORY_MODEL_ENABLED=1 \
+AURABOT_MEMORY_MODEL_NAME=your-structured-memory-model \
+AURABOT_MEMORY_MODEL_TIMEOUT_MS=12000 \
 AURABOT_TASK_RUNNER=codex \
 AURABOT_CODEX_COMMAND=/Applications/Codex.app/Contents/Resources/codex \
 AURABOT_CODEX_WORKDIR=/path/to/AuraBot \
@@ -336,7 +349,7 @@ This is still an MVP skeleton, not a production companion:
 
 1. Model roles default to deterministic local fallback; external calls require local config or environment variables.
 2. User messages now render immediately, but model replies are still non-streaming and user-message interruption of an in-flight generation is not implemented yet.
-3. Memory extraction and relation building are rule-based, not embedding or LLM powered.
+3. Memory can use `memoryModel` for structured extraction, duplicate-memory merging, candidate relation-edge planning, recall query-term generation, and seed-node reranking; embedding is not implemented yet.
 4. The task runner can call local Codex when explicitly configured, broadcasts JSONL child progress, cancels the child process when interrupted, and marks orphaned running tasks failed on startup; true resume and richer artifact handling are not implemented yet.
 5. Live2D status behavior uses the bundled Hiyori motion groups; custom expressions and richer animation tuning are not implemented yet.
 6. Voice input currently depends on Chromium's `SpeechRecognition`; a stable local or model-backed STT adapter is still needed.
@@ -348,7 +361,7 @@ The current priority order is:
 
 1. Live2D desktop-pet behavior layer: tune status motions, add richer expression assets, and keep hardening click-through hit testing.
 2. Real model adapter layer v2: add streaming replies, in-flight interruption, retry/backoff, and a visible model connection status.
-3. Memory v2: replace concept extraction, merge duplicate memories, add time-driven reminders, and build a memory debug view.
+3. Memory v2: expand the current main-chat-triggered follow-up reminders into a background scheduler plus desktop-pet bubbles, build a memory debug view, and create fixed evaluation fixtures.
 4. Task executor v2: add real task types, artifact handling, tool execution, and cancellation signals while keeping control in main chat.
 5. Main-thread task control v2: extend the current hint-based router with richer references like "第一个", "刚才那个", and task aliases.
 

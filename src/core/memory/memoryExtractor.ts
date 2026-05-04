@@ -6,6 +6,22 @@ export interface ExtractedMemoryCandidate {
   relationToPrevious?: MemoryWriteRequest["edges"][number];
 }
 
+export interface MemoryExtractionInput {
+  message: string;
+  nowIso: string;
+  timezone: string;
+}
+
+export interface MemoryExtractor {
+  extract(input: MemoryExtractionInput): Promise<ExtractedMemoryCandidate[]>;
+}
+
+export class DeterministicMemoryExtractor implements MemoryExtractor {
+  async extract(input: MemoryExtractionInput): Promise<ExtractedMemoryCandidate[]> {
+    return extractMemoryCandidates(input.message);
+  }
+}
+
 const PUNCTUATION_BOUNDARY = /[，。,.！？!?；;\n]/;
 const TIME_HINT_PATTERN = /(今晚|明天|后天|下周[一二三四五六日天]?|周[一二三四五六日天]|下个月|月底|月初)/;
 const EVENT_HINT_PATTERN = /(要|有|去|看|参加|考试|面试|演唱会|交作业|开会|提醒)/;

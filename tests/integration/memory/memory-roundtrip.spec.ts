@@ -61,4 +61,32 @@ describe("memory roundtrip", () => {
     expect(recall.assistantMessage?.content).toContain("阿杰");
     expect(recall.assistantMessage?.content).toContain("喜欢火锅");
   });
+
+  it("surfaces due follow-up memories in the next main chat reply and completes them", async () => {
+    const { services, orchestrator } = createTestOrchestrator("aurabot-memory-");
+    const profile = services.profileService.getOrSeedActiveProfile();
+    const mainSession = services.sessionRepository.getOrCreateMainSession(profile.id);
+
+    await services.memoryService.enqueueWrite({
+      profileId: profile.id,
+      sourceSessionId: mainSession.id,
+      node: {
+        type: "follow_up",
+        content: "提醒用户准备今晚的算法面试",
+        importance: 0.88,
+        startsAt: "2026-05-04T20:00:00.000+08:00"
+      },
+      edges: []
+    });
+
+    const result = await orchestrator.sendMessage({ content: "你在吗？" });
+    const memoryContext = services.memoryService.retrieveForProfile(profile.id);
+    const followUp = memoryContext.nodes.find((node) => node.type === "follow_up");
+    const eventLogs = services.eventLogService.list(20);
+
+    expect(result.assistantMessage?.content).toContain("提醒");
+    expect(result.assistantMessage?.content).toContain("算法面试");
+    expect(followUp?.state).toBe("completed");
+    expect(eventLogs.some((log) => log.eventType === "memory.follow_up_triggered")).toBe(true);
+  });
 });

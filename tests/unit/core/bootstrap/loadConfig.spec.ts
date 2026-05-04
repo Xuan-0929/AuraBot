@@ -37,6 +37,11 @@ describe("loadConfig", () => {
       model: "chat-stub",
       enabled: false
     });
+    expect(config.memoryModel).toMatchObject({
+      provider: "local-stub",
+      model: "memory-stub",
+      enabled: false
+    });
     expect(config.taskRunner).toMatchObject({
       provider: "deterministic",
       sandbox: "workspace-write",
@@ -65,6 +70,15 @@ describe("loadConfig", () => {
           model: "strong-chat-model",
           enabled: true,
           temperature: 0.7
+        },
+        memoryModel: {
+          provider: "openai-compatible",
+          baseUrl: "https://api.example.com/v1",
+          apiKey: "memory-key",
+          model: "structured-memory-model",
+          enabled: true,
+          temperature: 0,
+          timeoutMs: 12000
         }
       }),
       "utf8"
@@ -87,6 +101,15 @@ describe("loadConfig", () => {
       model: "strong-chat-model",
       enabled: true,
       temperature: 0.7
+    });
+    expect(config.memoryModel).toMatchObject({
+      provider: "openai-compatible",
+      baseUrl: "https://api.example.com/v1",
+      apiKey: "memory-key",
+      model: "structured-memory-model",
+      enabled: true,
+      temperature: 0,
+      timeoutMs: 12000
     });
   });
 
@@ -127,6 +150,9 @@ describe("loadConfig", () => {
     process.env.AURABOT_CHAT_MODEL_ENABLED = "true";
     process.env.AURABOT_CHAT_MODEL_NAME = "strong-chat-model";
     process.env.AURABOT_CHAT_MODEL_TEMPERATURE = "0.8";
+    process.env.AURABOT_MEMORY_MODEL_ENABLED = "true";
+    process.env.AURABOT_MEMORY_MODEL_NAME = "structured-memory-model";
+    process.env.AURABOT_MEMORY_MODEL_TIMEOUT_MS = "12000";
 
     const config = loadConfig(userDataPath);
 
@@ -144,6 +170,14 @@ describe("loadConfig", () => {
       model: "strong-chat-model",
       enabled: true,
       temperature: 0.8
+    });
+    expect(config.memoryModel).toMatchObject({
+      provider: "openai-compatible",
+      baseUrl: "https://api.example.com/v1",
+      apiKey: "shared-key",
+      model: "structured-memory-model",
+      enabled: true,
+      timeoutMs: 12000
     });
   });
 
