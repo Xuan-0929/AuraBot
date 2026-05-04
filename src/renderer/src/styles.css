@@ -267,7 +267,10 @@ textarea {
 }
 
 .console-window {
-  min-height: 100vh;
+  display: flex;
+  flex-direction: column;
+  height: 100vh;
+  min-height: 0;
   padding: 18px;
   background:
     radial-gradient(circle at 14% 12%, rgba(255, 244, 213, 0.86), transparent 26%),
@@ -277,6 +280,7 @@ textarea {
 }
 
 .console-header {
+  flex: 0 0 auto;
   display: flex;
   align-items: flex-start;
   justify-content: space-between;
@@ -341,9 +345,10 @@ textarea {
 }
 
 .console-chat {
+  flex: 1 1 auto;
   display: grid;
   grid-template-rows: minmax(0, 1fr) auto;
-  min-height: calc(100vh - 112px);
+  min-height: 0;
   gap: 12px;
 }
 
@@ -352,8 +357,16 @@ textarea {
   flex-direction: column;
   gap: 10px;
   min-height: 0;
-  overflow: auto;
-  padding-right: 4px;
+  overflow-x: hidden;
+  overflow-y: auto;
+  overscroll-behavior: contain;
+  padding-right: 8px;
+  scrollbar-gutter: stable;
+}
+
+.message-list:focus-visible {
+  outline: 2px solid rgba(50, 124, 144, 0.5);
+  outline-offset: 2px;
 }
 
 .message {
@@ -460,6 +473,7 @@ textarea {
 }
 
 .task-status-overlay {
+  flex: 0 0 auto;
   display: grid;
   gap: 8px;
   width: min(100%, 420px);

@@ -42,7 +42,7 @@ AuraBot 当前已经从“传统聊天界面”收敛为桌宠优先形态：
 | `corepack pnpm test` | 20 个 test files、56 个 tests 通过 |
 | `corepack pnpm typecheck` | 通过 |
 | `corepack pnpm build` | 通过 |
-| `corepack pnpm test:e2e` | 9 个 e2e tests 通过 |
+| `corepack pnpm test:e2e` | 10 个 e2e tests 通过 |
 | Live2D 冷启动检查 | `dev:clean` 可见渲染 Hiyori，`renderState=ready`，`motionGroup=Idle` |
 
 可视化产物：

@@ -156,6 +156,35 @@ test("waits on fragmented input and replies after the thought is completed", asy
   }
 });
 
+test("keeps long console conversations scrollable and pinned to the newest message", async () => {
+  const { electronApp, petWindow, userDataDir } = await launchAuraBot();
+
+  try {
+    const consoleWindow = await openConsole(electronApp, petWindow);
+    const input = consoleWindow.getByPlaceholder("Say something");
+
+    for (let index = 1; index <= 14; index += 1) {
+      await input.fill(`第 ${index} 条，我喜欢吃火锅。`);
+      await consoleWindow.getByRole("button", { name: "Send" }).click();
+      await expect(consoleWindow.getByText(/我记住了.*火锅/).last()).toBeVisible();
+    }
+
+    const scrollMetrics = await consoleWindow.locator(".message-list").evaluate((element) => ({
+      clientHeight: element.clientHeight,
+      scrollHeight: element.scrollHeight,
+      scrollTop: element.scrollTop,
+      windowHeight: window.innerHeight
+    }));
+
+    expect(scrollMetrics.clientHeight).toBeLessThan(scrollMetrics.scrollHeight);
+    expect(scrollMetrics.clientHeight).toBeLessThan(scrollMetrics.windowHeight);
+    expect(scrollMetrics.scrollTop + scrollMetrics.clientHeight).toBeGreaterThanOrEqual(scrollMetrics.scrollHeight - 2);
+    await expect(consoleWindow.locator(".message-user").filter({ hasText: "第 14 条" })).toBeVisible();
+  } finally {
+    await cleanupAuraBot(electronApp, userDataDir);
+  }
+});
+
 test("creates a visible queued task from a task-like chat request", async () => {
   const { electronApp, petWindow, userDataDir } = await launchAuraBot();
 
