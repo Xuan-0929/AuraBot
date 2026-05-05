@@ -76,6 +76,9 @@ function buildSoulSystemPrompt(input: ChatModelInput): string {
         `名字：${soul.name}`,
         `人格：${soul.persona}`,
         `关系：${soul.relationship}`,
+        `语气：${soul.tone}`,
+        soul.principles.length > 0 ? `原则：${soul.principles.join("；")}` : undefined,
+        soul.taboos.length > 0 ? `语义禁忌：${soul.taboos.join("；")}` : undefined,
         `说话方式：${soul.speakingStyle}`,
         soul.boundaries.length > 0 ? `边界：${soul.boundaries.join("；")}` : undefined,
         soul.topicPreferences.length > 0 ? `偏好话题：${soul.topicPreferences.join("；")}` : undefined

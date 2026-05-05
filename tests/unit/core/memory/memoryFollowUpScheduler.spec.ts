@@ -28,10 +28,11 @@ describe("MemoryFollowUpScheduler", () => {
       profileService: services.profileService,
       memoryService: services.memoryService,
       eventLogService: services.eventLogService,
+      voiceAdapter: services.voiceAdapter,
       broadcastPetActivity: (activity) => activities.push(activity)
     });
 
-    const result = scheduler.checkDueFollowUps("2026-05-05T20:01:00.000+08:00");
+    const result = await scheduler.checkDueFollowUps("2026-05-05T20:01:00.000+08:00");
     const memoryContext = services.memoryService.retrieveForProfile(profile.id);
     const followUp = memoryContext.nodes.find((node) => node.type === "follow_up");
     const eventLogs = services.eventLogService.list(20);

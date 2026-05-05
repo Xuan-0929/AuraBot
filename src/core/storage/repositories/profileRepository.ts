@@ -10,6 +10,9 @@ interface ProfileRow {
   soul_id: string | null;
   soul_name: string | null;
   persona: string | null;
+  tone: string | null;
+  principles_json: string | null;
+  taboos_json: string | null;
   speaking_style: string | null;
   relationship: string | null;
   boundaries_json: string | null;
@@ -34,6 +37,9 @@ export class ProfileRepository {
           souls.id as soul_id,
           souls.name as soul_name,
           souls.persona,
+          souls.tone,
+          souls.principles_json,
+          souls.taboos_json,
           souls.speaking_style,
           souls.relationship,
           souls.boundaries_json,
@@ -77,6 +83,9 @@ export class ProfileRepository {
             profile_id,
             name,
             persona,
+            tone,
+            principles_json,
+            taboos_json,
             speaking_style,
             relationship,
             boundaries_json,
@@ -89,6 +98,9 @@ export class ProfileRepository {
             @profileId,
             @name,
             @persona,
+            @tone,
+            @principlesJson,
+            @taboosJson,
             @speakingStyle,
             @relationship,
             @boundariesJson,
@@ -99,6 +111,9 @@ export class ProfileRepository {
           on conflict(profile_id) do update set
             name = excluded.name,
             persona = excluded.persona,
+            tone = excluded.tone,
+            principles_json = excluded.principles_json,
+            taboos_json = excluded.taboos_json,
             speaking_style = excluded.speaking_style,
             relationship = excluded.relationship,
             boundaries_json = excluded.boundaries_json,
@@ -108,6 +123,8 @@ export class ProfileRepository {
         )
         .run({
           ...soul,
+          principlesJson: JSON.stringify(soul.principles),
+          taboosJson: JSON.stringify(soul.taboos),
           boundariesJson: JSON.stringify(soul.boundaries),
           topicPreferencesJson: JSON.stringify(soul.topicPreferences)
         });
@@ -130,6 +147,9 @@ function mapProfile(row: ProfileRow): Profile {
           profileId: row.id,
           name: row.soul_name ?? "Aura",
           persona: row.persona ?? "",
+          tone: row.tone || row.speaking_style || "",
+          principles: JSON.parse(row.principles_json ?? "[]") as string[],
+          taboos: JSON.parse(row.taboos_json ?? "[]") as string[],
           speakingStyle: row.speaking_style ?? "",
           relationship: row.relationship ?? "",
           boundaries: JSON.parse(row.boundaries_json ?? "[]") as string[],

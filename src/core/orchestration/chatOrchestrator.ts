@@ -1,6 +1,7 @@
 import type { SendChatMessageInput, SendChatMessageResult } from "../../shared/contracts/chat";
 import type { Message } from "../../shared/schemas/message";
 import type { MemoryNode } from "../../shared/schemas/memory";
+import type { Soul } from "../../shared/schemas/profile";
 import { shouldAskMemoryRecall, type MemoryExtractor } from "../memory/memoryExtractor";
 import type { MemoryService } from "../memory/memoryService";
 import type { MessageRepository } from "../storage/repositories/messageRepository";
@@ -11,7 +12,11 @@ import type { EventLogService } from "../telemetry/eventLogService";
 import { parseTaskControlRequest } from "../tasks/taskControlRouter";
 import type { GateModel } from "../llm/gateModel";
 import type { ChatModel } from "../llm/chatModel";
-import { buildTaskSettledMessageDraft, buildTaskStatusResponse } from "../tasks/taskPresentation";
+import type { VoiceAdapter } from "../voice/voiceAdapter";
+import {
+  buildTaskSettledMessageDraftWithVoice,
+  buildTaskStatusResponseWithVoice
+} from "../tasks/taskPresentation";
 
 const GATE_CONTEXT_MESSAGE_LIMIT = 10;
 
@@ -25,6 +30,7 @@ export interface ChatOrchestratorDependencies {
   eventLogService: EventLogService;
   gateModel: GateModel;
   chatModel: ChatModel;
+  voiceAdapter: VoiceAdapter;
 }
 
 export interface SendChatMessageOptions {
@@ -101,7 +107,15 @@ export class ChatOrchestrator {
         sessionId: mainSession.id,
         profileId: profile.id,
         role: "assistant",
-        content: buildTaskAcceptedReply()
+        content: await this.dependencies.voiceAdapter.render({
+          scene: "task.accepted",
+          channel: "chat",
+          soul: profile.soul,
+          facts: {
+            taskTitle: semanticSegment
+          },
+          fallbackText: "好，我开始弄。"
+        })
       });
 
       this.dependencies.eventLogService.record("chat.message_persisted", {
@@ -128,7 +142,8 @@ export class ChatOrchestrator {
         profileId: profile.id,
         sessionId: mainSession.id,
         userMessageId: userMessage.id,
-        content: input.content
+        content: input.content,
+        soul: profile.soul
       });
 
       return {
@@ -294,6 +309,7 @@ export class ChatOrchestrator {
     sessionId: string;
     userMessageId: string;
     content: string;
+    soul?: Soul;
   }) {
     const request = parseTaskControlRequest(input.content);
     const selectedTask = this.dependencies.taskService.findTaskForChatControl({
@@ -306,19 +322,41 @@ export class ChatOrchestrator {
 
     if (!selectedTask) {
       responseContent = request.targetHint
-        ? `我没有找到和「${request.targetHint}」匹配的任务。`
-        : "我这边还没有正在跟的任务。";
+        ? await this.dependencies.voiceAdapter.render({
+            scene: "task.control_not_found",
+            channel: "chat",
+            soul: input.soul,
+            facts: {
+              targetHint: request.targetHint
+            },
+            fallbackText: `我没有找到和「${request.targetHint}」匹配的任务。`
+          })
+        : await this.dependencies.voiceAdapter.render({
+            scene: "task.control_not_found",
+            channel: "chat",
+            soul: input.soul,
+            facts: {},
+            fallbackText: "我这边还没有正在跟的任务。"
+          });
     } else if (request.action === "query") {
-      responseContent = buildTaskStatusResponse(
+      responseContent = await buildTaskStatusResponseWithVoice(
         selectedTask,
-        this.dependencies.taskService.listTaskEvents(selectedTask.id)
+        this.dependencies.taskService.listTaskEvents(selectedTask.id),
+        {
+          soul: input.soul,
+          voiceAdapter: this.dependencies.voiceAdapter
+        }
       );
     } else if (request.action === "start") {
       if (selectedTask.status !== "queued") {
         updatedTask = selectedTask;
-        responseContent = buildTaskStatusResponse(
+        responseContent = await buildTaskStatusResponseWithVoice(
           selectedTask,
-          this.dependencies.taskService.listTaskEvents(selectedTask.id)
+          this.dependencies.taskService.listTaskEvents(selectedTask.id),
+          {
+            soul: input.soul,
+            voiceAdapter: this.dependencies.voiceAdapter
+          }
         );
       } else {
         updatedTask = await this.dependencies.taskService.runTaskFromChat({
@@ -326,21 +364,39 @@ export class ChatOrchestrator {
           taskId: selectedTask.id
         });
         if (!updatedTask) {
-          responseContent = "我没有找到可开始的排队任务。";
+          responseContent = await this.dependencies.voiceAdapter.render({
+            scene: "task.control_not_found",
+            channel: "chat",
+            soul: input.soul,
+            facts: {},
+            fallbackText: "我没有找到可开始的排队任务。"
+          });
         } else if (updatedTask.status === "completed") {
-          responseContent = buildTaskSettledMessageDraft(
+          responseContent = (await buildTaskSettledMessageDraftWithVoice(
             updatedTask,
-            this.dependencies.taskService.listTaskEvents(updatedTask.id)
-          ).content;
+            this.dependencies.taskService.listTaskEvents(updatedTask.id),
+            {
+              soul: input.soul,
+              voiceAdapter: this.dependencies.voiceAdapter
+            }
+          )).content;
         } else if (updatedTask.status === "failed") {
-          responseContent = buildTaskSettledMessageDraft(
+          responseContent = (await buildTaskSettledMessageDraftWithVoice(
             updatedTask,
-            this.dependencies.taskService.listTaskEvents(updatedTask.id)
-          ).content;
+            this.dependencies.taskService.listTaskEvents(updatedTask.id),
+            {
+              soul: input.soul,
+              voiceAdapter: this.dependencies.voiceAdapter
+            }
+          )).content;
         } else {
-          responseContent = buildTaskStatusResponse(
+          responseContent = await buildTaskStatusResponseWithVoice(
             updatedTask,
-            this.dependencies.taskService.listTaskEvents(updatedTask.id)
+            this.dependencies.taskService.listTaskEvents(updatedTask.id),
+            {
+              soul: input.soul,
+              voiceAdapter: this.dependencies.voiceAdapter
+            }
           );
         }
       }
@@ -351,8 +407,23 @@ export class ChatOrchestrator {
         reason: "用户在主聊天线程要求停掉"
       });
       responseContent = updatedTask
-        ? "好，我先停下来。你想换方向的话，直接告诉我。"
-        : "这件事现在不用停，我这边没有可打断的运行状态。";
+        ? await this.dependencies.voiceAdapter.render({
+            scene: "task.interrupted",
+            channel: "chat",
+            soul: input.soul,
+            facts: {
+              taskTitle: updatedTask.title,
+              status: updatedTask.status
+            },
+            fallbackText: "好，我先停下来。你想换方向的话，直接告诉我。"
+          })
+        : await this.dependencies.voiceAdapter.render({
+            scene: "task.control_not_found",
+            channel: "chat",
+            soul: input.soul,
+            facts: {},
+            fallbackText: "这件事现在不用停，我这边没有可打断的运行状态。"
+          });
     } else {
       const revisedTitle = request.revisedTitle ?? input.content;
       updatedTask = this.dependencies.taskService.reviseTaskFromChat({
@@ -361,8 +432,22 @@ export class ChatOrchestrator {
         title: revisedTitle
       });
       responseContent = updatedTask
-        ? `好，我按这个新方向来：${updatedTask.title}`
-        : "这个任务没改成，我没有找到可修改的任务。";
+        ? await this.dependencies.voiceAdapter.render({
+            scene: "task.accepted",
+            channel: "chat",
+            soul: input.soul,
+            facts: {
+              taskTitle: updatedTask.title
+            },
+            fallbackText: `好，我按这个新方向来：${updatedTask.title}`
+          })
+        : await this.dependencies.voiceAdapter.render({
+            scene: "task.control_not_found",
+            channel: "chat",
+            soul: input.soul,
+            facts: {},
+            fallbackText: "这个任务没改成，我没有找到可修改的任务。"
+          });
     }
 
     const assistantMessage = this.dependencies.messageRepository.create({
@@ -406,8 +491,4 @@ function dedupeMemoryNodes(memories: MemoryNode[]): MemoryNode[] {
   }
 
   return result;
-}
-
-function buildTaskAcceptedReply(): string {
-  return "好！我现在就开始做。";
 }

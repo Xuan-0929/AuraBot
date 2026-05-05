@@ -13,7 +13,7 @@ import type { PetActivity } from "../shared/contracts/pet";
 import { parsePetSettingsPatch, type PetSettings, type PetSettingsPatch } from "../shared/schemas/petSettings";
 import type { Task } from "../shared/schemas/task";
 import type { AppServices } from "../core/bootstrap/createServices";
-import { buildTaskSettledMessageDraft, isTaskResultPathAllowed } from "../core/tasks/taskPresentation";
+import { buildTaskSettledMessageDraftWithVoice, isTaskResultPathAllowed } from "../core/tasks/taskPresentation";
 
 export interface WindowController {
   openConsoleWindow(): void;
@@ -91,12 +91,12 @@ export function registerIpc(services: AppServices, windows: WindowController): v
         onProgress: (progressTask) => {
           windows.broadcastTaskChanged(progressTask);
         },
-        onSettled: (settledTask) => {
+        onSettled: async (settledTask) => {
           windows.broadcastTaskChanged(settledTask);
           windows.broadcastAgentStatus("idle");
-          const assistantMessage = createTaskSettledMessage(services, settledTask);
+          const assistantMessage = await createTaskSettledMessage(services, settledTask);
           windows.broadcastChatMessage(assistantMessage);
-          const activity = buildPetActivityFromTask(settledTask);
+          const activity = await buildPetActivityFromTask(services, settledTask);
 
           if (activity) {
             windows.broadcastPetActivity(activity);
@@ -109,7 +109,7 @@ export function registerIpc(services: AppServices, windows: WindowController): v
         result.agentStatus = "tasking";
       }
     }
-    const activity = buildPetActivity(input, result);
+    const activity = await buildPetActivity(services, input, result);
 
     windows.broadcastAgentStatus(result.agentStatus);
 
@@ -193,11 +193,14 @@ export function registerIpc(services: AppServices, windows: WindowController): v
   });
 }
 
-function createTaskSettledMessage(services: AppServices, task: Task): Message {
+async function createTaskSettledMessage(services: AppServices, task: Task): Promise<Message> {
   const profile = services.profileService.getOrSeedActiveProfile();
   const mainSession = services.sessionRepository.getOrCreateMainSession(profile.id);
   const events = services.taskService.listTaskEvents(task.id);
-  const draft = buildTaskSettledMessageDraft(task, events);
+  const draft = await buildTaskSettledMessageDraftWithVoice(task, events, {
+    soul: profile.soul,
+    voiceAdapter: services.voiceAdapter
+  });
 
   return services.messageRepository.create({
     sessionId: mainSession.id,
@@ -256,25 +259,53 @@ function resolveTaskResultPath(services: AppServices, input: TaskResultFileActio
   return isTaskResultPathAllowed(events, input.path) ? input.path : undefined;
 }
 
-function buildPetActivityFromTask(task: Task): PetActivity | undefined {
+async function buildPetActivityFromTask(services: AppServices, task: Task): Promise<PetActivity | undefined> {
   if (task.status !== "completed" && task.status !== "failed") {
     return undefined;
   }
 
+  const profile = services.profileService.getOrSeedActiveProfile();
+
   return {
     id: randomUUID(),
     kind: "task_completed",
-    message: task.status === "completed" ? `任务完成：${task.title}` : `任务失败：${task.title}`,
+    message: await services.voiceAdapter.render({
+      scene: "pet.task_activity",
+      channel: "pet_notice",
+      soul: profile.soul,
+      facts: {
+        taskTitle: task.title,
+        status: task.status,
+        resultSubject: task.title
+      },
+      fallbackText: task.status === "completed" ? `${task.title}弄好了，要不要看一眼？` : `${task.title}没跑通，我在这儿等你看。`
+    }),
     createdAt: new Date().toISOString()
   };
 }
 
-function buildPetActivity(input: SendChatMessageInput, result: SendChatMessageResult): PetActivity | undefined {
+async function buildPetActivity(
+  services: AppServices,
+  input: SendChatMessageInput,
+  result: SendChatMessageResult
+): Promise<PetActivity | undefined> {
   if (result.updatedTask?.status === "completed") {
+    const profile = services.profileService.getOrSeedActiveProfile();
+
     return {
       id: randomUUID(),
       kind: "task_completed",
-      message: `任务完成：${result.updatedTask.title}`,
+      message: await services.voiceAdapter.render({
+        scene: "pet.task_activity",
+        channel: "pet_notice",
+        soul: profile.soul,
+        facts: {
+          taskTitle: result.updatedTask.title,
+          status: result.updatedTask.status,
+          resultSubject: result.updatedTask.title
+        },
+        fallbackText: `${result.updatedTask.title}弄好了，要不要看一眼？`
+      }),
       createdAt: new Date().toISOString()
     };
   }

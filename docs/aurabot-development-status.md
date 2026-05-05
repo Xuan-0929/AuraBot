@@ -4,11 +4,11 @@
 
 这份文档记录当前 live2D/console 集成分支已经完成的工程事实、最近一次验证结果，以及下一步最应该推进的任务。它是执行状态板，不替代 PRD，也不替代 MVP 计划。
 
-当前工作分支：`codex/aurabot-live2d-console-ui`
+当前工作分支：`codex/aurabot-persona-feel`
 
-当前集成提交：`de65810 Merge branch 'codex/aurabot-persona-feel' into codex/aurabot-live2d-console-ui`
+当前集成提交：`2aa63ff feat: unify soul-driven voice responses`
 
-分支边界：这一侧已经集成 Live2D 桌宠体验、主控制台、任务卡控制、流式回复、模型 gate、记忆调试和 follow-up 主动提醒。后续如果继续并行开发，记忆模型/配置大改、任务执行器大改、桌宠 UI 大改仍建议分支隔离，避免在 `chatOrchestrator`、`createWindow`、`store`、IPC contract 和 renderer 样式上互相抢修改权。
+分支边界：这一侧已经集成 Live2D 桌宠体验、主控制台、任务卡控制、流式回复、模型 gate、记忆调试、follow-up 主动提醒，以及 soul 驱动的统一回复/播报机制。后续如果继续并行开发，记忆模型/配置大改、任务执行器大改、桌宠 UI 大改仍建议分支隔离，避免在 `chatOrchestrator`、`createWindow`、`store`、IPC contract 和 renderer 样式上互相抢修改权。
 
 ## 当前产品形态
 
@@ -24,6 +24,7 @@ AuraBot 当前已经从“传统聊天界面”收敛为桌宠优先形态：
 8. 任务创建、查询、打断、修改、启动都通过控制台里的主聊天线程完成；任务状态卡也提供取消和删除按钮作为快速控制。
 9. 任务完成、桌宠语音回复和到期 follow-up 可以通过小人气泡临时浮现。
 10. 记忆系统当前是“分层摘要 + 图状联想 + 可选 memoryModel 增强”的 MVP；已补到期 follow-up 调试评估与主动提醒通道。
+11. 普通聊天、任务播报、任务完成/失败、任务控制、pet task notice 和 memory follow-up 已开始走统一 `Soul + ResponseWorkflow + VoiceAdapter` 机制，避免聊天像人、任务像系统通知的割裂体验。
 
 ## 已完成
 
@@ -37,9 +38,10 @@ AuraBot 当前已经从“传统聊天界面”收敛为桌宠优先形态：
 | 单主聊天线程 | 已完成 MVP | 主 session 持久化消息，控制台负责完整对话；用户消息乐观上屏，不再等待 gate/chat 模型返回。 |
 | 模型适配层 | 部分完成 | 已有 `gateModel` / `chatModel` / `memoryModel` 注入接口、OpenAI-compatible provider、userData/系统级 JSON 配置、env 配置、deterministic fallback 和 chat streaming；还缺用户新消息打断、retry/backoff 和连接状态 UI。 |
 | Gate/触发判断 | 已完成 MVP | 可判断碎片输入等待、完整输入回复、话题是否结束、聊天/任务/任务控制分类；强 gate 判定已延后到模型侧，外部模型异常时仍保留 fallback。 |
+| 活人感统一回复机制 | 已完成第一版 | `Soul` 只保留人格、语气、原则和语义禁忌；`ResponseWorkflow` 描述场景、事实和安全边界；`VoiceAdapter` 结合二者生成最终用户可见文本。任务完成等场景可以接近“本人自然告诉你结果并邀请你看一眼”的语感，但不会把样例当固定模板。 |
 | 记忆 v1/v2 写入层 | 部分完成 | 支持 preference、event、follow_up 写入，摘要层和关系边召回；显式配置 `memoryModel` 后可用 API 做结构化记忆抽取、重复记忆合并和候选关系边判断；App 运行期间到期 follow_up 可通过后台 scheduler 推送桌宠气泡。 |
 | 任务 v1 | 已完成 MVP | 可从主聊天创建任务、按聊天 hint 命中特定任务、查询状态、打断、修改、启动；默认 deterministic runner，显式配置后可调用本机 Codex 子任务 runner。任务完成后可把结果文件作为消息附件回流主聊天，并提供“打开文件 / 所在文件夹”操作；任务状态卡已补取消和删除按钮。 |
-| 任务体验文案 | 已完成第一版 | 任务创建、查询、完成、失败、重复开始和状态条都已去掉内部状态词，改成伴侣兼助手式中文回复。 |
+| 任务体验文案 | 已完成第二版 | 任务创建、查询、完成、失败、重复开始和状态条都已去掉内部状态词，并接入 `VoiceAdapter`。任务事实由 workflow 提供，最终表达由 soul 约束为更自然的伴侣兼助手式回复。 |
 | 记忆调试视图 | 已完成第二版 | 控制台 `Memory Debug` 面板可查看当前 memory nodes、edges、summaries、最近 memory event，以及最近一次 recall 的 query、planner terms、seed、扩散节点和 traversed edges。 |
 | 记忆评估语料 | 已完成第一版 | `corepack pnpm eval:memory` 可跑固定 recall fixture，覆盖直接偏好召回、事件到偏好图跳转、follow_up 排除不相关提醒。 |
 | 事件日志 | 部分完成 | 已写入 gate、memory、task、chat 关键日志；已有 memory debug 读取面板，还缺更完整的日志开关和路径可视化。 |
@@ -47,7 +49,17 @@ AuraBot 当前已经从“传统聊天界面”收敛为桌宠优先形态：
 
 ## 最近一次验证记录
 
-最近一次完整验证在 2026-05-05 当前 live2D/console 集成分支完成：
+最近一次完整验证在 2026-05-05 当前 `codex/aurabot-persona-feel` 分支完成：
+
+| 命令/检查 | 结果 |
+| --- | --- |
+| `corepack pnpm typecheck` | 通过 |
+| `corepack pnpm test` | 37 个 test files、133 个 tests 通过，覆盖 voice adapter、任务播报、memory follow-up 和既有单元/集成路径 |
+| `corepack pnpm build` | 通过 |
+| `corepack pnpm test:e2e` | 13 个 e2e tests 通过 |
+| `git diff --check` | 通过 |
+
+上一次 live2D/console 集成分支验证记录：
 
 | 命令/检查 | 结果 |
 | --- | --- |
@@ -68,9 +80,10 @@ AuraBot 当前已经从“传统聊天界面”收敛为桌宠优先形态：
 2. 用户消息已经即时显示，模型回复已支持流式 message update；还没有用户新消息打断 in-flight generation。
 3. 记忆写入层可由 `memoryModel` 接管抽取、合并和候选边判断；召回层也可由 `memoryModel` 生成语义检索词、目标类型和重排 seed node。到期 `follow_up` 可在下一次主聊天回复中触发并标记完成，也可在 App 运行期间由后台 scheduler 推送桌宠气泡；还没有系统级通知、离线调度或 embedding。
 4. 任务 runner 可显式配置为本机 Codex 子任务执行器，能广播 JSONL 子任务进度，在主聊天打断时取消子进程，并在启动时把失联运行态任务标记为失败；完成后的文件结果已可作为主聊天附件回流并打开，还没有真正 resume 和结构化 artifact registry。
-5. Live2D 状态行为当前复用 Hiyori 现有 motion group；全局鼠标追踪眼动已接入，但还没有定制表情资源或更细的动画状态机。
-6. 语音输入当前走 Chromium 原生 `SpeechRecognition`，运行时不支持时只显示轻提示；还没有稳定 STT adapter。
-7. 还没有 Profile 切换 UI、定时任务、桌面通知、打包发布、开机自启。
+5. `Soul + ResponseWorkflow + VoiceAdapter` 已覆盖任务和提醒类文本出口的第一批场景；普通聊天仍由 `chatModel` 直接生成，但已经读取同一套 soul 字段。下一步要继续统一 memory recall、普通 fallback、错误提示、设置页提示等剩余用户可见文本。
+6. Live2D 状态行为当前复用 Hiyori 现有 motion group；全局鼠标追踪眼动已接入，但还没有定制表情资源或更细的动画状态机。
+7. 语音输入当前走 Chromium 原生 `SpeechRecognition`，运行时不支持时只显示轻提示；还没有稳定 STT adapter。
+8. 还没有 Profile 切换 UI、定时任务、桌面通知、打包发布、开机自启。
 
 ## 下一步推荐
 
@@ -80,7 +93,7 @@ AuraBot 当前已经从“传统聊天界面”收敛为桌宠优先形态：
 
 建议任务：
 
-1. 继续细化状态动作：为 `idle / listening / thinking / replying / tasking` 选择更贴切的 motion 和后续 expression 资源。
+1. 继续细化状态动作：为 `idle / listening / thinking / typing / tasking` 选择更贴切的 motion 和后续 expression 资源。
 2. 继续细化点击穿透：小人主体可穿透，悬浮控制区仍可稳定点击。
 3. 已完成第一版：悬停时展示小型 `Chat` 气泡，点击展开成桌宠输入框，并把消息传给主对话。
 4. 已完成第一版：主进程轮询系统全局鼠标位置，Live2D 在窗口外也能追踪鼠标眼动。
@@ -99,6 +112,24 @@ AuraBot 当前已经从“传统聊天界面”收敛为桌宠优先形态：
 3. 为 provider 调用增加重试、超时、失败事件日志和可见错误提示。
 4. 在控制台或设置视窗暴露当前模型连接状态。
 5. 为 gate 模型输出增加线上样本日志，后续评估“是否抢话/是否漏接/任务误判”。
+
+### 2.5 活人感统一回复机制
+
+目标：让所有用户可见文本都像同一个 Aura 在说话，而不是不同模块各写各的提示语。
+
+已完成：
+
+1. 已新增设计文档 `docs/soul-response-workflow.md`，明确 `Soul` 只描述人格、语气、原则和语义禁忌，不承载具体任务模板。
+2. 已扩展 `Soul` schema 和默认 soul，增加 `tone / principles / taboos`，并补 SQLite 迁移和兼容读取。
+3. 已新增 `VoiceAdapter`，用 `soul + workflow + facts` 生成最终文本；配置 chat model 时走模型改写，失败或未配置时走 deterministic fallback。
+4. 已覆盖第一批场景：`task.accepted`、`task.status`、`task.completed`、`task.failed`、`task.interrupted`、`task.control_not_found`、`memory.follow_up`、`pet.task_activity`。
+5. 已补测试，覆盖附件事实安全、模型 prompt 构造、fallback 活人感和任务/e2e 语义断言。
+
+下一步：
+
+1. 把普通聊天 fallback、memory recall fallback、IPC 错误提示、设置页轻提示等剩余用户可见文本继续接入 workflow。
+2. 给 model-backed voice adapter 增加语义级质量检查：不能虚构附件、不能暴露内部 runner、不能变成客服/系统通知口吻。
+3. 记录 voice adapter 的 scene、fallback/model 路径和失败原因，方便后续调试活人感劣化。
 
 ### 3. 记忆 v2
 
@@ -143,6 +174,7 @@ AuraBot 当前已经从“传统聊天界面”收敛为桌宠优先形态：
 1. `README.md` 和 `README.zh-CN.md` 已补，包含本地安装、运行、验证、模型配置、Codex 子任务 runner 配置、截图路径、当前边界和下一步。
 2. `docs/TODO.md` 已同步任务执行 v2 当前进展：opt-in Codex 子任务 runner、JSONL 进度广播、打断取消子进程、失联运行态任务失败式恢复、任务结果附件回流和后续 resume / artifact registry。
 3. 当前 live2D/console 集成分支已合入 memory follow-up debug、任务卡控制、流式回复、模型 gate 延后、悬停聊天气泡和全局鼠标追踪眼动，可以 push 为 `codex/aurabot-live2d-console-ui`。
+4. 当前 persona-feel 分支已补 soul response workflow 文档、voice adapter 第一版和相关测试，等待继续验证实际模型输出的活人感。
 
 ## Push 准备
 

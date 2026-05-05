@@ -17,7 +17,8 @@ describe("chat task integration", () => {
 
     expect(result.gateDecision?.inputKind).toBe("task");
     expect(result.createdTask?.title).toContain("明天会议");
-    expect(result.assistantMessage?.content).toBe("好！我现在就开始做。");
+    expect(result.assistantMessage?.content).toContain("开始弄");
+    expect(result.assistantMessage?.content).toContain("明天会议");
     expect(result.assistantMessage?.content).not.toContain("排队");
     expect(result.assistantMessage?.content).not.toContain("任务");
     expect(tasks).toHaveLength(1);
@@ -35,7 +36,8 @@ describe("chat task integration", () => {
     expect(result.agentStatus).toBe("tasking");
     expect(result.gateDecision?.inputKind).toBe("task");
     expect(result.gateDecision?.replyDecision).toBe("reply");
-    expect(result.assistantMessage?.content).toBe("好！我现在就开始做。");
+    expect(result.assistantMessage?.content).toContain("开始弄");
+    expect(result.assistantMessage?.content).toContain("实践论");
     expect(tasks).toHaveLength(1);
     expect(tasks[0]?.title).toContain("实践论");
     expect(tasks[0]?.status).toBe("queued");
@@ -53,7 +55,7 @@ describe("chat task integration", () => {
       expect(result.agentStatus).toBe("tasking");
       expect(result.gateDecision?.inputKind).toBe("task");
       expect(result.gateDecision?.replyDecision).toBe("reply");
-      expect(result.assistantMessage?.content).toBe("好！我现在就开始做。");
+      expect(result.assistantMessage?.content).toContain("开始弄");
       expect(tasks).toHaveLength(1);
       expect(tasks[0]?.title).toBe(content);
       expect(tasks[0]?.status).toBe("queued");
@@ -71,9 +73,9 @@ describe("chat task integration", () => {
     const tasks = services.taskService.listTasksForProfile(profile.id);
 
     expect(query.gateDecision?.inputKind).toBe("task_control");
-    expect(query.assistantMessage?.content).toContain("还没开始处理");
+    expect(query.assistantMessage?.content).toContain("还没开始");
     expect(query.assistantMessage?.content).toContain("明天会议");
-    expect(query.assistantMessage?.content).toContain("开始做这个任务");
+    expect(query.assistantMessage?.content).toContain("开始");
     expect(interrupt.updatedTask?.status).toBe("interrupted");
     expect(interrupt.assistantMessage?.content).toContain("停下");
     expect(revise.updatedTask?.status).toBe("queued");
@@ -94,11 +96,12 @@ describe("chat task integration", () => {
     const tasks = services.taskService.listTasksForProfile(profile.id);
 
     expect(start.updatedTask?.status).toBe("completed");
-    expect(start.assistantMessage?.content).toContain("好啦");
+    expect(start.assistantMessage?.content).toContain("明天会议");
     expect(start.assistantMessage?.content).toContain("整理好了");
-    expect(query.assistantMessage?.content).toContain("好啦");
+    expect(start.assistantMessage?.content).toContain("调");
+    expect(query.assistantMessage?.content).toContain("整理好了");
     expect(query.assistantMessage?.content).not.toContain("completed");
-    expect(repeatStart.assistantMessage?.content).toContain("好啦");
+    expect(repeatStart.assistantMessage?.content).toContain("整理好了");
     expect(repeatStart.assistantMessage?.content).not.toContain("completed");
     expect(repeatStart.assistantMessage?.content).not.toContain("queued");
     expect(tasks[0]?.latestProgress).toContain("完成");
@@ -128,9 +131,9 @@ describe("chat task integration", () => {
 
     const query = await orchestrator.sendMessage({ content: "这个任务做到哪了？" });
 
-    expect(query.assistantMessage?.content).toContain("我正在处理");
+    expect(query.assistantMessage?.content).toContain("还在弄");
     expect(query.assistantMessage?.content).toContain("GitHub 周报");
-    expect(query.assistantMessage?.content).toContain("完成后我会回来告诉你");
+    expect(query.assistantMessage?.content).toContain("已经开始处理");
     expect(query.assistantMessage?.content).not.toContain("running");
     expect(query.assistantMessage?.content).not.toContain("Codex");
     expect(query.assistantMessage?.content).not.toContain("/Users/xuan/project");
@@ -163,7 +166,7 @@ describe("chat task integration", () => {
     const start = await orchestrator.sendMessage({ content: "开始做这个任务。" });
 
     expect(start.updatedTask?.status).toBe("failed");
-    expect(start.assistantMessage?.content).toContain("这次没跑成");
+    expect(start.assistantMessage?.content).toContain("这次没跑通");
     expect(start.assistantMessage?.content).toContain("codex exited 1");
   });
 

@@ -3,11 +3,13 @@ import type { PetActivity } from "../../shared/contracts/pet";
 import type { EventLogService } from "../telemetry/eventLogService";
 import type { MemoryService } from "./memoryService";
 import type { ProfileService } from "../profiles/profileService";
+import type { VoiceAdapter } from "../voice/voiceAdapter";
 
 export interface MemoryFollowUpSchedulerDependencies {
   profileService: ProfileService;
   memoryService: MemoryService;
   eventLogService: EventLogService;
+  voiceAdapter: VoiceAdapter;
   broadcastPetActivity(activity: PetActivity): void;
 }
 
@@ -53,7 +55,7 @@ export class MemoryFollowUpScheduler {
     this.timer = undefined;
   }
 
-  checkDueFollowUps(nowIso = new Date().toISOString()): PetActivity[] {
+  async checkDueFollowUps(nowIso = new Date().toISOString()): Promise<PetActivity[]> {
     const profile = this.dependencies.profileService.getOrSeedActiveProfile();
     const dueFollowUps = this.dependencies.memoryService.retrieveDueFollowUps(
       profile.id,
@@ -68,7 +70,15 @@ export class MemoryFollowUpScheduler {
     const activity: PetActivity = {
       id: randomUUID(),
       kind: "memory_follow_up",
-      message: formatFollowUpActivityMessage(dueFollowUps.map((memory) => memory.content)),
+      message: await this.dependencies.voiceAdapter.render({
+        scene: "memory.follow_up",
+        channel: "pet_notice",
+        soul: profile.soul,
+        facts: {
+          contents: dueFollowUps.map((memory) => memory.content)
+        },
+        fallbackText: formatFollowUpActivityMessage(dueFollowUps.map((memory) => memory.content))
+      }),
       createdAt: nowIso
     };
     const nodeIds = dueFollowUps.map((memory) => memory.id);
@@ -85,13 +95,11 @@ export class MemoryFollowUpScheduler {
   }
 
   private runScheduledCheck(): void {
-    try {
-      this.checkDueFollowUps();
-    } catch (error) {
+    this.checkDueFollowUps().catch((error: unknown) => {
       this.dependencies.eventLogService.record("memory.follow_up_scheduler_failed", {
         message: error instanceof Error ? error.message : String(error)
       });
-    }
+    });
   }
 }
 

@@ -1,0 +1,303 @@
+import type { ModelRoleConfig } from "../../shared/schemas/config";
+import type { Soul } from "../../shared/schemas/profile";
+import {
+  OpenAICompatibleChatCompletionClient,
+  type ChatCompletionRequest
+} from "../llm/openAiCompatibleClient";
+
+export type ResponseScene =
+  | "task.accepted"
+  | "task.status"
+  | "task.completed"
+  | "task.failed"
+  | "task.interrupted"
+  | "task.control_not_found"
+  | "memory.follow_up"
+  | "pet.task_activity";
+
+export type ResponseChannel = "chat" | "pet_notice";
+
+export interface VoiceRenderInput {
+  scene: ResponseScene;
+  channel?: ResponseChannel;
+  soul?: Soul;
+  facts: Record<string, unknown>;
+  fallbackText?: string;
+}
+
+export interface VoiceAdapter {
+  render(input: VoiceRenderInput): Promise<string>;
+}
+
+export interface VoiceAdapterClient {
+  complete(input: ChatCompletionRequest): Promise<string>;
+}
+
+export interface ModelBackedVoiceAdapterOptions {
+  client: VoiceAdapterClient;
+  config?: ModelRoleConfig;
+  fallbackAdapter?: VoiceAdapter;
+}
+
+export class DeterministicVoiceAdapter implements VoiceAdapter {
+  async render(input: VoiceRenderInput): Promise<string> {
+    return buildDeterministicVoiceText(input);
+  }
+}
+
+export class ModelBackedVoiceAdapter implements VoiceAdapter {
+  constructor(private readonly options: ModelBackedVoiceAdapterOptions) {}
+
+  async render(input: VoiceRenderInput): Promise<string> {
+    const fallback = this.options.fallbackAdapter ?? new DeterministicVoiceAdapter();
+
+    try {
+      const content = await this.options.client.complete({
+        baseUrl: this.options.config?.baseUrl ?? "",
+        apiKey: this.options.config?.apiKey ?? "",
+        model: this.options.config?.model ?? "voice-model",
+        temperature: this.options.config?.temperature ?? 0.55,
+        timeoutMs: this.options.config?.timeoutMs,
+        messages: buildVoicePrompt(input)
+      });
+      const sanitized = sanitizeModelText(content);
+
+      return sanitized || fallback.render(input);
+    } catch {
+      return fallback.render(input);
+    }
+  }
+}
+
+export function createVoiceAdapter(config: ModelRoleConfig): VoiceAdapter {
+  if (!config.enabled || config.provider !== "openai-compatible" || !config.baseUrl || !config.apiKey) {
+    return new DeterministicVoiceAdapter();
+  }
+
+  return new ModelBackedVoiceAdapter({
+    client: new OpenAICompatibleChatCompletionClient(),
+    config,
+    fallbackAdapter: new DeterministicVoiceAdapter()
+  });
+}
+
+function buildVoicePrompt(input: VoiceRenderInput): ChatCompletionRequest["messages"] {
+  return [
+    {
+      role: "system",
+      content: [
+        "你是 AuraBot 的 VoiceAdapter，只输出最终给用户看的文本。",
+        "Soul 只描述 Aura 是谁、语气、原则和语义禁忌；Workflow 描述这次回复要完成什么。",
+        "facts 是权威事实。你可以自然改写，但不能虚构任务完成、文件、失败原因、记忆或用户偏好。",
+        "表达目标是像 Aura 本人自然告诉用户结果，而不是客服、工单、系统通知、运行日志或任务广播。",
+        "任务完成时可以轻松邀请用户看一眼或继续调整，但不要固定套用任何一句样例。",
+        "如果 facts.hasAttachments=false，不要说文件已经放好；如果为 true，可以简短告诉用户文件在下面。",
+        "不要提内部实现词：Codex 子任务、runner、payload、event、task id、模型、系统提示。",
+        "默认一到两句，短、自然、可靠。"
+      ].join("\n")
+    },
+    {
+      role: "user",
+      content: JSON.stringify({
+        soul: summarizeSoul(input.soul),
+        workflow: buildWorkflow(input),
+        facts: input.facts,
+        fallbackText: input.fallbackText
+      })
+    }
+  ];
+}
+
+function buildWorkflow(input: VoiceRenderInput): Record<string, unknown> {
+  const channel = input.channel ?? "chat";
+
+  switch (input.scene) {
+    case "task.accepted":
+      return {
+        scene: input.scene,
+        channel,
+        intent: "确认收到任务并准备开始或已经开始推进。",
+        requirements: ["可以提任务主题", "不要承诺一定成功", "不要像状态机播报"]
+      };
+    case "task.status":
+      return {
+        scene: input.scene,
+        channel,
+        intent: "回答任务目前状态。",
+        requirements: ["只使用当前状态和最新进展", "简短告诉用户接下来会继续或等他指令"]
+      };
+    case "task.completed":
+      return {
+        scene: input.scene,
+        channel,
+        intent: "告诉用户任务已经完成。",
+        requirements: [
+          "必须保留完成事实",
+          "有附件才提文件在下面",
+          "可以自然邀请用户看一眼或继续修改",
+          "不要展示内部路径或 runner 细节"
+        ]
+      };
+    case "task.failed":
+      return {
+        scene: input.scene,
+        channel,
+        intent: "告诉用户这次没有跑通。",
+        requirements: ["保留安全失败原因", "不要推卸责任", "自然留下继续修改的入口"]
+      };
+    case "task.interrupted":
+      return {
+        scene: input.scene,
+        channel,
+        intent: "告诉用户已经停下来了。",
+        requirements: ["表达已经停止", "可以让用户给新方向"]
+      };
+    case "task.control_not_found":
+      return {
+        scene: input.scene,
+        channel,
+        intent: "告诉用户没有找到匹配任务。",
+        requirements: ["不要像错误码", "可以让用户换个说法或重新发任务"]
+      };
+    case "memory.follow_up":
+      return {
+        scene: input.scene,
+        channel,
+        intent: "把到期提醒自然告诉用户。",
+        requirements: ["只说提醒内容", "不要把记忆系统暴露出来"]
+      };
+    case "pet.task_activity":
+      return {
+        scene: input.scene,
+        channel,
+        intent: "给桌宠小提示用的极短通知。",
+        requirements: ["一句话", "像轻轻提醒", "不要系统广播腔"]
+      };
+  }
+}
+
+function summarizeSoul(soul: Soul | undefined): Record<string, unknown> {
+  if (!soul) {
+    return {
+      name: "Aura",
+      persona: "伴侣兼助手，亲近、可靠，会自然陪用户聊天和推进事情。",
+      tone: "短句、自然、有温度。",
+      principles: ["同一个人格覆盖聊天、任务和提醒。"],
+      taboos: ["不要用系统通知或客服播报的语义口吻。"]
+    };
+  }
+
+  return {
+    name: soul.name,
+    persona: soul.persona,
+    relationship: soul.relationship,
+    tone: soul.tone || soul.speakingStyle,
+    principles: soul.principles,
+    taboos: soul.taboos
+  };
+}
+
+function buildDeterministicVoiceText(input: VoiceRenderInput): string {
+  const facts = input.facts;
+  const title = cleanTaskTitle(readString(facts.taskTitle));
+  const subject = readString(facts.resultSubject) || title || "这件事";
+  const summary =
+    input.scene === "task.status"
+      ? readString(facts.latestProgress) || readString(facts.resultSummary)
+      : readString(facts.resultSummary) || readString(facts.latestProgress);
+  const hasAttachments = readBoolean(facts.hasAttachments);
+
+  switch (input.scene) {
+    case "task.accepted":
+      return title ? `好，我开始弄「${title}」。` : "好，我开始弄。";
+    case "task.status":
+      if (readString(facts.status) === "queued") {
+        return title ? `「${title}」我还没开始。你想现在做的话，直接跟我说开始。` : "这件事我还没开始。你想现在做的话，直接跟我说开始。";
+      }
+
+      return summary
+        ? `${title || "这件事"}我还在弄，最近一步是：${summary}。`
+        : `${title || "这件事"}我还在弄，弄完我告诉你。`;
+    case "task.completed":
+      if (hasAttachments) {
+        return `${subject}我弄好了，文件在下面。你先看一眼，有要改的我接着调。`;
+      }
+
+      return `${formatCompletedSubject(subject)}你看下还要不要再调。`;
+    case "task.failed":
+      return summary ? `这次没跑通，卡在：${summary}。我可以接着帮你改。` : "这次没跑通。我可以接着帮你改。";
+    case "task.interrupted":
+      return "好，我先停下来了。你想换方向的话，直接跟我说。";
+    case "task.control_not_found": {
+      const targetHint = readString(facts.targetHint);
+      return targetHint ? `我没找到和「${targetHint}」匹配的任务。你换个说法我再找。` : "我这边还没有正在跟的任务。";
+    }
+    case "memory.follow_up": {
+      const contents = readStringArray(facts.contents).map(cleanFollowUpContent).filter(Boolean);
+      return contents.length > 0 ? `我提醒你一下：${contents.join("；")}` : "我提醒你一下，有件之前记下的事到时间了。";
+    }
+    case "pet.task_activity":
+      if (readString(facts.status) === "failed") {
+        return `${title || subject}没跑通，我在这儿等你看。`;
+      }
+
+      return `${subject}弄好了，要不要看一眼？`;
+  }
+}
+
+function sanitizeModelText(content: string): string {
+  return content
+    .trim()
+    .replace(/^```(?:text)?\s*/i, "")
+    .replace(/\s*```$/i, "")
+    .replace(/^["“]|["”]$/g, "")
+    .trim();
+}
+
+function formatCompletedSubject(subject: string): string {
+  if (/完成|好了|写好|整理好|准备好/u.test(subject)) {
+    return `${subject}。`;
+  }
+
+  if (/周报|报告|文档|总结|摘要/u.test(subject)) {
+    return `${subject}我写好了。`;
+  }
+
+  if (/清单|表格|列表/u.test(subject)) {
+    return `${subject}我整理好了。`;
+  }
+
+  return `${subject}我处理好了。`;
+}
+
+function cleanTaskTitle(value: string): string {
+  return value
+    .trim()
+    .replace(/[。.!！]*$/u, "")
+    .replace(/^(请|麻烦)\s*/u, "")
+    .replace(
+      /^(帮我把|帮我做一下|帮我写一下|帮我整理一下|帮我生成一下|帮我做|帮我写|帮我整理|帮我生成|帮我|做一下|写一下|整理一下|生成一下|做|写|整理|生成)\s*/u,
+      ""
+    )
+    .replace(/^(一份|一个|一篇|一版|这份|这个|一下)\s*/u, "")
+    .trim();
+}
+
+function cleanFollowUpContent(content: string): string {
+  return content
+    .replace(/^需要跟进或提醒用户[:：]\s*/, "")
+    .replace(/^提醒用户\s*/, "")
+    .trim();
+}
+
+function readString(value: unknown): string {
+  return typeof value === "string" ? value.trim() : "";
+}
+
+function readBoolean(value: unknown): boolean {
+  return value === true;
+}
+
+function readStringArray(value: unknown): string[] {
+  return Array.isArray(value) ? value.filter((item): item is string => typeof item === "string") : [];
+}

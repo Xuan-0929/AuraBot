@@ -14,6 +14,7 @@ import { EventLogService } from "../telemetry/eventLogService";
 import { ProfileService } from "../profiles/profileService";
 import { createChatModel, type ChatModel } from "../llm/chatModel";
 import { createGateModel, type GateModel } from "../llm/gateModel";
+import { createVoiceAdapter, type VoiceAdapter } from "../voice/voiceAdapter";
 import type { MemoryExtractor } from "../memory/memoryExtractor";
 import {
   createMemoryExtractor,
@@ -38,6 +39,7 @@ export interface AppServices {
   eventLogService: EventLogService;
   gateModel: GateModel;
   chatModel: ChatModel;
+  voiceAdapter: VoiceAdapter;
   chatOrchestrator: ChatOrchestrator;
 }
 
@@ -57,6 +59,7 @@ export function createServices(userDataPath: string): AppServices {
   });
   const gateModel = createGateModel(config.gateModel);
   const chatModel = createChatModel(config.chatModel);
+  const voiceAdapter = createVoiceAdapter(config.chatModel);
   const memoryExtractor = createMemoryExtractor(config.memoryModel);
   const memoryMergePlanner = createMemoryMergePlanner(config.memoryModel);
   const memoryRelationPlanner = createMemoryRelationPlanner(config.memoryModel);
@@ -77,7 +80,8 @@ export function createServices(userDataPath: string): AppServices {
     taskService: new TaskService(taskRepository, sessionRepository, eventLogService, taskRunner),
     eventLogService,
     gateModel,
-    chatModel
+    chatModel,
+    voiceAdapter
   };
   services.taskService.recoverOrphanedActiveTasks();
 

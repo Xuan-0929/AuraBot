@@ -2,9 +2,11 @@ import { describe, expect, it } from "vitest";
 import type { Task, TaskEvent } from "../../../../src/shared/schemas/task";
 import {
   buildTaskSettledMessageDraft,
+  buildTaskSettledMessageDraftWithVoice,
   buildTaskStatusResponse,
   isTaskResultPathAllowed
 } from "../../../../src/core/tasks/taskPresentation";
+import { DeterministicVoiceAdapter } from "../../../../src/core/voice/voiceAdapter";
 
 const baseTask: Task = {
   id: "task-weekly",
@@ -122,5 +124,34 @@ describe("task presentation", () => {
     expect(draft.content).toBe("这次没跑成，卡在：codex exited 1。我们可以接着改。");
     expect(draft.content).not.toContain("failed");
     expect(draft.attachments).toEqual([]);
+  });
+
+  it("routes settled task text through the voice adapter while preserving attachments", async () => {
+    const events = [
+      taskEvent({
+        eventType: "task.agent.progress",
+        summary: "Codex 子任务新增文件：/Users/xuan/project/docs/report.md",
+        payload: {
+          fileChange: {
+            kind: "add",
+            path: "/Users/xuan/project/docs/report.md"
+          }
+        }
+      }),
+      taskEvent({
+        eventType: "task.completed",
+        summary: "Codex 子任务完成：\nGitHub 周报写好了，文件在 /Users/xuan/project/docs/report.md"
+      })
+    ];
+
+    const draft = await buildTaskSettledMessageDraftWithVoice(baseTask, events, {
+      voiceAdapter: new DeterministicVoiceAdapter()
+    });
+
+    expect(draft.content).toContain("GitHub 周报");
+    expect(draft.content).toContain("看一眼");
+    expect(draft.content).not.toContain("任务完成：");
+    expect(draft.content).not.toContain("Codex");
+    expect(draft.attachments).toHaveLength(1);
   });
 });

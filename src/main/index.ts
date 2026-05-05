@@ -67,6 +67,7 @@ async function bootstrap(): Promise<void> {
     profileService: services.profileService,
     memoryService: services.memoryService,
     eventLogService: services.eventLogService,
+    voiceAdapter: services.voiceAdapter,
     broadcastPetActivity
   });
   memoryFollowUpScheduler.start();

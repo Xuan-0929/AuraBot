@@ -1,10 +1,17 @@
 import { basename, isAbsolute, resolve } from "node:path";
 import type { MessageAttachment } from "../../shared/schemas/message";
+import type { Soul } from "../../shared/schemas/profile";
 import type { Task, TaskEvent } from "../../shared/schemas/task";
+import type { ResponseScene, VoiceAdapter } from "../voice/voiceAdapter";
 
 export interface TaskMessageDraft {
   content: string;
   attachments: MessageAttachment[];
+}
+
+export interface TaskVoiceOptions {
+  soul?: Soul;
+  voiceAdapter: VoiceAdapter;
 }
 
 export function buildTaskSettledMessageDraft(task: Task, events: TaskEvent[] = []): TaskMessageDraft {
@@ -44,6 +51,27 @@ export function buildTaskSettledMessageDraft(task: Task, events: TaskEvent[] = [
   };
 }
 
+export async function buildTaskSettledMessageDraftWithVoice(
+  task: Task,
+  events: TaskEvent[] = [],
+  options: TaskVoiceOptions
+): Promise<TaskMessageDraft> {
+  const fallback = buildTaskSettledMessageDraft(task, events);
+  const scene = getSettledTaskScene(task);
+  const content = await options.voiceAdapter.render({
+    scene,
+    channel: "chat",
+    soul: options.soul,
+    facts: buildTaskVoiceFacts(task, events, fallback.attachments),
+    fallbackText: fallback.content
+  });
+
+  return {
+    ...fallback,
+    content
+  };
+}
+
 export function buildTaskStatusResponse(task: Task, events: TaskEvent[] = []): string {
   if (task.status === "completed" || task.status === "failed" || task.status === "interrupted") {
     return buildTaskSettledMessageDraft(task, events).content;
@@ -55,6 +83,24 @@ export function buildTaskStatusResponse(task: Task, events: TaskEvent[] = []): s
 
   const latestSummary = cleanTaskProgressText(getLatestMeaningfulSummary(task, events));
   return `我正在处理「${cleanTaskTitle(task.title)}」，最近一步是：${latestSummary}\n完成后我会回来告诉你。`;
+}
+
+export async function buildTaskStatusResponseWithVoice(
+  task: Task,
+  events: TaskEvent[] = [],
+  options: TaskVoiceOptions
+): Promise<string> {
+  const fallback = buildTaskStatusResponse(task, events);
+
+  return options.voiceAdapter.render({
+    scene: task.status === "completed" || task.status === "failed" || task.status === "interrupted"
+      ? getSettledTaskScene(task)
+      : "task.status",
+    channel: "chat",
+    soul: options.soul,
+    facts: buildTaskVoiceFacts(task, events, buildTaskResultAttachments(task.id, events)),
+    fallbackText: fallback
+  });
 }
 
 export function buildTaskResultAttachments(taskId: string, events: TaskEvent[]): MessageAttachment[] {
@@ -225,6 +271,32 @@ function describeTaskResultSubject(task: Task): string {
   }
 
   return "结果";
+}
+
+function getSettledTaskScene(task: Task): ResponseScene {
+  if (task.status === "failed") {
+    return "task.failed";
+  }
+
+  if (task.status === "interrupted") {
+    return "task.interrupted";
+  }
+
+  return "task.completed";
+}
+
+function buildTaskVoiceFacts(task: Task, events: TaskEvent[], attachments: MessageAttachment[]): Record<string, unknown> {
+  const latestSummary = cleanTaskResultText(getLatestMeaningfulSummary(task, events));
+
+  return {
+    taskTitle: cleanTaskTitle(task.title),
+    status: task.status,
+    latestProgress: cleanTaskProgressText(getLatestMeaningfulSummary(task, events)),
+    resultSummary: latestSummary,
+    resultSubject: describeTaskResultSubject(task),
+    hasAttachments: attachments.length > 0,
+    attachmentNames: attachments.map((attachment) => attachment.name)
+  };
 }
 
 function isRecord(value: unknown): value is Record<string, unknown> {

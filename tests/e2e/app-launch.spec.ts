@@ -245,7 +245,7 @@ test("creates a visible queued task from a task-like chat request", async () => 
     await consoleWindow.getByPlaceholder("Say something").fill("帮我整理一份明天会议的清单。");
     await consoleWindow.getByRole("button", { name: "Send" }).click();
 
-    await expect(consoleWindow.getByText("好！我现在就开始做。")).toBeVisible();
+    await expect(consoleWindow.locator(".message-assistant").filter({ hasText: /开始弄/ })).toBeVisible();
     await expect(consoleWindow.getByLabel("Agent status")).toContainText("tasking");
     await expect(petWindow.getByLabel("Desktop Live2D pet")).toHaveAttribute("data-agent-status", "tasking");
     await expect(petWindow.locator(".live2d-canvas-host")).toHaveAttribute("data-motion-group", "TapBody");
@@ -269,7 +269,7 @@ test("controls a task through the main chat instead of task panel buttons", asyn
 
     await input.fill("这个任务做到哪了？");
     await consoleWindow.getByRole("button", { name: "Send" }).click();
-    await expect(consoleWindow.getByText(/还没开始处理/)).toBeVisible();
+    await expect(consoleWindow.locator(".message-assistant").filter({ hasText: /还没开始/ })).toBeVisible();
 
     await input.fill("先停掉这个任务。");
     await consoleWindow.getByRole("button", { name: "Send" }).click();
@@ -358,13 +358,13 @@ test("starts a queued task from the main chat and reports completion", async () 
 
     await input.fill("开始做这个任务。");
     await consoleWindow.getByRole("button", { name: "Send" }).click();
-    await expect(consoleWindow.locator(".message-assistant").filter({ hasText: /好啦/ })).toBeVisible();
+    await expect(consoleWindow.locator(".message-assistant").filter({ hasText: /整理好了/ })).toBeVisible();
     await expect(consoleWindow.locator(".task-status-card").filter({ hasText: "明天会议" })).toContainText("完成");
-    await expect(petWindow.getByLabel("Pet message")).toContainText("任务完成");
+    await expect(petWindow.getByLabel("Pet message")).toContainText("弄好了");
 
     await input.fill("这个任务做到哪了？");
     await consoleWindow.getByRole("button", { name: "Send" }).click();
-    await expect(consoleWindow.locator(".message-assistant").filter({ hasText: /好啦/ }).last()).toBeVisible();
+    await expect(consoleWindow.locator(".message-assistant").filter({ hasText: /整理好了/ }).last()).toBeVisible();
   } finally {
     await cleanupAuraBot(electronApp, userDataDir);
   }

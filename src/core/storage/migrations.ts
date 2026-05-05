@@ -23,6 +23,9 @@ export const MIGRATIONS: Migration[] = [
         profile_id text not null unique references profiles(id) on delete cascade,
         name text not null,
         persona text not null,
+        tone text not null default '',
+        principles_json text not null default '[]',
+        taboos_json text not null default '[]',
         speaking_style text not null,
         relationship text not null,
         boundaries_json text not null default '[]',
@@ -188,6 +191,37 @@ export const MIGRATIONS: Migration[] = [
 
       if (!columns.includes("metadata_json")) {
         database.exec("alter table messages add column metadata_json text not null default '{}'");
+      }
+    }
+  },
+  {
+    id: 4,
+    name: "add_soul_voice_fields",
+    up: "",
+    after(database) {
+      const soulTable = database
+        .prepare("select name from sqlite_master where type = 'table' and name = 'souls'")
+        .get();
+
+      if (!soulTable) {
+        return;
+      }
+
+      const columns = database
+        .prepare("pragma table_info(souls)")
+        .all()
+        .map((row) => (row as { name: string }).name);
+
+      if (!columns.includes("tone")) {
+        database.exec("alter table souls add column tone text not null default ''");
+      }
+
+      if (!columns.includes("principles_json")) {
+        database.exec("alter table souls add column principles_json text not null default '[]'");
+      }
+
+      if (!columns.includes("taboos_json")) {
+        database.exec("alter table souls add column taboos_json text not null default '[]'");
       }
     }
   }
