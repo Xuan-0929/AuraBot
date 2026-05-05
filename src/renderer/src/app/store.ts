@@ -26,6 +26,8 @@ interface AuraBotStore {
   setPetMousePassthrough(enabled: boolean): Promise<void>;
   movePetWindowBy(delta: { x: number; y: number }): Promise<void>;
   sendMessage(content: string, source?: "console" | "pet_voice" | "pet_text"): Promise<void>;
+  cancelTask(taskId: string): Promise<void>;
+  deleteTask(taskId: string): Promise<void>;
   showPetNotice(message: string): void;
   clearPetActivity(id?: string): void;
 }
@@ -71,6 +73,11 @@ export const useAuraBotStore = create<AuraBotStore>((set, get) => ({
         tasks: updateTasks(current.tasks, task)
       }));
     });
+    const unsubscribeTaskDeleted = window.aurabot.onTaskDeleted((taskId) => {
+      set((current) => ({
+        tasks: removeTask(current.tasks, taskId)
+      }));
+    });
 
     return () => {
       unsubscribeSettings();
@@ -79,6 +86,7 @@ export const useAuraBotStore = create<AuraBotStore>((set, get) => ({
       unsubscribeAgentStatus();
       unsubscribeChatMessage();
       unsubscribeTaskChanged();
+      unsubscribeTaskDeleted();
     };
   },
   async openConsoleWindow() {
@@ -132,6 +140,28 @@ export const useAuraBotStore = create<AuraBotStore>((set, get) => ({
       throw error;
     }
   },
+  async cancelTask(taskId: string) {
+    const result = await window.aurabot.cancelTask({ taskId });
+
+    if (!result.ok || !result.task) {
+      throw new Error(result.error ?? "任务取消失败。");
+    }
+
+    set((current) => ({
+      tasks: updateTasks(current.tasks, result.task)
+    }));
+  },
+  async deleteTask(taskId: string) {
+    const result = await window.aurabot.deleteTask({ taskId });
+
+    if (!result.ok) {
+      throw new Error(result.error ?? "任务删除失败。");
+    }
+
+    set((current) => ({
+      tasks: removeTask(current.tasks, result.taskId ?? taskId)
+    }));
+  },
   showPetNotice(message: string) {
     set({
       petActivity: {
@@ -152,6 +182,10 @@ export const useAuraBotStore = create<AuraBotStore>((set, get) => ({
     });
   }
 }));
+
+function removeTask(tasks: Task[], taskId: string): Task[] {
+  return tasks.filter((task) => task.id !== taskId);
+}
 
 function updateTasks(tasks: Task[], changedTask?: Task): Task[] {
   if (!changedTask) {

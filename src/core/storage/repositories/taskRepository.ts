@@ -201,6 +201,12 @@ export class TaskRepository {
 
     return row ? mapTask(row) : undefined;
   }
+
+  deleteById(taskId: string): boolean {
+    const result = this.database.prepare("delete from tasks where id = ?").run(taskId);
+
+    return result.changes > 0;
+  }
 }
 
 function mapTask(row: TaskRow): Task {

@@ -14,6 +14,8 @@ export function App() {
   const memoryDebugSnapshot = useAuraBotStore((state) => state.memoryDebugSnapshot);
   const debugPetOverlay = useAuraBotStore((state) => state.debugPetOverlay);
   const sendMessage = useAuraBotStore((state) => state.sendMessage);
+  const cancelTask = useAuraBotStore((state) => state.cancelTask);
+  const deleteTask = useAuraBotStore((state) => state.deleteTask);
   const updatePetSettings = useAuraBotStore((state) => state.updatePetSettings);
   const loadMemoryDebugSnapshot = useAuraBotStore((state) => state.loadMemoryDebugSnapshot);
   const setPetMousePassthrough = useAuraBotStore((state) => state.setPetMousePassthrough);
@@ -42,6 +44,8 @@ export function App() {
           onUpdatePetSettings={updatePetSettings}
           onLoadMemoryDebugSnapshot={loadMemoryDebugSnapshot}
           onSend={sendMessage}
+          onCancelTask={cancelTask}
+          onDeleteTask={deleteTask}
         />
       ) : (
         <DesktopPet

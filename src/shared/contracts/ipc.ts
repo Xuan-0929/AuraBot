@@ -19,6 +19,9 @@ export const IPC_CHANNELS = {
   chatMessageCreated: "chat:message-created",
   sendChatMessage: "chat:send-message",
   taskChanged: "task:changed",
+  taskDeleted: "task:deleted",
+  cancelTask: "task:cancel",
+  deleteTask: "task:delete",
   openTaskResultFile: "task:open-result-file",
   showTaskResultFileInFolder: "task:show-result-file-in-folder",
   getEventLogs: "debug:get-event-logs",
@@ -65,16 +68,27 @@ export interface TaskResultFileActionInput {
   path: string;
 }
 
-export interface TaskResultFileActionResult {
-  ok: boolean;
-  error?: string;
-}
-
 export interface PetCursorPosition {
   screenX: number;
   screenY: number;
   localX: number;
   localY: number;
+}
+
+export interface TaskResultFileActionResult {
+  ok: boolean;
+  error?: string;
+}
+
+export interface TaskControlActionInput {
+  taskId: string;
+}
+
+export interface TaskControlActionResult {
+  ok: boolean;
+  task?: Task;
+  taskId?: string;
+  error?: string;
 }
 
 export interface AuraBotApi {
@@ -90,7 +104,10 @@ export interface AuraBotApi {
   onAgentStatusChanged(listener: (status: import("./chat").AgentStatus) => void): () => void;
   onChatMessageCreated(listener: (message: Message) => void): () => void;
   onTaskChanged(listener: (task: Task) => void): () => void;
+  onTaskDeleted(listener: (taskId: string) => void): () => void;
   sendChatMessage(input: SendChatMessageInput): Promise<SendChatMessageResult>;
+  cancelTask(input: TaskControlActionInput): Promise<TaskControlActionResult>;
+  deleteTask(input: TaskControlActionInput): Promise<TaskControlActionResult>;
   openTaskResultFile(input: TaskResultFileActionInput): Promise<TaskResultFileActionResult>;
   showTaskResultFileInFolder(input: TaskResultFileActionInput): Promise<TaskResultFileActionResult>;
   getEventLogs(): Promise<EventLogRecord[]>;

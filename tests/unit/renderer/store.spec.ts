@@ -108,7 +108,8 @@ describe("useAuraBotStore chat sending", () => {
           taskChangedListener = listener;
 
           return vi.fn();
-        })
+        }),
+        onTaskDeleted: vi.fn(() => vi.fn())
       }
     });
 
@@ -201,5 +202,55 @@ describe("useAuraBotStore chat sending", () => {
 
     expect(getMemoryDebugSnapshot).toHaveBeenCalledTimes(1);
     expect(useAuraBotStore.getState().memoryDebugSnapshot).toBe(snapshot);
+  });
+
+  test("cancels and deletes tasks through task controls", async () => {
+    const queuedTask: Task = {
+      id: "task-1",
+      profileId: "profile-1",
+      parentSessionId: "session-1",
+      sessionId: "task-session-1",
+      title: "帮我写一份 GitHub 周报。",
+      status: "queued",
+      latestProgress: "Task queued from main chat.",
+      createdAt: "2026-05-04T00:00:01.000Z",
+      updatedAt: "2026-05-04T00:00:02.000Z"
+    };
+    const cancelledTask: Task = {
+      ...queuedTask,
+      status: "interrupted",
+      latestProgress: "好，我先停下来了。",
+      updatedAt: "2026-05-04T00:00:03.000Z"
+    };
+    const cancelTask = vi.fn(async () => ({
+      ok: true,
+      task: cancelledTask
+    }));
+    const deleteTask = vi.fn(async () => ({
+      ok: true,
+      taskId: queuedTask.id
+    }));
+    vi.stubGlobal("window", {
+      aurabot: {
+        cancelTask,
+        deleteTask
+      }
+    });
+    useAuraBotStore.setState({
+      tasks: [queuedTask]
+    });
+
+    await useAuraBotStore.getState().cancelTask(queuedTask.id);
+
+    expect(cancelTask).toHaveBeenCalledWith({ taskId: queuedTask.id });
+    expect(useAuraBotStore.getState().tasks[0]).toMatchObject({
+      id: queuedTask.id,
+      status: "interrupted"
+    });
+
+    await useAuraBotStore.getState().deleteTask(queuedTask.id);
+
+    expect(deleteTask).toHaveBeenCalledWith({ taskId: queuedTask.id });
+    expect(useAuraBotStore.getState().tasks).toEqual([]);
   });
 });

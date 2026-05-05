@@ -20,6 +20,8 @@ export interface ConsoleWindowProps {
   onUpdatePetSettings(patch: PetSettingsPatch): Promise<void>;
   onLoadMemoryDebugSnapshot(): Promise<void>;
   onSend(content: string): Promise<void>;
+  onCancelTask(taskId: string): Promise<void>;
+  onDeleteTask(taskId: string): Promise<void>;
 }
 
 export function ConsoleWindow({
@@ -30,7 +32,9 @@ export function ConsoleWindow({
   memoryDebugSnapshot,
   onUpdatePetSettings,
   onLoadMemoryDebugSnapshot,
-  onSend
+  onSend,
+  onCancelTask,
+  onDeleteTask
 }: ConsoleWindowProps) {
   const [memoryDebugExpanded, setMemoryDebugExpanded] = useState(false);
 
@@ -46,7 +50,7 @@ export function ConsoleWindow({
           <PetSettingsPanel settings={petSettings} onUpdate={onUpdatePetSettings} />
         </div>
       </header>
-      <TaskStatusOverlay tasks={tasks} />
+      <TaskStatusOverlay tasks={tasks} onCancelTask={onCancelTask} onDeleteTask={onDeleteTask} />
       <MemoryDebugPanel
         snapshot={memoryDebugSnapshot}
         expanded={memoryDebugExpanded}

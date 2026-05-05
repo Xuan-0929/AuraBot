@@ -1,6 +1,14 @@
 import type { Task } from "../../../../shared/schemas/task";
 
-export function TaskStatusOverlay({ tasks }: { tasks: Task[] }) {
+export function TaskStatusOverlay({
+  tasks,
+  onCancelTask,
+  onDeleteTask
+}: {
+  tasks: Task[];
+  onCancelTask?: (taskId: string) => void;
+  onDeleteTask?: (taskId: string) => void;
+}) {
   const visibleTasks = tasks.slice(0, 3);
 
   if (visibleTasks.length === 0) {
@@ -17,10 +25,59 @@ export function TaskStatusOverlay({ tasks }: { tasks: Task[] }) {
             <span className="task-status-progress">{formatTaskProgress(task)}</span>
           </span>
           <span className="task-status-value">{formatTaskStatus(task.status)}</span>
+          <TaskStatusAction task={task} onCancelTask={onCancelTask} onDeleteTask={onDeleteTask} />
         </div>
       ))}
     </aside>
   );
+}
+
+function TaskStatusAction({
+  task,
+  onCancelTask,
+  onDeleteTask
+}: {
+  task: Task;
+  onCancelTask?: (taskId: string) => void;
+  onDeleteTask?: (taskId: string) => void;
+}) {
+  const title = formatTaskTitle(task.title);
+
+  if (isTaskActive(task.status)) {
+    return (
+      <button
+        className="task-status-action task-status-action-cancel"
+        type="button"
+        aria-label={`取消任务：${title}`}
+        onClick={() => onCancelTask?.(task.id)}
+      >
+        取消
+      </button>
+    );
+  }
+
+  if (isTaskSettled(task.status)) {
+    return (
+      <button
+        className="task-status-action task-status-action-delete"
+        type="button"
+        aria-label={`删除任务：${title}`}
+        onClick={() => onDeleteTask?.(task.id)}
+      >
+        删除
+      </button>
+    );
+  }
+
+  return null;
+}
+
+function isTaskActive(status: Task["status"]): boolean {
+  return status === "queued" || status === "running" || status === "waiting";
+}
+
+function isTaskSettled(status: Task["status"]): boolean {
+  return status === "completed" || status === "failed" || status === "interrupted";
 }
 
 function formatTaskStatus(status: Task["status"]): string {

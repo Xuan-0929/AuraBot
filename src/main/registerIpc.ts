@@ -2,6 +2,8 @@ import { randomUUID } from "node:crypto";
 import { ipcMain, shell } from "electron";
 import {
   IPC_CHANNELS,
+  type TaskControlActionInput,
+  type TaskControlActionResult,
   type TaskResultFileActionInput,
   type TaskResultFileActionResult
 } from "../shared/contracts/ipc";
@@ -23,6 +25,7 @@ export interface WindowController {
   broadcastAgentStatus(status: AgentStatus): void;
   broadcastChatMessage(message: Message): void;
   broadcastTaskChanged(task: Task): void;
+  broadcastTaskDeleted(taskId: string): void;
 }
 
 export function registerIpc(services: AppServices, windows: WindowController): void {
@@ -105,6 +108,51 @@ export function registerIpc(services: AppServices, windows: WindowController): v
   ipcMain.handle(IPC_CHANNELS.openTaskResultFile, async (_event, input: TaskResultFileActionInput) =>
     openTaskResultFile(services, input)
   );
+
+  ipcMain.handle(IPC_CHANNELS.cancelTask, (_event, input: TaskControlActionInput) => {
+    const profile = services.profileService.getOrSeedActiveProfile();
+    const task = services.taskService.cancelTaskFromConsole({
+      profileId: profile.id,
+      taskId: input.taskId
+    });
+
+    if (!task) {
+      return {
+        ok: false,
+        error: "这个任务现在不能取消。"
+      } satisfies TaskControlActionResult;
+    }
+
+    windows.broadcastTaskChanged(task);
+    windows.broadcastAgentStatus("idle");
+
+    return {
+      ok: true,
+      task
+    } satisfies TaskControlActionResult;
+  });
+
+  ipcMain.handle(IPC_CHANNELS.deleteTask, (_event, input: TaskControlActionInput) => {
+    const profile = services.profileService.getOrSeedActiveProfile();
+    const deleted = services.taskService.deleteSettledTaskFromConsole({
+      profileId: profile.id,
+      taskId: input.taskId
+    });
+
+    if (!deleted) {
+      return {
+        ok: false,
+        error: "这个任务还不能从列表里移除。"
+      } satisfies TaskControlActionResult;
+    }
+
+    windows.broadcastTaskDeleted(input.taskId);
+
+    return {
+      ok: true,
+      taskId: input.taskId
+    } satisfies TaskControlActionResult;
+  });
 
   ipcMain.handle(IPC_CHANNELS.showTaskResultFileInFolder, (_event, input: TaskResultFileActionInput) =>
     showTaskResultFileInFolder(services, input)

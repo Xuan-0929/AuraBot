@@ -205,6 +205,66 @@ describe("task lifecycle", () => {
     expect(cancelledTaskId).toBe(task.id);
   });
 
+  it("cancels an active task from direct console controls", () => {
+    const services = createTestServices("aurabot-task-");
+    const profile = services.profileService.getOrSeedActiveProfile();
+    const mainSession = services.sessionRepository.getOrCreateMainSession(profile.id);
+    const task = services.taskService.createTaskFromChat({
+      profileId: profile.id,
+      parentSessionId: mainSession.id,
+      title: "帮我写一份 GitHub 周报。"
+    });
+
+    const cancelled = services.taskService.cancelTaskFromConsole({
+      profileId: profile.id,
+      taskId: task.id
+    });
+    const eventLogs = services.eventLogService.list(20);
+
+    expect(cancelled?.status).toBe("interrupted");
+    expect(cancelled?.latestProgress).toContain("我先停下来了");
+    expect(eventLogs.some((log) => log.eventType === "task.cancelled_from_console")).toBe(true);
+  });
+
+  it("deletes only settled tasks from the visible task list", async () => {
+    const services = createTestServices("aurabot-task-");
+    const profile = services.profileService.getOrSeedActiveProfile();
+    const mainSession = services.sessionRepository.getOrCreateMainSession(profile.id);
+    const queuedTask = services.taskService.createTaskFromChat({
+      profileId: profile.id,
+      parentSessionId: mainSession.id,
+      title: "排队任务"
+    });
+    const completedTask = services.taskService.createTaskFromChat({
+      profileId: profile.id,
+      parentSessionId: mainSession.id,
+      title: "已完成任务"
+    });
+
+    await services.taskService.runTaskFromChat({
+      profileId: profile.id,
+      taskId: completedTask.id
+    });
+
+    const queuedDeleted = services.taskService.deleteSettledTaskFromConsole({
+      profileId: profile.id,
+      taskId: queuedTask.id
+    });
+    const completedDeleted = services.taskService.deleteSettledTaskFromConsole({
+      profileId: profile.id,
+      taskId: completedTask.id
+    });
+    const tasks = services.taskService.listTasksForProfile(profile.id);
+    const completedEvents = services.taskService.listTaskEvents(completedTask.id);
+    const eventLogs = services.eventLogService.list(20);
+
+    expect(queuedDeleted).toBe(false);
+    expect(completedDeleted).toBe(true);
+    expect(tasks.map((task) => task.id)).toEqual([queuedTask.id]);
+    expect(completedEvents).toHaveLength(0);
+    expect(eventLogs.some((log) => log.eventType === "task.deleted_from_console")).toBe(true);
+  });
+
   it("recovers orphaned running tasks as failed when services start again", () => {
     const userDataDir = mkdtempSync(join(tmpdir(), "aurabot-task-recovery-"));
     let firstServices = createServices(userDataDir);
