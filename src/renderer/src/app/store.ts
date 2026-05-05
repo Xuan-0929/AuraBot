@@ -64,6 +64,11 @@ export const useAuraBotStore = create<AuraBotStore>((set, get) => ({
         return { messages: [...current.messages, message] };
       });
     });
+    const unsubscribeChatMessageUpdated = window.aurabot.onChatMessageUpdated((message) => {
+      set((current) => ({
+        messages: upsertMessage(current.messages, message)
+      }));
+    });
     const unsubscribeTaskChanged = window.aurabot.onTaskChanged((task) => {
       set((current) => ({
         tasks: updateTasks(current.tasks, task)
@@ -80,6 +85,7 @@ export const useAuraBotStore = create<AuraBotStore>((set, get) => ({
       unsubscribeActivity();
       unsubscribeAgentStatus();
       unsubscribeChatMessage();
+      unsubscribeChatMessageUpdated();
       unsubscribeTaskChanged();
       unsubscribeTaskDeleted();
     };
@@ -194,6 +200,16 @@ function updateTasks(tasks: Task[], changedTask?: Task): Task[] {
   }
 
   return tasks.map((task) => (task.id === changedTask.id ? changedTask : task));
+}
+
+function upsertMessage(messages: Message[], changedMessage: Message): Message[] {
+  const exists = messages.some((message) => message.id === changedMessage.id);
+
+  if (!exists) {
+    return [...messages, changedMessage];
+  }
+
+  return messages.map((message) => (message.id === changedMessage.id ? changedMessage : message));
 }
 
 function reconcileMessages(messages: Message[], pendingMessageId: string, result: SendChatMessageResult): Message[] {

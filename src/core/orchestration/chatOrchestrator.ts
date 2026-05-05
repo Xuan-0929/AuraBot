@@ -1,4 +1,5 @@
 import type { SendChatMessageInput, SendChatMessageResult } from "../../shared/contracts/chat";
+import type { Message } from "../../shared/schemas/message";
 import type { MemoryNode } from "../../shared/schemas/memory";
 import { shouldAskMemoryRecall, type MemoryExtractor } from "../memory/memoryExtractor";
 import type { MemoryService } from "../memory/memoryService";
@@ -26,10 +27,15 @@ export interface ChatOrchestratorDependencies {
   chatModel: ChatModel;
 }
 
+export interface SendChatMessageOptions {
+  onAssistantMessageCreated?(message: Message): void;
+  onAssistantMessageUpdated?(message: Message): void;
+}
+
 export class ChatOrchestrator {
   constructor(private readonly dependencies: ChatOrchestratorDependencies) {}
 
-  async sendMessage(input: SendChatMessageInput): Promise<SendChatMessageResult> {
+  async sendMessage(input: SendChatMessageInput, options: SendChatMessageOptions = {}): Promise<SendChatMessageResult> {
     const profile = this.dependencies.profileService.getOrSeedActiveProfile();
     const mainSession = this.dependencies.sessionRepository.getOrCreateMainSession(profile.id);
 
@@ -162,19 +168,55 @@ export class ChatOrchestrator {
       });
     }
 
-    const assistantMessage = this.dependencies.messageRepository.create({
+    let assistantMessage = this.dependencies.messageRepository.create({
       sessionId: mainSession.id,
       profileId: profile.id,
       role: "assistant",
-      content: await this.dependencies.chatModel.generateReply({
+      content: ""
+    });
+    options.onAssistantMessageCreated?.(assistantMessage);
+
+    let streamedContent = "";
+    const finalReply = await this.dependencies.chatModel.generateReply(
+      {
         userContent: semanticSegment,
         soul: profile.soul,
         writtenMemories,
         recalledMemories: shouldAskMemoryRecall(semanticSegment) ? memoryContext.nodes : recalledMemories,
         dueFollowUps,
         gateDecision
-      })
-    });
+      },
+      {
+        onDelta: (delta) => {
+          if (!delta) {
+            return;
+          }
+
+          streamedContent += delta;
+          const updatedMessage = this.dependencies.messageRepository.updateContent({
+            messageId: assistantMessage.id,
+            content: streamedContent
+          });
+
+          if (updatedMessage) {
+            assistantMessage = updatedMessage;
+            options.onAssistantMessageUpdated?.(assistantMessage);
+          }
+        }
+      }
+    );
+
+    if (finalReply !== assistantMessage.content) {
+      const updatedMessage = this.dependencies.messageRepository.updateContent({
+        messageId: assistantMessage.id,
+        content: finalReply
+      });
+
+      if (updatedMessage) {
+        assistantMessage = updatedMessage;
+        options.onAssistantMessageUpdated?.(assistantMessage);
+      }
+    }
 
     if (dueFollowUps.length > 0) {
       this.dependencies.memoryService.completeFollowUps(

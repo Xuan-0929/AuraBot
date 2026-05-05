@@ -38,6 +38,29 @@ describe("chat gate integration", () => {
     expect(memoryContext.nodes.some((node) => node.content.includes("火锅"))).toBe(true);
   });
 
+  it.each(["在干嘛", "说两句"])("replies to short direct social prompt %s", async (content) => {
+    const { orchestrator } = createTestOrchestrator("aurabot-gate-social-");
+
+    const result = await orchestrator.sendMessage({ content });
+
+    expect(result.agentStatus).toBe("idle");
+    expect(result.assistantMessage?.content).toBeTruthy();
+    expect(result.gateDecision).toMatchObject({
+      replyDecision: "reply",
+      inputKind: "chat"
+    });
+  });
+
+  it("does not force short non-fragment chat to keep listening by length alone", async () => {
+    const { orchestrator } = createTestOrchestrator("aurabot-gate-short-chat-");
+
+    const result = await orchestrator.sendMessage({ content: "随便聊聊" });
+
+    expect(result.agentStatus).toBe("idle");
+    expect(result.assistantMessage?.content).toBeTruthy();
+    expect(result.gateDecision?.reason).not.toContain("fragment");
+  });
+
   it("opens recent full conversation context to the gate model", async () => {
     const services = createTestServices("aurabot-gate-context-");
     const profile = services.profileService.getOrSeedActiveProfile();

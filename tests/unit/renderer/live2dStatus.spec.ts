@@ -6,7 +6,7 @@ describe("getLive2DMotionForAgentStatus", () => {
     ["idle", "Idle"],
     ["listening", "Idle"],
     ["thinking", "TapBody"],
-    ["replying", "TapBody"],
+    ["typing", "TapBody"],
     ["tasking", "TapBody"]
   ] as const)("maps %s to the expected available Hiyori motion group", (status, group) => {
     expect(getLive2DMotionForAgentStatus(status).group).toBe(group);

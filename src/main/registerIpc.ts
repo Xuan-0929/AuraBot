@@ -24,6 +24,7 @@ export interface WindowController {
   broadcastPetActivity(activity: PetActivity): void;
   broadcastAgentStatus(status: AgentStatus): void;
   broadcastChatMessage(message: Message): void;
+  broadcastChatMessageUpdated(message: Message): void;
   broadcastTaskChanged(task: Task): void;
   broadcastTaskDeleted(taskId: string): void;
 }
@@ -68,7 +69,21 @@ export function registerIpc(services: AppServices, windows: WindowController): v
   });
 
   ipcMain.handle(IPC_CHANNELS.sendChatMessage, async (_event, input: SendChatMessageInput) => {
-    const result = await services.chatOrchestrator.sendMessage(input);
+    const result = await services.chatOrchestrator.sendMessage(input, {
+      onAssistantMessageCreated: (message) => {
+        if (!message) {
+          return;
+        }
+
+        windows.broadcastAgentStatus("typing");
+        windows.broadcastChatMessage(message);
+      },
+      onAssistantMessageUpdated: (message) => {
+        if (message) {
+          windows.broadcastChatMessageUpdated(message);
+        }
+      }
+    });
     if (result.createdTask && services.config.taskRunner.provider === "codex") {
       const startedTask = services.taskService.runTaskInBackground({
         profileId: result.createdTask.profileId,

@@ -91,6 +91,24 @@ export class MessageRepository {
 
     return message;
   }
+
+  updateContent(input: { messageId: string; content: string }): Message | undefined {
+    this.database
+      .prepare(
+        `
+        update messages
+        set content = @content
+        where id = @messageId
+      `
+      )
+      .run(input);
+
+    const row = this.database
+      .prepare("select * from messages where id = ?")
+      .get(input.messageId) as MessageRow | undefined;
+
+    return row ? mapMessage(row) : undefined;
+  }
 }
 
 function mapMessage(row: MessageRow): Message {

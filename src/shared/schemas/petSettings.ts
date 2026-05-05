@@ -1,11 +1,13 @@
 import { z } from "zod";
 
 export const DEFAULT_PET_SETTINGS = {
-  clickThroughPet: false
+  clickThroughPet: false,
+  displayLanguage: "en"
 } as const;
 
 export const petSettingsSchema = z.object({
-  clickThroughPet: z.boolean().default(DEFAULT_PET_SETTINGS.clickThroughPet)
+  clickThroughPet: z.boolean().default(DEFAULT_PET_SETTINGS.clickThroughPet),
+  displayLanguage: z.enum(["en", "zh"]).default(DEFAULT_PET_SETTINGS.displayLanguage)
 });
 
 export const petSettingsPatchSchema = petSettingsSchema.partial();

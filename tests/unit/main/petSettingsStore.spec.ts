@@ -12,7 +12,8 @@ describe("PetSettingsStore", () => {
       const store = new PetSettingsStore(userDataPath);
 
       expect(store.get()).toEqual({
-        clickThroughPet: false
+        clickThroughPet: false,
+        displayLanguage: "en"
       });
     } finally {
       rmSync(userDataPath, { force: true, recursive: true });
@@ -26,13 +27,15 @@ describe("PetSettingsStore", () => {
       const store = new PetSettingsStore(userDataPath);
 
       expect(store.update({ clickThroughPet: true })).toEqual({
-        clickThroughPet: true
+        clickThroughPet: true,
+        displayLanguage: "en"
       });
 
       const reloadedStore = new PetSettingsStore(userDataPath);
 
       expect(reloadedStore.get()).toEqual({
-        clickThroughPet: true
+        clickThroughPet: true,
+        displayLanguage: "en"
       });
     } finally {
       rmSync(userDataPath, { force: true, recursive: true });
@@ -49,8 +52,28 @@ describe("PetSettingsStore", () => {
       const store = new PetSettingsStore(userDataPath);
 
       expect(store.get()).toEqual({
-        clickThroughPet: false
+        clickThroughPet: false,
+        displayLanguage: "en"
       });
+    } finally {
+      rmSync(userDataPath, { force: true, recursive: true });
+    }
+  });
+
+  test("persists the display language setting", () => {
+    const userDataPath = mkdtempSync(join(tmpdir(), "aurabot-pet-settings-"));
+
+    try {
+      const store = new PetSettingsStore(userDataPath);
+
+      expect(store.update({ displayLanguage: "zh" })).toEqual({
+        clickThroughPet: false,
+        displayLanguage: "zh"
+      });
+
+      const reloadedStore = new PetSettingsStore(userDataPath);
+
+      expect(reloadedStore.get().displayLanguage).toBe("zh");
     } finally {
       rmSync(userDataPath, { force: true, recursive: true });
     }

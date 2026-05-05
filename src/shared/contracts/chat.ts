@@ -3,7 +3,7 @@ import type { PetSettings } from "../schemas/petSettings";
 import type { Profile } from "../schemas/profile";
 import type { Task } from "../schemas/task";
 
-export type AgentStatus = "idle" | "listening" | "thinking" | "replying" | "tasking";
+export type AgentStatus = "idle" | "listening" | "thinking" | "typing" | "tasking";
 export type ReplyDecision = "reply" | "wait";
 export type InputKind = "chat" | "task" | "task_control";
 export type MemoryDecision = "write_now" | "defer" | "skip";

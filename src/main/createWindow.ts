@@ -141,6 +141,10 @@ export function broadcastChatMessage(message: Message): void {
   sendToRenderer(IPC_CHANNELS.chatMessageCreated, message);
 }
 
+export function broadcastChatMessageUpdated(message: Message): void {
+  sendToRenderer(IPC_CHANNELS.chatMessageUpdated, message);
+}
+
 export function broadcastTaskChanged(task: Task): void {
   sendToRenderer(IPC_CHANNELS.taskChanged, task);
 }

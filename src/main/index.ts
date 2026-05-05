@@ -4,6 +4,7 @@ import {
   applyPetSettings,
   broadcastAgentStatus,
   broadcastChatMessage,
+  broadcastChatMessageUpdated,
   broadcastPetActivity,
   broadcastTaskChanged,
   broadcastTaskDeleted,
@@ -33,11 +34,13 @@ async function bootstrap(): Promise<void> {
   registerIpc(services, {
     openConsoleWindow,
     getPetSettings: () => petSettingsStore?.get() ?? {
-      clickThroughPet: false
+      clickThroughPet: false,
+      displayLanguage: "en"
     },
     updatePetSettings: (patch) => {
       const settings = petSettingsStore?.update(patch) ?? {
-        clickThroughPet: false
+        clickThroughPet: false,
+        displayLanguage: "en"
       };
 
       applyPetSettings(settings);
@@ -49,6 +52,7 @@ async function bootstrap(): Promise<void> {
     broadcastPetActivity,
     broadcastAgentStatus,
     broadcastChatMessage,
+    broadcastChatMessageUpdated,
     broadcastTaskChanged,
     broadcastTaskDeleted
   });
