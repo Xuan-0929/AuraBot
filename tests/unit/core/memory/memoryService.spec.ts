@@ -128,4 +128,70 @@ describe("MemoryService", () => {
       })
     );
   });
+
+  it("keeps a debug trace for the most recent recall seeds and graph expansion", async () => {
+    const services = createTestServices("aurabot-memory-service-");
+    const profile = services.profileService.getOrSeedActiveProfile();
+    const session = services.sessionRepository.getOrCreateMainSession(profile.id);
+    const repository = new MemoryRepository(services.database);
+    const service = new MemoryService(repository, {
+      recallPlanner: {
+        plan: async ({ nodes }) => ({
+          queryTerms: ["阿杰"],
+          targetTypes: ["event"],
+          rankedNodeIds: [nodes.find((node) => node.type === "event")?.id ?? "missing-node"]
+        })
+      }
+    });
+
+    const preferenceId = await service.enqueueWrite({
+      profileId: profile.id,
+      sourceSessionId: session.id,
+      node: {
+        type: "preference",
+        content: "用户喜欢火锅",
+        importance: 0.72
+      },
+      edges: []
+    });
+    const eventId = await service.enqueueWrite({
+      profileId: profile.id,
+      sourceSessionId: session.id,
+      node: {
+        type: "event",
+        content: "用户明天要和阿杰去吃火锅",
+        importance: 0.84
+      },
+      edges: [
+        {
+          targetNodeId: preferenceId,
+          relationType: "preference_for",
+          weight: 0.91
+        }
+      ]
+    });
+
+    await service.retrieveRelevant(profile.id, "阿杰那件事我该注意什么？");
+
+    expect(service.getLastRecallTrace()).toMatchObject({
+      query: "阿杰那件事我该注意什么？",
+      recallPlan: {
+        queryTerms: ["阿杰"],
+        targetTypes: ["event"],
+        rankedNodeIds: [eventId]
+      },
+      seedNodeIds: [eventId],
+      expandedNodeIds: [preferenceId],
+      returnedNodeIds: expect.arrayContaining([eventId, preferenceId]),
+      traversedEdges: [
+        {
+          sourceNodeId: eventId,
+          targetNodeId: preferenceId,
+          relationType: "preference_for",
+          weight: 0.91,
+          depth: 1
+        }
+      ]
+    });
+  });
 });

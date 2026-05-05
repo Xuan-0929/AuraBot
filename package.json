@@ -17,7 +17,8 @@
     "test": "corepack pnpm rebuild:node && vitest run",
     "test:unit": "corepack pnpm rebuild:node && vitest run tests/unit",
     "test:integration": "corepack pnpm rebuild:node && vitest run tests/integration",
-    "test:e2e": "electron-rebuild -f -w better-sqlite3 && electron-vite build && playwright test"
+    "test:e2e": "electron-rebuild -f -w better-sqlite3 && electron-vite build && playwright test",
+    "eval:memory": "corepack pnpm rebuild:node && vitest run tests/unit/core/memory/memoryEvaluation.spec.ts"
   },
   "dependencies": {
     "better-sqlite3": "^12.9.0",

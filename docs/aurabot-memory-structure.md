@@ -2,7 +2,7 @@
 
 更新时间：2026-05-05
 
-这版记忆系统是一个受控的“分层摘要 + 图状联想 + memoryModel 语义增强”结构。它还不是向量库，也不是开放式知识图谱；当前目标是先让 AuraBot 在本地、可测试、可解释的范围内做到：写入稳定事实，识别时间事件，合并重复事实，在相关记忆之间自动连边，后续对话可以沿边联想召回，并能在下一次主聊天中触发到期 `follow_up`。
+这版记忆系统是一个受控的“分层摘要 + 图状联想 + memoryModel 语义增强”结构。它还不是向量库，也不是开放式知识图谱；当前目标是先让 AuraBot 在本地、可测试、可解释的范围内做到：写入稳定事实，识别时间事件，合并重复事实，在相关记忆之间自动连边，后续对话可以沿边联想召回，并能在主聊天或后台轮询中触发到期 `follow_up`。
 
 ## 结构图
 
@@ -75,6 +75,8 @@ flowchart TB
   subgraph DueFollowUp["时间驱动 follow_up 触发路径"]
     Nodes --> DueScan["retrieveDueFollowUps<br/>type = follow_up<br/>state = active<br/>startsAt <= now"]
     DueScan --> DueList["dueFollowUps"]
+    DueList --> Scheduler["MemoryFollowUpScheduler<br/>后台轮询"]
+    Scheduler --> PetBubble["PetActivity<br/>memory_follow_up<br/>桌宠气泡提醒"]
     DueList --> CompleteFollowUp["completeFollowUps<br/>state -> completed"]
     CompleteFollowUp --> Nodes
     CompleteFollowUp --> EventLogs
@@ -182,14 +184,28 @@ follow_up --preference_for(0.90)--> preference
 4. 合并 `rankedNodeIds + scored nodes`，取前几个 seed nodes。
 5. `GraphTraversal` 从 seed nodes 出发，按边权、深度和数量上限扩散。
 6. 返回 `summaries + nodes`，由 `ChatModel / ResponsePlanner` 负责生成当前回复。
+7. `MemoryService` 保存最近一次召回 trace：query、recall planner 输出、seed nodes、expanded nodes、returned nodes 和 traversed edges，供 Memory Debug 面板解释“为什么召回到这些记忆”。
+
+## 当前评估语料
+
+固定记忆评估入口是 `corepack pnpm eval:memory`，底层运行 `tests/unit/core/memory/memoryEvaluation.spec.ts`。
+
+当前 fixture 在 `tests/fixtures/memory/recall-evaluation.json`，覆盖三类 MVP 召回：
+
+1. **preference-direct-keyword**：直接偏好问题能通过本地关键词/概念 scoring 召回稳定偏好。
+2. **event-to-preference-graph-hop**：事件 query 先命中 event seed，再沿 `preference_for` 边跳到稳定 preference。
+3. **follow-up-due-filter**：具体事件 query 召回相关 `follow_up`，并把不相关的未来提醒排除在结果外。
+
+评估 runner 会把 fixture label 映射到真实写入的 memory node id，跑 `MemoryService.retrieveRelevant()`，再检查 recalled labels、seed labels、expanded labels 和 traversed edges。这样后续调 query analyzer、边权重或 embedding 时，可以先看固定语料有没有回退。
 
 ## 当前 follow-up 触发策略
 
 1. `retrieveDueFollowUps(profileId, nowIso)` 找出 `type = follow_up`、`state = active` 且 `startsAt <= now` 的节点。
-2. 下一次主聊天回复会把这些 due follow-up 放进 `dueFollowUps`，生成“我提醒你一下...”这类回复。
-3. 回复生成后调用 `completeFollowUps()`，把这些节点标记为 `completed`。
-4. 同时写入 `memory.follow_up_triggered` 事件日志，便于后续调试视图展示。
-5. 当前还不是后台 scheduler；如果用户没有唤醒主聊天，就不会主动弹桌宠气泡。
+2. 下一次主聊天回复仍会把这些 due follow-up 放进 `dueFollowUps`，生成“我提醒你一下...”这类回复。
+3. Electron 主进程启动 `MemoryFollowUpScheduler`，按固定 interval 后台扫描到期 follow-up，并通过现有 `PetActivity` IPC 通道推送 `memory_follow_up` 桌宠气泡。
+4. 触发后调用 `completeFollowUps()`，把这些节点标记为 `completed`，避免主聊天和后台轮询重复提醒。
+5. 同时写入 `memory.follow_up_triggered` 事件日志，并用 `trigger = scheduler` 区分后台主动提醒。
+6. 当前还不是系统级通知或开机自启定时任务；如果 App 没运行，就不会主动提醒。
 
 ## 当前边界
 
@@ -197,14 +213,14 @@ follow_up --preference_for(0.90)--> preference
 2. 显式配置 `memoryModel` 后，记忆写入层可以调用 OpenAI-compatible API 做结构化抽取、重复记忆合并和候选关系边判断；API 失败或输出不合法时回退本地规则。
 3. 图扩散有 `maxDepth` 和 `maxNodes` 上限，避免把所有记忆都拉进回复。
 4. 显式配置 `memoryModel` 后，召回入口可以调用 API 生成语义检索词、目标记忆类型和重排 node id；未配置或失败时仍走本地关键词/概念规则。
-5. 已到期的 active `follow_up` 会在下一次主聊天回复中被带出，并在回复生成后标记为 `completed`，避免重复提醒。
-6. 控制台 `Memory Debug` 面板可以查看当前节点、关系边、摘要计数和最近 memory event。
-7. 当前还没有后台 scheduler 或桌面主动气泡触发，到期提醒仍依赖主聊天被唤醒。
+5. 已到期的 active `follow_up` 会在下一次主聊天回复中被带出，或由 `MemoryFollowUpScheduler` 通过桌宠气泡主动提醒，并在触发后标记为 `completed`，避免重复提醒。
+6. 控制台 `Memory Debug` 面板可以查看当前节点、关系边、摘要计数、最近 memory event，以及最近一次召回的 query、planner terms、seed、图扩散节点和 traversed edges。
+7. 当前已有 App 运行期间的后台 scheduler 和桌宠气泡提醒，但还没有系统级通知、开机自启或离线调度。
 8. SQLite 表结构继续沿用；模型输出必须落到现有 `memory_nodes` 和 `memory_edges` 约束内。
 
 ## 下一步应做
 
-1. **增强时间驱动记忆**：把当前主聊天触发式 follow-up 扩展为后台 scheduler + 桌宠气泡主动提醒。
-2. **增强记忆调试视图**：补本轮召回 seed、图扩散路径和模型 planner 原始输出，否则后续很难调联想质量。
-3. **建立评估语料**：用固定对话集比较关键词召回、概念召回、图扩散召回的回复差异，避免凭感觉调参。
+1. **扩展评估语料**：继续增加更真实的多轮对话 fixture，比较关键词召回、概念召回、图扩散召回的回复差异，避免凭感觉调参。
+2. **增强主动提醒交付面**：补系统通知、提醒权限和 App 未运行时的边界提示。
+3. **增强记忆调试视图第二版**：把模型 planner 原始响应和 fallback 原因纳入 debug event，便于区分模型输出和本地兜底。
 4. **后续可选 embedding**：如果固定评估集显示结构化 query analyzer 仍不够，再引入 embedding 和向量索引。

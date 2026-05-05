@@ -659,6 +659,55 @@ textarea {
   text-align: center;
 }
 
+.memory-debug-recall {
+  display: grid;
+  gap: 6px;
+  padding: 8px;
+  border: 1px solid rgba(47, 98, 107, 0.18);
+  border-radius: 8px;
+  background: rgba(232, 246, 242, 0.72);
+}
+
+.memory-debug-recall-header,
+.memory-debug-chip-row {
+  display: flex;
+  flex-wrap: wrap;
+  gap: 6px;
+  align-items: center;
+}
+
+.memory-debug-recall-header h2 {
+  margin: 0;
+  color: #344041;
+  font-size: 12px;
+  letter-spacing: 0;
+}
+
+.memory-debug-recall-header span,
+.memory-debug-chip-row span {
+  padding: 3px 6px;
+  border: 1px solid rgba(41, 65, 67, 0.12);
+  border-radius: 8px;
+  background: rgba(255, 255, 255, 0.68);
+  color: #435051;
+  font-size: 10px;
+  font-weight: 900;
+}
+
+.memory-debug-query,
+.memory-debug-path-list p {
+  margin: 0;
+  overflow-wrap: anywhere;
+  color: #263334;
+  font-size: 12px;
+  line-height: 1.36;
+}
+
+.memory-debug-path-list {
+  display: grid;
+  gap: 4px;
+}
+
 .memory-debug-grid {
   display: grid;
   grid-template-columns: repeat(3, minmax(0, 1fr));

@@ -35,10 +35,11 @@ AuraBot 当前已经从“传统聊天界面”收敛为桌宠优先形态：
 | 单主聊天线程 | 已完成 MVP | 主 session 持久化消息，控制台负责完整对话；用户消息乐观上屏，不再等待 gate/chat 模型返回。 |
 | 模型适配层 | 部分完成 | 已有 `gateModel` / `chatModel` / `memoryModel` 注入接口、OpenAI-compatible provider、userData/系统级 JSON 配置、env 配置和 deterministic fallback；还缺流式与中断。 |
 | Gate/触发判断 | 已完成 MVP | 可判断碎片输入等待、完整输入回复、话题是否结束、聊天/任务/任务控制分类；已放宽直接产出型任务判定，`做一份读书笔记`、`写一份GitHub周报` 等不需要“帮我”前缀也会进入任务流。 |
-| 记忆 v1/v2 写入层 | 部分完成 | 支持 preference、event、follow_up 写入，摘要层和关系边召回；显式配置 `memoryModel` 后可用 API 做结构化记忆抽取、重复记忆合并和候选关系边判断。 |
+| 记忆 v1/v2 写入层 | 部分完成 | 支持 preference、event、follow_up 写入，摘要层和关系边召回；显式配置 `memoryModel` 后可用 API 做结构化记忆抽取、重复记忆合并和候选关系边判断；App 运行期间到期 follow_up 可通过后台 scheduler 推送桌宠气泡。 |
 | 任务 v1 | 已完成 MVP | 可从主聊天创建任务、按聊天 hint 命中特定任务、查询状态、打断、修改、启动；默认 deterministic runner，显式配置后可调用本机 Codex 子任务 runner。任务完成后可把结果文件作为消息附件回流主聊天，并提供“打开文件 / 所在文件夹”操作。 |
 | 任务体验文案 | 已完成第一版 | 任务创建、查询、完成、失败、重复开始和状态条都已去掉内部状态词，改成伴侣兼助手式中文回复。 |
-| 记忆调试视图 | 已完成第一版 | 控制台 `Memory Debug` 面板可查看当前 memory nodes、edges、summaries 计数和最近 memory event。 |
+| 记忆调试视图 | 已完成第二版 | 控制台 `Memory Debug` 面板可查看当前 memory nodes、edges、summaries、最近 memory event，以及最近一次 recall 的 query、planner terms、seed、扩散节点和 traversed edges。 |
+| 记忆评估语料 | 已完成第一版 | `corepack pnpm eval:memory` 可跑固定 recall fixture，覆盖直接偏好召回、事件到偏好图跳转、follow_up 排除不相关提醒。 |
 | 事件日志 | 部分完成 | 已写入 gate、memory、task、chat 关键日志；已有 memory debug 读取面板，还缺更完整的日志开关和路径可视化。 |
 | E2E 演示流 | 已完成 MVP | 桌宠启动、悬浮控制开控制台、桌宠设置同步、位置持久化、状态同步、记忆、碎片等待、任务控制路径都有 e2e 覆盖。 |
 
@@ -64,7 +65,7 @@ AuraBot 当前已经从“传统聊天界面”收敛为桌宠优先形态：
 
 1. 模型角色默认仍走 deterministic fallback；外部模型调用需要本地 `aurabot.config.json` / `config.json`、macOS 系统级 `/Library/Application Support/AuraBot/config.json`，或环境变量。
 2. 用户消息已经即时显示，但模型回复目前仍是非流式；还没有用户新消息打断 in-flight generation。
-3. 记忆写入层可由 `memoryModel` 接管抽取、合并和候选边判断；召回层也可由 `memoryModel` 生成语义检索词、目标类型和重排 seed node。到期 `follow_up` 可在下一次主聊天回复中触发并标记完成；还没有后台 scheduler 或 embedding。
+3. 记忆写入层可由 `memoryModel` 接管抽取、合并和候选边判断；召回层也可由 `memoryModel` 生成语义检索词、目标类型和重排 seed node。到期 `follow_up` 可在下一次主聊天回复中触发并标记完成，也可在 App 运行期间由后台 scheduler 推送桌宠气泡；还没有系统级通知、离线调度或 embedding。
 4. 任务 runner 可显式配置为本机 Codex 子任务执行器，能广播 JSONL 子任务进度，在主聊天打断时取消子进程，并在启动时把失联运行态任务标记为失败；完成后的文件结果已可作为主聊天附件回流并打开，还没有真正 resume 和结构化 artifact registry。
 5. Live2D 状态行为当前复用 Hiyori 现有 motion group，还没有定制表情资源或更细的动画状态机。
 6. 语音输入当前走 Chromium 原生 `SpeechRecognition`，运行时不支持时只显示轻提示；还没有稳定 STT adapter。
@@ -81,7 +82,7 @@ AuraBot 当前已经从“传统聊天界面”收敛为桌宠优先形态：
 1. 继续细化状态动作：为 `idle / listening / thinking / replying / tasking` 选择更贴切的 motion 和后续 expression 资源。
 2. 继续细化点击穿透：小人主体可穿透，悬浮控制区仍可稳定点击。
 3. 接入稳定 STT adapter，替换当前浏览器原生语音识别 MVP。
-4. 为真正的主动提醒/主动对话补后台触发入口，并复用当前气泡通道。
+4. 继续细化主动提醒：当前已复用气泡通道补后台 follow-up 触发入口，下一步是系统通知、提醒权限和更细的触发策略。
 5. 增加开发期诊断面板，展示 Live2D `renderState`、motion、窗口 bounds、click-through 状态。
 
 ### 2. 真实模型适配层
@@ -107,10 +108,12 @@ AuraBot 当前已经从“传统聊天界面”收敛为桌宠优先形态：
 3. 已完成第一步：候选关系边可通过 relation planner 由 API 判断，并限制 target node 必须来自已有节点。
 4. 已完成第一步：召回阶段可通过 recall planner 获取 query terms、target types 和 ranked node ids，减少只靠关键词命中。
 5. 已完成第一步：到期 `follow_up` 会在下一次主聊天回复中提醒，并在触发后标记为 `completed`。
-6. 下一步：为时间驱动记忆增加后台 scheduler 和桌宠气泡主动触发。
-7. 已完成第一版：控制台 `Memory Debug` 面板可查看 nodes、edges、summaries 计数、当前节点、关系边和最近 memory event。
-8. 下一步：增强调试视图，展示本轮召回 seed、图扩散路径和模型 planner 原始输出。
-9. 下一步：构造固定对话集，比较“关键词召回”和“图状联想召回”的差异。
+6. 已完成第一步：App 运行期间 `MemoryFollowUpScheduler` 会后台扫描到期 `follow_up`，通过桌宠气泡主动提醒，并写入 `memory.follow_up_triggered` 日志。
+7. 已完成第二版：控制台 `Memory Debug` 面板可查看 nodes、edges、summaries 计数、当前节点、关系边、最近 memory event，以及最近一次 recall 的 query、planner terms、seed、扩散节点和 traversed edges。
+8. 已完成第一版：`corepack pnpm eval:memory` 可跑固定 recall fixture，比较直接关键词召回、图状联想召回和不相关 follow_up 排除。
+9. 下一步：补系统通知和 App 未运行时的提醒边界提示。
+10. 下一步：把模型 planner 原始响应和 fallback 原因纳入 debug event。
+11. 下一步：继续扩展更真实的多轮记忆评估语料。
 
 ### 4. 任务执行 v2
 

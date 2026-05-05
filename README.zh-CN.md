@@ -37,7 +37,7 @@ AuraBot 是一个桌面优先的陪伴型 AI MVP。它不是传统意义上常�
 | 主聊天线程 | 控制台消息通过 typed IPC 进入主进程并持久化。 |
 | 模型角色 | `gateModel`、`chatModel` 和 `memoryModel` 可注入；默认走本地 deterministic fallback，也可以接 OpenAI-compatible API。 |
 | Gate 逻辑 | 可判断碎片输入等待、完整聊天、任务请求、任务控制和话题结束。 |
-| 记忆 v1 | 支持 preference、event、follow-up 记忆写入，并可通过关系边召回。 |
+| 记忆 v1/v2 | 支持 preference、event、follow-up 记忆写入，并可通过关系边召回；App 运行期间可用后台 scheduler 触发到期提醒桌宠气泡。 |
 | 任务 v1 | 可以在主聊天里创建、查询、打断、修改、启动并完成任务；显式配置后可调用本机 Codex 子任务 runner 执行真实委派任务。 |
 | 验证 | Unit、integration、build 和 e2e 检查都已接入。 |
 
@@ -361,7 +361,7 @@ Cubism Core runtime 通过 `live2dcubismcore@1.0.2` 本地打包，应用启动�
 
 1. Live2D 桌宠行为层：细化状态动作，补更丰富表情资源，继续打磨点击穿透 hit testing。
 2. 真实模型适配层 v2：增加流式回复、in-flight 中断、retry/backoff 和可见模型连接状态。
-3. Memory v2：把当前主聊天触发式 follow-up 扩展成后台 scheduler + 桌宠气泡主动提醒，并增强记忆调试视图和固定评估语料。
+3. Memory v2：继续扩展更真实的多轮评估语料；当前 App 运行期间的 follow-up 后台 scheduler + 桌宠气泡主动提醒已接入，Memory Debug 已能展示最近一次 recall trace，`corepack pnpm eval:memory` 已可跑固定 recall fixture。
 4. Task executor v2：增加真实任务类型、artifact 处理、工具执行和取消信号，同时保持主聊天控制面。
 5. 主线程任务控制 v2：扩展当前 hint router，支持“第一个”“刚才那个”和任务别名等更自然的引用。
 

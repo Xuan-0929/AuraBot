@@ -2,7 +2,7 @@ import type { MemoryWriteRequest } from "../../shared/schemas/memory";
 import type { MemoryNode } from "../../shared/schemas/memory";
 import type { MemoryRepository } from "../storage/repositories/memoryRepository";
 import { deriveMemoryConcepts } from "./memoryAssociations";
-import { retrieveMemoryContext, type RetrievedMemoryContext } from "./memoryRetriever";
+import { retrieveMemoryContext, type RetrievedMemoryContext, type RetrievedMemoryTrace } from "./memoryRetriever";
 import { MemoryWriteQueue } from "./memoryWriter";
 import {
   DeterministicMemoryMergePlanner,
@@ -20,11 +20,17 @@ export interface MemoryServiceOptions {
   recallPlanner?: MemoryRecallPlanner;
 }
 
+export interface MemoryRecallDebugTrace extends RetrievedMemoryTrace {
+  query: string;
+  recallPlan: MemoryRecallPlan;
+}
+
 export class MemoryService {
   private readonly writeQueue = new MemoryWriteQueue();
   private readonly mergePlanner: MemoryMergePlanner;
   private readonly relationPlanner: MemoryRelationPlanner;
   private readonly recallPlanner: MemoryRecallPlanner;
+  private lastRecallTrace: MemoryRecallDebugTrace | undefined;
 
   constructor(
     private readonly memoryRepository: MemoryRepository,
@@ -96,6 +102,10 @@ export class MemoryService {
     }
   }
 
+  getLastRecallTrace(): MemoryRecallDebugTrace | undefined {
+    return this.lastRecallTrace;
+  }
+
   async retrieveRelevant(profileId: string, query: string): Promise<RetrievedMemoryContext> {
     const context = this.memoryRepository.getMemoryContext(profileId);
     const recallPlan = await this.recallPlanner.plan({
@@ -116,13 +126,23 @@ export class MemoryService {
     const seedNodeIds = dedupeIds([...rankedNodeIds, ...scoredNodeIds]).slice(0, 4);
 
     if (seedNodeIds.length === 0) {
+      this.lastRecallTrace = {
+        query,
+        recallPlan,
+        seedNodeIds: [],
+        expandedNodeIds: [],
+        returnedNodeIds: [],
+        traversedEdges: []
+      };
+
       return {
         summaries: context.summaries,
-        nodes: []
+        nodes: [],
+        trace: this.lastRecallTrace
       };
     }
 
-    return retrieveMemoryContext({
+    const retrievedContext = retrieveMemoryContext({
       seedNodeIds,
       summaries: context.summaries,
       nodes: context.nodes,
@@ -130,6 +150,14 @@ export class MemoryService {
       maxDepth: 2,
       maxNodes: 8
     });
+
+    this.lastRecallTrace = {
+      query,
+      recallPlan,
+      ...retrievedContext.trace
+    };
+
+    return retrievedContext;
   }
 }
 

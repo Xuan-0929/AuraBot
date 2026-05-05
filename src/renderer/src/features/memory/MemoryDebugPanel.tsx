@@ -42,6 +42,7 @@ export function MemoryDebugPanel({ snapshot, expanded, onToggle, onRefresh }: Me
                 <span>Summaries {snapshot.summaries.length}</span>
                 <span>Events {snapshot.recentEvents.length}</span>
               </div>
+              {snapshot.lastRecallTrace ? <LastRecallTrace snapshot={snapshot} /> : null}
               <div className="memory-debug-grid">
                 <DebugColumn title="Nodes">
                   {snapshot.nodes.slice(0, 8).map((node) => (
@@ -78,6 +79,43 @@ export function MemoryDebugPanel({ snapshot, expanded, onToggle, onRefresh }: Me
           )}
         </div>
       ) : null}
+    </section>
+  );
+}
+
+function LastRecallTrace({ snapshot }: { snapshot: MemoryDebugSnapshot }) {
+  const trace = snapshot.lastRecallTrace;
+
+  if (!trace) {
+    return null;
+  }
+
+  return (
+    <section className="memory-debug-recall" aria-label="Last memory recall trace">
+      <div className="memory-debug-recall-header">
+        <h2>Last Recall</h2>
+        <span>Seeds {trace.seedNodeIds.length}</span>
+        <span>Expanded {trace.expandedNodeIds.length}</span>
+        <span>Returned {trace.returnedNodeIds.length}</span>
+      </div>
+      <p className="memory-debug-query">{trace.query}</p>
+      <div className="memory-debug-chip-row">
+        {trace.recallPlan.queryTerms.map((term) => (
+          <span key={term}>{term}</span>
+        ))}
+        {trace.recallPlan.targetTypes.map((type) => (
+          <span key={type}>{type}</span>
+        ))}
+      </div>
+      <div className="memory-debug-path-list">
+        {trace.traversedEdges.slice(0, 6).map((edge) => (
+          <p key={`${edge.sourceNodeId}-${edge.targetNodeId}-${edge.relationType ?? "relates_to"}-${edge.depth}`}>
+            {shortId(edge.sourceNodeId)} {"->"} {shortId(edge.targetNodeId)} /{" "}
+            {edge.relationType ?? "relates_to"} / d{edge.depth}
+            {typeof edge.weight === "number" ? ` / ${edge.weight.toFixed(2)}` : ""}
+          </p>
+        ))}
+      </div>
     </section>
   );
 }

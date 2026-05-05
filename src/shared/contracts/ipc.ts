@@ -31,12 +31,32 @@ export interface EventLogRecord {
   createdAt: string;
 }
 
+export interface MemoryRecallDebugTrace {
+  query: string;
+  recallPlan: {
+    queryTerms: string[];
+    targetTypes: MemoryNode["type"][];
+    rankedNodeIds: string[];
+  };
+  seedNodeIds: string[];
+  expandedNodeIds: string[];
+  returnedNodeIds: string[];
+  traversedEdges: Array<{
+    sourceNodeId: string;
+    targetNodeId: string;
+    relationType?: MemoryEdge["relationType"] | string;
+    weight?: number;
+    depth: number;
+  }>;
+}
+
 export interface MemoryDebugSnapshot {
   generatedAt: string;
   nodes: MemoryNode[];
   edges: MemoryEdge[];
   summaries: MemorySummary[];
   recentEvents: EventLogRecord[];
+  lastRecallTrace?: MemoryRecallDebugTrace;
 }
 
 export interface TaskResultFileActionInput {

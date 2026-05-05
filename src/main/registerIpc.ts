@@ -124,7 +124,8 @@ export function registerIpc(services: AppServices, windows: WindowController): v
       nodes: memoryContext.nodes,
       edges: memoryContext.edges,
       summaries: memoryContext.summaries,
-      recentEvents
+      recentEvents,
+      lastRecallTrace: services.memoryService.getLastRecallTrace()
     };
   });
 }

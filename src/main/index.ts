@@ -1,5 +1,6 @@
 import { app, BrowserWindow } from "electron";
 import { createServices, type AppServices } from "../core/bootstrap/createServices";
+import { MemoryFollowUpScheduler } from "../core/memory/memoryFollowUpScheduler";
 import {
   applyPetSettings,
   broadcastAgentStatus,
@@ -18,6 +19,7 @@ import { registerIpc } from "./registerIpc";
 let services: AppServices | undefined;
 let petSettingsStore: PetSettingsStore | undefined;
 let petWindowStateStore: PetWindowStateStore | undefined;
+let memoryFollowUpScheduler: MemoryFollowUpScheduler | undefined;
 
 if (process.env.AURABOT_USER_DATA_DIR) {
   app.setPath("userData", process.env.AURABOT_USER_DATA_DIR);
@@ -55,6 +57,13 @@ async function bootstrap(): Promise<void> {
     savedBounds: petWindowStateStore.getBounds(),
     onBoundsChanged: (bounds) => petWindowStateStore?.saveBounds(bounds)
   });
+  memoryFollowUpScheduler = new MemoryFollowUpScheduler({
+    profileService: services.profileService,
+    memoryService: services.memoryService,
+    eventLogService: services.eventLogService,
+    broadcastPetActivity
+  });
+  memoryFollowUpScheduler.start();
 }
 
 app.whenReady().then(bootstrap);
@@ -76,5 +85,6 @@ app.on("window-all-closed", () => {
 });
 
 app.on("before-quit", () => {
+  memoryFollowUpScheduler?.stop();
   services?.database.close();
 });

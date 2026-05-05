@@ -37,7 +37,7 @@ Console window:
 | Main chat thread | Console messages persist through typed IPC into the main process. |
 | Model roles | `gateModel`, `chatModel`, and `memoryModel` are injectable; all default to local deterministic fallback and can use OpenAI-compatible APIs. |
 | Gate logic | Fragmented messages can wait; complete chat, task requests, task controls, and topic endings are classified. |
-| Memory v1 | Preference, event, and follow-up memories can be written and recalled through relation edges. |
+| Memory v1/v2 | Preference, event, and follow-up memories can be written and recalled through relation edges; while the app is running, a background scheduler can surface due follow-ups through desktop-pet bubbles. |
 | Task v1 | Tasks can be created, queried, interrupted, revised, started, and completed from main chat; an opt-in Codex child runner can execute real delegated tasks. |
 | Verification | Unit, integration, build, and e2e checks are wired. |
 
@@ -361,7 +361,7 @@ The current priority order is:
 
 1. Live2D desktop-pet behavior layer: tune status motions, add richer expression assets, and keep hardening click-through hit testing.
 2. Real model adapter layer v2: add streaming replies, in-flight interruption, retry/backoff, and a visible model connection status.
-3. Memory v2: expand the current main-chat-triggered follow-up reminders into a background scheduler plus desktop-pet bubbles, deepen the memory debug view, and create fixed evaluation fixtures.
+3. Memory v2: keep expanding realistic multi-turn evaluation fixtures; the app-running follow-up background scheduler plus desktop-pet bubble path is wired in, Memory Debug shows the latest recall trace, and `corepack pnpm eval:memory` runs the fixed recall fixture.
 4. Task executor v2: add real task types, artifact handling, tool execution, and cancellation signals while keeping control in main chat.
 5. Main-thread task control v2: extend the current hint-based router with richer references like "第一个", "刚才那个", and task aliases.
 

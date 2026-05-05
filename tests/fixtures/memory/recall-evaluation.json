@@ -1,0 +1,81 @@
+{
+  "version": 1,
+  "description": "Fixed memory recall fixtures for keyword, graph-hop, and due follow-up behavior.",
+  "cases": [
+    {
+      "id": "preference-direct-keyword",
+      "description": "A direct preference question should recall the stored preference through local scoring.",
+      "memories": [
+        {
+          "label": "hotpot-preference",
+          "type": "preference",
+          "content": "用户喜欢火锅",
+          "importance": 0.72
+        }
+      ],
+      "query": "我喜欢吃什么来着？",
+      "expected": {
+        "recalledLabels": ["hotpot-preference"],
+        "seedLabels": ["hotpot-preference"],
+        "expandedLabels": []
+      }
+    },
+    {
+      "id": "event-to-preference-graph-hop",
+      "description": "A question about an event should recall the event seed and hop to a related stable preference.",
+      "memories": [
+        {
+          "label": "hotpot-preference",
+          "type": "preference",
+          "content": "用户喜欢火锅",
+          "importance": 0.72
+        },
+        {
+          "label": "ajie-hotpot-event",
+          "type": "event",
+          "content": "用户明天要和阿杰去吃火锅",
+          "importance": 0.84,
+          "edges": [
+            {
+              "targetLabel": "hotpot-preference",
+              "relationType": "preference_for",
+              "weight": 0.91
+            }
+          ]
+        }
+      ],
+      "query": "阿杰 那件事我该顺便注意什么？",
+      "expected": {
+        "recalledLabels": ["ajie-hotpot-event", "hotpot-preference"],
+        "seedLabels": ["ajie-hotpot-event"],
+        "expandedLabels": ["hotpot-preference"]
+      }
+    },
+    {
+      "id": "follow-up-due-filter",
+      "description": "A reminder query should recall an active due follow-up and keep future follow-ups out of the result.",
+      "memories": [
+        {
+          "label": "interview-follow-up",
+          "type": "follow_up",
+          "content": "提醒用户准备今晚的算法面试",
+          "importance": 0.88,
+          "startsAt": "2026-05-05T20:00:00.000+08:00"
+        },
+        {
+          "label": "future-reading-follow-up",
+          "type": "follow_up",
+          "content": "提醒用户下个月整理读书笔记",
+          "importance": 0.66,
+          "startsAt": "2026-06-05T20:00:00.000+08:00"
+        }
+      ],
+      "query": "算法面试现在要准备什么？",
+      "expected": {
+        "recalledLabels": ["interview-follow-up"],
+        "seedLabels": ["interview-follow-up"],
+        "excludedLabels": ["future-reading-follow-up"]
+      }
+    }
+  ]
+}

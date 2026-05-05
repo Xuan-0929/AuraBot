@@ -42,7 +42,7 @@ It does not try to build the entire AuraBot vision in one pass. It narrows the f
 
 1. Multi-profile support beyond a single active profile.
 2. Scheduled jobs and reminders.
-3. Desktop notifications for proactive follow-ups.
+3. System notifications for proactive follow-ups; App-running desktop-pet bubble reminders are already wired through `MemoryFollowUpScheduler`.
 4. External channel adapters such as QQ and WeChat.
 
 ### 2.3 Explicitly Out of Scope for MVP
@@ -556,7 +556,7 @@ Must show:
 1. 继续打磨 agent status 到 Live2D motion/expression 的映射质量。
 2. 继续细化点击穿透 hit testing，让主体穿透和控制区点击可以同时稳定成立。
 3. 接入稳定 STT adapter，替换当前浏览器原生语音识别 MVP。
-4. 将主动提醒/主动对话触发接入当前桌宠气泡通道。
+4. 已将到期 `follow_up` 的主动提醒触发接入当前桌宠气泡通道；主动对话仍待设计。
 5. 增加开发期诊断面板，展示 Live2D renderState、motion、窗口 bounds、click-through 状态。
 
 ### Next 2: 真实模型适配层
@@ -583,10 +583,12 @@ Must show:
 3. 已完成第一步：候选关系边支持 relation planner，并过滤模型发明的 node id。
 4. 已完成第一步：召回阶段支持 recall planner，可用模型生成语义检索词、目标记忆类型和重排 seed node。
 5. 已完成第一步：到期 `follow_up` 会在下一次主聊天回复中提醒，并在触发后标记为 `completed`。
-6. 已完成第一版：控制台 `Memory Debug` 面板显示 nodes、edges、summaries 计数、当前节点、关系边和最近 memory event。
-7. 下一步：把主聊天触发式 follow-up 扩展成后台 scheduler + 桌宠气泡主动提醒。
-8. 下一步：增强调试视图，显示本轮召回 seed、图扩散路径和模型 planner 原始输出。
-9. 下一步：构造固定对话集，比较关键词召回和图状联想召回。
+6. 已完成第一步：App 运行期间，后台 `MemoryFollowUpScheduler` 会扫描到期 `follow_up`，触发桌宠气泡并标记完成。
+7. 已完成第二版：控制台 `Memory Debug` 面板显示 nodes、edges、summaries 计数、当前节点、关系边、最近 memory event，以及最近一次 recall 的 query、planner terms、seed、扩散节点和 traversed edges。
+8. 下一步：补系统通知、提醒权限和 App 未运行时的边界提示。
+9. 已完成第一版：`corepack pnpm eval:memory` 可跑固定 recall fixture，覆盖直接偏好召回、事件到偏好图跳转、follow_up 排除不相关提醒。
+10. 下一步：把模型 planner 原始响应和 fallback 原因纳入 debug event。
+11. 下一步：继续扩展更真实的多轮记忆评估语料。
 
 ### Next 4: Task Executor v2
 
