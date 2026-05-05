@@ -2,10 +2,11 @@ import type { GateDecision } from "../../shared/contracts/chat";
 import type { MemoryNode } from "../../shared/schemas/memory";
 import type { ModelRoleConfig } from "../../shared/schemas/config";
 import type { ChatCompletionRequest } from "./openAiCompatibleClient";
-import type { ChatModel, ChatModelInput } from "./chatModel";
+import type { ChatModel, ChatModelInput, ChatReplyObserver } from "./chatModel";
 
 export interface ChatModelClient {
   complete(input: ChatCompletionRequest): Promise<string>;
+  streamComplete?(input: ChatCompletionRequest, onDelta: (delta: string) => void | Promise<void>): Promise<string>;
 }
 
 export interface ModelBackedChatModelOptions {
@@ -17,22 +18,33 @@ export interface ModelBackedChatModelOptions {
 export class ModelBackedChatModel implements ChatModel {
   constructor(private readonly options: ModelBackedChatModelOptions) {}
 
-  async generateReply(input: ChatModelInput): Promise<string> {
+  async generateReply(input: ChatModelInput, observer?: ChatReplyObserver): Promise<string> {
     const fallback = this.options.fallbackModel;
+    const request: ChatCompletionRequest = {
+      baseUrl: this.options.config?.baseUrl ?? "",
+      apiKey: this.options.config?.apiKey ?? "",
+      model: this.options.config?.model ?? "chat-model",
+      temperature: this.options.config?.temperature ?? 0.7,
+      timeoutMs: this.options.config?.timeoutMs,
+      messages: buildChatPrompt(input)
+    };
 
     try {
-      return await this.options.client.complete({
-        baseUrl: this.options.config?.baseUrl ?? "",
-        apiKey: this.options.config?.apiKey ?? "",
-        model: this.options.config?.model ?? "chat-model",
-        temperature: this.options.config?.temperature ?? 0.7,
-        timeoutMs: this.options.config?.timeoutMs,
-        messages: buildChatPrompt(input)
-      });
+      if (this.options.client.streamComplete) {
+        return await this.options.client.streamComplete(request, async (delta) => {
+          await observer?.onDelta?.(delta);
+        });
+      }
+
+      const reply = await this.options.client.complete(request);
+
+      await observer?.onDelta?.(reply);
+
+      return reply;
     } catch {
       return fallback
-        ? fallback.generateReply(input)
-        : buildDeterministicFallback(input);
+        ? fallback.generateReply(input, observer)
+        : buildDeterministicFallback(input, observer);
     }
   }
 }
@@ -90,20 +102,23 @@ function summarizeMemories(memories: MemoryNode[]): Array<{ type: string; conten
   }));
 }
 
-function buildDeterministicFallback(input: ChatModelInput): string {
+async function buildDeterministicFallback(input: ChatModelInput, observer?: ChatReplyObserver): Promise<string> {
   const recalled = input.recalledMemories;
   const written = input.writtenMemories;
   const dueFollowUps = input.dueFollowUps ?? [];
+  let reply: string;
 
   if (dueFollowUps.length > 0) {
     const joined = dueFollowUps.map((memory) => memory.content).join("；");
-    return `我提醒你一下：${joined}。`;
-  }
-
-  if (recalled.length > 0 || written.length > 0) {
+    reply = `我提醒你一下：${joined}。`;
+  } else if (recalled.length > 0 || written.length > 0) {
     const joined = [...recalled, ...written].map((memory) => memory.content).join("；");
-    return `我记得：${joined}。`;
+    reply = `我记得：${joined}。`;
+  } else {
+    reply = "嗯，我在。你继续说，我会把这段关系上下文接住。";
   }
 
-  return "嗯，我在。你继续说，我会把这段关系上下文接住。";
+  await observer?.onDelta?.(reply);
+
+  return reply;
 }

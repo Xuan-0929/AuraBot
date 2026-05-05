@@ -6,11 +6,12 @@ import { useAuraBotStore } from "../../app/store";
 export function ChatWindow() {
   const messages = useAuraBotStore((state) => state.messages);
   const agentStatus = useAuraBotStore((state) => state.agentStatus);
+  const petSettings = useAuraBotStore((state) => state.petSettings);
   const sendMessage = useAuraBotStore((state) => state.sendMessage);
 
   return (
     <main className="chat-window">
-      <AgentStatusBar status={agentStatus} />
+      <AgentStatusBar status={agentStatus} displayLanguage={petSettings.displayLanguage} />
       <MessageList messages={messages} />
       <Composer onSend={sendMessage} />
     </main>

@@ -74,7 +74,7 @@ textarea {
 }
 
 .desktop-pet[data-agent-status="thinking"] .desktop-pet-model-shell,
-.desktop-pet[data-agent-status="replying"] .desktop-pet-model-shell {
+.desktop-pet[data-agent-status="typing"] .desktop-pet-model-shell {
   filter: drop-shadow(0 10px 10px rgba(188, 101, 65, 0.26));
 }
 
@@ -345,7 +345,7 @@ textarea {
 }
 
 .status-dot-thinking,
-.status-dot-replying,
+.status-dot-typing,
 .status-dot-tasking {
   background: #c66f44;
 }

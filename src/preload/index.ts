@@ -55,6 +55,13 @@ const api: AuraBotApi = {
 
     return () => ipcRenderer.removeListener(IPC_CHANNELS.chatMessageCreated, handler);
   },
+  onChatMessageUpdated: (listener: (message: Message) => void) => {
+    const handler = (_event: Electron.IpcRendererEvent, message: Message) => listener(message);
+
+    ipcRenderer.on(IPC_CHANNELS.chatMessageUpdated, handler);
+
+    return () => ipcRenderer.removeListener(IPC_CHANNELS.chatMessageUpdated, handler);
+  },
   onTaskChanged: (listener: (task: Task) => void) => {
     const handler = (_event: Electron.IpcRendererEvent, task: Task) => listener(task);
 

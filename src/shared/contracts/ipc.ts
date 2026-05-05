@@ -17,6 +17,7 @@ export const IPC_CHANNELS = {
   petCursorPosition: "pet:cursor-position",
   agentStatusChanged: "agent:status-changed",
   chatMessageCreated: "chat:message-created",
+  chatMessageUpdated: "chat:message-updated",
   sendChatMessage: "chat:send-message",
   taskChanged: "task:changed",
   taskDeleted: "task:deleted",
@@ -103,6 +104,7 @@ export interface AuraBotApi {
   onPetCursorPosition(listener: (position: PetCursorPosition) => void): () => void;
   onAgentStatusChanged(listener: (status: import("./chat").AgentStatus) => void): () => void;
   onChatMessageCreated(listener: (message: Message) => void): () => void;
+  onChatMessageUpdated(listener: (message: Message) => void): () => void;
   onTaskChanged(listener: (task: Task) => void): () => void;
   onTaskDeleted(listener: (taskId: string) => void): () => void;
   sendChatMessage(input: SendChatMessageInput): Promise<SendChatMessageResult>;

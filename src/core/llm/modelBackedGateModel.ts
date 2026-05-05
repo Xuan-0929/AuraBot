@@ -65,9 +65,9 @@ export class ModelBackedGateModel {
         timeoutMs: this.options.config?.timeoutMs,
         messages: buildGatePrompt(input)
       });
-      return applyLocalTaskGuard(normalizeGateDecision(parseJsonFromModel(content), input), input);
+      return normalizeGateDecision(parseJsonFromModel(content), input);
     } catch (error) {
-      return applyLocalTaskGuard(await fallback.evaluate(input), input);
+      return fallback.evaluate(input);
     }
   }
 }
@@ -81,7 +81,7 @@ function buildGatePrompt(input: GateEvaluationInput): ChatCompletionRequest["mes
         "字段必须是 replyDecision(reply|wait), inputKind(chat|task|task_control), memoryDecision(write_now|defer|skip), confidence(0-1), reason, coalescedText, topicEnded。",
         "输入里 recentMessages 是最近完整对话上下文，包含 user/assistant，请结合它判断用户是在继续上一句话、回应 Aura、提出新问题，还是发起/控制任务。",
         "任务判断要宽松：只要用户要求 Aura 帮他产出、整理、撰写、生成、查询、搜索、总结、翻译、做报告、周报、读书笔记、清单、文档或表格，就判为 inputKind=task、replyDecision=reply、memoryDecision=skip、topicEnded=true，即使句末没有标点。",
-        "普通聊天里 topicEnded=false 时 replyDecision 必须是 wait，memoryDecision 必须是 defer。"
+        "普通聊天是否回复由你根据上下文判断；短句、没标点、topicEnded=false 都不能单独作为必须等待的理由。"
       ].join("\n")
     },
     {
@@ -137,42 +137,9 @@ function normalizeGateDecision(rawDecision: unknown, input: GateEvaluationInput)
   };
 }
 
-function applyLocalTaskGuard(decision: GateDecision, input: GateEvaluationInput): GateDecision {
-  const localDecision = evaluateGate(input);
-  const localTaskLike = localDecision.inputKind === "task" || localDecision.inputKind === "task_control";
-  const modelUnderClassified =
-    decision.inputKind === "chat" ||
-    decision.replyDecision === "wait" ||
-    decision.memoryDecision !== "skip" ||
-    decision.topicEnded === false;
-
-  if (!localTaskLike || !modelUnderClassified) {
-    return decision;
-  }
-
-  return {
-    ...localDecision,
-    confidence: Math.max(localDecision.confidence, decision.confidence),
-    reason: `local-task-guard: ${localDecision.reason}`
-  };
-}
-
 function normalizeDirectGateDecision(decision: z.infer<typeof gateDecisionSchema>): GateDecision {
   const topicEnded =
     decision.topicEnded ?? (decision.replyDecision === "reply" && decision.memoryDecision !== "defer");
-
-  if (decision.inputKind === "chat" && topicEnded === false) {
-    return {
-      ...decision,
-      replyDecision: "wait",
-      memoryDecision: "defer",
-      reason:
-        decision.replyDecision === "wait" && decision.memoryDecision === "defer"
-          ? decision.reason
-          : "model-gate: chat topic still open",
-      topicEnded
-    };
-  }
 
   return {
     ...decision,
@@ -193,10 +160,6 @@ function normalizeReplyDecision(input: {
   shouldReply?: boolean;
   topicEnded?: boolean;
 }): ReplyDecision {
-  if (input.inputKind === "chat" && input.topicEnded === false) {
-    return "wait";
-  }
-
   const shouldReply = input.shouldReply ?? (input.inputKind !== "chat");
 
   return shouldReply ? "reply" : "wait";

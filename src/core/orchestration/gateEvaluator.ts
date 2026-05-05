@@ -19,6 +19,7 @@ const DIRECT_CREATION_TASK_PATTERN = /^(做|写|撰写|整理|生成)(一份|一
 const TASK_CONTROL_PATTERN = /(任务|这个|它).*(做到哪|进度|怎么样|状态|停掉|取消|打断|中止|暂停|改成|修改|换成)|(开始做|开始执行|执行一下|执行这个任务|执行任务|去做|跑一下).*(任务|这个|它)?|^(做到哪|进度|停掉|取消|打断|中止|暂停|先停|改成|修改|换成)/;
 const FRAGMENT_TRAILING_PATTERN = /(然后|但是|可是|因为|所以|我觉得|我想|就是|还有|以及|不过)$/;
 const MEMORY_HINT_PATTERN = /(喜欢|讨厌|下周|明天|后天|今晚|提醒|别忘|记得|考试|面试|演唱会)/;
+const DIRECT_CHAT_REPLY_PATTERN = /(在吗|在不在|在干嘛|干嘛呢|忙什么|说两句|说句话|说点|聊聊|陪我|理我|回我|吱声|冒个泡)/;
 
 export function evaluateGate(input: GateEvaluationInput): GateDecision {
   const currentMessage = input.currentMessage.trim();
@@ -68,7 +69,12 @@ function decideTopicEnded(
     return false;
   }
 
-  return CLEAR_BOUNDARY_PATTERN.test(message) || QUESTION_PATTERN.test(message) || memoryDecision === "write_now";
+  return (
+    CLEAR_BOUNDARY_PATTERN.test(message) ||
+    QUESTION_PATTERN.test(message) ||
+    isDirectChatReplyPrompt(message) ||
+    memoryDecision === "write_now"
+  );
 }
 
 function classifyInputKind(message: string): InputKind {
@@ -93,11 +99,19 @@ function decideReply(message: string, coalescedText: string, inputKind: InputKin
     return "reply";
   }
 
-  if (message.length <= 8 || FRAGMENT_TRAILING_PATTERN.test(message)) {
+  if (isDirectChatReplyPrompt(message)) {
+    return "reply";
+  }
+
+  if (FRAGMENT_TRAILING_PATTERN.test(message)) {
     return "wait";
   }
 
   return coalescedText.length >= 28 ? "reply" : "wait";
+}
+
+export function isDirectChatReplyPrompt(message: string): boolean {
+  return DIRECT_CHAT_REPLY_PATTERN.test(message.trim());
 }
 
 function decideMemory(
@@ -154,6 +168,10 @@ function explainDecision(input: {
 
   if (input.replyDecision === "wait") {
     return "fragment: message lacks a clear semantic boundary";
+  }
+
+  if (isDirectChatReplyPrompt(input.currentMessage)) {
+    return "complete-chat: direct social prompt";
   }
 
   if (input.memoryDecision === "write_now") {

@@ -15,21 +15,29 @@ export interface ChatModelInput {
   gateDecision: GateDecision;
 }
 
+export interface ChatReplyObserver {
+  onDelta?(delta: string): void | Promise<void>;
+}
+
 export interface ChatModel {
-  generateReply(input: ChatModelInput): Promise<string>;
+  generateReply(input: ChatModelInput, observer?: ChatReplyObserver): Promise<string>;
 }
 
 export type ChatModelConfig = ModelRoleConfig;
 
 export class DeterministicChatModel implements ChatModel {
-  async generateReply(input: ChatModelInput): Promise<string> {
-    return planAssistantResponse({
+  async generateReply(input: ChatModelInput, observer?: ChatReplyObserver): Promise<string> {
+    const reply = planAssistantResponse({
       userContent: input.userContent,
       soul: input.soul,
       writtenMemories: input.writtenMemories,
       recalledMemories: input.recalledMemories,
       dueFollowUps: input.dueFollowUps
     });
+
+    await observer?.onDelta?.(reply);
+
+    return reply;
   }
 }
 

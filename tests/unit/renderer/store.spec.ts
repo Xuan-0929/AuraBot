@@ -87,6 +87,7 @@ describe("useAuraBotStore chat sending", () => {
 
   test("applies task and assistant message broadcasts from the main process", () => {
     let chatMessageListener: ((message: Message) => void) | undefined;
+    let chatMessageUpdatedListener: ((message: Message) => void) | undefined;
     let taskChangedListener: ((task: Task) => void) | undefined;
     let petCursorPositionListener: ((position: PetCursorPosition) => void) | undefined;
     vi.stubGlobal("window", {
@@ -101,6 +102,11 @@ describe("useAuraBotStore chat sending", () => {
         }),
         onChatMessageCreated: vi.fn((listener: (message: Message) => void) => {
           chatMessageListener = listener;
+
+          return vi.fn();
+        }),
+        onChatMessageUpdated: vi.fn((listener: (message: Message) => void) => {
+          chatMessageUpdatedListener = listener;
 
           return vi.fn();
         }),
@@ -143,6 +149,10 @@ describe("useAuraBotStore chat sending", () => {
     chatMessageListener?.(assistantMessage);
     chatMessageListener?.(assistantMessage);
     petCursorPositionListener?.(cursorPosition);
+    chatMessageUpdatedListener?.({
+      ...assistantMessage,
+      content: "这个任务完成了：GitHub 周报已经写好。我放到下面了。"
+    });
     taskChangedListener?.(runningTask);
     taskChangedListener?.({
       ...runningTask,
@@ -151,7 +161,12 @@ describe("useAuraBotStore chat sending", () => {
       updatedAt: "2026-05-04T00:00:04.000Z"
     });
 
-    expect(useAuraBotStore.getState().messages).toEqual([assistantMessage]);
+    expect(useAuraBotStore.getState().messages).toEqual([
+      {
+        ...assistantMessage,
+        content: "这个任务完成了：GitHub 周报已经写好。我放到下面了。"
+      }
+    ]);
     expect(useAuraBotStore.getState().tasks).toHaveLength(1);
     expect(useAuraBotStore.getState().tasks[0]).toMatchObject({
       id: "task-1",

@@ -20,7 +20,8 @@ vi.mock("../../../src/renderer/src/features/live2d/Live2DModelCanvas", () => ({
 const baseProps: DesktopPetProps = {
   agentStatus: "idle",
   petSettings: {
-    clickThroughPet: false
+    clickThroughPet: false,
+    displayLanguage: "zh"
   },
   debugPetOverlay: false,
   petCursorPosition: undefined,

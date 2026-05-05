@@ -9,7 +9,7 @@ const STATUS_MOTIONS: Record<AgentStatus, Live2DMotionDescriptor> = {
   idle: { group: "Idle", index: 0 },
   listening: { group: "Idle", index: 1 },
   thinking: { group: "TapBody" },
-  replying: { group: "TapBody" },
+  typing: { group: "TapBody" },
   tasking: { group: "TapBody" }
 };
 

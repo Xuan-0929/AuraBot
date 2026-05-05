@@ -61,7 +61,7 @@ test("launches as a small desktop pet and opens console from the hover control",
 
     const consoleWindow = await openConsole(electronApp, petWindow);
     await expect(consoleWindow.getByLabel("AuraBot console window")).toBeVisible();
-    await expect(consoleWindow.getByLabel("Agent status")).toContainText("Idle");
+    await expect(consoleWindow.getByLabel("Agent status")).toContainText("idle");
   } finally {
     await cleanupAuraBot(electronApp, userDataDir);
   }
@@ -87,6 +87,10 @@ test("reveals pet quick controls and syncs click-through settings from the conso
     const consoleWindow = await openConsole(electronApp, petWindow);
 
     await expect(consoleWindow.getByLabel("Hide character on hover")).toHaveCount(0);
+    await consoleWindow.getByLabel("Display language").selectOption("zh");
+    await expect(consoleWindow.getByLabel("Agent status")).toContainText("空闲中");
+    await consoleWindow.getByLabel("Display language").selectOption("en");
+    await expect(consoleWindow.getByLabel("Agent status")).toContainText("idle");
 
     await consoleWindow.getByLabel("Click through character").check();
     await expect(petWindow.getByLabel("Desktop Live2D pet")).toHaveAttribute("data-click-through", "true");
@@ -192,7 +196,7 @@ test("waits on fragmented input and replies after the thought is completed", asy
 
     await input.fill("然后我觉得");
     await consoleWindow.getByRole("button", { name: "Send" }).click();
-    await expect(consoleWindow.getByLabel("Agent status")).toContainText("Listening");
+    await expect(consoleWindow.getByLabel("Agent status")).toContainText("listening");
     await expect(consoleWindow.locator(".message-assistant")).toHaveCount(0);
 
     await input.fill("我喜欢吃火锅。");
@@ -242,7 +246,7 @@ test("creates a visible queued task from a task-like chat request", async () => 
     await consoleWindow.getByRole("button", { name: "Send" }).click();
 
     await expect(consoleWindow.getByText("好！我现在就开始做。")).toBeVisible();
-    await expect(consoleWindow.getByLabel("Agent status")).toContainText("Tasking");
+    await expect(consoleWindow.getByLabel("Agent status")).toContainText("tasking");
     await expect(petWindow.getByLabel("Desktop Live2D pet")).toHaveAttribute("data-agent-status", "tasking");
     await expect(petWindow.locator(".live2d-canvas-host")).toHaveAttribute("data-motion-group", "TapBody");
     await expect(consoleWindow.locator(".task-status-card").filter({ hasText: "明天会议" })).toContainText("待开始");

@@ -46,7 +46,7 @@ export function ConsoleWindow({
           <p>Chat here when the desktop companion needs a full thread.</p>
         </div>
         <div className="console-header-tools">
-          <AgentStatusBar status={agentStatus} />
+          <AgentStatusBar status={agentStatus} displayLanguage={petSettings.displayLanguage} />
           <PetSettingsPanel settings={petSettings} onUpdate={onUpdatePetSettings} />
         </div>
       </header>

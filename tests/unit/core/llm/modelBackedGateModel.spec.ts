@@ -29,7 +29,7 @@ describe("ModelBackedGateModel", () => {
     expect(decision.topicEnded).toBe(true);
   });
 
-  it("normalizes lightweight provider gate fields into AuraBot gate decisions", async () => {
+  it("keeps lightweight provider reply decisions even when topic is not ended", async () => {
     const model = new ModelBackedGateModel({
       client: {
         complete: async () =>
@@ -52,15 +52,15 @@ describe("ModelBackedGateModel", () => {
     });
 
     expect(decision).toMatchObject({
-      replyDecision: "wait",
+      replyDecision: "reply",
       inputKind: "chat",
-      memoryDecision: "defer",
+      memoryDecision: "skip",
       topicEnded: false,
       reason: "model-gate: normalized provider schema"
     });
   });
 
-  it("guards against direct gate output replying before a chat topic has ended", async () => {
+  it("keeps direct gate output instead of forcing open chat topics to wait", async () => {
     const model = new ModelBackedGateModel({
       client: {
         complete: async () =>
@@ -83,15 +83,15 @@ describe("ModelBackedGateModel", () => {
     });
 
     expect(decision).toMatchObject({
-      replyDecision: "wait",
+      replyDecision: "reply",
       inputKind: "chat",
-      memoryDecision: "defer",
+      memoryDecision: "skip",
       topicEnded: false,
-      reason: "model-gate: chat topic still open"
+      reason: "needs clarification"
     });
   });
 
-  it("rescues clear task requests when the lightweight model under-classifies them as open chat", async () => {
+  it("does not rescue clear task requests when the lightweight model under-classifies them", async () => {
     const model = new ModelBackedGateModel({
       client: {
         complete: async () =>
@@ -114,16 +114,16 @@ describe("ModelBackedGateModel", () => {
     });
 
     expect(decision).toMatchObject({
-      replyDecision: "reply",
-      inputKind: "task",
-      memoryDecision: "skip",
-      topicEnded: true
+      replyDecision: "wait",
+      inputKind: "chat",
+      memoryDecision: "defer",
+      topicEnded: false,
+      reason: "looks like an unfinished topic"
     });
-    expect(decision.reason).toContain("local-task-guard");
   });
 
   it.each(["帮我写一份实践论的读书笔记", "做一份读书笔记", "写一份GitHub周报"])(
-    "rescues provider-schema task miss %s with the same local task guard",
+    "keeps provider-schema task miss %s without local task override",
     async (content) => {
       const model = new ModelBackedGateModel({
         client: {
@@ -147,11 +147,11 @@ describe("ModelBackedGateModel", () => {
         recentMessages: []
       });
 
-      expect(decision.inputKind).toBe("task");
-      expect(decision.replyDecision).toBe("reply");
-      expect(decision.memoryDecision).toBe("skip");
-      expect(decision.topicEnded).toBe(true);
-      expect(decision.reason).toContain("local-task-guard");
+      expect(decision.inputKind).toBe("chat");
+      expect(decision.replyDecision).toBe("wait");
+      expect(decision.memoryDecision).toBe("defer");
+      expect(decision.topicEnded).toBe(false);
+      expect(decision.reason).toBe("unfinished chat");
     }
   );
 
@@ -183,6 +183,39 @@ describe("ModelBackedGateModel", () => {
     expect(decision.memoryDecision).toBe("defer");
     expect(decision.topicEnded).toBe(false);
   });
+
+  it.each(["在干嘛", "说两句"])(
+    "keeps clear short social prompt %s as wait when the lightweight model waits",
+    async (content) => {
+      const model = new ModelBackedGateModel({
+        client: {
+          complete: async () =>
+            JSON.stringify({
+              shouldReply: false,
+              isTask: false,
+              isTaskControl: false,
+              memory: {
+                shouldWrite: false
+              },
+              isTopicEnded: false,
+              reason: "unfinished chat"
+            })
+        }
+      });
+
+      const decision = await model.evaluate({
+        currentMessage: content,
+        recentUserMessages: [],
+        recentMessages: []
+      });
+
+      expect(decision.inputKind).toBe("chat");
+      expect(decision.replyDecision).toBe("wait");
+      expect(decision.memoryDecision).toBe("defer");
+      expect(decision.topicEnded).toBe(false);
+      expect(decision.reason).toBe("unfinished chat");
+    }
+  );
 
   it("includes recent assistant and user messages in the lightweight gate prompt", async () => {
     let request: unknown;

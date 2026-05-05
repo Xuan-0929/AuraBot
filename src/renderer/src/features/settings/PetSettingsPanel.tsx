@@ -10,6 +10,17 @@ export function PetSettingsPanel({ settings, onUpdate }: PetSettingsPanelProps) 
     <section className="pet-settings-panel" aria-label="Pet settings">
       <span className="pet-settings-title">Pet</span>
       <label className="pet-settings-option">
+        <span>Language</span>
+        <select
+          value={settings.displayLanguage}
+          aria-label="Display language"
+          onChange={(event) => void onUpdate({ displayLanguage: event.currentTarget.value as PetSettings["displayLanguage"] })}
+        >
+          <option value="en">English</option>
+          <option value="zh">中文</option>
+        </select>
+      </label>
+      <label className="pet-settings-option">
         <input
           type="checkbox"
           checked={settings.clickThroughPet}
