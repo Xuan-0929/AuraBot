@@ -582,9 +582,10 @@ Must show:
 3. 已完成第一步：候选关系边支持 relation planner，并过滤模型发明的 node id。
 4. 已完成第一步：召回阶段支持 recall planner，可用模型生成语义检索词、目标记忆类型和重排 seed node。
 5. 已完成第一步：到期 `follow_up` 会在下一次主聊天回复中提醒，并在触发后标记为 `completed`。
-6. 下一步：把主聊天触发式 follow-up 扩展成后台 scheduler + 桌宠气泡主动提醒。
-7. 下一步：做一个记忆调试视图，显示写入、召回和边跳转。
-8. 下一步：构造固定对话集，比较关键词召回和图状联想召回。
+6. 已完成第一版：控制台 `Memory Debug` 面板显示 nodes、edges、summaries 计数、当前节点、关系边和最近 memory event。
+7. 下一步：把主聊天触发式 follow-up 扩展成后台 scheduler + 桌宠气泡主动提醒。
+8. 下一步：增强调试视图，显示本轮召回 seed、图扩散路径和模型 planner 原始输出。
+9. 下一步：构造固定对话集，比较关键词召回和图状联想召回。
 
 ### Next 4: Task Executor v2
 

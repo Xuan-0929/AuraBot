@@ -361,7 +361,7 @@ Cubism Core runtime 通过 `live2dcubismcore@1.0.2` 本地打包，应用启动�
 
 1. Live2D 桌宠行为层：细化状态动作，补更丰富表情资源，继续打磨点击穿透 hit testing。
 2. 真实模型适配层 v2：增加流式回复、in-flight 中断、retry/backoff 和可见模型连接状态。
-3. Memory v2：把当前主聊天触发式 follow-up 扩展成后台 scheduler + 桌宠气泡主动提醒，并补记忆调试视图和固定评估语料。
+3. Memory v2：把当前主聊天触发式 follow-up 扩展成后台 scheduler + 桌宠气泡主动提醒，并增强记忆调试视图和固定评估语料。
 4. Task executor v2：增加真实任务类型、artifact 处理、工具执行和取消信号，同时保持主聊天控制面。
 5. 主线程任务控制 v2：扩展当前 hint router，支持“第一个”“刚才那个”和任务别名等更自然的引用。
 

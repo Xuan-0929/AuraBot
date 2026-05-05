@@ -136,6 +136,27 @@ test("persists a chat message and shows a memory-aware acknowledgement in the co
   }
 });
 
+test("shows a memory debug panel with nodes and recent memory events", async () => {
+  const { electronApp, petWindow, userDataDir } = await launchAuraBot();
+
+  try {
+    const consoleWindow = await openConsole(electronApp, petWindow);
+
+    await consoleWindow.getByPlaceholder("Say something").fill("我喜欢吃火锅。");
+    await consoleWindow.getByRole("button", { name: "Send" }).click();
+    await expect(consoleWindow.getByText(/我记住了.*火锅/)).toBeVisible();
+
+    await consoleWindow.getByRole("button", { name: "Memory Debug" }).click();
+
+    await expect(consoleWindow.getByLabel("Memory debug panel")).toBeVisible();
+    await expect(consoleWindow.getByText("Nodes 1")).toBeVisible();
+    await expect(consoleWindow.getByText("用户喜欢火锅")).toBeVisible();
+    await expect(consoleWindow.getByText("memory.write_completed")).toBeVisible();
+  } finally {
+    await cleanupAuraBot(electronApp, userDataDir);
+  }
+});
+
 test("sends console input with Enter and inserts line breaks with Ctrl+Enter", async () => {
   const { electronApp, petWindow, userDataDir } = await launchAuraBot();
 

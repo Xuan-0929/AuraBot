@@ -361,7 +361,7 @@ The current priority order is:
 
 1. Live2D desktop-pet behavior layer: tune status motions, add richer expression assets, and keep hardening click-through hit testing.
 2. Real model adapter layer v2: add streaming replies, in-flight interruption, retry/backoff, and a visible model connection status.
-3. Memory v2: expand the current main-chat-triggered follow-up reminders into a background scheduler plus desktop-pet bubbles, build a memory debug view, and create fixed evaluation fixtures.
+3. Memory v2: expand the current main-chat-triggered follow-up reminders into a background scheduler plus desktop-pet bubbles, deepen the memory debug view, and create fixed evaluation fixtures.
 4. Task executor v2: add real task types, artifact handling, tool execution, and cancellation signals while keeping control in main chat.
 5. Main-thread task control v2: extend the current hint-based router with richer references like "第一个", "刚才那个", and task aliases.
 

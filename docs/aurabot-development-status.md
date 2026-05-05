@@ -31,7 +31,8 @@ AuraBot 当前已经从“传统聊天界面”收敛为桌宠优先形态：
 | Gate/触发判断 | 已完成 MVP | 可判断碎片输入等待、完整输入回复、话题是否结束、聊天/任务/任务控制分类。 |
 | 记忆 v1/v2 写入层 | 部分完成 | 支持 preference、event、follow_up 写入，摘要层和关系边召回；显式配置 `memoryModel` 后可用 API 做结构化记忆抽取、重复记忆合并和候选关系边判断。 |
 | 任务 v1 | 已完成 MVP | 可从主聊天创建任务、按聊天 hint 命中特定任务、查询状态、打断、修改、启动；默认 deterministic runner，显式配置后可调用本机 Codex 子任务 runner。 |
-| 事件日志 | 部分完成 | 已写入 gate、memory、task、chat 关键日志；还没有调试视窗或日志开关。 |
+| 记忆调试视图 | 已完成第一版 | 控制台 `Memory Debug` 面板可查看当前 memory nodes、edges、summaries 计数和最近 memory event。 |
+| 事件日志 | 部分完成 | 已写入 gate、memory、task、chat 关键日志；已有 memory debug 读取面板，还缺更完整的日志开关和路径可视化。 |
 | E2E 演示流 | 已完成 MVP | 桌宠启动、悬浮控制开控制台、桌宠设置同步、位置持久化、状态同步、记忆、碎片等待、任务控制路径都有 e2e 覆盖。 |
 
 ## 最近一次验证记录
@@ -99,8 +100,9 @@ AuraBot 当前已经从“传统聊天界面”收敛为桌宠优先形态：
 4. 已完成第一步：召回阶段可通过 recall planner 获取 query terms、target types 和 ranked node ids，减少只靠关键词命中。
 5. 已完成第一步：到期 `follow_up` 会在下一次主聊天回复中提醒，并在触发后标记为 `completed`。
 6. 下一步：为时间驱动记忆增加后台 scheduler 和桌宠气泡主动触发。
-7. 下一步：增加记忆调试视图：本轮写入了什么、召回了什么、沿哪些边跳转。
-8. 下一步：构造固定对话集，比较“关键词召回”和“图状联想召回”的差异。
+7. 已完成第一版：控制台 `Memory Debug` 面板可查看 nodes、edges、summaries 计数、当前节点、关系边和最近 memory event。
+8. 下一步：增强调试视图，展示本轮召回 seed、图扩散路径和模型 planner 原始输出。
+9. 下一步：构造固定对话集，比较“关键词召回”和“图状联想召回”的差异。
 
 ### 4. 任务执行 v2
 

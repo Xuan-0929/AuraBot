@@ -543,3 +543,123 @@ textarea {
 .task-status-dot-interrupted {
   background: #b84d4a;
 }
+
+.memory-debug-shell {
+  flex: 0 0 auto;
+  margin-bottom: 12px;
+}
+
+.memory-debug-toolbar {
+  display: flex;
+  gap: 8px;
+  align-items: center;
+}
+
+.memory-debug-toggle,
+.memory-debug-refresh {
+  min-height: 32px;
+  padding: 0 10px;
+  border: 1px solid rgba(41, 65, 67, 0.16);
+  border-radius: 8px;
+  background: rgba(255, 255, 255, 0.74);
+  color: #344041;
+  cursor: pointer;
+  font-size: 12px;
+  font-weight: 800;
+  letter-spacing: 0;
+  box-shadow: 0 5px 14px rgba(63, 76, 77, 0.1);
+}
+
+.memory-debug-toggle[aria-expanded="true"] {
+  border-color: rgba(47, 98, 107, 0.34);
+  background: rgba(232, 246, 242, 0.86);
+}
+
+.memory-debug-panel {
+  display: grid;
+  gap: 10px;
+  max-height: min(32vh, 260px);
+  margin-top: 8px;
+  overflow: auto;
+  padding: 10px;
+  border: 1px solid rgba(41, 65, 67, 0.16);
+  border-radius: 8px;
+  background: rgba(255, 255, 255, 0.76);
+  box-shadow: 0 14px 32px rgba(63, 76, 77, 0.12);
+}
+
+.memory-debug-metrics {
+  display: grid;
+  grid-template-columns: repeat(4, minmax(72px, 1fr));
+  gap: 8px;
+}
+
+.memory-debug-metrics span {
+  min-height: 28px;
+  padding: 6px 8px;
+  border: 1px solid rgba(41, 65, 67, 0.12);
+  border-radius: 8px;
+  background: rgba(244, 249, 247, 0.9);
+  color: #344041;
+  font-size: 12px;
+  font-weight: 800;
+  text-align: center;
+}
+
+.memory-debug-grid {
+  display: grid;
+  grid-template-columns: repeat(3, minmax(0, 1fr));
+  gap: 10px;
+}
+
+.memory-debug-column {
+  min-width: 0;
+}
+
+.memory-debug-column h2 {
+  margin: 0 0 6px;
+  color: #435051;
+  font-size: 12px;
+  letter-spacing: 0;
+}
+
+.memory-debug-list {
+  display: grid;
+  gap: 7px;
+}
+
+.memory-debug-item {
+  min-width: 0;
+  margin: 0;
+  padding: 8px;
+  border: 1px solid rgba(41, 65, 67, 0.12);
+  border-radius: 8px;
+  background: rgba(255, 255, 255, 0.68);
+}
+
+.memory-debug-kicker {
+  display: block;
+  overflow: hidden;
+  color: #657172;
+  font-size: 10px;
+  font-weight: 900;
+  text-overflow: ellipsis;
+  text-transform: uppercase;
+  white-space: nowrap;
+}
+
+.memory-debug-item p,
+.memory-debug-empty {
+  margin: 3px 0 0;
+  overflow-wrap: anywhere;
+  color: #263334;
+  font-size: 12px;
+  line-height: 1.38;
+}
+
+@media (max-width: 720px) {
+  .memory-debug-metrics,
+  .memory-debug-grid {
+    grid-template-columns: 1fr;
+  }
+}

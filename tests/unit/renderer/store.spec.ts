@@ -1,5 +1,6 @@
 import { afterEach, beforeEach, describe, expect, test, vi } from "vitest";
 import { useAuraBotStore } from "../../../src/renderer/src/app/store";
+import type { MemoryDebugSnapshot } from "../../../src/shared/contracts/ipc";
 import type { SendChatMessageResult } from "../../../src/shared/contracts/chat";
 import type { Message } from "../../../src/shared/schemas/message";
 import type { Task } from "../../../src/shared/schemas/task";
@@ -145,5 +146,46 @@ describe("useAuraBotStore chat sending", () => {
     });
 
     unsubscribe();
+  });
+
+  test("loads memory debug snapshots from IPC", async () => {
+    const snapshot: MemoryDebugSnapshot = {
+      generatedAt: "2026-05-05T00:00:00.000Z",
+      nodes: [
+        {
+          id: "memory-hotpot",
+          profileId: "profile-1",
+          type: "preference",
+          state: "active",
+          content: "用户喜欢火锅",
+          importance: 0.72,
+          createdAt: "2026-05-05T00:00:00.000Z",
+          updatedAt: "2026-05-05T00:00:00.000Z"
+        }
+      ],
+      edges: [],
+      summaries: [],
+      recentEvents: [
+        {
+          id: "event-1",
+          eventType: "memory.write_completed",
+          payload: {
+            nodeId: "memory-hotpot"
+          },
+          createdAt: "2026-05-05T00:00:01.000Z"
+        }
+      ]
+    };
+    const getMemoryDebugSnapshot = vi.fn(async () => snapshot);
+    vi.stubGlobal("window", {
+      aurabot: {
+        getMemoryDebugSnapshot
+      }
+    });
+
+    await useAuraBotStore.getState().loadMemoryDebugSnapshot();
+
+    expect(getMemoryDebugSnapshot).toHaveBeenCalledTimes(1);
+    expect(useAuraBotStore.getState().memoryDebugSnapshot).toBe(snapshot);
   });
 });

@@ -51,7 +51,8 @@ const api: AuraBotApi = {
     return () => ipcRenderer.removeListener(IPC_CHANNELS.taskChanged, handler);
   },
   sendChatMessage: (input: SendChatMessageInput) => ipcRenderer.invoke(IPC_CHANNELS.sendChatMessage, input),
-  getEventLogs: () => ipcRenderer.invoke(IPC_CHANNELS.getEventLogs)
+  getEventLogs: () => ipcRenderer.invoke(IPC_CHANNELS.getEventLogs),
+  getMemoryDebugSnapshot: () => ipcRenderer.invoke(IPC_CHANNELS.getMemoryDebugSnapshot)
 };
 
 contextBridge.exposeInMainWorld("aurabot", api);

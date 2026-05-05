@@ -1,6 +1,7 @@
 import type { AppInitialState, SendChatMessageInput, SendChatMessageResult } from "./chat";
 import type { PetActivity } from "./pet";
 import type { Message } from "../schemas/message";
+import type { MemoryEdge, MemoryNode, MemorySummary } from "../schemas/memory";
 import type { PetSettings, PetSettingsPatch } from "../schemas/petSettings";
 import type { Task } from "../schemas/task";
 
@@ -17,7 +18,8 @@ export const IPC_CHANNELS = {
   chatMessageCreated: "chat:message-created",
   sendChatMessage: "chat:send-message",
   taskChanged: "task:changed",
-  getEventLogs: "debug:get-event-logs"
+  getEventLogs: "debug:get-event-logs",
+  getMemoryDebugSnapshot: "debug:get-memory-snapshot"
 } as const;
 
 export interface EventLogRecord {
@@ -25,6 +27,14 @@ export interface EventLogRecord {
   eventType: string;
   payload: Record<string, unknown>;
   createdAt: string;
+}
+
+export interface MemoryDebugSnapshot {
+  generatedAt: string;
+  nodes: MemoryNode[];
+  edges: MemoryEdge[];
+  summaries: MemorySummary[];
+  recentEvents: EventLogRecord[];
 }
 
 export interface AuraBotApi {
@@ -41,4 +51,5 @@ export interface AuraBotApi {
   onTaskChanged(listener: (task: Task) => void): () => void;
   sendChatMessage(input: SendChatMessageInput): Promise<SendChatMessageResult>;
   getEventLogs(): Promise<EventLogRecord[]>;
+  getMemoryDebugSnapshot(): Promise<MemoryDebugSnapshot>;
 }

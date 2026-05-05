@@ -98,6 +98,22 @@ export function registerIpc(services: AppServices, windows: WindowController): v
   });
 
   ipcMain.handle(IPC_CHANNELS.getEventLogs, () => services.eventLogService.list());
+
+  ipcMain.handle(IPC_CHANNELS.getMemoryDebugSnapshot, () => {
+    const profile = services.profileService.getOrSeedActiveProfile();
+    const memoryContext = services.memoryService.retrieveForProfile(profile.id);
+    const recentEvents = services.eventLogService
+      .list(80)
+      .filter((event) => event.eventType.startsWith("memory."));
+
+    return {
+      generatedAt: new Date().toISOString(),
+      nodes: memoryContext.nodes,
+      edges: memoryContext.edges,
+      summaries: memoryContext.summaries,
+      recentEvents
+    };
+  });
 }
 
 function createTaskSettledMessage(services: AppServices, task: Task): Message {

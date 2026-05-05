@@ -198,12 +198,13 @@ follow_up --preference_for(0.90)--> preference
 3. 图扩散有 `maxDepth` 和 `maxNodes` 上限，避免把所有记忆都拉进回复。
 4. 显式配置 `memoryModel` 后，召回入口可以调用 API 生成语义检索词、目标记忆类型和重排 node id；未配置或失败时仍走本地关键词/概念规则。
 5. 已到期的 active `follow_up` 会在下一次主聊天回复中被带出，并在回复生成后标记为 `completed`，避免重复提醒。
-6. 当前还没有后台 scheduler 或桌面主动气泡触发，到期提醒仍依赖主聊天被唤醒。
-7. SQLite 表结构继续沿用；模型输出必须落到现有 `memory_nodes` 和 `memory_edges` 约束内。
+6. 控制台 `Memory Debug` 面板可以查看当前节点、关系边、摘要计数和最近 memory event。
+7. 当前还没有后台 scheduler 或桌面主动气泡触发，到期提醒仍依赖主聊天被唤醒。
+8. SQLite 表结构继续沿用；模型输出必须落到现有 `memory_nodes` 和 `memory_edges` 约束内。
 
 ## 下一步应做
 
 1. **增强时间驱动记忆**：把当前主聊天触发式 follow-up 扩展为后台 scheduler + 桌宠气泡主动提醒。
-2. **补记忆调试视图**：需要能看到“本轮写入哪些节点、召回哪些节点、沿哪些边跳转”，否则后续很难调联想质量。
+2. **增强记忆调试视图**：补本轮召回 seed、图扩散路径和模型 planner 原始输出，否则后续很难调联想质量。
 3. **建立评估语料**：用固定对话集比较关键词召回、概念召回、图扩散召回的回复差异，避免凭感觉调参。
 4. **后续可选 embedding**：如果固定评估集显示结构化 query analyzer 仍不够，再引入 embedding 和向量索引。

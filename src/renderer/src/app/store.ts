@@ -1,5 +1,6 @@
 import { create } from "zustand";
 import type { AgentStatus, AppInitialState, SendChatMessageResult } from "../../../shared/contracts/chat";
+import type { MemoryDebugSnapshot } from "../../../shared/contracts/ipc";
 import type { PetActivity } from "../../../shared/contracts/pet";
 import type { Message } from "../../../shared/schemas/message";
 import { DEFAULT_PET_SETTINGS, type PetSettings, type PetSettingsPatch } from "../../../shared/schemas/petSettings";
@@ -14,8 +15,10 @@ interface AuraBotStore {
   agentStatus: AgentStatus;
   petSettings: PetSettings;
   petActivity?: PetActivity;
+  memoryDebugSnapshot?: MemoryDebugSnapshot;
   debugPetOverlay: boolean;
   loadInitialState(): Promise<void>;
+  loadMemoryDebugSnapshot(): Promise<void>;
   subscribeToPetEvents(): () => void;
   openConsoleWindow(): Promise<void>;
   updatePetSettings(patch: PetSettingsPatch): Promise<void>;
@@ -35,6 +38,10 @@ export const useAuraBotStore = create<AuraBotStore>((set, get) => ({
   async loadInitialState() {
     const state: AppInitialState = await window.aurabot.getInitialState();
     set(state);
+  },
+  async loadMemoryDebugSnapshot() {
+    const memoryDebugSnapshot = await window.aurabot.getMemoryDebugSnapshot();
+    set({ memoryDebugSnapshot });
   },
   subscribeToPetEvents() {
     const unsubscribeSettings = window.aurabot.onPetSettingsChanged((petSettings) => {
