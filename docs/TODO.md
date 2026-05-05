@@ -533,11 +533,12 @@ Must show:
 
 最近一次完整验证记录：
 
-1. `corepack pnpm test`：23 个 test files、74 个 tests 通过。
+1. `corepack pnpm test`：30 个 test files、104 个 tests 通过。
 2. `corepack pnpm typecheck`：通过。
 3. `corepack pnpm build`：通过。
-4. `corepack pnpm test:e2e`：11 个 e2e tests 通过。
-5. Live2D 冷启动检查：`dev:clean` 可见渲染 Hiyori，`renderState=ready`，`motionGroup=Idle`。
+4. `corepack pnpm test:e2e`：12 个 e2e tests 通过。
+5. `git diff --check`：通过。
+6. 外部 gate UI 烟测：`做一份读书笔记` 和 `写一份GitHub周报` 都进入 `Tasking` 并创建任务状态卡。
 
 当前可视化产物：
 
@@ -594,12 +595,14 @@ Must show:
 建议交付：
 
 1. 已完成：opt-in Codex 子任务 runner，可在创建任务后后台调用本机 `codex exec`，实时广播 JSONL 进度，查询时暴露最近进展，并把最终结果回流主聊天。
-2. 下一步：设计真实 `TaskRegistry` 类型和输入输出协议。
-3. 下一步：明确 task artifact 写入和主线程回流格式。
+2. 已完成：任务完成结果可以作为主聊天文件附件回流，并提供“打开文件 / 所在文件夹”，不直接暴露原始路径。
+3. 已完成：任务状态条和主聊天任务回复已改成人话表达，避免暴露 `queued`、`completed`、`Codex 子任务` 等内部词。
 4. 已完成：主聊天打断任务会取消底层 runner / Codex 子进程，避免只改 UI 状态。
 5. 已完成：服务启动时会把上次遗留的 running/waiting 任务标记为失联失败，避免永久卡在运行态。
-6. 下一步：补真正 resume 和更完整的 artifact 回流协议。
-7. 继续保持控制面在主聊天线程，不新增任务按钮面板。
+6. 已完成：任务 gate 已覆盖直接产出型请求，`做一份读书笔记`、`写一份GitHub周报` 不需要“帮我”前缀也会进入任务流。
+7. 下一步：设计真实 `TaskRegistry` 类型、输入输出协议和结构化 artifact registry。
+8. 下一步：补真正 resume。
+9. 继续保持控制面在主聊天线程，不新增任务按钮面板。
 
 ### Next 5: Handoff and Push Prep
 
@@ -611,8 +614,8 @@ Must show:
 
 ## 15. Push Decision
 
-当前不自动 push。建议先 review 本文档更新：
+当前任务系统分支为 `codex/aurabot-task-system`，已从记忆底座上拆出任务系统提交：
 
-1. 如果当前状态和下一步优先级符合预期，再提交并 push。
-2. 如果下一步想先做模型 API、memory v2 或 Live2D 行为层中的某一项，先调整文档再 push。
-3. 截图已确认可以进入仓库，push 前应一并 stage `artifacts/desktop-pet.png` 和 `artifacts/console-window.png`。
+1. `ac6afd9 feat: refine task chat flow`
+2. 本分支适合继续推进任务系统、主聊天任务控制、结果附件回流、gate/task 判定和任务状态表达。
+3. 记忆系统后续大改应继续放在记忆分支或独立工作树，避免共享文件同时被两条线修改。
