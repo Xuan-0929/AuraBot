@@ -2,15 +2,15 @@
 
 [中文 README](README.zh-CN.md)
 
-AuraBot is a desktop-first companion AI MVP. The product shape is not a traditional always-open chat app: the default surface is a small Live2D desktop pet, and hovering the character reveals lightweight controls for drag, voice input, and the full console conversation.
+AuraBot is a desktop-first companion AI MVP. The product shape is not a traditional always-open chat app: the default surface is a small Live2D desktop pet, and hovering the character reveals lightweight controls for drag, voice input, inline quick chat, and the full console conversation.
 
 The current build validates the first useful loop:
 
 1. A transparent always-on-top Live2D pet lives on the desktop.
-2. Hovering the pet reveals semi-transparent drag, voice, and console controls.
+2. Hovering the pet reveals semi-transparent drag, voice, console, and quick-chat controls.
 3. The console handles chat, memory, and task control through the main thread.
-4. Task status is visible, but task control stays in chat rather than button panels.
-5. Task completion and pet-voice replies can surface as temporary desktop bubbles.
+4. Task status is visible through cards, with main-chat control plus quick cancel/delete buttons for common card actions.
+5. Task completion, pet-voice replies, pet quick-chat input, and due follow-ups can surface through desktop-pet bubbles.
 
 ## Current Demo
 
@@ -31,14 +31,15 @@ Console window:
 | Two-window UX | Small pet window opens or focuses a normal console window from the hover control. |
 | Pet behavior settings | Console settings can let clicks pass through the pet window. |
 | Pet placement | Dragged pet window positions are persisted and clamped back into the visible work area. |
-| Pet status behavior | Agent status is broadcast to the pet and mapped onto Hiyori's available motion groups. |
+| Pet status behavior | Agent status is broadcast to the pet and mapped onto Hiyori's available motion groups; the pet also tracks the system cursor for eye focus even outside the pet window. |
+| Pet quick chat | Hovering the Live2D model reveals a small `Chat` bubble that expands into an inline input and sends messages back to the main chat as `pet_text`. |
 | Voice input MVP | Pet hover control can use browser SpeechRecognition when the runtime supports it. |
 | Local storage | SQLite stores profiles, souls, sessions, messages, memory, tasks, and event logs. |
-| Main chat thread | Console messages persist through typed IPC into the main process. |
+| Main chat thread | Console and pet quick-chat messages persist through typed IPC into the main process, with optimistic user messages and streaming assistant updates. |
 | Model roles | `gateModel`, `chatModel`, and `memoryModel` are injectable; all default to local deterministic fallback and can use OpenAI-compatible APIs. |
-| Gate logic | Fragmented messages can wait; complete chat, task requests, task controls, and topic endings are classified. |
+| Gate logic | Fragmented messages can wait; complete chat, task requests, task controls, and topic endings are classified, with model-backed gate decisions when configured. |
 | Memory v1/v2 | Preference, event, and follow-up memories can be written and recalled through relation edges; while the app is running, a background scheduler can surface due follow-ups through desktop-pet bubbles. |
-| Task v1 | Tasks can be created, queried, interrupted, revised, started, and completed from main chat; an opt-in Codex child runner can execute real delegated tasks. |
+| Task v1 | Tasks can be created, queried, interrupted, revised, started, and completed from main chat; task cards expose quick cancel/delete controls; an opt-in Codex child runner can execute real delegated tasks. |
 | Verification | Unit, integration, build, and e2e checks are wired. |
 
 ## Quick Start
@@ -348,10 +349,10 @@ The Cubism Core runtime is bundled through `live2dcubismcore@1.0.2`; app startup
 This is still an MVP skeleton, not a production companion:
 
 1. Model roles default to deterministic local fallback; external calls require local config or environment variables.
-2. User messages now render immediately, but model replies are still non-streaming and user-message interruption of an in-flight generation is not implemented yet.
+2. User messages render immediately and assistant messages can stream through update broadcasts, but user-message interruption of an in-flight generation is not implemented yet.
 3. Memory can use `memoryModel` for structured extraction, duplicate-memory merging, candidate relation-edge planning, recall query-term generation, and seed-node reranking; embedding is not implemented yet.
 4. The task runner can call local Codex when explicitly configured, broadcasts JSONL child progress, cancels the child process when interrupted, and marks orphaned running tasks failed on startup; true resume and richer artifact handling are not implemented yet.
-5. Live2D status behavior uses the bundled Hiyori motion groups; custom expressions and richer animation tuning are not implemented yet.
+5. Live2D status behavior uses the bundled Hiyori motion groups and global cursor focus; custom expressions and richer animation tuning are not implemented yet.
 6. Voice input currently depends on Chromium's `SpeechRecognition`; a stable local or model-backed STT adapter is still needed.
 7. Profile switching, scheduled jobs, desktop notifications, packaging, and auto-start are not implemented yet.
 
@@ -359,10 +360,10 @@ This is still an MVP skeleton, not a production companion:
 
 The current priority order is:
 
-1. Live2D desktop-pet behavior layer: tune status motions, add richer expression assets, and keep hardening click-through hit testing.
-2. Real model adapter layer v2: add streaming replies, in-flight interruption, retry/backoff, and a visible model connection status.
+1. Live2D desktop-pet behavior layer: tune status motions, add richer expression assets, keep hardening click-through hit testing, and add diagnostics for global cursor tracking.
+2. Real model adapter layer v2: add in-flight interruption, retry/backoff, and a visible model connection status now that streaming replies are wired.
 3. Memory v2: keep expanding realistic multi-turn evaluation fixtures; the app-running follow-up background scheduler plus desktop-pet bubble path is wired in, Memory Debug shows the latest recall trace, and `corepack pnpm eval:memory` runs the fixed recall fixture.
-4. Task executor v2: add real task types, artifact handling, tool execution, and cancellation signals while keeping control in main chat.
+4. Task executor v2: add real task types, artifact handling, tool execution, and cancellation signals while keeping main chat as the primary control plane.
 5. Main-thread task control v2: extend the current hint-based router with richer references like "第一个", "刚才那个", and task aliases.
 
 See [AuraBot 当前开发状态](docs/aurabot-development-status.md) for the live status board.

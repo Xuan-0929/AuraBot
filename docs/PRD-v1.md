@@ -15,7 +15,7 @@
 2. 提炼已经形成共识的核心需求，并把未定事项显式标出来。
 3. 为后续分阶段开发提供统一基线，避免实现时因理解偏差反复返工。
 
-当前实现进度见：[AuraBot 当前开发状态](/Users/xuan/.codex/worktrees/8fcd/New%20project%204/docs/aurabot-development-status.md)。
+当前实现进度见：[AuraBot 当前开发状态](aurabot-development-status.md)。
 
 ## 2. 产品定义
 

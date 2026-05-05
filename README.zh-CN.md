@@ -2,15 +2,15 @@
 
 [English README](README.md)
 
-AuraBot 是一个桌面优先的陪伴型 AI MVP。它不是传统意义上常驻打开的聊天软件：默认形态是一个桌面 Live2D 小人，平时只显示小人本体，鼠标悬浮时才露出拖拽、语音输入和控制台入口。
+AuraBot 是一个桌面优先的陪伴型 AI MVP。它不是传统意义上常驻打开的聊天软件：默认形态是一个桌面 Live2D 小人，平时只显示小人本体，鼠标悬浮时才露出拖拽、语音输入、桌宠小气泡输入和控制台入口。
 
 当前版本先验证一条最小可用闭环：
 
 1. 一个透明、置顶的 Live2D 桌宠停在桌面上。
-2. 鼠标悬浮小人时，下方浮现半透明的 `Drag / Voice / Console` 控制。
+2. 鼠标悬浮小人时，下方浮现半透明的 `Drag / Voice / Console` 控制，并在侧边显示可展开的 `Chat` 小气泡。
 3. 控制台承担完整主线程对话、记忆写入/召回和任务控制。
-4. 任务状态可以看见，但任务控制仍通过聊天完成，不做任务按钮面板。
-5. 任务完成和桌宠语音回复可以通过临时桌面气泡浮现。
+4. 任务状态可以通过任务卡看见，主要控制仍走主聊天，同时任务卡提供取消/删除快捷按钮。
+5. 任务完成、桌宠语音回复、桌宠小气泡输入和到期 follow-up 可以通过临时桌面气泡浮现。
 
 ## 当前演示
 
@@ -31,14 +31,15 @@ AuraBot 是一个桌面优先的陪伴型 AI MVP。它不是传统意义上常�
 | 双窗口体验 | 小人窗口可以通过悬浮控制打开或聚焦普通控制台窗口。 |
 | 桌宠行为设置 | 控制台设置可以让点击穿透小人窗口，便于点到后面的桌面内容。 |
 | 桌宠位置 | 拖拽后的位置会持久化，并在启动时夹回可见工作区。 |
-| 桌宠状态 | Agent 状态会广播到桌宠，并映射到 Hiyori 当前可用的 motion group。 |
+| 桌宠状态 | Agent 状态会广播到桌宠，并映射到 Hiyori 当前可用的 motion group；主进程也会追踪系统全局鼠标，让小人在窗口外也能看向指针。 |
+| 桌宠小气泡输入 | 悬停 Live2D 模型会出现小型 `Chat` 气泡，点击后展开成输入框，并以 `pet_text` 来源发送到主对话。 |
 | 语音输入 MVP | 运行时支持浏览器 `SpeechRecognition` 时，桌宠悬浮按钮可以语音输入。 |
 | 本地存储 | SQLite 存储 profiles、souls、sessions、messages、memory、tasks 和 event logs。 |
-| 主聊天线程 | 控制台消息通过 typed IPC 进入主进程并持久化。 |
+| 主聊天线程 | 控制台和桌宠小气泡消息通过 typed IPC 进入主进程并持久化；用户消息即时上屏，助手回复可流式更新。 |
 | 模型角色 | `gateModel`、`chatModel` 和 `memoryModel` 可注入；默认走本地 deterministic fallback，也可以接 OpenAI-compatible API。 |
-| Gate 逻辑 | 可判断碎片输入等待、完整聊天、任务请求、任务控制和话题结束。 |
+| Gate 逻辑 | 可判断碎片输入等待、完整聊天、任务请求、任务控制和话题结束；配置模型后可使用 model-backed gate 判定。 |
 | 记忆 v1/v2 | 支持 preference、event、follow-up 记忆写入，并可通过关系边召回；App 运行期间可用后台 scheduler 触发到期提醒桌宠气泡。 |
-| 任务 v1 | 可以在主聊天里创建、查询、打断、修改、启动并完成任务；显式配置后可调用本机 Codex 子任务 runner 执行真实委派任务。 |
+| 任务 v1 | 可以在主聊天里创建、查询、打断、修改、启动并完成任务；任务卡提供取消/删除快捷按钮；显式配置后可调用本机 Codex 子任务 runner 执行真实委派任务。 |
 | 验证 | Unit、integration、build 和 e2e 检查都已接入。 |
 
 ## 快速启动
@@ -348,10 +349,10 @@ Cubism Core runtime 通过 `live2dcubismcore@1.0.2` 本地打包，应用启动�
 这还是 MVP 骨架，不是生产级陪伴产品：
 
 1. 模型角色默认走 deterministic local fallback；外部调用需要本地配置文件或环境变量。
-2. 用户消息已经能即时显示，但模型回复仍是非流式，也还没有支持用户新消息打断 in-flight generation。
+2. 用户消息已经能即时显示，助手消息可以通过 update 广播流式更新；还没有支持用户新消息打断 in-flight generation。
 3. 记忆层配置 `memoryModel` 后可用 API 做结构化抽取、重复记忆合并、候选关系边判断、召回语义检索词生成和 seed node 重排；还没有 embedding。
 4. 任务 runner 显式配置后可以调用本机 Codex、广播 JSONL 子任务进度，在主聊天打断时取消子进程，并在启动时把失联运行态任务标记为失败；真正 resume 和更完整的 artifact 管理还没有实现。
-5. Live2D 状态行为复用 Hiyori 内置 motion group，还没有定制表情资源或更细的动画状态机。
+5. Live2D 状态行为复用 Hiyori 内置 motion group，并已接入全局鼠标追踪眼动；还没有定制表情资源或更细的动画状态机。
 6. 语音输入依赖 Chromium 的 `SpeechRecognition`；还需要稳定的本地或模型 STT adapter。
 7. Profile 切换、定时任务、桌面通知、打包发布和开机自启还没有实现。
 
@@ -359,10 +360,10 @@ Cubism Core runtime 通过 `live2dcubismcore@1.0.2` 本地打包，应用启动�
 
 当前优先级：
 
-1. Live2D 桌宠行为层：细化状态动作，补更丰富表情资源，继续打磨点击穿透 hit testing。
-2. 真实模型适配层 v2：增加流式回复、in-flight 中断、retry/backoff 和可见模型连接状态。
+1. Live2D 桌宠行为层：细化状态动作，补更丰富表情资源，继续打磨点击穿透 hit testing，并给全局鼠标追踪增加诊断显示。
+2. 真实模型适配层 v2：在流式回复已接入的基础上继续补 in-flight 中断、retry/backoff 和可见模型连接状态。
 3. Memory v2：继续扩展更真实的多轮评估语料；当前 App 运行期间的 follow-up 后台 scheduler + 桌宠气泡主动提醒已接入，Memory Debug 已能展示最近一次 recall trace，`corepack pnpm eval:memory` 已可跑固定 recall fixture。
-4. Task executor v2：增加真实任务类型、artifact 处理、工具执行和取消信号，同时保持主聊天控制面。
+4. Task executor v2：增加真实任务类型、artifact 处理、工具执行和取消信号，同时保持主聊天为主要控制面。
 5. 主线程任务控制 v2：扩展当前 hint router，支持“第一个”“刚才那个”和任务别名等更自然的引用。
 
 更多实时状态见 [AuraBot 当前开发状态](docs/aurabot-development-status.md)。

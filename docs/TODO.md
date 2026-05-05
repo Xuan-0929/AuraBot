@@ -12,7 +12,7 @@
 
 ## 1. This Plan Covers
 
-This document is the execution-facing breakdown of the PRD at [AuraBot 产品需求文档](/Users/xuan/.codex/worktrees/8fcd/New%20project%204/docs/PRD-v1.md).
+This document is the execution-facing breakdown of the PRD at [AuraBot 产品需求文档](PRD-v1.md).
 
 It does not try to build the entire AuraBot vision in one pass. It narrows the first implementation to a testable MVP plus the minimum scaffolding needed not to paint the codebase into a corner.
 
@@ -514,7 +514,7 @@ Must show:
 
 ## 12. Current Implementation Status
 
-当前执行状态详见：[AuraBot 当前开发状态](/Users/xuan/.codex/worktrees/8fcd/New%20project%204/docs/aurabot-development-status.md)。
+当前执行状态详见：[AuraBot 当前开发状态](aurabot-development-status.md)。
 
 | 原计划任务 | 当前状态 | 说明 |
 | --- | --- | --- |
@@ -523,9 +523,9 @@ Must show:
 | Task 3: Build the Main Chat UI Shell | 已完成并调整形态 | 不再是传统主聊天窗口；当前为桌面小人 + 悬浮控制打开控制台视窗。 |
 | Task 4: Add Profile and Soul Loading | 部分完成 | 默认 profile/soul 已可 seed；还缺专门的 soul schema 单元测试和 Profile UI。 |
 | Task 5: Implement the Gate Evaluator | 已完成 MVP | 支持碎片等待、完整回复、话题结束、chat/task/task_control 分类和事件日志；可由轻量外部模型接管。 |
-| Task 6: Implement the Main Chat Orchestrator | 已完成 MVP | 支持消息持久化、控制台用户消息乐观上屏、注入式 gate/chat model、memory 写入/召回、按聊天 hint 控制特定 task；还缺真实流式生成取消。 |
+| Task 6: Implement the Main Chat Orchestrator | 已完成 MVP | 支持消息持久化、控制台用户消息乐观上屏、注入式 gate/chat model、chat streaming、memory 写入/召回、按聊天 hint 控制特定 task；还缺用户新消息打断生成。 |
 | Task 7: Add Mixed Memory v1 | 已完成 MVP | 支持 preference/event/follow_up，摘要层、关系边和 bounded graph traversal。 |
-| Task 8: Add the Task Engine and Console Task Status Strip | 已完成 MVP | 支持主聊天创建、按目标 hint 查询/打断/修改/启动任务；任务条只展示状态，不放控制按钮；显式配置后可调用本机 Codex 子任务 runner。 |
+| Task 8: Add the Task Engine and Console Task Status Strip | 已完成 MVP | 支持主聊天创建、按目标 hint 查询/打断/修改/启动任务；任务卡展示状态并提供取消/删除快捷按钮；显式配置后可调用本机 Codex 子任务 runner。 |
 | Task 9: Add Debugging and Event Log Surfaces | 部分完成 | `event_logs` 已记录关键事件；还缺 settings/debug 视窗和日志开关。 |
 | Task 10: Hardening Pass and MVP Demo Flow | 部分完成 | e2e、截图、`README.md` 和本地使用说明已覆盖；还缺打包/发布说明。 |
 
@@ -533,12 +533,11 @@ Must show:
 
 最近一次完整验证记录：
 
-1. `corepack pnpm test`：30 个 test files、104 个 tests 通过。
+1. `corepack pnpm test:unit`：29 个 test files、95 个 tests 通过。
 2. `corepack pnpm typecheck`：通过。
 3. `corepack pnpm build`：通过。
-4. `corepack pnpm test:e2e`：12 个 e2e tests 通过。
-5. `git diff --check`：通过。
-6. 外部 gate UI 烟测：`做一份读书笔记` 和 `写一份GitHub周报` 都进入 `Tasking` 并创建任务状态卡。
+4. `corepack pnpm test:e2e`：13 个 e2e tests 通过。
+5. `corepack pnpm vitest run tests/unit/renderer/desktopPet.spec.tsx tests/unit/main/petCursorTracking.spec.ts tests/unit/renderer/store.spec.ts`：3 个 test files、11 个 tests 通过。
 
 当前可视化产物：
 
@@ -555,9 +554,11 @@ Must show:
 
 1. 继续打磨 agent status 到 Live2D motion/expression 的映射质量。
 2. 继续细化点击穿透 hit testing，让主体穿透和控制区点击可以同时稳定成立。
-3. 接入稳定 STT adapter，替换当前浏览器原生语音识别 MVP。
-4. 已将到期 `follow_up` 的主动提醒触发接入当前桌宠气泡通道；主动对话仍待设计。
-5. 增加开发期诊断面板，展示 Live2D renderState、motion、窗口 bounds、click-through 状态。
+3. 已完成第一版：悬停 Live2D 小人时显示小型 `Chat` 气泡，点击展开成输入框，并以 `pet_text` 来源发送到主对话。
+4. 已完成第一版：主进程轮询系统全局鼠标位置，Live2D 在窗口外也能朝鼠标方向转动眼睛。
+5. 接入稳定 STT adapter，替换当前浏览器原生语音识别 MVP。
+6. 已将到期 `follow_up` 的主动提醒触发接入当前桌宠气泡通道；主动对话仍待设计。
+7. 增加开发期诊断面板，展示 Live2D renderState、motion、窗口 bounds、click-through 状态和全局 cursor 追踪状态。
 
 ### Next 2: 真实模型适配层
 
@@ -569,8 +570,9 @@ Must show:
 2. 已完成：定义 `gateModel` / `chatModel` / `memoryModel` adapter interface，并接入 OpenAI-compatible provider。
 3. 已完成：保留 deterministic adapter 作为无 key fallback 和测试 adapter。
 4. 已完成：控制台用户消息和输入框清空本地即时提交，不再等待 gate/chat 模型返回。
-5. 下一步：加入流式回复和用户新消息中断生成。
-6. 下一步：增加 provider 重试、超时、失败事件日志和连接状态展示。
+5. 已完成：`chatModel` 流式回复已接入，主进程可广播 `chat:message-updated`，renderer 会更新同一条助手消息。
+6. 下一步：加入用户新消息中断生成。
+7. 下一步：增加 provider 重试、超时、失败事件日志和连接状态展示。
 
 ### Next 3: Memory v2
 
@@ -616,8 +618,10 @@ Must show:
 
 ## 15. Push Decision
 
-当前任务系统分支为 `codex/aurabot-task-system`，已从记忆底座上拆出任务系统提交：
+当前集成分支为 `codex/aurabot-live2d-console-ui`，已合入以下主要进展：
 
-1. `ac6afd9 feat: refine task chat flow`
-2. 本分支适合继续推进任务系统、主聊天任务控制、结果附件回流、gate/task 判定和任务状态表达。
-3. 记忆系统后续大改应继续放在记忆分支或独立工作树，避免共享文件同时被两条线修改。
+1. `e9033ca feat: improve pet hover chat and cursor tracking`
+2. `c4e1db5 feat: add task card controls`
+3. `6d62c89 feat: stream chat replies and defer gate decisions to model`
+4. `665a324 feat: add memory follow-up debug eval`
+5. 本分支适合继续推进 Live2D 桌宠体验、主控制台、任务卡控制、流式回复、模型 gate 和桌宠输入。后续记忆模型/配置大改、任务执行器大改、桌宠 UI 大改仍建议分支隔离。
