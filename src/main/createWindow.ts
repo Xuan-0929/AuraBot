@@ -145,6 +145,10 @@ export function broadcastTaskChanged(task: Task): void {
   sendToRenderer(IPC_CHANNELS.taskChanged, task);
 }
 
+export function broadcastTaskDeleted(taskId: string): void {
+  sendToRenderer(IPC_CHANNELS.taskDeleted, taskId);
+}
+
 export function broadcastPetSettings(settings: PetSettings): void {
   sendToRenderer(IPC_CHANNELS.petSettingsChanged, settings);
 }

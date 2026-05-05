@@ -6,6 +6,7 @@ import {
   broadcastChatMessage,
   broadcastPetActivity,
   broadcastTaskChanged,
+  broadcastTaskDeleted,
   createPetWindow,
   movePetWindowBy,
   openConsoleWindow,
@@ -48,7 +49,8 @@ async function bootstrap(): Promise<void> {
     broadcastPetActivity,
     broadcastAgentStatus,
     broadcastChatMessage,
-    broadcastTaskChanged
+    broadcastTaskChanged,
+    broadcastTaskDeleted
   });
   createPetWindow({
     settings: petSettingsStore.get(),

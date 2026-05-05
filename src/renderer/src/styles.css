@@ -535,7 +535,7 @@ textarea {
 
 .task-status-card {
   display: grid;
-  grid-template-columns: auto minmax(0, 1fr) auto;
+  grid-template-columns: auto minmax(0, 1fr) auto auto;
   align-items: center;
   gap: 8px;
   min-height: 34px;
@@ -570,6 +570,31 @@ textarea {
 
 .task-status-value {
   font-weight: 800;
+}
+
+.task-status-action {
+  min-width: 42px;
+  min-height: 24px;
+  padding: 0 8px;
+  border: 1px solid rgba(41, 65, 67, 0.16);
+  border-radius: 7px;
+  background: rgba(255, 255, 255, 0.68);
+  color: #405052;
+  cursor: pointer;
+  font-size: 11px;
+  font-weight: 800;
+}
+
+.task-status-action:hover {
+  background: rgba(255, 255, 255, 0.92);
+}
+
+.task-status-action-cancel {
+  color: #8a5c1d;
+}
+
+.task-status-action-delete {
+  color: #9b4845;
 }
 
 .task-status-dot {

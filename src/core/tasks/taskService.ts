@@ -5,6 +5,9 @@ import type { TaskRepository } from "../storage/repositories/taskRepository";
 import type { EventLogService } from "../telemetry/eventLogService";
 import { selectTaskForControl } from "./taskControlRouter";
 
+const ACTIVE_STATUSES = new Set<Task["status"]>(["queued", "running", "waiting"]);
+const SETTLED_STATUSES = new Set<Task["status"]>(["completed", "failed", "interrupted"]);
+
 export interface CreateTaskFromChatInput {
   profileId: string;
   parentSessionId: string;
@@ -160,6 +163,73 @@ export class TaskService {
       task,
       reason: input.reason
     });
+  }
+
+  cancelTaskFromConsole(input: { profileId: string; taskId: string }): Task | undefined {
+    const task = this.taskRepository.getById(input.taskId);
+
+    if (!task || task.profileId !== input.profileId || !ACTIVE_STATUSES.has(task.status)) {
+      return undefined;
+    }
+
+    const reason = "好，我先停下来了。之后你想继续的话，再跟我说一声。";
+    const cancelled = this.taskRepository.updateStatus({
+      taskId: task.id,
+      status: "interrupted",
+      latestProgress: reason
+    });
+
+    if (cancelled) {
+      const runnerCancelled = this.taskRunner.cancel?.(cancelled.id) ?? false;
+      this.taskRepository.appendEvent({
+        taskId: cancelled.id,
+        eventType: "task.cancelled_from_console",
+        summary: reason,
+        payload: {
+          previousStatus: task.status,
+          runnerCancelled
+        }
+      });
+      this.eventLogService.record("task.cancelled_from_console", {
+        profileId: input.profileId,
+        taskId: cancelled.id,
+        title: cancelled.title,
+        previousStatus: task.status,
+        status: cancelled.status,
+        runnerCancelled
+      });
+    }
+
+    return cancelled;
+  }
+
+  deleteSettledTaskFromConsole(input: { profileId: string; taskId: string }): boolean {
+    const task = this.taskRepository.getById(input.taskId);
+
+    if (!task || task.profileId !== input.profileId || !SETTLED_STATUSES.has(task.status)) {
+      return false;
+    }
+
+    this.taskRepository.appendEvent({
+      taskId: task.id,
+      eventType: "task.deleted_from_console",
+      summary: `从控制台移除任务：${task.title}`,
+      payload: {
+        deletedStatus: task.status
+      }
+    });
+    const deleted = this.taskRepository.deleteById(task.id);
+
+    if (deleted) {
+      this.eventLogService.record("task.deleted_from_console", {
+        profileId: input.profileId,
+        taskId: task.id,
+        title: task.title,
+        deletedStatus: task.status
+      });
+    }
+
+    return deleted;
   }
 
   private interruptResolvedTask(input: {

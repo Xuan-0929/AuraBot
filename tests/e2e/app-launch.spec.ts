@@ -280,6 +280,37 @@ test("controls a task through the main chat instead of task panel buttons", asyn
   }
 });
 
+test("uses task status card buttons to cancel and remove settled tasks", async () => {
+  const { electronApp, petWindow, userDataDir } = await launchAuraBot();
+
+  try {
+    const consoleWindow = await openConsole(electronApp, petWindow);
+    const input = consoleWindow.getByPlaceholder("Say something");
+
+    await input.fill("帮我整理一份明天会议的清单。");
+    await consoleWindow.getByRole("button", { name: "Send" }).click();
+    const meetingCard = consoleWindow.locator(".task-status-card").filter({ hasText: "明天会议" });
+    await expect(meetingCard).toContainText("待开始");
+
+    await meetingCard.getByRole("button", { name: /取消任务/ }).click();
+    await expect(meetingCard).toContainText("已停下");
+    await meetingCard.getByRole("button", { name: /删除任务/ }).click();
+    await expect(meetingCard).toHaveCount(0);
+
+    await input.fill("帮我写一份 GitHub 周报。");
+    await consoleWindow.getByRole("button", { name: "Send" }).click();
+    await input.fill("开始做这个任务。");
+    await consoleWindow.getByRole("button", { name: "Send" }).click();
+    const reportCard = consoleWindow.locator(".task-status-card").filter({ hasText: "GitHub 周报" });
+    await expect(reportCard).toContainText("完成");
+
+    await reportCard.getByRole("button", { name: /删除任务/ }).click();
+    await expect(reportCard).toHaveCount(0);
+  } finally {
+    await cleanupAuraBot(electronApp, userDataDir);
+  }
+});
+
 test("targets a specific task through main chat wording when multiple tasks exist", async () => {
   const { electronApp, petWindow, userDataDir } = await launchAuraBot();
 
