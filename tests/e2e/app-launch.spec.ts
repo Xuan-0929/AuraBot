@@ -135,6 +135,7 @@ test("persists a chat message and shows a memory-aware acknowledgement in the co
 
     await expect(consoleWindow.locator(".message-user").filter({ hasText: "我喜欢吃火锅。" })).toBeVisible();
     await expect(consoleWindow.getByText(/我记住了.*火锅/)).toBeVisible();
+    await expect(petWindow.getByLabel("Pet message")).toContainText(/火锅/);
   } finally {
     await cleanupAuraBot(electronApp, userDataDir);
   }

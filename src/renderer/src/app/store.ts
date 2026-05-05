@@ -15,6 +15,7 @@ interface AuraBotStore {
   agentStatus: AgentStatus;
   petSettings: PetSettings;
   petActivity?: PetActivity;
+  petActivityQueue: PetActivity[];
   petCursorPosition?: PetCursorPosition;
   memoryDebugSnapshot?: MemoryDebugSnapshot;
   debugPetOverlay: boolean;
@@ -37,6 +38,7 @@ export const useAuraBotStore = create<AuraBotStore>((set, get) => ({
   tasks: [],
   agentStatus: "idle",
   petSettings: { ...DEFAULT_PET_SETTINGS },
+  petActivityQueue: [],
   debugPetOverlay: false,
   async loadInitialState() {
     const state: AppInitialState = await window.aurabot.getInitialState();
@@ -51,7 +53,7 @@ export const useAuraBotStore = create<AuraBotStore>((set, get) => ({
       set({ petSettings });
     });
     const unsubscribeActivity = window.aurabot.onPetActivity((petActivity) => {
-      set({ petActivity });
+      set((current) => enqueuePetActivity(current, petActivity));
     });
     const unsubscribePetCursorPosition = window.aurabot.onPetCursorPosition((petCursorPosition) => {
       set({ petCursorPosition });
@@ -169,14 +171,14 @@ export const useAuraBotStore = create<AuraBotStore>((set, get) => ({
     }));
   },
   showPetNotice(message: string) {
-    set({
-      petActivity: {
+    set((current) =>
+      enqueuePetActivity(current, {
         id: `local-${Date.now()}`,
         kind: "voice_notice",
         message,
         createdAt: new Date().toISOString()
-      }
-    });
+      })
+    );
   },
   clearPetActivity(id?: string) {
     set((current) => {
@@ -184,10 +186,46 @@ export const useAuraBotStore = create<AuraBotStore>((set, get) => ({
         return {};
       }
 
-      return { petActivity: undefined };
+      const [nextActivity, ...remainingActivities] = current.petActivityQueue;
+
+      return {
+        petActivity: nextActivity,
+        petActivityQueue: remainingActivities
+      };
     });
   }
 }));
+
+function enqueuePetActivity(
+  current: Pick<AuraBotStore, "petActivity" | "petActivityQueue">,
+  petActivity: PetActivity
+): Partial<AuraBotStore> {
+  if (!current.petActivity) {
+    return { petActivity };
+  }
+
+  if (isPriorityPetActivity(petActivity) && !isPriorityPetActivity(current.petActivity)) {
+    return {
+      petActivity,
+      petActivityQueue: current.petActivityQueue.filter(isPriorityPetActivity)
+    };
+  }
+
+  if (
+    current.petActivity.id === petActivity.id ||
+    current.petActivityQueue.some((queuedActivity) => queuedActivity.id === petActivity.id)
+  ) {
+    return {};
+  }
+
+  return {
+    petActivityQueue: [...current.petActivityQueue, petActivity]
+  };
+}
+
+function isPriorityPetActivity(petActivity: PetActivity): boolean {
+  return petActivity.kind !== "chat_reply";
+}
 
 function removeTask(tasks: Task[], taskId: string): Task[] {
   return tasks.filter((task) => task.id !== taskId);

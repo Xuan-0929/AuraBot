@@ -14,6 +14,7 @@ import { parsePetSettingsPatch, type PetSettings, type PetSettingsPatch } from "
 import type { Task } from "../shared/schemas/task";
 import type { AppServices } from "../core/bootstrap/createServices";
 import { buildTaskSettledMessageDraftWithVoice, isTaskResultPathAllowed } from "../core/tasks/taskPresentation";
+import { splitTextIntoSentences } from "../shared/text/sentences";
 
 export interface WindowController {
   openConsoleWindow(): void;
@@ -30,6 +31,20 @@ export interface WindowController {
 }
 
 export function registerIpc(services: AppServices, windows: WindowController): void {
+  const assistantPetActivityCursors = new Map<string, number>();
+  const broadcastAssistantMessagePetActivities = (message: Message, flushRemainder = false) => {
+    const result = buildAssistantMessagePetActivities(message, {
+      startIndex: assistantPetActivityCursors.get(message.id) ?? 0,
+      flushRemainder
+    });
+
+    assistantPetActivityCursors.set(message.id, result.nextIndex);
+
+    for (const activity of result.activities) {
+      windows.broadcastPetActivity(activity);
+    }
+  };
+
   ipcMain.handle(IPC_CHANNELS.getInitialState, () => {
     const profile = services.profileService.getOrSeedActiveProfile();
     const mainSession = services.sessionRepository.getOrCreateMainSession(profile.id);
@@ -77,10 +92,12 @@ export function registerIpc(services: AppServices, windows: WindowController): v
 
         windows.broadcastAgentStatus("typing");
         windows.broadcastChatMessage(message);
+        broadcastAssistantMessagePetActivities(message);
       },
       onAssistantMessageUpdated: (message) => {
         if (message) {
           windows.broadcastChatMessageUpdated(message);
+          broadcastAssistantMessagePetActivities(message);
         }
       }
     });
@@ -112,6 +129,10 @@ export function registerIpc(services: AppServices, windows: WindowController): v
     const activity = await buildPetActivity(services, input, result);
 
     windows.broadcastAgentStatus(result.agentStatus);
+
+    if (result.assistantMessage) {
+      broadcastAssistantMessagePetActivities(result.assistantMessage, true);
+    }
 
     if (activity) {
       windows.broadcastPetActivity(activity);
@@ -284,9 +305,51 @@ async function buildPetActivityFromTask(services: AppServices, task: Task): Prom
   };
 }
 
-async function buildPetActivity(
+export interface BuildAssistantMessagePetActivitiesOptions {
+  startIndex: number;
+  flushRemainder?: boolean;
+}
+
+export interface BuildAssistantMessagePetActivitiesResult {
+  activities: PetActivity[];
+  nextIndex: number;
+}
+
+export function buildAssistantMessagePetActivities(
+  message: Message,
+  options: BuildAssistantMessagePetActivitiesOptions
+): BuildAssistantMessagePetActivitiesResult {
+  const content = message.content;
+  const startIndex = Math.min(Math.max(options.startIndex, 0), content.length);
+
+  if (message.role !== "assistant" || !content.trim()) {
+    return {
+      activities: [],
+      nextIndex: startIndex
+    };
+  }
+
+  const activities: PetActivity[] = [];
+  const createdAt = new Date().toISOString();
+  const result = splitTextIntoSentences(content, {
+    startIndex,
+    flushRemainder: options.flushRemainder
+  });
+
+  return {
+    activities: result.sentences.map((sentence, index) => ({
+      id: `chat-reply-${message.id}-${index}-${sentence.endIndex}`,
+      kind: "chat_reply",
+      message: sentence.text,
+      createdAt
+    })),
+    nextIndex: result.nextIndex
+  };
+}
+
+export async function buildPetActivity(
   services: AppServices,
-  input: SendChatMessageInput,
+  _input: SendChatMessageInput,
   result: SendChatMessageResult
 ): Promise<PetActivity | undefined> {
   if (result.updatedTask?.status === "completed") {
@@ -306,15 +369,6 @@ async function buildPetActivity(
         },
         fallbackText: `${result.updatedTask.title}弄好了，要不要看一眼？`
       }),
-      createdAt: new Date().toISOString()
-    };
-  }
-
-  if (input.source === "pet_voice" && result.assistantMessage) {
-    return {
-      id: randomUUID(),
-      kind: "voice_reply",
-      message: result.assistantMessage.content,
       createdAt: new Date().toISOString()
     };
   }

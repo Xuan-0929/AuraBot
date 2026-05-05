@@ -28,7 +28,8 @@ describe("useAuraBotStore chat sending", () => {
       messages: [],
       tasks: [],
       agentStatus: "idle",
-      petActivity: undefined
+      petActivity: undefined,
+      petActivityQueue: []
     });
   });
 
@@ -174,6 +175,98 @@ describe("useAuraBotStore chat sending", () => {
       latestProgress: "Codex 子任务完成：GitHub 周报已经写好。"
     });
     expect(useAuraBotStore.getState().petCursorPosition).toBe(cursorPosition);
+
+    unsubscribe();
+  });
+
+  test("queues pet activities so sentence bubbles appear one at a time", () => {
+    let petActivityListener: ((activity: import("../../../src/shared/contracts/pet").PetActivity) => void) | undefined;
+    vi.stubGlobal("window", {
+      aurabot: {
+        onPetSettingsChanged: vi.fn(() => vi.fn()),
+        onPetActivity: vi.fn((listener: typeof petActivityListener) => {
+          petActivityListener = listener;
+
+          return vi.fn();
+        }),
+        onAgentStatusChanged: vi.fn(() => vi.fn()),
+        onPetCursorPosition: vi.fn(() => vi.fn()),
+        onChatMessageCreated: vi.fn(() => vi.fn()),
+        onChatMessageUpdated: vi.fn(() => vi.fn()),
+        onTaskChanged: vi.fn(() => vi.fn()),
+        onTaskDeleted: vi.fn(() => vi.fn())
+      }
+    });
+
+    const unsubscribe = useAuraBotStore.getState().subscribeToPetEvents();
+    const firstActivity = {
+      id: "chat-reply-1-0",
+      kind: "chat_reply" as const,
+      message: "第一句。",
+      createdAt: "2026-05-05T00:00:01.000Z"
+    };
+    const secondActivity = {
+      id: "chat-reply-1-1",
+      kind: "chat_reply" as const,
+      message: "第二句。",
+      createdAt: "2026-05-05T00:00:02.000Z"
+    };
+
+    petActivityListener?.(firstActivity);
+    petActivityListener?.(secondActivity);
+
+    expect(useAuraBotStore.getState().petActivity).toBe(firstActivity);
+
+    useAuraBotStore.getState().clearPetActivity(firstActivity.id);
+    expect(useAuraBotStore.getState().petActivity).toBe(secondActivity);
+
+    useAuraBotStore.getState().clearPetActivity(secondActivity.id);
+    expect(useAuraBotStore.getState().petActivity).toBeUndefined();
+
+    unsubscribe();
+  });
+
+  test("shows task completion bubbles ahead of stale chat reply bubbles", () => {
+    let petActivityListener: ((activity: import("../../../src/shared/contracts/pet").PetActivity) => void) | undefined;
+    vi.stubGlobal("window", {
+      aurabot: {
+        onPetSettingsChanged: vi.fn(() => vi.fn()),
+        onPetActivity: vi.fn((listener: typeof petActivityListener) => {
+          petActivityListener = listener;
+
+          return vi.fn();
+        }),
+        onAgentStatusChanged: vi.fn(() => vi.fn()),
+        onPetCursorPosition: vi.fn(() => vi.fn()),
+        onChatMessageCreated: vi.fn(() => vi.fn()),
+        onChatMessageUpdated: vi.fn(() => vi.fn()),
+        onTaskChanged: vi.fn(() => vi.fn()),
+        onTaskDeleted: vi.fn(() => vi.fn())
+      }
+    });
+
+    const unsubscribe = useAuraBotStore.getState().subscribeToPetEvents();
+
+    petActivityListener?.({
+      id: "chat-reply-task-started",
+      kind: "chat_reply",
+      message: "好，我开始弄「明天会议的清单」。",
+      createdAt: "2026-05-05T00:00:01.000Z"
+    });
+    petActivityListener?.({
+      id: "task-completed",
+      kind: "task_completed",
+      message: "明天会议的清单弄好了，要不要看一眼？",
+      createdAt: "2026-05-05T00:00:02.000Z"
+    });
+
+    expect(useAuraBotStore.getState().petActivity).toMatchObject({
+      id: "task-completed",
+      message: "明天会议的清单弄好了，要不要看一眼？"
+    });
+
+    useAuraBotStore.getState().clearPetActivity("task-completed");
+    expect(useAuraBotStore.getState().petActivity).toBeUndefined();
 
     unsubscribe();
   });

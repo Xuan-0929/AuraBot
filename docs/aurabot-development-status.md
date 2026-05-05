@@ -4,9 +4,9 @@
 
 这份文档记录当前 live2D/console 集成分支已经完成的工程事实、最近一次验证结果，以及下一步最应该推进的任务。它是执行状态板，不替代 PRD，也不替代 MVP 计划。
 
-当前工作分支：`codex/aurabot-persona-feel`
+当前工作分支：`codex/aurabot-live2d-console-ui`
 
-当前集成提交：`2aa63ff feat: unify soul-driven voice responses`
+当前集成基线：`d2150a3 feat: unify soul-driven voice responses`
 
 分支边界：这一侧已经集成 Live2D 桌宠体验、主控制台、任务卡控制、流式回复、模型 gate、记忆调试、follow-up 主动提醒，以及 soul 驱动的统一回复/播报机制。后续如果继续并行开发，记忆模型/配置大改、任务执行器大改、桌宠 UI 大改仍建议分支隔离，避免在 `chatOrchestrator`、`createWindow`、`store`、IPC contract 和 renderer 样式上互相抢修改权。
 
@@ -23,8 +23,11 @@ AuraBot 当前已经从“传统聊天界面”收敛为桌宠优先形态：
 7. `chatModel` 已支持流式回复保存和广播，控制台能接收 `chat:message-updated` 逐步更新助手消息。
 8. 任务创建、查询、打断、修改、启动都通过控制台里的主聊天线程完成；任务状态卡也提供取消和删除按钮作为快速控制。
 9. 任务完成、桌宠语音回复和到期 follow-up 可以通过小人气泡临时浮现。
-10. 记忆系统当前是“分层摘要 + 图状联想 + 可选 memoryModel 增强”的 MVP；已补到期 follow-up 调试评估与主动提醒通道。
-11. 普通聊天、任务播报、任务完成/失败、任务控制、pet task notice 和 memory follow-up 已开始走统一 `Soul + ResponseWorkflow + VoiceAdapter` 机制，避免聊天像人、任务像系统通知的割裂体验。
+10. 普通 bot 输出现在会同步进入桌宠头顶气泡，不再只在任务完成时弹出提示。
+11. bot 输出的头顶气泡会按句子流式展示，控制台里的 assistant 回复也会按句拆成连续聊天气泡，视觉上更接近真实网络聊天。
+12. 分句规则已抽成共享工具，当前识别 `。！？!?；;～~〜…` 等聊天句尾标点；英文句点暂不作为分隔符，避免拆坏文件名、URL 和小数。
+13. 记忆系统当前是“分层摘要 + 图状联想 + 可选 memoryModel 增强”的 MVP；已补到期 follow-up 调试评估与主动提醒通道。
+14. 普通聊天、任务播报、任务完成/失败、任务控制、pet task notice 和 memory follow-up 已开始走统一 `Soul + ResponseWorkflow + VoiceAdapter` 机制，避免聊天像人、任务像系统通知的割裂体验。
 
 ## 已完成
 
@@ -34,8 +37,10 @@ AuraBot 当前已经从“传统聊天界面”收敛为桌宠优先形态：
 | 双窗口桌宠壳层 | 已完成 | `createPetWindow()` 默认创建桌面小人，`openConsoleWindow()` 按需打开控制台。 |
 | Live2D 真实模型 | 已完成 | 已接入官方样例 `Hiyori`，Cubism Core 本地打包，不依赖启动时 CDN。 |
 | Live2D 桌宠交互层 | 部分完成 | 悬浮控制条、拖拽按钮、控制台按钮、点击穿透设置、任务完成气泡、位置持久化、状态 motion 映射、悬停小聊天气泡、展开式桌宠输入框和全局鼠标追踪眼动已接入。 |
+| 桌宠消息气泡 | 已完成第二版 | bot 普通输出、任务完成、语音回复和到期 follow-up 都会进入桌宠气泡通道；普通 bot 输出按句子流式排队展示，任务/提醒类气泡可优先打断过时普通聊天气泡。 |
 | SQLite 数据层 | 已完成 | 已有 profiles、souls、sessions、messages、memory、tasks、event_logs 等表。 |
 | 单主聊天线程 | 已完成 MVP | 主 session 持久化消息，控制台负责完整对话；用户消息乐观上屏，不再等待 gate/chat 模型返回。 |
+| 控制台消息展示 | 已完成第二版 | assistant 回复在 UI 层按句子拆成多个连续气泡，底层消息仍保持一条完整记录；用户消息不拆，任务附件挂在最后一句气泡下。 |
 | 模型适配层 | 部分完成 | 已有 `gateModel` / `chatModel` / `memoryModel` 注入接口、OpenAI-compatible provider、userData/系统级 JSON 配置、env 配置、deterministic fallback 和 chat streaming；还缺用户新消息打断、retry/backoff 和连接状态 UI。 |
 | Gate/触发判断 | 已完成 MVP | 可判断碎片输入等待、完整输入回复、话题是否结束、聊天/任务/任务控制分类；强 gate 判定已延后到模型侧，外部模型异常时仍保留 fallback。 |
 | 活人感统一回复机制 | 已完成第一版 | `Soul` 只保留人格、语气、原则和语义禁忌；`ResponseWorkflow` 描述场景、事实和安全边界；`VoiceAdapter` 结合二者生成最终用户可见文本。任务完成等场景可以接近“本人自然告诉你结果并邀请你看一眼”的语感，但不会把样例当固定模板。 |
@@ -48,6 +53,17 @@ AuraBot 当前已经从“传统聊天界面”收敛为桌宠优先形态：
 | E2E 演示流 | 已完成 MVP | 桌宠启动、悬浮控制开控制台、桌宠设置同步、位置持久化、状态同步、记忆、碎片等待、任务控制路径都有 e2e 覆盖。 |
 
 ## 最近一次验证记录
+
+最近一次 live2D/console 分句气泡更新验证在 2026-05-05 当前 `codex/aurabot-live2d-console-ui` 分支完成：
+
+| 命令/检查 | 结果 |
+| --- | --- |
+| `corepack pnpm vitest run tests/unit/shared/sentences.spec.ts tests/unit/main/petActivity.spec.ts tests/unit/renderer/messageList.spec.tsx` | 3 个 test files、9 个 tests 通过，覆盖共享分句规则、头顶气泡分句和控制台分句 |
+| `corepack pnpm vitest run tests/unit/main/petActivity.spec.ts tests/unit/renderer/store.spec.ts` | 2 个 test files、11 个 tests 通过，覆盖桌宠气泡队列和任务完成气泡优先级 |
+| `corepack pnpm typecheck` | 通过 |
+| `corepack pnpm test:unit` | 32 个 test files、109 个 tests 通过 |
+| `corepack pnpm test:e2e` | 13 个 e2e tests 通过 |
+| `git diff --check` | 通过 |
 
 最近一次完整验证在 2026-05-05 当前 `codex/aurabot-persona-feel` 分支完成：
 
@@ -97,9 +113,10 @@ AuraBot 当前已经从“传统聊天界面”收敛为桌宠优先形态：
 2. 继续细化点击穿透：小人主体可穿透，悬浮控制区仍可稳定点击。
 3. 已完成第一版：悬停时展示小型 `Chat` 气泡，点击展开成桌宠输入框，并把消息传给主对话。
 4. 已完成第一版：主进程轮询系统全局鼠标位置，Live2D 在窗口外也能追踪鼠标眼动。
-5. 接入稳定 STT adapter，替换当前浏览器原生语音识别 MVP。
-6. 继续细化主动提醒：当前已复用气泡通道补后台 follow-up 触发入口，下一步是系统通知、提醒权限和更细的触发策略。
-7. 增加开发期诊断面板，展示 Live2D `renderState`、motion、窗口 bounds、click-through 状态和全局 cursor 追踪状态。
+5. 已完成第二版：普通 bot 输出会在头顶气泡按句子流式出现，连续句子进入队列；任务完成、提醒等更高优先级气泡可打断旧的普通聊天气泡。
+6. 接入稳定 STT adapter，替换当前浏览器原生语音识别 MVP。
+7. 继续细化主动提醒：当前已复用气泡通道补后台 follow-up 触发入口，下一步是系统通知、提醒权限和更细的触发策略。
+8. 增加开发期诊断面板，展示 Live2D `renderState`、motion、窗口 bounds、click-through 状态和全局 cursor 追踪状态。
 
 ### 2. 真实模型适配层
 
@@ -108,10 +125,11 @@ AuraBot 当前已经从“传统聊天界面”收敛为桌宠优先形态：
 建议任务：
 
 1. 已完成：流式回复已接入，助手消息可通过 `chat:message-updated` 增量更新。
-2. 支持用户新消息打断当前强模型生成。
-3. 为 provider 调用增加重试、超时、失败事件日志和可见错误提示。
-4. 在控制台或设置视窗暴露当前模型连接状态。
-5. 为 gate 模型输出增加线上样本日志，后续评估“是否抢话/是否漏接/任务误判”。
+2. 已完成：普通 assistant 回复在控制台按句子拆成连续气泡，但底层仍保持完整 message，避免影响记忆、任务附件和历史记录。
+3. 支持用户新消息打断当前强模型生成。
+4. 为 provider 调用增加重试、超时、失败事件日志和可见错误提示。
+5. 在控制台或设置视窗暴露当前模型连接状态。
+6. 为 gate 模型输出增加线上样本日志，后续评估“是否抢话/是否漏接/任务误判”。
 
 ### 2.5 活人感统一回复机制
 
@@ -187,7 +205,8 @@ AuraBot 当前已经从“传统聊天界面”收敛为桌宠优先形态：
 5. 桌宠悬停 `Chat` 小气泡、展开式输入框、`pet_text` 主聊天来源。
 6. 主进程全局鼠标追踪和 Live2D 窗口外眼动。
 7. memory follow-up debug/evaluation 和后台到期提醒桌宠气泡。
-8. 相关 unit、integration 和 e2e 测试。
+8. 普通 bot 输出头顶气泡、按句流式队列、控制台分句气泡和聊天式标点分句规则。
+9. 相关 unit、integration 和 e2e 测试。
 
 不纳入本次 push 的本地临时产物：
 

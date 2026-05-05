@@ -1,5 +1,6 @@
 import { useEffect, useRef } from "react";
 import type { Message, MessageAttachment } from "../../../../shared/schemas/message";
+import { splitTextIntoSentences } from "../../../../shared/text/sentences";
 
 export function MessageList({ messages }: { messages: Message[] }) {
   const listRef = useRef<HTMLDivElement>(null);
@@ -25,17 +26,39 @@ export function MessageList({ messages }: { messages: Message[] }) {
 
   return (
     <div ref={listRef} className="message-list" aria-label="Conversation messages" aria-live="polite" tabIndex={0}>
-      {messages.map((message) => (
-        <article key={message.id} className={`message message-${message.role}`}>
-          <span className="message-role">{message.role === "user" ? "You" : "Aura"}</span>
-          <p>{message.content}</p>
-          {(message.attachments ?? []).length > 0 ? (
-            <MessageAttachments attachments={message.attachments ?? []} />
-          ) : null}
-        </article>
-      ))}
+      {messages.flatMap((message) => renderMessageBubbles(message))}
     </div>
   );
+}
+
+function renderMessageBubbles(message: Message) {
+  const segments = getMessageDisplaySegments(message);
+
+  return segments.map((segment, index) => {
+    const isFirstSegment = index === 0;
+    const isLastSegment = index === segments.length - 1;
+    const attachments = isLastSegment ? (message.attachments ?? []) : [];
+
+    return (
+      <article key={`${message.id}-${index}`} className={`message message-${message.role}`}>
+        {isFirstSegment ? <span className="message-role">{message.role === "user" ? "You" : "Aura"}</span> : null}
+        <p>{segment}</p>
+        {attachments.length > 0 ? <MessageAttachments attachments={attachments} /> : null}
+      </article>
+    );
+  });
+}
+
+function getMessageDisplaySegments(message: Message): string[] {
+  if (message.role !== "assistant") {
+    return [message.content];
+  }
+
+  const sentences = splitTextIntoSentences(message.content, { flushRemainder: true }).sentences.map(
+    (sentence) => sentence.text
+  );
+
+  return sentences.length > 0 ? sentences : [message.content];
 }
 
 function MessageAttachments({ attachments }: { attachments: MessageAttachment[] }) {

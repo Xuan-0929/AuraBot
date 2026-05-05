@@ -64,4 +64,58 @@ describe("MessageList task result attachments", () => {
       root.unmount();
     });
   });
+
+  it("renders assistant replies as sentence-level chat bubbles", async () => {
+    const container = document.createElement("div");
+    const root = createRoot(container);
+    const message: Message = {
+      id: "message-1",
+      sessionId: "session-1",
+      profileId: "profile-1",
+      role: "assistant",
+      content: "我在，刚才那件事我已经记住了。你继续说！第三句还在写",
+      createdAt: "2026-05-05T00:00:00.000Z"
+    };
+
+    await act(async () => {
+      root.render(<MessageList messages={[message]} />);
+    });
+
+    const assistantBubbles = Array.from(container.querySelectorAll(".message-assistant"));
+    expect(assistantBubbles).toHaveLength(3);
+    expect(assistantBubbles.map((bubble) => bubble.textContent)).toEqual([
+      "Aura我在，刚才那件事我已经记住了。",
+      "你继续说！",
+      "第三句还在写"
+    ]);
+
+    await act(async () => {
+      root.unmount();
+    });
+  });
+
+  it("keeps user messages as one bubble even when they contain several sentences", async () => {
+    const container = document.createElement("div");
+    const root = createRoot(container);
+    const message: Message = {
+      id: "message-1",
+      sessionId: "session-1",
+      profileId: "profile-1",
+      role: "user",
+      content: "第一句。第二句。",
+      createdAt: "2026-05-05T00:00:00.000Z"
+    };
+
+    await act(async () => {
+      root.render(<MessageList messages={[message]} />);
+    });
+
+    const userBubbles = Array.from(container.querySelectorAll(".message-user"));
+    expect(userBubbles).toHaveLength(1);
+    expect(userBubbles[0]?.textContent).toBe("You第一句。第二句。");
+
+    await act(async () => {
+      root.unmount();
+    });
+  });
 });
