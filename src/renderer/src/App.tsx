@@ -10,6 +10,7 @@ export function App() {
   const agentStatus = useAuraBotStore((state) => state.agentStatus);
   const petSettings = useAuraBotStore((state) => state.petSettings);
   const petActivity = useAuraBotStore((state) => state.petActivity);
+  const petCursorPosition = useAuraBotStore((state) => state.petCursorPosition);
   const memoryDebugSnapshot = useAuraBotStore((state) => state.memoryDebugSnapshot);
   const debugPetOverlay = useAuraBotStore((state) => state.debugPetOverlay);
   const sendMessage = useAuraBotStore((state) => state.sendMessage);
@@ -47,9 +48,11 @@ export function App() {
           agentStatus={agentStatus}
           petSettings={petSettings}
           petActivity={petActivity}
+          petCursorPosition={petCursorPosition}
           debugPetOverlay={debugPetOverlay}
           onOpenConsole={openConsoleWindow}
           onSendVoiceInput={(content) => sendMessage(content, "pet_voice")}
+          onSendTextInput={(content) => sendMessage(content, "pet_text")}
           onSetMousePassthrough={setPetMousePassthrough}
           onMovePetWindowBy={movePetWindowBy}
           onShowPetNotice={showPetNotice}

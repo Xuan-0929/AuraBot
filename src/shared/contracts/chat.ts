@@ -20,7 +20,7 @@ export interface GateDecision {
 
 export interface SendChatMessageInput {
   content: string;
-  source?: "console" | "pet_voice";
+  source?: "console" | "pet_voice" | "pet_text";
 }
 
 export interface SendChatMessageResult {

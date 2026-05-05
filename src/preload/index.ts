@@ -29,6 +29,13 @@ const api: AuraBotApi = {
 
     return () => ipcRenderer.removeListener(IPC_CHANNELS.petActivity, handler);
   },
+  onPetCursorPosition: (listener) => {
+    const handler = (_event: Electron.IpcRendererEvent, position: Parameters<typeof listener>[0]) => listener(position);
+
+    ipcRenderer.on(IPC_CHANNELS.petCursorPosition, handler);
+
+    return () => ipcRenderer.removeListener(IPC_CHANNELS.petCursorPosition, handler);
+  },
   onAgentStatusChanged: (listener: (status: AgentStatus) => void) => {
     const handler = (_event: Electron.IpcRendererEvent, status: AgentStatus) => listener(status);
 

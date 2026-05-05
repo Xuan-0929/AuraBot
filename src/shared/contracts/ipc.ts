@@ -14,6 +14,7 @@ export const IPC_CHANNELS = {
   movePetWindowBy: "pet:move-window-by",
   petSettingsChanged: "pet:settings-changed",
   petActivity: "pet:activity",
+  petCursorPosition: "pet:cursor-position",
   agentStatusChanged: "agent:status-changed",
   chatMessageCreated: "chat:message-created",
   sendChatMessage: "chat:send-message",
@@ -69,6 +70,13 @@ export interface TaskResultFileActionResult {
   error?: string;
 }
 
+export interface PetCursorPosition {
+  screenX: number;
+  screenY: number;
+  localX: number;
+  localY: number;
+}
+
 export interface AuraBotApi {
   getInitialState(): Promise<AppInitialState>;
   openConsoleWindow(): Promise<void>;
@@ -78,6 +86,7 @@ export interface AuraBotApi {
   movePetWindowBy(delta: { x: number; y: number }): Promise<void>;
   onPetSettingsChanged(listener: (settings: PetSettings) => void): () => void;
   onPetActivity(listener: (activity: PetActivity) => void): () => void;
+  onPetCursorPosition(listener: (position: PetCursorPosition) => void): () => void;
   onAgentStatusChanged(listener: (status: import("./chat").AgentStatus) => void): () => void;
   onChatMessageCreated(listener: (message: Message) => void): () => void;
   onTaskChanged(listener: (task: Task) => void): () => void;

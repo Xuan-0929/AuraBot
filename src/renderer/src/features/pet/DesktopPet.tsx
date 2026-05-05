@@ -1,5 +1,6 @@
-import { useEffect, useRef, useState, type PointerEvent } from "react";
+import { useEffect, useRef, useState, type FormEvent, type KeyboardEvent, type PointerEvent } from "react";
 import type { AgentStatus } from "../../../../shared/contracts/chat";
+import type { PetCursorPosition } from "../../../../shared/contracts/ipc";
 import type { PetActivity } from "../../../../shared/contracts/pet";
 import type { PetSettings } from "../../../../shared/schemas/petSettings";
 import { Live2DModelCanvas } from "../live2d/Live2DModelCanvas";
@@ -9,9 +10,11 @@ export interface DesktopPetProps {
   agentStatus: AgentStatus;
   petSettings: PetSettings;
   petActivity?: PetActivity;
+  petCursorPosition?: PetCursorPosition;
   debugPetOverlay: boolean;
   onOpenConsole(): Promise<void>;
   onSendVoiceInput(content: string): Promise<void>;
+  onSendTextInput(content: string): Promise<void>;
   onSetMousePassthrough(enabled: boolean): Promise<void>;
   onMovePetWindowBy(delta: { x: number; y: number }): Promise<void>;
   onShowPetNotice(message: string): void;
@@ -20,8 +23,12 @@ export interface DesktopPetProps {
 
 const MODEL_PATH = "assets/live2d/hiyori/Hiyori.model3.json";
 const PET_ACTIVITY_TIMEOUT_MS = 7000;
+const HOVER_CHAT_WIDTH_PX = 224;
+const HOVER_CHAT_GAP_PX = 12;
+const HOVER_EXIT_GRACE_MS = 180;
 
 type VoiceState = "idle" | "recording";
+type HoverChatSide = "left" | "right";
 
 interface SpeechRecognitionLike {
   lang: string;
@@ -48,9 +55,11 @@ export function DesktopPet({
   agentStatus,
   petSettings,
   petActivity,
+  petCursorPosition,
   debugPetOverlay,
   onOpenConsole,
   onSendVoiceInput,
+  onSendTextInput,
   onSetMousePassthrough,
   onMovePetWindowBy,
   onShowPetNotice,
@@ -58,12 +67,22 @@ export function DesktopPet({
 }: DesktopPetProps) {
   const [isModelHovering, setIsModelHovering] = useState(false);
   const [isControlsHovering, setIsControlsHovering] = useState(false);
+  const [isHoverChatHovering, setIsHoverChatHovering] = useState(false);
+  const [isHoverChatFocused, setIsHoverChatFocused] = useState(false);
   const [isDragging, setIsDragging] = useState(false);
   const [voiceState, setVoiceState] = useState<VoiceState>("idle");
+  const [hoverChatSide, setHoverChatSide] = useState<HoverChatSide>("left");
+  const [hoverChatContent, setHoverChatContent] = useState("");
+  const [isHoverChatExpanded, setIsHoverChatExpanded] = useState(false);
+  const [isHoverChatSubmitting, setIsHoverChatSubmitting] = useState(false);
+  const modelButtonRef = useRef<HTMLButtonElement>(null);
+  const hoverChatTextareaRef = useRef<HTMLTextAreaElement>(null);
   const recognitionRef = useRef<SpeechRecognitionLike | undefined>(undefined);
+  const hoverExitTimeoutRef = useRef<number | undefined>(undefined);
   const mousePassthroughRef = useRef<boolean | undefined>(undefined);
   const lastDragPositionRef = useRef<{ x: number; y: number } | undefined>(undefined);
-  const areQuickControlsVisible = isModelHovering || isControlsHovering || isDragging;
+  const isHoverUiVisible =
+    isModelHovering || isControlsHovering || isHoverChatHovering || isHoverChatFocused || isDragging;
 
   useEffect(() => {
     if (!petActivity) {
@@ -81,6 +100,26 @@ export function DesktopPet({
     mousePassthroughRef.current = undefined;
   }, [petSettings.clickThroughPet]);
 
+  useEffect(() => {
+    if (!isHoverChatExpanded) {
+      return;
+    }
+
+    const frameId = window.requestAnimationFrame(() => {
+      hoverChatTextareaRef.current?.focus();
+    });
+
+    return () => window.cancelAnimationFrame(frameId);
+  }, [isHoverChatExpanded]);
+
+  useEffect(() => {
+    return () => {
+      if (hoverExitTimeoutRef.current) {
+        window.clearTimeout(hoverExitTimeoutRef.current);
+      }
+    };
+  }, []);
+
   function setHoverPassthrough(enabled: boolean) {
     if (mousePassthroughRef.current === enabled) {
       return;
@@ -96,9 +135,9 @@ export function DesktopPet({
     }
 
     const target = event.target instanceof Element ? event.target : undefined;
-    const isOverQuickControls = Boolean(target?.closest(".pet-quick-controls"));
+    const isOverInteractivePetUi = Boolean(target?.closest(".pet-quick-controls, .pet-hover-chat"));
 
-    setHoverPassthrough(!isOverQuickControls);
+    setHoverPassthrough(!isOverInteractivePetUi);
   }
 
   function handleVoiceClick() {
@@ -144,6 +183,7 @@ export function DesktopPet({
   }
 
   function handleControlsPointerEnter() {
+    clearHoverExitTimeout();
     setIsControlsHovering(true);
 
     if (petSettings.clickThroughPet) {
@@ -157,6 +197,85 @@ export function DesktopPet({
     if (petSettings.clickThroughPet && !isDragging) {
       setHoverPassthrough(true);
     }
+  }
+
+  function handleModelPointerEnter() {
+    clearHoverExitTimeout();
+    updateHoverChatSide();
+    setIsModelHovering(true);
+  }
+
+  function handleModelPointerLeave() {
+    clearHoverExitTimeout();
+    hoverExitTimeoutRef.current = window.setTimeout(() => {
+      setIsModelHovering(false);
+      hoverExitTimeoutRef.current = undefined;
+    }, HOVER_EXIT_GRACE_MS);
+  }
+
+  function clearHoverExitTimeout() {
+    if (!hoverExitTimeoutRef.current) {
+      return;
+    }
+
+    window.clearTimeout(hoverExitTimeoutRef.current);
+    hoverExitTimeoutRef.current = undefined;
+  }
+
+  function updateHoverChatSide() {
+    const modelRect = modelButtonRef.current?.getBoundingClientRect();
+
+    if (!modelRect) {
+      setHoverChatSide("left");
+      return;
+    }
+
+    const requiredLeftWidth = HOVER_CHAT_WIDTH_PX + HOVER_CHAT_GAP_PX;
+
+    setHoverChatSide(modelRect.left >= requiredLeftWidth ? "left" : "right");
+  }
+
+  async function sendHoverChatContent(nextContent: string) {
+    const trimmed = nextContent.trim();
+
+    if (!trimmed || isHoverChatSubmitting) {
+      return;
+    }
+
+    setIsHoverChatSubmitting(true);
+    setHoverChatContent("");
+
+    try {
+      await onSendTextInput(trimmed);
+      setIsHoverChatExpanded(false);
+    } catch (error) {
+      setHoverChatContent((currentContent) => currentContent || nextContent);
+      throw error;
+    } finally {
+      setIsHoverChatSubmitting(false);
+    }
+  }
+
+  function handleHoverChatSubmit(event: FormEvent<HTMLFormElement>) {
+    event.preventDefault();
+    void sendHoverChatContent(hoverChatContent);
+  }
+
+  function handleHoverChatKeyDown(event: KeyboardEvent<HTMLTextAreaElement>) {
+    if (event.key !== "Enter" || event.nativeEvent.isComposing) {
+      return;
+    }
+
+    if (event.ctrlKey) {
+      return;
+    }
+
+    event.preventDefault();
+    void sendHoverChatContent(event.currentTarget.value);
+  }
+
+  function focusHoverChatInput() {
+    hoverChatTextareaRef.current?.focus();
   }
 
   function handleDragPointerDown(event: PointerEvent<HTMLButtonElement>) {
@@ -214,6 +333,7 @@ export function DesktopPet({
       ) : null}
       <button
         className="desktop-pet-model-button"
+        ref={modelButtonRef}
         type="button"
         aria-label="Interact with AuraBot"
         onClick={() => void onOpenConsole()}
@@ -221,16 +341,72 @@ export function DesktopPet({
         <span
           className="desktop-pet-model-shell"
           data-testid="live2d-model-surface"
-          onPointerEnter={() => setIsModelHovering(true)}
-          onPointerLeave={() => setIsModelHovering(false)}
+          onPointerEnter={handleModelPointerEnter}
+          onPointerLeave={handleModelPointerLeave}
         >
-          <Live2DModelCanvas modelPath={MODEL_PATH} agentStatus={agentStatus} compact debug={debugPetOverlay} />
+          <Live2DModelCanvas
+            modelPath={MODEL_PATH}
+            agentStatus={agentStatus}
+            compact
+            debug={debugPetOverlay}
+            cursorPosition={petCursorPosition}
+          />
         </span>
       </button>
+      {isHoverUiVisible ? (
+        <form
+          className="pet-hover-chat"
+          aria-label="Pet quick chat"
+          data-side={hoverChatSide}
+          data-expanded={isHoverChatExpanded ? "true" : "false"}
+          onClick={focusHoverChatInput}
+          onSubmit={handleHoverChatSubmit}
+          onPointerEnter={() => {
+            clearHoverExitTimeout();
+            setIsHoverChatHovering(true);
+          }}
+          onPointerLeave={() => setIsHoverChatHovering(false)}
+        >
+          {isHoverChatExpanded ? (
+            <>
+              <textarea
+                ref={hoverChatTextareaRef}
+                value={hoverChatContent}
+                onChange={(event) => setHoverChatContent(event.target.value)}
+                onFocus={() => setIsHoverChatFocused(true)}
+                onBlur={() => setIsHoverChatFocused(false)}
+                onKeyDown={handleHoverChatKeyDown}
+                placeholder="给主对话发送消息"
+                rows={2}
+              />
+              <button
+                className="pet-hover-chat-send"
+                type="submit"
+                disabled={isHoverChatSubmitting || !hoverChatContent.trim()}
+                aria-label="Send pet chat"
+              >
+                Send
+              </button>
+            </>
+          ) : (
+            <button
+              className="pet-hover-chat-trigger"
+              type="button"
+              aria-label="Open pet quick chat"
+              onClick={(event) => {
+                event.stopPropagation();
+                setIsHoverChatExpanded(true);
+              }}
+            >
+              Chat
+            </button>
+          )}
+        </form>
+      ) : null}
       <div
         className="pet-quick-controls"
         aria-label="Pet quick controls"
-        data-visible={areQuickControlsVisible ? "true" : "false"}
+        data-visible={isHoverUiVisible ? "true" : "false"}
         onPointerEnter={handleControlsPointerEnter}
         onPointerLeave={handleControlsPointerLeave}
       >

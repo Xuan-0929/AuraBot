@@ -1,6 +1,6 @@
 import { afterEach, beforeEach, describe, expect, test, vi } from "vitest";
 import { useAuraBotStore } from "../../../src/renderer/src/app/store";
-import type { MemoryDebugSnapshot } from "../../../src/shared/contracts/ipc";
+import type { MemoryDebugSnapshot, PetCursorPosition } from "../../../src/shared/contracts/ipc";
 import type { SendChatMessageResult } from "../../../src/shared/contracts/chat";
 import type { Message } from "../../../src/shared/schemas/message";
 import type { Task } from "../../../src/shared/schemas/task";
@@ -88,11 +88,17 @@ describe("useAuraBotStore chat sending", () => {
   test("applies task and assistant message broadcasts from the main process", () => {
     let chatMessageListener: ((message: Message) => void) | undefined;
     let taskChangedListener: ((task: Task) => void) | undefined;
+    let petCursorPositionListener: ((position: PetCursorPosition) => void) | undefined;
     vi.stubGlobal("window", {
       aurabot: {
         onPetSettingsChanged: vi.fn(() => vi.fn()),
         onPetActivity: vi.fn(() => vi.fn()),
         onAgentStatusChanged: vi.fn(() => vi.fn()),
+        onPetCursorPosition: vi.fn((listener: (position: PetCursorPosition) => void) => {
+          petCursorPositionListener = listener;
+
+          return vi.fn();
+        }),
         onChatMessageCreated: vi.fn((listener: (message: Message) => void) => {
           chatMessageListener = listener;
 
@@ -126,9 +132,16 @@ describe("useAuraBotStore chat sending", () => {
       createdAt: "2026-05-04T00:00:01.000Z",
       updatedAt: "2026-05-04T00:00:02.000Z"
     };
+    const cursorPosition: PetCursorPosition = {
+      screenX: 1200,
+      screenY: 480,
+      localX: 334,
+      localY: 180
+    };
 
     chatMessageListener?.(assistantMessage);
     chatMessageListener?.(assistantMessage);
+    petCursorPositionListener?.(cursorPosition);
     taskChangedListener?.(runningTask);
     taskChangedListener?.({
       ...runningTask,
@@ -144,6 +157,7 @@ describe("useAuraBotStore chat sending", () => {
       status: "completed",
       latestProgress: "Codex 子任务完成：GitHub 周报已经写好。"
     });
+    expect(useAuraBotStore.getState().petCursorPosition).toBe(cursorPosition);
 
     unsubscribe();
   });

@@ -2,6 +2,7 @@ import { useEffect, useRef, useState } from "react";
 import type { DisplayObject } from "pixi.js";
 import cubismCoreUrl from "live2dcubismcore/live2dcubismcore.min.js?url";
 import type { AgentStatus } from "../../../../shared/contracts/chat";
+import type { PetCursorPosition } from "../../../../shared/contracts/ipc";
 import {
   calculateLive2DPlacement,
   resolveLive2DHostSize
@@ -19,6 +20,7 @@ interface Live2DModelCanvasProps {
   agentStatus: AgentStatus;
   compact?: boolean;
   debug?: boolean;
+  cursorPosition?: PetCursorPosition;
 }
 
 interface Live2DModelRuntime {
@@ -36,6 +38,7 @@ interface Live2DModelRuntime {
   x: number;
   y: number;
   motion(group: string, index?: number): unknown;
+  focus(x: number, y: number, instant?: boolean): void;
   on(eventName: "hit", handler: () => void): void;
 }
 
@@ -46,7 +49,13 @@ declare global {
   }
 }
 
-export function Live2DModelCanvas({ modelPath, agentStatus, compact = false, debug = false }: Live2DModelCanvasProps) {
+export function Live2DModelCanvas({
+  modelPath,
+  agentStatus,
+  compact = false,
+  debug = false,
+  cursorPosition
+}: Live2DModelCanvasProps) {
   const hostRef = useRef<HTMLDivElement>(null);
   const canvasRef = useRef<HTMLCanvasElement>(null);
   const modelRef = useRef<Live2DModelRuntime | undefined>(undefined);
@@ -81,7 +90,7 @@ export function Live2DModelCanvas({ modelPath, agentStatus, compact = false, deb
           preserveDrawingBuffer: true,
           resizeTo: host
         });
-        const model = (await Live2DModel.from(modelPath)) as Live2DModelRuntime;
+        const model = (await Live2DModel.from(modelPath, { autoInteract: false })) as Live2DModelRuntime;
         model.autoUpdate = true;
 
         if (disposed) {
@@ -173,6 +182,19 @@ export function Live2DModelCanvas({ modelPath, agentStatus, compact = false, deb
     lastMotionSignatureRef.current = signature;
     model.motion(motion.group, motion.index);
   }, [agentStatus, renderState]);
+
+  useEffect(() => {
+    const model = modelRef.current;
+    const host = hostRef.current;
+
+    if (!model || !host || !cursorPosition || renderState !== "ready") {
+      return;
+    }
+
+    const hostRect = host.getBoundingClientRect();
+
+    model.focus(cursorPosition.localX - hostRect.left, cursorPosition.localY - hostRect.top);
+  }, [cursorPosition, renderState]);
 
   return (
     <div

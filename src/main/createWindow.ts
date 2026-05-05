@@ -6,12 +6,14 @@ import type { Message } from "../shared/schemas/message";
 import type { PetActivity } from "../shared/contracts/pet";
 import { DEFAULT_PET_SETTINGS, type PetSettings } from "../shared/schemas/petSettings";
 import type { Task } from "../shared/schemas/task";
+import { createPetCursorPosition } from "./petCursorTracking";
 import { clampWindowBoundsToWorkArea, placeWindowNearPet, type WindowRectangle } from "./windowPlacement";
 
 let petWindow: BrowserWindow | undefined;
 let consoleWindow: BrowserWindow | undefined;
 let currentPetSettings: PetSettings = { ...DEFAULT_PET_SETTINGS };
 let onPetBoundsChanged: ((bounds: WindowRectangle) => void) | undefined;
+let petCursorTrackingInterval: NodeJS.Timeout | undefined;
 
 const PET_WINDOW_SIZE = {
   width: 300,
@@ -22,6 +24,7 @@ const CONSOLE_WINDOW_SIZE = {
   width: 920,
   height: 700
 };
+const PET_CURSOR_TRACKING_INTERVAL_MS = 50;
 
 export interface CreatePetWindowOptions {
   settings?: PetSettings;
@@ -62,9 +65,11 @@ export function createPetWindow(options: CreatePetWindowOptions = {}): BrowserWi
   petWindow.setVisibleOnAllWorkspaces(true, { visibleOnFullScreen: true });
   petWindow.on("closed", () => {
     petWindow = undefined;
+    stopPetCursorTracking();
   });
   loadRenderer(petWindow, "pet");
   applyPetSettings(settings);
+  startPetCursorTracking();
 
   return petWindow;
 }
@@ -227,4 +232,38 @@ function sendToRenderer(channel: string, payload: unknown): void {
       window.webContents.send(channel, payload);
     }
   }
+}
+
+function startPetCursorTracking(): void {
+  if (petCursorTrackingInterval) {
+    return;
+  }
+
+  petCursorTrackingInterval = setInterval(() => {
+    if (!petWindow || petWindow.isDestroyed()) {
+      stopPetCursorTracking();
+      return;
+    }
+
+    const cursor = screen.getCursorScreenPoint();
+    const petBounds = petWindow.getBounds();
+
+    petWindow.webContents.send(
+      IPC_CHANNELS.petCursorPosition,
+      createPetCursorPosition({
+        cursor,
+        petBounds
+      })
+    );
+  }, PET_CURSOR_TRACKING_INTERVAL_MS);
+  petCursorTrackingInterval.unref?.();
+}
+
+function stopPetCursorTracking(): void {
+  if (!petCursorTrackingInterval) {
+    return;
+  }
+
+  clearInterval(petCursorTrackingInterval);
+  petCursorTrackingInterval = undefined;
 }

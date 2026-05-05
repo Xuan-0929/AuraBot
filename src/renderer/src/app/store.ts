@@ -1,6 +1,6 @@
 import { create } from "zustand";
 import type { AgentStatus, AppInitialState, SendChatMessageResult } from "../../../shared/contracts/chat";
-import type { MemoryDebugSnapshot } from "../../../shared/contracts/ipc";
+import type { MemoryDebugSnapshot, PetCursorPosition } from "../../../shared/contracts/ipc";
 import type { PetActivity } from "../../../shared/contracts/pet";
 import type { Message } from "../../../shared/schemas/message";
 import { DEFAULT_PET_SETTINGS, type PetSettings, type PetSettingsPatch } from "../../../shared/schemas/petSettings";
@@ -15,6 +15,7 @@ interface AuraBotStore {
   agentStatus: AgentStatus;
   petSettings: PetSettings;
   petActivity?: PetActivity;
+  petCursorPosition?: PetCursorPosition;
   memoryDebugSnapshot?: MemoryDebugSnapshot;
   debugPetOverlay: boolean;
   loadInitialState(): Promise<void>;
@@ -24,7 +25,7 @@ interface AuraBotStore {
   updatePetSettings(patch: PetSettingsPatch): Promise<void>;
   setPetMousePassthrough(enabled: boolean): Promise<void>;
   movePetWindowBy(delta: { x: number; y: number }): Promise<void>;
-  sendMessage(content: string, source?: "console" | "pet_voice"): Promise<void>;
+  sendMessage(content: string, source?: "console" | "pet_voice" | "pet_text"): Promise<void>;
   showPetNotice(message: string): void;
   clearPetActivity(id?: string): void;
 }
@@ -50,6 +51,9 @@ export const useAuraBotStore = create<AuraBotStore>((set, get) => ({
     const unsubscribeActivity = window.aurabot.onPetActivity((petActivity) => {
       set({ petActivity });
     });
+    const unsubscribePetCursorPosition = window.aurabot.onPetCursorPosition((petCursorPosition) => {
+      set({ petCursorPosition });
+    });
     const unsubscribeAgentStatus = window.aurabot.onAgentStatusChanged((agentStatus) => {
       set({ agentStatus });
     });
@@ -71,6 +75,7 @@ export const useAuraBotStore = create<AuraBotStore>((set, get) => ({
     return () => {
       unsubscribeSettings();
       unsubscribeActivity();
+      unsubscribePetCursorPosition();
       unsubscribeAgentStatus();
       unsubscribeChatMessage();
       unsubscribeTaskChanged();
@@ -89,7 +94,7 @@ export const useAuraBotStore = create<AuraBotStore>((set, get) => ({
   async movePetWindowBy(delta: { x: number; y: number }) {
     await window.aurabot.movePetWindowBy(delta);
   },
-  async sendMessage(content: string, source: "console" | "pet_voice" = "console") {
+  async sendMessage(content: string, source: "console" | "pet_voice" | "pet_text" = "console") {
     const trimmed = content.trim();
 
     if (!trimmed) {
