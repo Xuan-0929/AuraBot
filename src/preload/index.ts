@@ -1,5 +1,5 @@
 import { contextBridge, ipcRenderer } from "electron";
-import { IPC_CHANNELS, type AuraBotApi } from "../shared/contracts/ipc";
+import { IPC_CHANNELS, type AuraBotApi, type TaskResultFileActionInput } from "../shared/contracts/ipc";
 import type { AgentStatus, SendChatMessageInput } from "../shared/contracts/chat";
 import type { Message } from "../shared/schemas/message";
 import type { PetActivity } from "../shared/contracts/pet";
@@ -51,6 +51,10 @@ const api: AuraBotApi = {
     return () => ipcRenderer.removeListener(IPC_CHANNELS.taskChanged, handler);
   },
   sendChatMessage: (input: SendChatMessageInput) => ipcRenderer.invoke(IPC_CHANNELS.sendChatMessage, input),
+  openTaskResultFile: (input: TaskResultFileActionInput) =>
+    ipcRenderer.invoke(IPC_CHANNELS.openTaskResultFile, input),
+  showTaskResultFileInFolder: (input: TaskResultFileActionInput) =>
+    ipcRenderer.invoke(IPC_CHANNELS.showTaskResultFileInFolder, input),
   getEventLogs: () => ipcRenderer.invoke(IPC_CHANNELS.getEventLogs),
   getMemoryDebugSnapshot: () => ipcRenderer.invoke(IPC_CHANNELS.getMemoryDebugSnapshot)
 };

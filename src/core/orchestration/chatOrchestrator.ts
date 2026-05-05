@@ -1,6 +1,5 @@
 import type { SendChatMessageInput, SendChatMessageResult } from "../../shared/contracts/chat";
 import type { MemoryNode } from "../../shared/schemas/memory";
-import type { Task } from "../../shared/schemas/task";
 import { shouldAskMemoryRecall, type MemoryExtractor } from "../memory/memoryExtractor";
 import type { MemoryService } from "../memory/memoryService";
 import type { MessageRepository } from "../storage/repositories/messageRepository";
@@ -11,6 +10,9 @@ import type { EventLogService } from "../telemetry/eventLogService";
 import { parseTaskControlRequest } from "../tasks/taskControlRouter";
 import type { GateModel } from "../llm/gateModel";
 import type { ChatModel } from "../llm/chatModel";
+import { buildTaskSettledMessageDraft, buildTaskStatusResponse } from "../tasks/taskPresentation";
+
+const GATE_CONTEXT_MESSAGE_LIMIT = 10;
 
 export interface ChatOrchestratorDependencies {
   profileService: ProfileService;
@@ -37,13 +39,21 @@ export class ChatOrchestrator {
       role: "user",
       content: input.content
     });
-    const recentUserMessages = this.dependencies.messageRepository
-      .listRecentUserMessages(mainSession.id, 4)
+    const recentMessages = this.dependencies.messageRepository
+      .listRecentBySession(mainSession.id, GATE_CONTEXT_MESSAGE_LIMIT + 1)
       .filter((message) => message.id !== userMessage.id)
+      .slice(-GATE_CONTEXT_MESSAGE_LIMIT)
+      .map((message) => ({
+        role: message.role,
+        content: message.content
+      }));
+    const recentUserMessages = recentMessages
+      .filter((message) => message.role === "user")
       .map((message) => message.content);
     const gateDecision = await this.dependencies.gateModel.evaluate({
       currentMessage: input.content,
-      recentUserMessages
+      recentUserMessages,
+      recentMessages
     });
 
     this.dependencies.eventLogService.record("gate.decision", {
@@ -85,7 +95,7 @@ export class ChatOrchestrator {
         sessionId: mainSession.id,
         profileId: profile.id,
         role: "assistant",
-        content: `我先把这个任务排上：${createdTask.title}`
+        content: buildTaskAcceptedReply()
       });
 
       this.dependencies.eventLogService.record("chat.message_persisted", {
@@ -158,6 +168,7 @@ export class ChatOrchestrator {
       role: "assistant",
       content: await this.dependencies.chatModel.generateReply({
         userContent: semanticSegment,
+        soul: profile.soul,
         writtenMemories,
         recalledMemories: shouldAskMemoryRecall(semanticSegment) ? memoryContext.nodes : recalledMemories,
         dueFollowUps,
@@ -246,7 +257,7 @@ export class ChatOrchestrator {
     const selectedTask = this.dependencies.taskService.findTaskForChatControl({
       profileId: input.profileId,
       targetHint: request.targetHint,
-      activeOnly: request.action === "start" || request.action === "interrupt"
+      activeOnly: request.action === "interrupt"
     });
     let updatedTask;
     let responseContent: string;
@@ -256,11 +267,17 @@ export class ChatOrchestrator {
         ? `我没有找到和「${request.targetHint}」匹配的任务。`
         : "我这边还没有正在跟的任务。";
     } else if (request.action === "query") {
-      responseContent = this.buildTaskStatusResponse(selectedTask);
+      responseContent = buildTaskStatusResponse(
+        selectedTask,
+        this.dependencies.taskService.listTaskEvents(selectedTask.id)
+      );
     } else if (request.action === "start") {
       if (selectedTask.status !== "queued") {
         updatedTask = selectedTask;
-        responseContent = `这个任务现在是 ${selectedTask.status}，不用重复开始：${selectedTask.title}`;
+        responseContent = buildTaskStatusResponse(
+          selectedTask,
+          this.dependencies.taskService.listTaskEvents(selectedTask.id)
+        );
       } else {
         updatedTask = await this.dependencies.taskService.runTaskFromChat({
           profileId: input.profileId,
@@ -269,11 +286,20 @@ export class ChatOrchestrator {
         if (!updatedTask) {
           responseContent = "我没有找到可开始的排队任务。";
         } else if (updatedTask.status === "completed") {
-          responseContent = `这个任务我跑完了：${updatedTask.latestProgress}`;
+          responseContent = buildTaskSettledMessageDraft(
+            updatedTask,
+            this.dependencies.taskService.listTaskEvents(updatedTask.id)
+          ).content;
         } else if (updatedTask.status === "failed") {
-          responseContent = `这个任务跑失败了：${updatedTask.latestProgress}`;
+          responseContent = buildTaskSettledMessageDraft(
+            updatedTask,
+            this.dependencies.taskService.listTaskEvents(updatedTask.id)
+          ).content;
         } else {
-          responseContent = `这个任务现在是 ${updatedTask.status}：${updatedTask.latestProgress}`;
+          responseContent = buildTaskStatusResponse(
+            updatedTask,
+            this.dependencies.taskService.listTaskEvents(updatedTask.id)
+          );
         }
       }
     } else if (request.action === "interrupt") {
@@ -283,8 +309,8 @@ export class ChatOrchestrator {
         reason: "用户在主聊天线程要求停掉"
       });
       responseContent = updatedTask
-        ? `行，我先把这个任务停下：${updatedTask.title}`
-        : `这个任务现在是 ${selectedTask.status}，没有可打断的运行态。`;
+        ? "好，我先停下来。你想换方向的话，直接告诉我。"
+        : "这件事现在不用停，我这边没有可打断的运行状态。";
     } else {
       const revisedTitle = request.revisedTitle ?? input.content;
       updatedTask = this.dependencies.taskService.reviseTaskFromChat({
@@ -293,7 +319,7 @@ export class ChatOrchestrator {
         title: revisedTitle
       });
       responseContent = updatedTask
-        ? `我把任务方向改成：${updatedTask.title}`
+        ? `好，我按这个新方向来：${updatedTask.title}`
         : "这个任务没改成，我没有找到可修改的任务。";
     }
 
@@ -322,50 +348,6 @@ export class ChatOrchestrator {
     };
   }
 
-  private buildTaskStatusResponse(task: Task) {
-    const events = this.dependencies.taskService.listTaskEvents(task.id);
-    const latestEvent = events.at(-1);
-    const details = [
-      `这个任务现在是 ${task.status}：${task.title}`,
-      `最近进展：${task.latestProgress}`
-    ];
-
-    if (latestEvent) {
-      details.push(`最近事件：${latestEvent.summary}`);
-      details.push(...this.formatTaskEventDetails(latestEvent));
-    }
-
-    if (task.status === "running") {
-      details.push("我会在这个子任务完成、失败或异常时自动回到主聊天。");
-    }
-
-    if (task.status === "queued") {
-      details.push("它还没进入执行态；如果需要立刻执行，可以说“开始做这个任务”。");
-    }
-
-    return details.join("\n");
-  }
-
-  private formatTaskEventDetails(event: { payload: Record<string, unknown> }): string[] {
-    const details: string[] = [];
-    const cwd = typeof event.payload.cwd === "string" ? event.payload.cwd : undefined;
-    const outputFile = typeof event.payload.outputFile === "string" ? event.payload.outputFile : undefined;
-    const sandbox = typeof event.payload.sandbox === "string" ? event.payload.sandbox : undefined;
-
-    if (cwd) {
-      details.push(`运行目录：${cwd}`);
-    }
-
-    if (outputFile) {
-      details.push(`输出文件：${outputFile}`);
-    }
-
-    if (sandbox) {
-      details.push(`sandbox：${sandbox}`);
-    }
-
-    return details;
-  }
 }
 
 function dedupeMemoryNodes(memories: MemoryNode[]): MemoryNode[] {
@@ -382,4 +364,8 @@ function dedupeMemoryNodes(memories: MemoryNode[]): MemoryNode[] {
   }
 
   return result;
+}
+
+function buildTaskAcceptedReply(): string {
+  return "好！我现在就开始做。";
 }

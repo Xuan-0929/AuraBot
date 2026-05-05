@@ -17,11 +17,48 @@ describe("chat task integration", () => {
 
     expect(result.gateDecision?.inputKind).toBe("task");
     expect(result.createdTask?.title).toContain("明天会议");
-    expect(result.assistantMessage?.content).toContain("任务");
+    expect(result.assistantMessage?.content).toBe("好！我现在就开始做。");
+    expect(result.assistantMessage?.content).not.toContain("排队");
+    expect(result.assistantMessage?.content).not.toContain("任务");
     expect(tasks).toHaveLength(1);
     expect(tasks[0]?.status).toBe("queued");
     expect(memoryContext.nodes).toHaveLength(0);
   });
+
+  it("treats writing a reading note as a task instead of waiting for more chat", async () => {
+    const { services, orchestrator } = createTestOrchestrator("aurabot-chat-task-");
+
+    const result = await orchestrator.sendMessage({ content: "帮我写一份实践论的读书笔记" });
+    const profile = services.profileService.getOrSeedActiveProfile();
+    const tasks = services.taskService.listTasksForProfile(profile.id);
+
+    expect(result.agentStatus).toBe("tasking");
+    expect(result.gateDecision?.inputKind).toBe("task");
+    expect(result.gateDecision?.replyDecision).toBe("reply");
+    expect(result.assistantMessage?.content).toBe("好！我现在就开始做。");
+    expect(tasks).toHaveLength(1);
+    expect(tasks[0]?.title).toContain("实践论");
+    expect(tasks[0]?.status).toBe("queued");
+  });
+
+  it.each(["做一份读书笔记", "写一份GitHub周报"])(
+    "treats direct creation request %s as a task without requiring a helper prefix",
+    async (content) => {
+      const { services, orchestrator } = createTestOrchestrator("aurabot-chat-task-");
+
+      const result = await orchestrator.sendMessage({ content });
+      const profile = services.profileService.getOrSeedActiveProfile();
+      const tasks = services.taskService.listTasksForProfile(profile.id);
+
+      expect(result.agentStatus).toBe("tasking");
+      expect(result.gateDecision?.inputKind).toBe("task");
+      expect(result.gateDecision?.replyDecision).toBe("reply");
+      expect(result.assistantMessage?.content).toBe("好！我现在就开始做。");
+      expect(tasks).toHaveLength(1);
+      expect(tasks[0]?.title).toBe(content);
+      expect(tasks[0]?.status).toBe("queued");
+    }
+  );
 
   it("lets the main chat query, interrupt, and revise the latest task", async () => {
     const { services, orchestrator } = createTestOrchestrator("aurabot-chat-task-");
@@ -34,9 +71,9 @@ describe("chat task integration", () => {
     const tasks = services.taskService.listTasksForProfile(profile.id);
 
     expect(query.gateDecision?.inputKind).toBe("task_control");
-    expect(query.assistantMessage?.content).toContain("queued");
-    expect(query.assistantMessage?.content).toContain("最近进展");
-    expect(query.assistantMessage?.content).toContain("Task queued from main chat.");
+    expect(query.assistantMessage?.content).toContain("还没开始处理");
+    expect(query.assistantMessage?.content).toContain("明天会议");
+    expect(query.assistantMessage?.content).toContain("开始做这个任务");
     expect(interrupt.updatedTask?.status).toBe("interrupted");
     expect(interrupt.assistantMessage?.content).toContain("停下");
     expect(revise.updatedTask?.status).toBe("queued");
@@ -52,17 +89,22 @@ describe("chat task integration", () => {
     await orchestrator.sendMessage({ content: "帮我整理一份明天会议的清单。" });
     const start = await orchestrator.sendMessage({ content: "开始做这个任务。" });
     const query = await orchestrator.sendMessage({ content: "这个任务做到哪了？" });
+    const repeatStart = await orchestrator.sendMessage({ content: "开始做这个任务。" });
     const profile = services.profileService.getOrSeedActiveProfile();
     const tasks = services.taskService.listTasksForProfile(profile.id);
 
     expect(start.updatedTask?.status).toBe("completed");
-    expect(start.assistantMessage?.content).toContain("完成");
-    expect(query.assistantMessage?.content).toContain("completed");
-    expect(query.assistantMessage?.content).toContain("明天会议");
+    expect(start.assistantMessage?.content).toContain("好啦");
+    expect(start.assistantMessage?.content).toContain("整理好了");
+    expect(query.assistantMessage?.content).toContain("好啦");
+    expect(query.assistantMessage?.content).not.toContain("completed");
+    expect(repeatStart.assistantMessage?.content).toContain("好啦");
+    expect(repeatStart.assistantMessage?.content).not.toContain("completed");
+    expect(repeatStart.assistantMessage?.content).not.toContain("queued");
     expect(tasks[0]?.latestProgress).toContain("完成");
   });
 
-  it("reports child agent execution details when querying a running task", async () => {
+  it("describes a running child agent task without exposing execution details", async () => {
     const { services, orchestrator } = createTestOrchestrator("aurabot-chat-task-");
     const taskRepository = new TaskRepository(services.database);
 
@@ -86,12 +128,14 @@ describe("chat task integration", () => {
 
     const query = await orchestrator.sendMessage({ content: "这个任务做到哪了？" });
 
-    expect(query.assistantMessage?.content).toContain("running");
-    expect(query.assistantMessage?.content).toContain("最近事件：Codex 子任务已启动");
-    expect(query.assistantMessage?.content).toContain("运行目录：/Users/xuan/project");
-    expect(query.assistantMessage?.content).toContain("输出文件：/Users/xuan/output/task.md");
-    expect(query.assistantMessage?.content).toContain("sandbox：workspace-write");
-    expect(query.assistantMessage?.content).toContain("自动回到主聊天");
+    expect(query.assistantMessage?.content).toContain("我正在处理");
+    expect(query.assistantMessage?.content).toContain("GitHub 周报");
+    expect(query.assistantMessage?.content).toContain("完成后我会回来告诉你");
+    expect(query.assistantMessage?.content).not.toContain("running");
+    expect(query.assistantMessage?.content).not.toContain("Codex");
+    expect(query.assistantMessage?.content).not.toContain("/Users/xuan/project");
+    expect(query.assistantMessage?.content).not.toContain("/Users/xuan/output/task.md");
+    expect(query.assistantMessage?.content).not.toContain("sandbox");
   });
 
   it("reports a child task runner failure back through the main chat", async () => {
@@ -119,7 +163,7 @@ describe("chat task integration", () => {
     const start = await orchestrator.sendMessage({ content: "开始做这个任务。" });
 
     expect(start.updatedTask?.status).toBe("failed");
-    expect(start.assistantMessage?.content).toContain("这个任务跑失败了");
+    expect(start.assistantMessage?.content).toContain("这次没跑成");
     expect(start.assistantMessage?.content).toContain("codex exited 1");
   });
 

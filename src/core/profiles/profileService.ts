@@ -1,6 +1,6 @@
 import type { Profile } from "../../shared/schemas/profile";
 import type { ProfileRepository } from "../storage/repositories/profileRepository";
-import { createDefaultProfile } from "./soulService";
+import { createDefaultProfile, DEFAULT_PROFILE_ID } from "./soulService";
 
 export class ProfileService {
   constructor(private readonly profileRepository: ProfileRepository) {}
@@ -9,6 +9,22 @@ export class ProfileService {
     const existing = this.profileRepository.getActiveProfile();
 
     if (existing) {
+      if (existing.id === DEFAULT_PROFILE_ID && existing.soul?.id === "soul_default") {
+        const { profile, soul } = createDefaultProfile(new Date().toISOString());
+        this.profileRepository.upsertDefaultProfile(
+          {
+            ...profile,
+            createdAt: existing.createdAt
+          },
+          {
+            ...soul,
+            createdAt: existing.soul.createdAt
+          }
+        );
+
+        return this.profileRepository.getActiveProfile() ?? existing;
+      }
+
       return existing;
     }
 

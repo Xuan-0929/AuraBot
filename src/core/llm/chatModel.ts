@@ -1,5 +1,6 @@
 import type { GateDecision } from "../../shared/contracts/chat";
 import type { MemoryNode } from "../../shared/schemas/memory";
+import type { Soul } from "../../shared/schemas/profile";
 import type { ModelRoleConfig } from "../../shared/schemas/config";
 import { planAssistantResponse } from "../orchestration/responsePlanner";
 import { OpenAICompatibleChatCompletionClient } from "./openAiCompatibleClient";
@@ -7,6 +8,7 @@ import { ModelBackedChatModel } from "./modelBackedChatModel";
 
 export interface ChatModelInput {
   userContent: string;
+  soul?: Soul;
   writtenMemories: MemoryNode[];
   recalledMemories: MemoryNode[];
   dueFollowUps?: MemoryNode[];
@@ -23,6 +25,7 @@ export class DeterministicChatModel implements ChatModel {
   async generateReply(input: ChatModelInput): Promise<string> {
     return planAssistantResponse({
       userContent: input.userContent,
+      soul: input.soul,
       writtenMemories: input.writtenMemories,
       recalledMemories: input.recalledMemories,
       dueFollowUps: input.dueFollowUps

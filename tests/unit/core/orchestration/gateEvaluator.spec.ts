@@ -39,6 +39,33 @@ describe("evaluateGate", () => {
     expect(decision.inputKind).toBe("task");
   });
 
+  it("classifies writing a reading note as a task even without sentence punctuation", () => {
+    const decision = evaluateGate({
+      currentMessage: "帮我写一份实践论的读书笔记",
+      recentUserMessages: []
+    });
+
+    expect(decision.replyDecision).toBe("reply");
+    expect(decision.memoryDecision).toBe("skip");
+    expect(decision.inputKind).toBe("task");
+    expect(decision.topicEnded).toBe(true);
+  });
+
+  it.each(["做一份读书笔记", "写一份GitHub周报"])(
+    "classifies direct creation request %s as a task without requiring a helper prefix",
+    (content) => {
+      const decision = evaluateGate({
+        currentMessage: content,
+        recentUserMessages: []
+      });
+
+      expect(decision.replyDecision).toBe("reply");
+      expect(decision.memoryDecision).toBe("skip");
+      expect(decision.inputKind).toBe("task");
+      expect(decision.topicEnded).toBe(true);
+    }
+  );
+
   it("classifies conversational task controls separately from new task requests", () => {
     const decision = evaluateGate({
       currentMessage: "先停掉这个任务。",

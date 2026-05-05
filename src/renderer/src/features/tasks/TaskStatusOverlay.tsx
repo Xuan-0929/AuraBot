@@ -13,12 +13,80 @@ export function TaskStatusOverlay({ tasks }: { tasks: Task[] }) {
         <div className="task-status-card" key={task.id}>
           <span className={`task-status-dot task-status-dot-${task.status}`} />
           <span className="task-status-copy">
-            <span className="task-status-title">{task.title}</span>
-            <span className="task-status-progress">{task.latestProgress}</span>
+            <span className="task-status-title">{formatTaskTitle(task.title)}</span>
+            <span className="task-status-progress">{formatTaskProgress(task)}</span>
           </span>
-          <span className="task-status-value">{task.status}</span>
+          <span className="task-status-value">{formatTaskStatus(task.status)}</span>
         </div>
       ))}
     </aside>
   );
+}
+
+function formatTaskStatus(status: Task["status"]): string {
+  if (status === "queued") {
+    return "待开始";
+  }
+
+  if (status === "running" || status === "waiting") {
+    return "处理中";
+  }
+
+  if (status === "completed") {
+    return "完成";
+  }
+
+  if (status === "failed") {
+    return "没跑成";
+  }
+
+  return "已停下";
+}
+
+function formatTaskProgress(task: Task): string {
+  if (task.status === "queued") {
+    return "还没开始";
+  }
+
+  if (task.status === "completed") {
+    return "结果已经准备好";
+  }
+
+  if (task.status === "failed") {
+    return "遇到一点问题";
+  }
+
+  if (task.status === "interrupted") {
+    return "已经停下";
+  }
+
+  return cleanTaskProgress(task.latestProgress);
+}
+
+function cleanTaskProgress(progress: string): string {
+  const cleaned = progress
+    .replace(/^Codex 子任务会话已建立：.*$/u, "已经接上任务线程")
+    .replace(/^Codex 子任务开始处理任务。?$/u, "正在处理")
+    .replace(/^开始调用 Codex 子任务：.*$/u, "正在处理")
+    .replace(/^Codex 子任务完成命令：.*$/u, "刚完成一步处理")
+    .replace(/^Codex 子任务(?:新增|修改|删除)文件：.*$/u, "正在整理结果文件")
+    .replace(/^Codex 子任务本轮处理完成，正在收尾。?$/u, "正在收尾")
+    .trim();
+
+  return cleaned || "正在处理";
+}
+
+function formatTaskTitle(title: string): string {
+  const cleaned = title
+    .trim()
+    .replace(/[。.!！]*$/u, "")
+    .replace(/^(请|麻烦)\s*/u, "")
+    .replace(
+      /^(帮我把|帮我做一下|帮我写一下|帮我整理一下|帮我生成一下|帮我做|帮我写|帮我整理|帮我生成|帮我|做一下|写一下|整理一下|生成一下|做|写|整理|生成)\s*/u,
+      ""
+    )
+    .replace(/^(一份|一个|一篇|一版|这份|这个|一下)\s*/u, "")
+    .trim();
+
+  return cleaned || title;
 }

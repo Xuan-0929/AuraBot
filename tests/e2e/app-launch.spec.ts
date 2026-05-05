@@ -241,11 +241,11 @@ test("creates a visible queued task from a task-like chat request", async () => 
     await consoleWindow.getByPlaceholder("Say something").fill("帮我整理一份明天会议的清单。");
     await consoleWindow.getByRole("button", { name: "Send" }).click();
 
-    await expect(consoleWindow.getByText(/我先把这个任务排上/)).toBeVisible();
+    await expect(consoleWindow.getByText("好！我现在就开始做。")).toBeVisible();
     await expect(consoleWindow.getByLabel("Agent status")).toContainText("Tasking");
     await expect(petWindow.getByLabel("Desktop Live2D pet")).toHaveAttribute("data-agent-status", "tasking");
     await expect(petWindow.locator(".live2d-canvas-host")).toHaveAttribute("data-motion-group", "TapBody");
-    await expect(consoleWindow.locator(".task-status-card").filter({ hasText: "明天会议" })).toContainText("queued");
+    await expect(consoleWindow.locator(".task-status-card").filter({ hasText: "明天会议" })).toContainText("待开始");
     await expect(consoleWindow.locator(".task-panel")).toHaveCount(0);
   } finally {
     await cleanupAuraBot(electronApp, userDataDir);
@@ -261,19 +261,19 @@ test("controls a task through the main chat instead of task panel buttons", asyn
 
     await input.fill("帮我整理一份明天会议的清单。");
     await consoleWindow.getByRole("button", { name: "Send" }).click();
-    await expect(consoleWindow.locator(".task-status-card").filter({ hasText: "明天会议" })).toContainText("queued");
+    await expect(consoleWindow.locator(".task-status-card").filter({ hasText: "明天会议" })).toContainText("待开始");
 
     await input.fill("这个任务做到哪了？");
     await consoleWindow.getByRole("button", { name: "Send" }).click();
-    await expect(consoleWindow.getByText(/现在是 queued/)).toBeVisible();
+    await expect(consoleWindow.getByText(/还没开始处理/)).toBeVisible();
 
     await input.fill("先停掉这个任务。");
     await consoleWindow.getByRole("button", { name: "Send" }).click();
-    await expect(consoleWindow.locator(".task-status-card").filter({ hasText: "明天会议" })).toContainText("interrupted");
+    await expect(consoleWindow.locator(".task-status-card").filter({ hasText: "明天会议" })).toContainText("已停下");
 
     await input.fill("改成整理后天路演的清单。");
     await consoleWindow.getByRole("button", { name: "Send" }).click();
-    await expect(consoleWindow.locator(".task-status-card").filter({ hasText: "后天路演" })).toContainText("queued");
+    await expect(consoleWindow.locator(".task-status-card").filter({ hasText: "后天路演" })).toContainText("待开始");
     await expect(consoleWindow.locator(".task-panel")).toHaveCount(0);
   } finally {
     await cleanupAuraBot(electronApp, userDataDir);
@@ -289,21 +289,21 @@ test("targets a specific task through main chat wording when multiple tasks exis
 
     await input.fill("帮我整理一份明天会议的清单。");
     await consoleWindow.getByRole("button", { name: "Send" }).click();
-    await expect(consoleWindow.locator(".task-status-card").filter({ hasText: "明天会议" })).toContainText("queued");
+    await expect(consoleWindow.locator(".task-status-card").filter({ hasText: "明天会议" })).toContainText("待开始");
 
     await input.fill("帮我生成一份周报初稿。");
     await consoleWindow.getByRole("button", { name: "Send" }).click();
-    await expect(consoleWindow.locator(".task-status-card").filter({ hasText: "周报" })).toContainText("queued");
+    await expect(consoleWindow.locator(".task-status-card").filter({ hasText: "周报" })).toContainText("待开始");
 
     await input.fill("把会议任务改成整理后天路演的清单。");
     await consoleWindow.getByRole("button", { name: "Send" }).click();
-    await expect(consoleWindow.locator(".task-status-card").filter({ hasText: "后天路演" })).toContainText("queued");
-    await expect(consoleWindow.locator(".task-status-card").filter({ hasText: "周报" })).toContainText("queued");
+    await expect(consoleWindow.locator(".task-status-card").filter({ hasText: "后天路演" })).toContainText("待开始");
+    await expect(consoleWindow.locator(".task-status-card").filter({ hasText: "周报" })).toContainText("待开始");
 
     await input.fill("停掉周报任务。");
     await consoleWindow.getByRole("button", { name: "Send" }).click();
-    await expect(consoleWindow.locator(".task-status-card").filter({ hasText: "周报" })).toContainText("interrupted");
-    await expect(consoleWindow.locator(".task-status-card").filter({ hasText: "后天路演" })).toContainText("queued");
+    await expect(consoleWindow.locator(".task-status-card").filter({ hasText: "周报" })).toContainText("已停下");
+    await expect(consoleWindow.locator(".task-status-card").filter({ hasText: "后天路演" })).toContainText("待开始");
     await expect(consoleWindow.locator(".task-panel")).toHaveCount(0);
   } finally {
     await cleanupAuraBot(electronApp, userDataDir);
@@ -319,17 +319,17 @@ test("starts a queued task from the main chat and reports completion", async () 
 
     await input.fill("帮我整理一份明天会议的清单。");
     await consoleWindow.getByRole("button", { name: "Send" }).click();
-    await expect(consoleWindow.locator(".task-status-card").filter({ hasText: "明天会议" })).toContainText("queued");
+    await expect(consoleWindow.locator(".task-status-card").filter({ hasText: "明天会议" })).toContainText("待开始");
 
     await input.fill("开始做这个任务。");
     await consoleWindow.getByRole("button", { name: "Send" }).click();
-    await expect(consoleWindow.locator(".message-assistant").filter({ hasText: /这个任务我跑完了/ })).toBeVisible();
-    await expect(consoleWindow.locator(".task-status-card").filter({ hasText: "明天会议" })).toContainText("completed");
+    await expect(consoleWindow.locator(".message-assistant").filter({ hasText: /好啦/ })).toBeVisible();
+    await expect(consoleWindow.locator(".task-status-card").filter({ hasText: "明天会议" })).toContainText("完成");
     await expect(petWindow.getByLabel("Pet message")).toContainText("任务完成");
 
     await input.fill("这个任务做到哪了？");
     await consoleWindow.getByRole("button", { name: "Send" }).click();
-    await expect(consoleWindow.getByText(/现在是 completed/)).toBeVisible();
+    await expect(consoleWindow.locator(".message-assistant").filter({ hasText: /好啦/ }).last()).toBeVisible();
   } finally {
     await cleanupAuraBot(electronApp, userDataDir);
   }

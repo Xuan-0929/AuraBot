@@ -1,20 +1,28 @@
 import type { GateDecision, InputKind, MemoryDecision, ReplyDecision } from "../../shared/contracts/chat";
+import type { MessageRole } from "../../shared/schemas/message";
+
+export interface GateContextMessage {
+  role: MessageRole;
+  content: string;
+}
 
 export interface GateEvaluationInput {
   currentMessage: string;
   recentUserMessages: string[];
+  recentMessages?: GateContextMessage[];
 }
 
 const CLEAR_BOUNDARY_PATTERN = /[。！？!?]$/;
 const QUESTION_PATTERN = /(吗|么|什么|咋|怎么|哪|多少|来着|？|\?)$/;
-const TASK_PATTERN = /^(帮我|给我|替我|请你|麻烦|整理|生成|写一份|做一个|查一下|搜索|提醒我)/;
+const ASSISTED_TASK_PATTERN = /^(帮我|给我|替我|请你|麻烦|整理|生成|查一下|搜索|提醒我)/;
+const DIRECT_CREATION_TASK_PATTERN = /^(做|写|撰写|整理|生成)(一份|一个|一篇|一版|份|个|篇|下|一下)/;
 const TASK_CONTROL_PATTERN = /(任务|这个|它).*(做到哪|进度|怎么样|状态|停掉|取消|打断|中止|暂停|改成|修改|换成)|(开始做|开始执行|执行一下|执行这个任务|执行任务|去做|跑一下).*(任务|这个|它)?|^(做到哪|进度|停掉|取消|打断|中止|暂停|先停|改成|修改|换成)/;
 const FRAGMENT_TRAILING_PATTERN = /(然后|但是|可是|因为|所以|我觉得|我想|就是|还有|以及|不过)$/;
 const MEMORY_HINT_PATTERN = /(喜欢|讨厌|下周|明天|后天|今晚|提醒|别忘|记得|考试|面试|演唱会)/;
 
 export function evaluateGate(input: GateEvaluationInput): GateDecision {
   const currentMessage = input.currentMessage.trim();
-  const recentFragments = input.recentUserMessages.map((message) => message.trim()).filter(Boolean);
+  const recentFragments = getRecentUserMessageContents(input);
   const coalescedText = [...recentFragments, currentMessage].join("\n");
   const inputKind = classifyInputKind(currentMessage);
   const replyDecision = decideReply(currentMessage, coalescedText, inputKind);
@@ -31,6 +39,19 @@ export function evaluateGate(input: GateEvaluationInput): GateDecision {
     coalescedText,
     topicEnded
   };
+}
+
+function getRecentUserMessageContents(input: GateEvaluationInput): string[] {
+  const directMessages = input.recentUserMessages.map((message) => message.trim()).filter(Boolean);
+
+  if (directMessages.length > 0) {
+    return directMessages;
+  }
+
+  return (input.recentMessages ?? [])
+    .filter((message) => message.role === "user")
+    .map((message) => message.content.trim())
+    .filter(Boolean);
 }
 
 function decideTopicEnded(
@@ -55,7 +76,7 @@ function classifyInputKind(message: string): InputKind {
     return "task_control";
   }
 
-  return TASK_PATTERN.test(message) ? "task" : "chat";
+  return ASSISTED_TASK_PATTERN.test(message) || DIRECT_CREATION_TASK_PATTERN.test(message) ? "task" : "chat";
 }
 
 function decideReply(message: string, coalescedText: string, inputKind: InputKind): ReplyDecision {

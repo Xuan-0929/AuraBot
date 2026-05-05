@@ -120,6 +120,10 @@ export class TaskService {
     return this.taskRepository.getLatestByProfile(profileId);
   }
 
+  getTaskById(taskId: string): Task | undefined {
+    return this.taskRepository.getById(taskId);
+  }
+
   findTaskForChatControl(input: {
     profileId: string;
     targetHint?: string;

@@ -1,12 +1,17 @@
 import { randomUUID } from "node:crypto";
-import { ipcMain } from "electron";
-import { IPC_CHANNELS } from "../shared/contracts/ipc";
+import { ipcMain, shell } from "electron";
+import {
+  IPC_CHANNELS,
+  type TaskResultFileActionInput,
+  type TaskResultFileActionResult
+} from "../shared/contracts/ipc";
 import type { AgentStatus, SendChatMessageInput, SendChatMessageResult } from "../shared/contracts/chat";
 import type { Message } from "../shared/schemas/message";
 import type { PetActivity } from "../shared/contracts/pet";
 import { parsePetSettingsPatch, type PetSettings, type PetSettingsPatch } from "../shared/schemas/petSettings";
 import type { Task } from "../shared/schemas/task";
 import type { AppServices } from "../core/bootstrap/createServices";
+import { buildTaskSettledMessageDraft, isTaskResultPathAllowed } from "../core/tasks/taskPresentation";
 
 export interface WindowController {
   openConsoleWindow(): void;
@@ -97,6 +102,14 @@ export function registerIpc(services: AppServices, windows: WindowController): v
     return result;
   });
 
+  ipcMain.handle(IPC_CHANNELS.openTaskResultFile, async (_event, input: TaskResultFileActionInput) =>
+    openTaskResultFile(services, input)
+  );
+
+  ipcMain.handle(IPC_CHANNELS.showTaskResultFileInFolder, (_event, input: TaskResultFileActionInput) =>
+    showTaskResultFileInFolder(services, input)
+  );
+
   ipcMain.handle(IPC_CHANNELS.getEventLogs, () => services.eventLogService.list());
 
   ipcMain.handle(IPC_CHANNELS.getMemoryDebugSnapshot, () => {
@@ -119,16 +132,64 @@ export function registerIpc(services: AppServices, windows: WindowController): v
 function createTaskSettledMessage(services: AppServices, task: Task): Message {
   const profile = services.profileService.getOrSeedActiveProfile();
   const mainSession = services.sessionRepository.getOrCreateMainSession(profile.id);
+  const events = services.taskService.listTaskEvents(task.id);
+  const draft = buildTaskSettledMessageDraft(task, events);
 
   return services.messageRepository.create({
     sessionId: mainSession.id,
     profileId: profile.id,
     role: "assistant",
-    content:
-      task.status === "completed"
-        ? `这个任务完成了：${task.latestProgress}`
-        : `这个任务${task.status === "failed" ? "失败了" : `现在是 ${task.status}`}：${task.latestProgress}`
+    content: draft.content,
+    attachments: draft.attachments
   });
+}
+
+async function openTaskResultFile(
+  services: AppServices,
+  input: TaskResultFileActionInput
+): Promise<TaskResultFileActionResult> {
+  const path = resolveTaskResultPath(services, input);
+
+  if (!path) {
+    return {
+      ok: false,
+      error: "这个结果文件没有通过任务记录校验。"
+    };
+  }
+
+  const error = await shell.openPath(path);
+
+  return error ? { ok: false, error } : { ok: true };
+}
+
+function showTaskResultFileInFolder(
+  services: AppServices,
+  input: TaskResultFileActionInput
+): TaskResultFileActionResult {
+  const path = resolveTaskResultPath(services, input);
+
+  if (!path) {
+    return {
+      ok: false,
+      error: "这个结果文件没有通过任务记录校验。"
+    };
+  }
+
+  shell.showItemInFolder(path);
+
+  return { ok: true };
+}
+
+function resolveTaskResultPath(services: AppServices, input: TaskResultFileActionInput): string | undefined {
+  const task = services.taskService.getTaskById(input.taskId);
+
+  if (!task) {
+    return undefined;
+  }
+
+  const events = services.taskService.listTaskEvents(task.id);
+
+  return isTaskResultPathAllowed(events, input.path) ? input.path : undefined;
 }
 
 function buildPetActivityFromTask(task: Task): PetActivity | undefined {

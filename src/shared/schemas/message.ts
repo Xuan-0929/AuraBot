@@ -3,14 +3,26 @@ import { isoDateStringSchema } from "./memory";
 
 export const messageRoleSchema = z.enum(["user", "assistant", "system", "tool"]);
 
+export const messageAttachmentSchema = z.object({
+  id: z.string().min(1),
+  kind: z.literal("file"),
+  taskId: z.string().min(1),
+  name: z.string().min(1),
+  path: z.string().min(1)
+});
+
 export const messageSchema = z.object({
   id: z.string().min(1),
   sessionId: z.string().min(1),
   profileId: z.string().min(1),
   role: messageRoleSchema,
   content: z.string(),
+  attachments: z.array(messageAttachmentSchema).optional().default([]),
   createdAt: isoDateStringSchema
 });
 
-export type Message = z.infer<typeof messageSchema>;
+export type MessageAttachment = z.infer<typeof messageAttachmentSchema>;
+export type Message = Omit<z.infer<typeof messageSchema>, "attachments"> & {
+  attachments?: MessageAttachment[];
+};
 export type MessageRole = z.infer<typeof messageRoleSchema>;

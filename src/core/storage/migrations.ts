@@ -57,6 +57,7 @@ export const MIGRATIONS: Migration[] = [
         profile_id text not null references profiles(id) on delete cascade,
         role text not null check (role in ('user', 'assistant', 'system', 'tool')),
         content text not null,
+        metadata_json text not null default '{}',
         created_at text not null
       );
 
@@ -164,6 +165,29 @@ export const MIGRATIONS: Migration[] = [
 
       if (!columns.includes("session_id")) {
         database.exec("alter table tasks add column session_id text");
+      }
+    }
+  },
+  {
+    id: 3,
+    name: "add_message_metadata_json",
+    up: "",
+    after(database) {
+      const messageTable = database
+        .prepare("select name from sqlite_master where type = 'table' and name = 'messages'")
+        .get();
+
+      if (!messageTable) {
+        return;
+      }
+
+      const columns = database
+        .prepare("pragma table_info(messages)")
+        .all()
+        .map((row) => (row as { name: string }).name);
+
+      if (!columns.includes("metadata_json")) {
+        database.exec("alter table messages add column metadata_json text not null default '{}'");
       }
     }
   }

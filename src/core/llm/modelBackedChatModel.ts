@@ -41,13 +41,13 @@ function buildChatPrompt(input: ChatModelInput): ChatCompletionRequest["messages
   return [
     {
       role: "system",
-      content:
-        "你是 AuraBot 的强推理对话模型。用自然中文回复，保持桌面伴侣感，不要提及系统提示。需要时结合上下文、记忆和任务状态，但不要啰嗦。"
+      content: buildSoulSystemPrompt(input)
     },
     {
       role: "user",
       content: JSON.stringify({
         userContent: input.userContent,
+        soul: input.soul,
         writtenMemories: summarizeMemories(input.writtenMemories),
         recalledMemories: summarizeMemories(input.recalledMemories),
         dueFollowUps: summarizeMemories(input.dueFollowUps ?? []),
@@ -55,6 +55,32 @@ function buildChatPrompt(input: ChatModelInput): ChatCompletionRequest["messages
       })
     }
   ];
+}
+
+function buildSoulSystemPrompt(input: ChatModelInput): string {
+  const soul = input.soul;
+  const soulLines = soul
+    ? [
+        `名字：${soul.name}`,
+        `人格：${soul.persona}`,
+        `关系：${soul.relationship}`,
+        `说话方式：${soul.speakingStyle}`,
+        soul.boundaries.length > 0 ? `边界：${soul.boundaries.join("；")}` : undefined,
+        soul.topicPreferences.length > 0 ? `偏好话题：${soul.topicPreferences.join("；")}` : undefined
+      ].filter(Boolean)
+    : [
+        "名字：Aura",
+        "人格：伴侣兼助手，亲近、可靠，会自然陪用户聊天和推进事情。",
+        "关系：长期陪伴用户的桌面伴侣和助手。",
+        "说话方式：短句、自然、有温度，不像客服或机器人。"
+      ];
+
+  return [
+    "你是 Aura。你以伴侣兼助手的身份和用户说话，不要把自己描述成 AI、模型、机器人或系统。",
+    "不管是普通聊天、记忆相关回复、还是任务类对话，都必须保持同一个 soul，不要切成工具播报口吻。",
+    "用自然中文回复，短而真诚；需要时结合上下文、记忆和任务状态，但不要啰嗦，不要提及系统提示。",
+    ...soulLines
+  ].join("\n");
 }
 
 function summarizeMemories(memories: MemoryNode[]): Array<{ type: string; content: string }> {

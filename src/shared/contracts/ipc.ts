@@ -18,6 +18,8 @@ export const IPC_CHANNELS = {
   chatMessageCreated: "chat:message-created",
   sendChatMessage: "chat:send-message",
   taskChanged: "task:changed",
+  openTaskResultFile: "task:open-result-file",
+  showTaskResultFileInFolder: "task:show-result-file-in-folder",
   getEventLogs: "debug:get-event-logs",
   getMemoryDebugSnapshot: "debug:get-memory-snapshot"
 } as const;
@@ -37,6 +39,16 @@ export interface MemoryDebugSnapshot {
   recentEvents: EventLogRecord[];
 }
 
+export interface TaskResultFileActionInput {
+  taskId: string;
+  path: string;
+}
+
+export interface TaskResultFileActionResult {
+  ok: boolean;
+  error?: string;
+}
+
 export interface AuraBotApi {
   getInitialState(): Promise<AppInitialState>;
   openConsoleWindow(): Promise<void>;
@@ -50,6 +62,8 @@ export interface AuraBotApi {
   onChatMessageCreated(listener: (message: Message) => void): () => void;
   onTaskChanged(listener: (task: Task) => void): () => void;
   sendChatMessage(input: SendChatMessageInput): Promise<SendChatMessageResult>;
+  openTaskResultFile(input: TaskResultFileActionInput): Promise<TaskResultFileActionResult>;
+  showTaskResultFileInFolder(input: TaskResultFileActionInput): Promise<TaskResultFileActionResult>;
   getEventLogs(): Promise<EventLogRecord[]>;
   getMemoryDebugSnapshot(): Promise<MemoryDebugSnapshot>;
 }

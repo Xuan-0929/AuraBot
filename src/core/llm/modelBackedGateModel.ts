@@ -65,9 +65,9 @@ export class ModelBackedGateModel {
         timeoutMs: this.options.config?.timeoutMs,
         messages: buildGatePrompt(input)
       });
-      return normalizeGateDecision(parseJsonFromModel(content), input);
+      return applyLocalTaskGuard(normalizeGateDecision(parseJsonFromModel(content), input), input);
     } catch (error) {
-      return fallback.evaluate(input);
+      return applyLocalTaskGuard(await fallback.evaluate(input), input);
     }
   }
 }
@@ -76,8 +76,13 @@ function buildGatePrompt(input: GateEvaluationInput): ChatCompletionRequest["mes
   return [
     {
       role: "system",
-      content:
-        "你是 AuraBot 的轻量判断模型。只返回 JSON，不要解释。字段必须是 replyDecision(reply|wait), inputKind(chat|task|task_control), memoryDecision(write_now|defer|skip), confidence(0-1), reason, coalescedText, topicEnded。判断用户输入是否该回复、是否是任务、是否是任务控制、记忆决策、话题是否结束。普通聊天里 topicEnded=false 时 replyDecision 必须是 wait，memoryDecision 必须是 defer。"
+      content: [
+        "你是 AuraBot 的轻量判断模型。只返回 JSON，不要解释。",
+        "字段必须是 replyDecision(reply|wait), inputKind(chat|task|task_control), memoryDecision(write_now|defer|skip), confidence(0-1), reason, coalescedText, topicEnded。",
+        "输入里 recentMessages 是最近完整对话上下文，包含 user/assistant，请结合它判断用户是在继续上一句话、回应 Aura、提出新问题，还是发起/控制任务。",
+        "任务判断要宽松：只要用户要求 Aura 帮他产出、整理、撰写、生成、查询、搜索、总结、翻译、做报告、周报、读书笔记、清单、文档或表格，就判为 inputKind=task、replyDecision=reply、memoryDecision=skip、topicEnded=true，即使句末没有标点。",
+        "普通聊天里 topicEnded=false 时 replyDecision 必须是 wait，memoryDecision 必须是 defer。"
+      ].join("\n")
     },
     {
       role: "user",
@@ -129,6 +134,26 @@ function normalizeGateDecision(rawDecision: unknown, input: GateEvaluationInput)
     reason: providerDecision.reason ?? "model-gate: normalized provider schema",
     coalescedText: buildCoalescedText(input),
     topicEnded
+  };
+}
+
+function applyLocalTaskGuard(decision: GateDecision, input: GateEvaluationInput): GateDecision {
+  const localDecision = evaluateGate(input);
+  const localTaskLike = localDecision.inputKind === "task" || localDecision.inputKind === "task_control";
+  const modelUnderClassified =
+    decision.inputKind === "chat" ||
+    decision.replyDecision === "wait" ||
+    decision.memoryDecision !== "skip" ||
+    decision.topicEnded === false;
+
+  if (!localTaskLike || !modelUnderClassified) {
+    return decision;
+  }
+
+  return {
+    ...localDecision,
+    confidence: Math.max(localDecision.confidence, decision.confidence),
+    reason: `local-task-guard: ${localDecision.reason}`
   };
 }
 
@@ -218,5 +243,12 @@ function estimateNormalizedConfidence(input: {
 }
 
 function buildCoalescedText(input: GateEvaluationInput): string {
-  return [...input.recentUserMessages, input.currentMessage].map((message) => message.trim()).filter(Boolean).join("\n");
+  const recentUserMessages =
+    input.recentUserMessages.length > 0
+      ? input.recentUserMessages
+      : (input.recentMessages ?? [])
+          .filter((message) => message.role === "user")
+          .map((message) => message.content);
+
+  return [...recentUserMessages, input.currentMessage].map((message) => message.trim()).filter(Boolean).join("\n");
 }

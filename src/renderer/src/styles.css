@@ -405,6 +405,59 @@ textarea {
   white-space: pre-wrap;
 }
 
+.message-attachments {
+  display: grid;
+  gap: 8px;
+  margin-top: 10px;
+}
+
+.message-attachment {
+  display: flex;
+  align-items: center;
+  justify-content: space-between;
+  gap: 10px;
+  width: 100%;
+  max-width: 520px;
+  padding: 8px;
+  border: 1px solid rgba(48, 76, 78, 0.16);
+  border-radius: 8px;
+  background: rgba(255, 255, 255, 0.54);
+}
+
+.message-attachment-name {
+  min-width: 0;
+  overflow: hidden;
+  color: #263435;
+  font-size: 13px;
+  font-weight: 800;
+  text-overflow: ellipsis;
+  white-space: nowrap;
+}
+
+.message-attachment-actions {
+  display: inline-flex;
+  flex: 0 0 auto;
+  gap: 6px;
+}
+
+.message-attachment button {
+  min-height: 30px;
+  padding: 0 9px;
+  border: 1px solid rgba(43, 91, 94, 0.18);
+  border-radius: 8px;
+  background: rgba(242, 249, 247, 0.82);
+  color: #263435;
+  cursor: pointer;
+  font-size: 12px;
+  font-weight: 800;
+  letter-spacing: 0;
+}
+
+.message-attachment button:hover {
+  border-color: rgba(43, 113, 98, 0.34);
+  background: rgba(232, 246, 241, 0.94);
+}
+
 .empty-state {
   align-self: flex-end;
   max-width: 360px;

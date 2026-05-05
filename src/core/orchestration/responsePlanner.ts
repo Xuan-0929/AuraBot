@@ -1,8 +1,10 @@
 import type { MemoryNode } from "../../shared/schemas/memory";
+import type { Soul } from "../../shared/schemas/profile";
 import { shouldAskMemoryRecall } from "../memory/memoryExtractor";
 
 export interface PlanAssistantResponseInput {
   userContent: string;
+  soul?: Soul;
   writtenMemories: MemoryNode[];
   recalledMemories: MemoryNode[];
   dueFollowUps?: MemoryNode[];
