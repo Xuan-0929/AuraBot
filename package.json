@@ -22,6 +22,7 @@
     "eval:memory": "corepack pnpm rebuild:node && vitest run tests/unit/core/memory/memoryEvaluation.spec.ts"
   },
   "dependencies": {
+    "@langchain/openai": "^1.4.5",
     "better-sqlite3": "^12.9.0",
     "live2dcubismcore": "1.0.2",
     "p-queue": "^9.2.0",

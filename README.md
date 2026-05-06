@@ -194,6 +194,22 @@ Example:
 }
 ```
 
+The `chatModel` role also has a small LangChain-backed proof-of-concept path. Set only `chatModel.provider` to `"langchain-openai"` to route final conversation generation through `@langchain/openai` while keeping `gateModel` and `memoryModel` on the existing provider path:
+
+```json
+{
+  "chatModel": {
+    "enabled": true,
+    "provider": "langchain-openai",
+    "baseUrl": "https://api.example.com/v1",
+    "apiKey": "your-api-key",
+    "model": "your-strong-reasoning-model",
+    "temperature": 0.7,
+    "timeoutMs": 30000
+  }
+}
+```
+
 Use the provider API root as `baseUrl`, usually ending in `/v1`. Do not point `baseUrl` directly at `/chat/completions`; AuraBot appends the chat completions path itself.
 
 For temporary development launches, environment variables can override the file:

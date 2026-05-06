@@ -194,6 +194,22 @@ sudo nano "/Library/Application Support/AuraBot/config.json"
 }
 ```
 
+`chatModel` 现在也有一个小型 LangChain POC 路径。只把 `chatModel.provider` 设为 `"langchain-openai"`，最终对话生成就会走 `@langchain/openai`；`gateModel` 和 `memoryModel` 仍可继续使用现有 provider 路径：
+
+```json
+{
+  "chatModel": {
+    "enabled": true,
+    "provider": "langchain-openai",
+    "baseUrl": "https://api.example.com/v1",
+    "apiKey": "your-api-key",
+    "model": "your-strong-reasoning-model",
+    "temperature": 0.7,
+    "timeoutMs": 30000
+  }
+}
+```
+
 `baseUrl` 填 provider 的 API 根路径，通常以 `/v1` 结尾。不要直接填到 `/chat/completions`，AuraBot 会自己拼接 chat completions 路径。
 
 临时开发启动也可以用环境变量覆盖文件配置：
