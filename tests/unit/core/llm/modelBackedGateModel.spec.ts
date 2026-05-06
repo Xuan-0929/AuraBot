@@ -1,7 +1,24 @@
 import { describe, expect, it } from "vitest";
 import { ModelBackedGateModel } from "../../../../src/core/llm/modelBackedGateModel";
+import { ModelInvocationError } from "../../../../src/core/llm/modelErrors";
 
 describe("ModelBackedGateModel", () => {
+  it("propagates lightweight model failures instead of using local gate heuristics", async () => {
+    const model = new ModelBackedGateModel({
+      client: {
+        complete: async () => {
+          throw new Error("gate unavailable");
+        }
+      }
+    });
+
+    await expect(model.evaluate({
+      currentMessage: "帮我写一份实践论的读书笔记",
+      recentUserMessages: [],
+      recentMessages: []
+    })).rejects.toBeInstanceOf(ModelInvocationError);
+  });
+
   it("parses structured gate output from the lightweight model", async () => {
     const model = new ModelBackedGateModel({
       client: {
@@ -27,6 +44,37 @@ describe("ModelBackedGateModel", () => {
     expect(decision.inputKind).toBe("task_control");
     expect(decision.replyDecision).toBe("reply");
     expect(decision.topicEnded).toBe(true);
+  });
+
+  it("preserves time reminder task subtype from structured gate output", async () => {
+    const model = new ModelBackedGateModel({
+      client: {
+        complete: async () =>
+          JSON.stringify({
+            replyDecision: "reply",
+            inputKind: "task",
+            taskKind: "time_reminder",
+            memoryDecision: "skip",
+            confidence: 0.9,
+            reason: "scheduled reminder task",
+            coalescedText: "两分钟后提醒我喝水",
+            topicEnded: true
+          })
+      }
+    });
+
+    const decision = await model.evaluate({
+      currentMessage: "两分钟后提醒我喝水",
+      recentUserMessages: [],
+      recentMessages: []
+    });
+
+    expect(decision).toMatchObject({
+      inputKind: "task",
+      taskKind: "time_reminder",
+      replyDecision: "reply",
+      memoryDecision: "skip"
+    });
   });
 
   it("keeps lightweight provider reply decisions even when topic is not ended", async () => {
@@ -257,5 +305,6 @@ describe("ModelBackedGateModel", () => {
     ]);
     expect(messages[0]!.content).toContain("读书笔记");
     expect(messages[0]!.content).toContain("inputKind=task");
+    expect(messages[0]!.content).toContain("time_reminder");
   });
 });

@@ -23,23 +23,23 @@ function createUserDataDir(): string {
 }
 
 describe("loadConfig", () => {
-  it("keeps local deterministic models by default", () => {
+  it("defaults model roles to API providers without enabling local fallback", () => {
     const userDataPath = createUserDataDir();
     const config = loadConfig(userDataPath);
 
     expect(config.gateModel).toMatchObject({
-      provider: "local-stub",
-      model: "gate-stub",
+      provider: "openai-compatible",
+      model: "gate-model",
       enabled: false
     });
     expect(config.chatModel).toMatchObject({
-      provider: "local-stub",
-      model: "chat-stub",
+      provider: "openai-compatible",
+      model: "chat-model",
       enabled: false
     });
     expect(config.memoryModel).toMatchObject({
-      provider: "local-stub",
-      model: "memory-stub",
+      provider: "openai-compatible",
+      model: "memory-model",
       enabled: false
     });
     expect(config.taskRunner).toMatchObject({
@@ -47,7 +47,35 @@ describe("loadConfig", () => {
       sandbox: "workspace-write",
       approvalPolicy: "never"
     });
+    expect(config.proactive).toMatchObject({
+      pollIntervalMs: 10000,
+      idleThresholdMs: 600000,
+      idleCooldownMs: 1800000
+    });
     expect(config.storagePath).toBe(join(userDataPath, "aurabot.sqlite"));
+  });
+
+  it("loads proactive trigger timing from config", () => {
+    const userDataPath = createUserDataDir();
+    writeFileSync(
+      join(userDataPath, "config.json"),
+      JSON.stringify({
+        proactive: {
+          idleThresholdMs: 120000,
+          idleCooldownMs: 240000,
+          pollIntervalMs: 15000
+        }
+      }),
+      "utf8"
+    );
+
+    const config = loadConfig(userDataPath);
+
+    expect(config.proactive).toMatchObject({
+      idleThresholdMs: 120000,
+      idleCooldownMs: 240000,
+      pollIntervalMs: 15000
+    });
   });
 
   it("loads separate lightweight gate and stronger chat model roles from config", () => {

@@ -56,18 +56,17 @@ export async function buildTaskSettledMessageDraftWithVoice(
   events: TaskEvent[] = [],
   options: TaskVoiceOptions
 ): Promise<TaskMessageDraft> {
-  const fallback = buildTaskSettledMessageDraft(task, events);
+  const draft = buildTaskSettledMessageDraft(task, events);
   const scene = getSettledTaskScene(task);
   const content = await options.voiceAdapter.render({
     scene,
     channel: "chat",
     soul: options.soul,
-    facts: buildTaskVoiceFacts(task, events, fallback.attachments),
-    fallbackText: fallback.content
+    facts: buildTaskVoiceFacts(task, events, draft.attachments)
   });
 
   return {
-    ...fallback,
+    ...draft,
     content
   };
 }
@@ -90,16 +89,13 @@ export async function buildTaskStatusResponseWithVoice(
   events: TaskEvent[] = [],
   options: TaskVoiceOptions
 ): Promise<string> {
-  const fallback = buildTaskStatusResponse(task, events);
-
   return options.voiceAdapter.render({
     scene: task.status === "completed" || task.status === "failed" || task.status === "interrupted"
       ? getSettledTaskScene(task)
       : "task.status",
     channel: "chat",
     soul: options.soul,
-    facts: buildTaskVoiceFacts(task, events, buildTaskResultAttachments(task.id, events)),
-    fallbackText: fallback
+    facts: buildTaskVoiceFacts(task, events, buildTaskResultAttachments(task.id, events))
   });
 }
 

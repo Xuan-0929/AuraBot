@@ -1,8 +1,10 @@
 import { describe, expect, it } from "vitest";
 import {
+  createVoiceAdapter,
   DeterministicVoiceAdapter,
   ModelBackedVoiceAdapter
 } from "../../../../src/core/voice/voiceAdapter";
+import { ModelConfigurationError, ModelInvocationError } from "../../../../src/core/llm/modelErrors";
 import type { ChatCompletionRequest } from "../../../../src/core/llm/openAiCompatibleClient";
 import type { Soul } from "../../../../src/shared/schemas/profile";
 
@@ -23,6 +25,23 @@ const soul: Soul = {
 };
 
 describe("VoiceAdapter", () => {
+  it("does not create user-facing deterministic voice text when API config is missing", async () => {
+    const adapter = createVoiceAdapter({
+      enabled: false,
+      provider: "openai-compatible",
+      model: "voice-model"
+    });
+
+    await expect(adapter.render({
+      scene: "task.reminder_due",
+      channel: "pet_notice",
+      soul,
+      facts: {
+        taskTitle: "喝水"
+      }
+    })).rejects.toBeInstanceOf(ModelConfigurationError);
+  });
+
   it("keeps deterministic task completion warm and attachment-safe", async () => {
     const adapter = new DeterministicVoiceAdapter();
     const reply = await adapter.render({
@@ -60,6 +79,75 @@ describe("VoiceAdapter", () => {
     expect(reply).not.toContain("文件");
   });
 
+  it("keeps deterministic reminder wording natural", async () => {
+    const adapter = new DeterministicVoiceAdapter();
+    const scheduled = await adapter.render({
+      scene: "task.reminder_scheduled",
+      channel: "chat",
+      soul,
+      facts: {
+        taskTitle: "喝水",
+        dueAt: "2026-05-06T04:02:00.000Z"
+      }
+    });
+    const due = await adapter.render({
+      scene: "task.reminder_due",
+      channel: "pet_notice",
+      soul,
+      facts: {
+        taskTitle: "喝水",
+        dueAt: "2026-05-06T04:02:00.000Z"
+      }
+    });
+
+    expect(scheduled).toContain("喝水");
+    expect(scheduled).not.toContain("「");
+    expect(scheduled).not.toContain("」");
+    expect(due).toContain("喝水");
+    expect(due).not.toContain("我提醒你一下：");
+  });
+
+  it("uses the LangChain chat provider for voice adaptation when configured", async () => {
+    let request: ChatCompletionRequest | undefined;
+    const adapter = createVoiceAdapter(
+      {
+        enabled: true,
+        provider: "langchain-openai",
+        baseUrl: "https://example.test/v1",
+        apiKey: "key",
+        model: "voice-model",
+        temperature: 0.55
+      },
+      {
+        langChainClient: {
+          complete: async (input) => {
+            request = input;
+
+            return "好，我记着啦，等会儿叫你喝水。";
+          }
+        }
+      }
+    );
+
+    const reply = await adapter.render({
+      scene: "task.reminder_scheduled",
+      channel: "chat",
+      soul,
+      facts: {
+        taskTitle: "喝水",
+        dueAt: "2026-05-06T04:02:00.000Z"
+      }
+    });
+
+    expect(reply).toBe("好，我记着啦，等会儿叫你喝水。");
+    expect(request).toMatchObject({
+      baseUrl: "https://example.test/v1",
+      apiKey: "key",
+      model: "voice-model",
+      temperature: 0.55
+    });
+  });
+
   it("passes soul, workflow, and facts to the model without using the example as a fixed template", async () => {
     let request: ChatCompletionRequest | undefined;
     const adapter = new ModelBackedVoiceAdapter({
@@ -87,8 +175,7 @@ describe("VoiceAdapter", () => {
         taskTitle: "帮我写一份周报。",
         resultSubject: "周报",
         hasAttachments: true
-      },
-      fallbackText: "周报写好了。"
+      }
     });
 
     expect(reply).toBe("周报弄好了，文件我放在下面。你要不要先看一眼？");
@@ -96,6 +183,32 @@ describe("VoiceAdapter", () => {
     expect(request?.messages[1]?.content).toContain("完成事情时像本人把结果告诉用户");
     expect(request?.messages[1]?.content).toContain("任务完成后可以自然邀请用户看一眼");
     expect(request?.messages[1]?.content).toContain("hasAttachments");
+    expect(request?.messages[1]?.content).not.toContain("fallbackText");
+  });
+
+  it("propagates voice model failures instead of rendering deterministic task notices", async () => {
+    const adapter = new ModelBackedVoiceAdapter({
+      client: {
+        complete: async () => {
+          throw new Error("voice unavailable");
+        }
+      },
+      config: {
+        enabled: true,
+        provider: "openai-compatible",
+        baseUrl: "https://example.test/v1",
+        apiKey: "key",
+        model: "voice-model"
+      }
+    });
+
+    await expect(adapter.render({
+      scene: "task.reminder_due",
+      channel: "pet_notice",
+      soul,
+      facts: {
+        taskTitle: "喝水"
+      }
+    })).rejects.toBeInstanceOf(ModelInvocationError);
   });
 });
-

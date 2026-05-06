@@ -4,6 +4,12 @@ import type { ModelRoleConfig } from "../../shared/schemas/config";
 import { OpenAICompatibleChatCompletionClient } from "./openAiCompatibleClient";
 import { LangChainStructuredGateClient } from "./langChainGateModel";
 import { ModelBackedGateModel, type GateModelClient, structuredGateDecisionSchema } from "./modelBackedGateModel";
+import {
+  createMissingModelConfigurationError,
+  createUnsupportedModelProviderError,
+  isUsableModelRoleConfig,
+  shouldUseDeterministicModelTestFallback
+} from "./modelErrors";
 
 export interface GateModel {
   evaluate(input: GateEvaluationInput): Promise<GateDecision>;
@@ -22,8 +28,24 @@ export class DeterministicGateModel implements GateModel {
   }
 }
 
+export class UnavailableGateModel implements GateModel {
+  constructor(private readonly error: Error) {}
+
+  async evaluate(): Promise<GateDecision> {
+    throw this.error;
+  }
+}
+
 export function createGateModel(config: GateModelConfig, dependencies: GateModelFactoryDependencies = {}): GateModel {
-  if (!config.enabled || !config.baseUrl || !config.apiKey) {
+  if (!isUsableModelRoleConfig(config)) {
+    if (shouldUseDeterministicModelTestFallback()) {
+      return new DeterministicGateModel();
+    }
+
+    return new UnavailableGateModel(createMissingModelConfigurationError("gateModel", config));
+  }
+
+  if (config.provider === "local-stub" && shouldUseDeterministicModelTestFallback()) {
     return new DeterministicGateModel();
   }
 
@@ -31,18 +53,16 @@ export function createGateModel(config: GateModelConfig, dependencies: GateModel
     return new ModelBackedGateModel({
       client:
         dependencies.langChainClient ?? new LangChainStructuredGateClient({ schema: structuredGateDecisionSchema }),
-      config,
-      fallbackModel: new DeterministicGateModel()
+      config
     });
   }
 
   if (config.provider !== "openai-compatible") {
-    return new DeterministicGateModel();
+    return new UnavailableGateModel(createUnsupportedModelProviderError("gateModel", config.provider));
   }
 
   return new ModelBackedGateModel({
     client: dependencies.openAICompatibleClient ?? new OpenAICompatibleChatCompletionClient(),
-    config,
-    fallbackModel: new DeterministicGateModel()
+    config
   });
 }

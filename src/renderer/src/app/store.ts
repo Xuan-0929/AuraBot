@@ -4,6 +4,7 @@ import type { MemoryDebugSnapshot, PetCursorPosition } from "../../../shared/con
 import type { PetActivity } from "../../../shared/contracts/pet";
 import type {
   ModelProviderSettingsPatch,
+  ProactiveSettingsPatch,
   PublicAppConfig,
   TaskRunnerSettingsPatch
 } from "../../../shared/contracts/settings";
@@ -33,6 +34,7 @@ interface AuraBotStore {
   openConfigFile(): Promise<void>;
   updateTaskRunnerSettings(runners: TaskRunnerSettingsPatch["runners"]): Promise<void>;
   updateModelProviderSettings(patch: ModelProviderSettingsPatch): Promise<void>;
+  updateProactiveSettings(patch: ProactiveSettingsPatch): Promise<void>;
   updatePetSettings(patch: PetSettingsPatch): Promise<void>;
   setPetMousePassthrough(enabled: boolean): Promise<void>;
   movePetWindowBy(delta: { x: number; y: number }): Promise<void>;
@@ -122,6 +124,10 @@ export const useAuraBotStore = create<AuraBotStore>((set, get) => ({
   },
   async updateModelProviderSettings(patch) {
     const appConfig = await window.aurabot.updateModelProviderSettings(patch);
+    set({ appConfig });
+  },
+  async updateProactiveSettings(patch) {
+    const appConfig = await window.aurabot.updateProactiveSettings(patch);
     set({ appConfig });
   },
   async updatePetSettings(patch: PetSettingsPatch) {

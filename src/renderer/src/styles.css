@@ -693,6 +693,18 @@ textarea {
   width: 68px;
 }
 
+.settings-proactive-wait input {
+  width: 82px;
+  min-height: 30px;
+  border: 1px solid rgba(41, 65, 67, 0.18);
+  border-radius: 6px;
+  background: rgba(255, 255, 255, 0.88);
+  color: #2d3b3c;
+  font: inherit;
+  font-weight: 800;
+  text-align: right;
+}
+
 .console-chat {
   flex: 1 1 auto;
   display: grid;
@@ -877,9 +889,27 @@ textarea {
 .task-status-overlay {
   flex: 0 0 auto;
   display: grid;
-  gap: 8px;
-  width: min(100%, 420px);
+  grid-template-columns: minmax(0, 420px) minmax(0, 420px);
+  justify-content: space-between;
+  gap: 12px;
+  width: 100%;
   margin-bottom: 12px;
+}
+
+.task-status-column {
+  display: grid;
+  gap: 8px;
+  min-width: 0;
+}
+
+.task-status-overlay-result {
+  justify-self: start;
+  width: min(100%, 420px);
+}
+
+.task-status-overlay-reminder {
+  justify-self: end;
+  width: min(100%, 420px);
 }
 
 .task-status-card {
@@ -969,6 +999,18 @@ textarea {
 .task-status-dot-failed,
 .task-status-dot-interrupted {
   background: #b84d4a;
+}
+
+@media (max-width: 860px) {
+  .task-status-overlay {
+    grid-template-columns: 1fr;
+  }
+
+  .task-status-overlay-result,
+  .task-status-overlay-reminder {
+    justify-self: stretch;
+    width: 100%;
+  }
 }
 
 .memory-debug-shell {

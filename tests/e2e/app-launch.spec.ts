@@ -25,7 +25,8 @@ async function launchAuraBot(inputUserDataDir?: string): Promise<{
       ...process.env,
       NODE_ENV: "test",
       AURABOT_USER_DATA_DIR: userDataDir,
-      AURABOT_DISABLE_SYSTEM_CONFIG: "1"
+      AURABOT_DISABLE_SYSTEM_CONFIG: "1",
+      AURABOT_DETERMINISTIC_MODEL_FALLBACK: "1"
     }
   });
   const petWindow = await electronApp.firstWindow();

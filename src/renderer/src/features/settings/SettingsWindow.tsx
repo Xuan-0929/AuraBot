@@ -5,6 +5,7 @@ import type {
   PublicAppConfig,
   PublicModelRoleConfig,
   PublicTaskCliRunnerConfig,
+  ProactiveSettingsPatch,
   TaskRunnerSettingsPatch
 } from "../../../../shared/contracts/settings";
 import { MODEL_PROVIDER_OPTIONS as modelProviderOptions } from "../../../../shared/contracts/settings";
@@ -17,6 +18,7 @@ export interface SettingsWindowProps {
   onUpdatePetSettings(patch: PetSettingsPatch): Promise<void>;
   onUpdateTaskRunnerSettings(runners: TaskRunnerSettingsPatch["runners"]): Promise<void>;
   onUpdateModelProviderSettings(patch: ModelProviderSettingsPatch): Promise<void>;
+  onUpdateProactiveSettings(patch: ProactiveSettingsPatch): Promise<void>;
   onOpenConfigFile(): Promise<void>;
 }
 
@@ -44,6 +46,7 @@ export function SettingsWindow({
   onUpdatePetSettings,
   onUpdateTaskRunnerSettings,
   onUpdateModelProviderSettings,
+  onUpdateProactiveSettings,
   onOpenConfigFile
 }: SettingsWindowProps) {
   const displayLanguage = petSettings.displayLanguage;
@@ -137,6 +140,29 @@ export function SettingsWindow({
           )}
         </div>
       </section>
+      <section className="settings-page-section" aria-label={t(displayLanguage, "proactiveMessages")}>
+        <div className="settings-page-section-header">
+          <div>
+            <h2>{t(displayLanguage, "proactiveMessages")}</h2>
+            <p>{t(displayLanguage, "proactiveMessagesHint")}</p>
+          </div>
+        </div>
+        <label className="settings-page-field settings-proactive-wait">
+          <span>{t(displayLanguage, "proactiveWaitMinutes")}</span>
+          <input
+            type="number"
+            min={1}
+            max={240}
+            value={millisecondsToMinutes(appConfig?.proactive.idleThresholdMs ?? 600000)}
+            aria-label={t(displayLanguage, "proactiveMessageWaitMinutes")}
+            onInput={(event) =>
+              void onUpdateProactiveSettings({
+                idleThresholdMs: minutesToMilliseconds(Number.parseInt(event.currentTarget.value, 10) || 1)
+              })
+            }
+          />
+        </label>
+      </section>
       <section className="settings-page-section" aria-label={t(displayLanguage, "characterSettings")}>
         <h2>{t(displayLanguage, "character")}</h2>
         <label className="settings-page-toggle">
@@ -151,6 +177,14 @@ export function SettingsWindow({
       </section>
     </main>
   );
+}
+
+function millisecondsToMinutes(value: number): number {
+  return Math.max(1, Math.round(value / 60_000));
+}
+
+function minutesToMilliseconds(value: number): number {
+  return Math.max(1, value) * 60_000;
 }
 
 function TaskCliRunnerCard({
@@ -244,7 +278,7 @@ function ModelConfigCard({
 function toModelProviderOption(provider: string): ModelProviderOption {
   return modelProviderOptions.includes(provider as ModelProviderOption)
     ? (provider as ModelProviderOption)
-    : "local-stub";
+    : "openai-compatible";
 }
 
 function getModelProviderLabel(
@@ -259,5 +293,5 @@ function getModelProviderLabel(
     return t(displayLanguage, "providerLangChainOpenAI");
   }
 
-  return t(displayLanguage, "providerLocalFallback");
+  return t(displayLanguage, "providerOpenAICompatible");
 }

@@ -9,15 +9,18 @@ export const taskStatusSchema = z.enum([
   "failed",
   "interrupted"
 ]);
+export const taskKindSchema = z.enum(["result_output", "time_reminder"]);
 
 export const taskSchema = z.object({
   id: z.string().min(1),
   profileId: z.string().min(1),
   parentSessionId: z.string().min(1),
   sessionId: z.string().min(1),
+  kind: taskKindSchema.default("result_output"),
   title: z.string().min(1),
   status: taskStatusSchema,
   latestProgress: z.string().default(""),
+  dueAt: isoDateStringSchema.optional(),
   createdAt: isoDateStringSchema,
   updatedAt: isoDateStringSchema
 });
@@ -33,4 +36,5 @@ export const taskEventSchema = z.object({
 
 export type Task = z.infer<typeof taskSchema>;
 export type TaskStatus = z.infer<typeof taskStatusSchema>;
+export type TaskKind = z.infer<typeof taskKindSchema>;
 export type TaskEvent = z.infer<typeof taskEventSchema>;

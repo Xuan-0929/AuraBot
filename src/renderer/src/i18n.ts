@@ -37,7 +37,6 @@ const UI_TEXT = {
     characterSettings: "Character settings",
     clickThroughCharacter: "Click through character",
     provider: "Provider",
-    providerLocalFallback: "Local fallback",
     providerOpenAICompatible: "OpenAI compatible",
     providerLangChainOpenAI: "LangChain OpenAI",
     apiKey: "API key",
@@ -53,6 +52,10 @@ const UI_TEXT = {
     taskCliHint: "Choose which command-line agent AuraBot should use for tasks. Lower priority runs first.",
     taskRunner: "task runner",
     taskRunnerPriority: "task runner priority",
+    proactiveMessages: "Proactive messages",
+    proactiveMessagesHint: "Set how long Aura waits before a light idle message.",
+    proactiveWaitMinutes: "Wait minutes",
+    proactiveMessageWaitMinutes: "Proactive message wait minutes",
     enable: "Enable",
     priority: "Priority",
     petQuickControls: "Pet quick controls",
@@ -126,7 +129,6 @@ const UI_TEXT = {
     characterSettings: "人物设置",
     clickThroughCharacter: "穿透人物点击",
     provider: "服务商",
-    providerLocalFallback: "本地 fallback",
     providerOpenAICompatible: "OpenAI compatible",
     providerLangChainOpenAI: "LangChain OpenAI",
     apiKey: "API Key",
@@ -142,6 +144,10 @@ const UI_TEXT = {
     taskCliHint: "选择 AuraBot 做任务时使用哪个命令行 agent。优先级数字越小越先用。",
     taskRunner: "任务执行器",
     taskRunnerPriority: "任务执行器优先级",
+    proactiveMessages: "主动消息",
+    proactiveMessagesHint: "设置 Aura 空闲多久后轻轻主动冒泡。",
+    proactiveWaitMinutes: "等待分钟数",
+    proactiveMessageWaitMinutes: "主动消息等待分钟数",
     enable: "启用",
     priority: "优先级",
     petQuickControls: "桌宠快捷控制",
@@ -239,6 +245,16 @@ export function taskProgressLabel(displayLanguage: DisplayLanguage | undefined, 
   const language = displayLanguage ?? "en";
 
   if (language === "zh") {
+    if (task.kind === "time_reminder") {
+      if (task.status === "queued" && task.dueAt) {
+        return `会在 ${formatTaskDueTime(task.dueAt, language)} 提醒`;
+      }
+
+      if (task.status === "completed") {
+        return "已经提醒过";
+      }
+    }
+
     if (task.status === "queued") {
       return "还没开始";
     }
@@ -259,7 +275,15 @@ export function taskProgressLabel(displayLanguage: DisplayLanguage | undefined, 
   }
 
   if (task.status === "queued") {
+    if (task.kind === "time_reminder" && task.dueAt) {
+      return `Reminds at ${formatTaskDueTime(task.dueAt, language)}`;
+    }
+
     return "Not started yet";
+  }
+
+  if (task.kind === "time_reminder" && task.status === "completed") {
+    return "Reminder sent";
   }
 
   if (task.status === "completed") {
@@ -275,6 +299,19 @@ export function taskProgressLabel(displayLanguage: DisplayLanguage | undefined, 
   }
 
   return cleanTaskProgress(task.latestProgress, language);
+}
+
+function formatTaskDueTime(value: string, language: DisplayLanguage): string {
+  const date = new Date(value);
+
+  if (!Number.isFinite(date.getTime())) {
+    return value;
+  }
+
+  return date.toLocaleTimeString(language === "zh" ? "zh-CN" : "en", {
+    hour: "2-digit",
+    minute: "2-digit"
+  });
 }
 
 function cleanTaskProgress(progress: string, displayLanguage: DisplayLanguage): string {

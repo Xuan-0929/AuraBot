@@ -41,6 +41,7 @@ Initial scenes:
 - `task.control_not_found`: explain no matching task exists without sounding like an error code.
 - `memory.follow_up`: surface due reminders naturally.
 - `pet.task_activity`: make small pet notices feel like Aura nudging the user, not a system event.
+- `proactive.idle_nudge`: let Aura lightly surface that she is still there after a quiet period without demanding a reply.
 
 Workflow must pass structured facts into the adapter:
 
@@ -64,8 +65,9 @@ Rules:
 - The adapter should prefer a living conversational line over a broadcast line. It should sound like Aura is telling the user what happened, not like a task runner is reporting state.
 - It should avoid internal implementation terms such as Codex child task, runner, event, payload, task id, or file system paths unless the path is intentionally shown as an attachment.
 - It should keep output brief by default.
+- Proactive pet messages are not chat history by themselves. They stay in the pet bubble channel unless the user responds, and only that subsequent real exchange should enter the main chat history.
 
-The model-backed adapter should use the configured chat model when available. If the model call fails or is disabled, the deterministic fallback should still be warm and fact-safe.
+The model-backed adapter should use the configured chat model. If the model call fails or the model role is not configured, the error should stay visible to the orchestration/UI layer instead of silently rendering deterministic user-facing text. Deterministic voice output remains available only as an explicit development/test double.
 
 ## Quality Direction
 
@@ -85,5 +87,25 @@ The first implementation should:
 2. Add a `VoiceAdapter` with deterministic and model-backed implementations.
 3. Add workflow payloads for task acceptance, task status, task completion, task failure, task interruption, task-control miss, memory follow-up, and pet task activity.
 4. Replace direct final-text construction in task and follow-up presentation paths with the adapter.
-5. Add tests for fact preservation, attachment safety, model prompt construction, and fallback warmth.
+5. Add tests for fact preservation, attachment safety, model prompt construction, and the absence of user-facing fallback.
 
+## Proactive Triggering
+
+The first proactive message layer should live outside the main chat history.
+
+- Trigger sources can include due follow-ups, due `time_reminder` tasks, idle nudges, and later task-related nudges.
+- Trigger evaluation should live in a scheduler or trigger engine, not in the chat orchestrator.
+- A proactive trigger emits `PetActivity` first.
+- If the user ignores it, no main chat message is persisted.
+- If the user responds, the follow-up exchange goes through the normal main chat path and is persisted there.
+
+This keeps Aura capable of initiating contact without polluting the visible conversation log with one-sided messages.
+
+## Task Categories
+
+Gate output should keep reminders in the task domain instead of turning them into chat to dodge result-task routing.
+
+- `result_output`: Aura is expected to produce, gather, write, summarize, organize, search, or otherwise return a result.
+- `time_reminder`: Aura is expected to remember a requested time and remind the user when it arrives.
+
+The control surface can treat these differently: result-output tasks stay in the left task stack, while time reminders stay in the right reminder stack. The VoiceAdapter still handles both through the same soul-driven tone layer, so a reminder can sound like Aura naturally speaking rather than a timer notification.

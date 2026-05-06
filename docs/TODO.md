@@ -568,7 +568,7 @@ Must show:
 
 1. 已完成：provider config 支持 `API Base URL`、`API Key`、`chatModel`、`gateModel`、`memoryModel`、enable switch。
 2. 已完成：定义 `gateModel` / `chatModel` / `memoryModel` adapter interface，并接入 OpenAI-compatible provider。
-3. 已完成：保留 deterministic adapter 作为无 key fallback 和测试 adapter。
+3. 已完成：用户端已移除无 key fallback；deterministic adapter 仅作为显式开发/测试替身保留。
 4. 已完成：控制台用户消息和输入框清空本地即时提交，不再等待 gate/chat 模型返回。
 5. 已完成：`chatModel` 流式回复已接入，主进程可广播 `chat:message-updated`，renderer 会更新同一条助手消息。
 6. 下一步：加入用户新消息中断生成。
@@ -580,7 +580,7 @@ Must show:
 
 建议交付：
 
-1. 已完成第一步：`memoryModel` 可接管结构化记忆抽取，并在失败时回退本地规则。
+1. 已完成第一步：`memoryModel` 可接管结构化记忆抽取；用户端失败时暴露模型错误，不再静默回退本地规则。
 2. 已完成第一步：写入队列支持 merge planner，重复语义记忆可更新旧节点。
 3. 已完成第一步：候选关系边支持 relation planner，并过滤模型发明的 node id。
 4. 已完成第一步：召回阶段支持 recall planner，可用模型生成语义检索词、目标记忆类型和重排 seed node。
@@ -589,7 +589,7 @@ Must show:
 7. 已完成第二版：控制台 `Memory Debug` 面板显示 nodes、edges、summaries 计数、当前节点、关系边、最近 memory event，以及最近一次 recall 的 query、planner terms、seed、扩散节点和 traversed edges。
 8. 下一步：补系统通知、提醒权限和 App 未运行时的边界提示。
 9. 已完成第一版：`corepack pnpm eval:memory` 可跑固定 recall fixture，覆盖直接偏好召回、事件到偏好图跳转、follow_up 排除不相关提醒。
-10. 下一步：把模型 planner 原始响应和 fallback 原因纳入 debug event。
+10. 下一步：把模型 planner 原始响应和失败原因纳入 debug event。
 11. 下一步：继续扩展更真实的多轮记忆评估语料。
 
 ### Next 4: Task Executor v2

@@ -1,5 +1,6 @@
 import { describe, expect, it } from "vitest";
 import { ModelBackedChatModel } from "../../../../src/core/llm/modelBackedChatModel";
+import { ModelInvocationError } from "../../../../src/core/llm/modelErrors";
 import type { ChatCompletionRequest } from "../../../../src/core/llm/openAiCompatibleClient";
 import type { Soul } from "../../../../src/shared/schemas/profile";
 
@@ -20,6 +21,39 @@ const companionSoul: Soul = {
 };
 
 describe("ModelBackedChatModel", () => {
+  it("propagates model invocation failures instead of using deterministic chat text", async () => {
+    const model = new ModelBackedChatModel({
+      client: {
+        complete: async () => {
+          throw new Error("network down");
+        }
+      },
+      config: {
+        enabled: true,
+        provider: "openai-compatible",
+        baseUrl: "https://example.test/v1",
+        apiKey: "key",
+        model: "chat-model"
+      }
+    });
+
+    await expect(model.generateReply({
+      userContent: "你是谁？",
+      writtenMemories: [],
+      recalledMemories: [],
+      dueFollowUps: [],
+      gateDecision: {
+        replyDecision: "reply",
+        inputKind: "chat",
+        memoryDecision: "skip",
+        confidence: 0.8,
+        reason: "test",
+        coalescedText: "你是谁？",
+        topicEnded: true
+      }
+    })).rejects.toBeInstanceOf(ModelInvocationError);
+  });
+
   it("injects the soul into the chat prompt and forbids AI self-description", async () => {
     let request: ChatCompletionRequest | undefined;
     const model = new ModelBackedChatModel({

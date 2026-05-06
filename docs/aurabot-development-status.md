@@ -4,7 +4,7 @@
 
 这份文档记录当前 main 集成线已经完成的工程事实、最近一次验证结果，以及下一步最应该推进的任务。它是执行状态板，不替代 PRD，也不替代 MVP 计划。
 
-当前工作分支：`codex/aurabot-langchain-gatemodel`
+当前工作分支：`codex/aurabot-persona-feel`
 
 当前集成基线：`989fc03 docs: update LangChain development log`
 
@@ -17,10 +17,10 @@
 已完成：
 
 1. 新增 `@langchain/openai` 依赖。
-2. 新增 `chatModel.provider = "langchain-openai"` 路径，通过 `LangChainOpenAIChatCompletionClient` 调用 `ChatOpenAI`，并保持现有 `ChatModel` 接口、流式 delta observer、消息持久化和 fallback 行为不变。
-3. 新增 `memoryModel.provider = "langchain-openai"` 路径，通过 `LangChainStructuredMemoryClient` 调用 `ChatOpenAI.withStructuredOutput(zodSchema)`，再复用现有 zod 校验、SQLite 记忆图、merge/relation/recall planner 和 deterministic fallback。
-4. 新增 `gateModel.provider = "langchain-openai"` 路径，通过 `LangChainStructuredGateClient` 调用 `ChatOpenAI.withStructuredOutput(structuredGateDecisionSchema)`，再复用现有 gate zod 校验、聊天/任务/任务控制归一化和 deterministic fallback。
-5. 设置窗口已新增三类模型角色的 provider 下拉选择，可在本地 fallback、OpenAI-compatible 和 LangChain OpenAI 之间切换；选择会写入 userData `config.json`，并在当前进程内重建对应 gate/chat/memory 服务。
+2. 新增 `chatModel.provider = "langchain-openai"` 路径，通过 `LangChainOpenAIChatCompletionClient` 调用 `ChatOpenAI`，并保持现有 `ChatModel` 接口、流式 delta observer 和消息持久化行为。
+3. 新增 `memoryModel.provider = "langchain-openai"` 路径，通过 `LangChainStructuredMemoryClient` 调用 `ChatOpenAI.withStructuredOutput(zodSchema)`，再复用现有 zod 校验、SQLite 记忆图和 merge/relation/recall planner。
+4. 新增 `gateModel.provider = "langchain-openai"` 路径，通过 `LangChainStructuredGateClient` 调用 `ChatOpenAI.withStructuredOutput(structuredGateDecisionSchema)`，再复用现有 gate zod 校验和聊天/任务/任务控制归一化。
+5. 设置窗口已新增三类模型角色的 provider 下拉选择，可在 OpenAI-compatible 和 LangChain OpenAI 之间切换；选择会写入 userData `config.json`，并在当前进程内重建对应 gate/chat/memory 服务。
 6. README 中英文已补充 `langchain-openai` 配置示例和设置页 provider 选择说明，当前可分别对 `gateModel`、`chatModel` 和 `memoryModel` 开启 LangChain。
 7. LangChain 分支 `codex/aurabot-langchain-chatmodel` 已 fast-forward 合入 `main`，当前远端 `main` 已包含 `80f3dc8 feat: add LangChain chat model adapter`、`36ab259 feat: add LangChain structured memory model` 和 `989fc03 docs: update LangChain development log`。
 
@@ -38,7 +38,7 @@
 
 当前 LangChain 边界：
 
-1. LangChain 现在是可选 provider，不是强制默认；没有 API Key 或 provider 未启用时，仍保持本地 deterministic fallback。
+1. LangChain 现在是可选 provider，不是强制默认；用户端不再提供本地模型 fallback，没有 API Key 或 provider 未启用时会暴露模型配置/调用错误。
 2. `memoryModel` 这条最适合继续加码，因为 LangChain structured output 对记忆抽取、合并、关系边和召回规划有直接价值。
 3. 下一步若要“强制使用 LangChain”，建议先补模型连接状态、连接测试和失败可见提示，再决定是否把默认 provider 切到 LangChain。
 
@@ -100,15 +100,16 @@ AuraBot 当前已经从“传统聊天界面”收敛为桌宠优先形态：
 | 全局界面语言 | 已完成第一版 | `displayLanguage` 已覆盖桌宠、控制台、设置、设置菜单、聊天、任务状态和记忆调试等主要 UI 文本。 |
 | Live2D 真实模型 | 已完成 | 已接入官方样例 `Hiyori`，Cubism Core 本地打包，不依赖启动时 CDN。 |
 | Live2D 桌宠交互层 | 部分完成 | 悬浮控制条、拖拽按钮、控制台按钮、点击穿透设置、任务完成气泡、位置持久化、状态 motion 映射、悬停小聊天气泡、展开式桌宠输入框和全局鼠标追踪眼动已接入。 |
-| 桌宠消息气泡 | 已完成第二版 | bot 普通输出、任务完成、语音回复和到期 follow-up 都会进入桌宠气泡通道；普通 bot 输出按句子流式排队展示，任务/提醒类气泡可优先打断过时普通聊天气泡。 |
+| 桌宠消息气泡 | 已完成第二版 | bot 普通输出、任务完成、语音回复、到期 follow-up 和到期时间提醒任务都会进入桌宠气泡通道；普通 bot 输出按句子流式排队展示，任务/提醒类气泡可优先打断过时普通聊天气泡。 |
 | SQLite 数据层 | 已完成 | 已有 profiles、souls、sessions、messages、memory、tasks、event_logs 等表。 |
 | 单主聊天线程 | 已完成 MVP | 主 session 持久化消息，控制台负责完整对话；用户消息乐观上屏，不再等待 gate/chat 模型返回。 |
 | 控制台消息展示 | 已完成第二版 | assistant 回复在 UI 层按句子拆成多个连续气泡，底层消息仍保持一条完整记录；用户消息不拆，任务附件挂在最后一句气泡下。 |
-| 模型适配层 | 部分完成 | 已有 `gateModel` / `chatModel` / `memoryModel` 注入接口、OpenAI-compatible provider、三类模型角色的 LangChain POC provider、userData/系统级 JSON 配置、env 配置、deterministic fallback、chat streaming、设置页安全摘要和 provider 选择；还缺用户新消息打断、retry/backoff、连接测试和真实连接状态 UI。 |
-| Gate/触发判断 | 已完成 MVP | 可判断碎片输入等待、完整输入回复、话题是否结束、聊天/任务/任务控制分类；强 gate 判定已延后到模型侧，外部模型异常时仍保留 fallback。 |
+| 模型适配层 | 部分完成 | 已有 `gateModel` / `chatModel` / `memoryModel` 注入接口、OpenAI-compatible provider、三类模型角色的 LangChain POC provider、userData/系统级 JSON 配置、env 配置、chat streaming、设置页安全摘要和 provider 选择；用户端已移除本地模型 fallback，deterministic 模型仅保留给显式测试开关；还缺用户新消息打断、retry/backoff、连接测试和真实连接状态 UI。 |
+| Gate/触发判断 | 已完成第二版 | 可判断碎片输入等待、完整输入回复、话题是否结束、聊天/任务/任务控制分类；任务内已细分 `result_output` 和 `time_reminder`，轻量 gateModel 需要给出任务子类型；外部模型异常时不再用本地 gate 兜底。 |
 | 活人感统一回复机制 | 已完成第一版 | `Soul` 只保留人格、语气、原则和语义禁忌；`ResponseWorkflow` 描述场景、事实和安全边界；`VoiceAdapter` 结合二者生成最终用户可见文本。任务完成等场景可以接近“本人自然告诉你结果并邀请你看一眼”的语感，但不会把样例当固定模板。 |
+| 主动消息触发 | 已完成第二版 | `ProactiveTriggerEngine` 统一支持到期 follow-up、到期 `time_reminder` 任务和空闲轻提醒；默认 10 秒扫描一次到期提醒；主动消息只进入桌宠气泡和事件日志，不直接写入主聊天；只有用户回应后，后续真实对话才进入主聊天历史。空闲主动消息等待时间已进入设置页。 |
 | 记忆 v1/v2 写入层 | 部分完成 | 支持 preference、event、follow_up 写入，摘要层和关系边召回；显式配置 `memoryModel` 后可用 API 做结构化记忆抽取、重复记忆合并和候选关系边判断；App 运行期间到期 follow_up 可通过后台 scheduler 推送桌宠气泡。 |
-| 任务 v1 | 已完成 MVP | 可从主聊天创建任务、按聊天 hint 命中特定任务、查询状态、打断、修改、启动；默认 deterministic runner，显式配置后可调用本机 Codex 子任务 runner。任务完成后可把结果文件作为消息附件回流主聊天，并提供“打开文件 / 所在文件夹”操作；任务状态卡已补取消和删除按钮。 |
+| 任务 v1 | 已完成第二版 | 任务已细分为结果产出型 `result_output` 和时间提醒型 `time_reminder`。结果产出任务可从主聊天创建、按聊天 hint 命中特定任务、查询状态、打断、修改、启动；默认 deterministic runner，显式配置后可调用本机 Codex 子任务 runner。时间提醒任务可由“两分钟后提醒我……”这类输入创建，记录 `dueAt`，到点由桌宠气泡提醒并标记完成。控制台左上展示结果产出任务，右上展示时间提醒任务。 |
 | 任务体验文案 | 已完成第二版 | 任务创建、查询、完成、失败、重复开始和状态条都已去掉内部状态词，并接入 `VoiceAdapter`。任务事实由 workflow 提供，最终表达由 soul 约束为更自然的伴侣兼助手式回复。 |
 | 记忆调试视图 | 已完成第二版 | 控制台 `Memory Debug` 面板可查看当前 memory nodes、edges、summaries、最近 memory event，以及最近一次 recall 的 query、planner terms、seed、扩散节点和 traversed edges。 |
 | 记忆评估语料 | 已完成第一版 | `corepack pnpm eval:memory` 可跑固定 recall fixture，覆盖直接偏好召回、事件到偏好图跳转、follow_up 排除不相关提醒。 |
@@ -116,6 +117,17 @@ AuraBot 当前已经从“传统聊天界面”收敛为桌宠优先形态：
 | E2E 演示流 | 已完成 MVP | 桌宠启动、悬浮控制开控制台、桌宠设置同步、位置持久化、状态同步、记忆、碎片等待、任务控制路径都有 e2e 覆盖。 |
 
 ## 最近一次验证记录
+
+2026-05-06 在 `codex/aurabot-persona-feel` 分支完成用户端模型 fallback 移除、设置页 provider 收敛和测试替身显式化验证：
+
+| 命令/检查 | 结果 |
+| --- | --- |
+| `corepack pnpm typecheck` | 通过 |
+| `corepack pnpm vitest run tests/unit/core/llm/chatModel.spec.ts tests/unit/core/llm/modelBackedChatModel.spec.ts tests/unit/core/llm/gateModel.spec.ts tests/unit/core/llm/modelBackedGateModel.spec.ts tests/unit/core/voice/voiceAdapter.spec.ts tests/unit/core/memory/modelBackedMemoryModel.spec.ts tests/unit/main/appConfigStore.spec.ts tests/unit/renderer/settingsWindow.spec.tsx tests/unit/shared/settings.spec.ts tests/unit/core/bootstrap/loadConfig.spec.ts` | 10 个 test files、50 个 tests 通过，覆盖无 API 配置不生成用户端本地回复、模型失败不静默兜底、设置页不暴露 Local fallback |
+| `corepack pnpm test` | 52 个 test files、186 个 tests 通过 |
+| `corepack pnpm build` | 通过 |
+| `corepack pnpm test:e2e` | 14 个 e2e tests 通过 |
+| `git diff --check` | 通过 |
 
 最近一次 live2D/console 分句气泡更新验证在 2026-05-05 当前 `codex/aurabot-live2d-console-ui` 分支完成：
 
@@ -133,7 +145,7 @@ AuraBot 当前已经从“传统聊天界面”收敛为桌宠优先形态：
 | 命令/检查 | 结果 |
 | --- | --- |
 | `corepack pnpm typecheck` | 通过 |
-| `corepack pnpm test` | 37 个 test files、133 个 tests 通过，覆盖 voice adapter、任务播报、memory follow-up 和既有单元/集成路径 |
+| `corepack pnpm test` | 50 个 test files、165 个 tests 通过，覆盖 voice adapter、任务播报、proactive trigger、memory follow-up 和既有单元/集成路径 |
 | `corepack pnpm build` | 通过 |
 | `corepack pnpm test:e2e` | 13 个 e2e tests 通过 |
 | `git diff --check` | 通过 |
@@ -155,11 +167,11 @@ AuraBot 当前已经从“传统聊天界面”收敛为桌宠优先形态：
 
 ## 当前边界
 
-1. 模型角色默认仍走 deterministic fallback；外部模型调用需要本地 `aurabot.config.json` / `config.json`、macOS 系统级 `/Library/Application Support/AuraBot/config.json`，或环境变量。`gateModel`、`chatModel` 和 `memoryModel` 均可选 `provider: "langchain-openai"`。
+1. 模型角色默认进入未配置状态，不再走用户端 deterministic fallback；外部模型调用需要本地 `aurabot.config.json` / `config.json`、macOS 系统级 `/Library/Application Support/AuraBot/config.json`，或环境变量。`gateModel`、`chatModel` 和 `memoryModel` 均可选 `provider: "langchain-openai"`。
 2. 用户消息已经即时显示，模型回复已支持流式 message update；还没有用户新消息打断 in-flight generation。
 3. 记忆写入层可由 `memoryModel` 接管抽取、合并和候选边判断；召回层也可由 `memoryModel` 生成语义检索词、目标类型和重排 seed node。到期 `follow_up` 可在下一次主聊天回复中触发并标记完成，也可在 App 运行期间由后台 scheduler 推送桌宠气泡；还没有系统级通知、离线调度或 embedding。
 4. 任务 runner 可显式配置为本机 Codex 子任务执行器，能广播 JSONL 子任务进度，在主聊天打断时取消子进程，并在启动时把失联运行态任务标记为失败；完成后的文件结果已可作为主聊天附件回流并打开，还没有真正 resume 和结构化 artifact registry。
-5. `Soul + ResponseWorkflow + VoiceAdapter` 已覆盖任务和提醒类文本出口的第一批场景；普通聊天仍由 `chatModel` 直接生成，但已经读取同一套 soul 字段。下一步要继续统一 memory recall、普通 fallback、错误提示、设置页提示等剩余用户可见文本。
+5. `Soul + ResponseWorkflow + VoiceAdapter` 已覆盖任务和提醒类文本出口的第一批场景；普通聊天仍由 `chatModel` 直接生成，但已经读取同一套 soul 字段。下一步要继续补错误提示和设置页提示等剩余用户可见文本。
 6. Live2D 状态行为当前复用 Hiyori 现有 motion group；全局鼠标追踪眼动已接入，但还没有定制表情资源或更细的动画状态机。
 7. 语音输入当前走 Chromium 原生 `SpeechRecognition`，运行时不支持时只显示轻提示；还没有稳定 STT adapter。
 8. 还没有 Profile 切换 UI、定时任务、桌面通知、打包发布、开机自启。
@@ -202,15 +214,35 @@ AuraBot 当前已经从“传统聊天界面”收敛为桌宠优先形态：
 
 1. 已新增设计文档 `docs/soul-response-workflow.md`，明确 `Soul` 只描述人格、语气、原则和语义禁忌，不承载具体任务模板。
 2. 已扩展 `Soul` schema 和默认 soul，增加 `tone / principles / taboos`，并补 SQLite 迁移和兼容读取。
-3. 已新增 `VoiceAdapter`，用 `soul + workflow + facts` 生成最终文本；配置 chat model 时走模型改写，失败或未配置时走 deterministic fallback。
+3. 已新增 `VoiceAdapter`，用 `soul + workflow + facts` 生成最终文本；配置 chat model 时走模型改写，失败或未配置时直接暴露模型错误，不再生成用户端 deterministic 文案。
 4. 已覆盖第一批场景：`task.accepted`、`task.status`、`task.completed`、`task.failed`、`task.interrupted`、`task.control_not_found`、`memory.follow_up`、`pet.task_activity`。
-5. 已补测试，覆盖附件事实安全、模型 prompt 构造、fallback 活人感和任务/e2e 语义断言。
+5. 已补测试，覆盖附件事实安全、模型 prompt 构造、无用户端 fallback 约束和任务/e2e 语义断言。
+6. 已新增 `proactive.idle_nudge` workflow scene，并由 `ProactiveTriggerEngine` 驱动桌宠主动轻提醒。
 
 下一步：
 
-1. 把普通聊天 fallback、memory recall fallback、IPC 错误提示、设置页轻提示等剩余用户可见文本继续接入 workflow。
+1. 把模型连接失败、IPC 错误提示、设置页轻提示等剩余用户可见文本继续接入 workflow。
 2. 给 model-backed voice adapter 增加语义级质量检查：不能虚构附件、不能暴露内部 runner、不能变成客服/系统通知口吻。
-3. 记录 voice adapter 的 scene、fallback/model 路径和失败原因，方便后续调试活人感劣化。
+3. 记录 voice adapter 的 scene、model 路径和失败原因，方便后续调试活人感劣化。
+
+### 2.6 主动消息触发
+
+目标：让 Aura 能主动冒出来一下，但不把没有回应的一句话污染成正式聊天历史。
+
+已完成：
+
+1. 已新增 `ProactiveTriggerEngine`，统一管理主动触发源，而不是把主动逻辑散在 `chatOrchestrator` 或单一 follow-up scheduler 里。
+2. 第一批 trigger 已接入：到期 `follow_up`、到期 `time_reminder` 任务、空闲轻提醒 `idle_nudge`。
+3. 主动触发当前只发 `PetActivity`，不会直接创建 `assistant message` 或写入 main session。
+4. 用户发送下一条真实输入时，会走现有 `sendChatMessage` 路径进入主聊天，因此只有“被接住的主动触发”才会形成正式对话历史。
+5. 已补事件日志：`proactive.trigger_evaluated`、`proactive.message_emitted`、`proactive.suppressed`、`proactive.user_activity_recorded`、`proactive.scheduler_failed`。
+6. 已把空闲主动消息等待时间纳入 `proactive.idleThresholdMs` 配置，并在设置页提供分钟级修改入口。
+
+下一步：
+
+1. 继续扩展触发源，例如 memory recall nudge、deadline nudge。
+2. 增加更细的打扰判断：最近是否刚收到桌宠气泡、是否正在 typing/tasking、是否刚被用户明确打断。
+3. 给主动消息增加用户级开关、更细 cooldown 配置和 debug 面板查看入口。
 
 ### 3. 记忆 v2
 
@@ -218,7 +250,7 @@ AuraBot 当前已经从“传统聊天界面”收敛为桌宠优先形态：
 
 建议任务：
 
-1. 已完成第一步：显式配置 `memoryModel` 后，可用 LLM 替换记忆抽取，并保留 deterministic fallback。
+1. 已完成第一步：显式配置 `memoryModel` 后，可用 LLM 替换记忆抽取；用户端模型失败不再回退到 deterministic 记忆逻辑。
 2. 已完成第一步：写入队列可通过 merge planner 更新重复记忆，而不是只按完全相同 content 去重。
 3. 已完成第一步：候选关系边可通过 relation planner 由 API 判断，并限制 target node 必须来自已有节点。
 4. 已完成第一步：召回阶段可通过 recall planner 获取 query terms、target types 和 ranked node ids，减少只靠关键词命中。
@@ -227,7 +259,7 @@ AuraBot 当前已经从“传统聊天界面”收敛为桌宠优先形态：
 7. 已完成第二版：控制台 `Memory Debug` 面板可查看 nodes、edges、summaries 计数、当前节点、关系边、最近 memory event，以及最近一次 recall 的 query、planner terms、seed、扩散节点和 traversed edges。
 8. 已完成第一版：`corepack pnpm eval:memory` 可跑固定 recall fixture，比较直接关键词召回、图状联想召回和不相关 follow_up 排除。
 9. 下一步：补系统通知和 App 未运行时的提醒边界提示。
-10. 下一步：把模型 planner 原始响应和 fallback 原因纳入 debug event。
+10. 下一步：把模型 planner 原始响应和失败原因纳入 debug event。
 11. 下一步：继续扩展更真实的多轮记忆评估语料。
 
 ### 4. 任务执行 v2

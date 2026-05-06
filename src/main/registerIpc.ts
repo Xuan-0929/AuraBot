@@ -16,7 +16,12 @@ import type { AppServices } from "../core/bootstrap/createServices";
 import { shouldAutoRunTasks } from "../core/bootstrap/createServices";
 import { buildTaskSettledMessageDraftWithVoice, isTaskResultPathAllowed } from "../core/tasks/taskPresentation";
 import { splitTextIntoSentences } from "../shared/text/sentences";
-import { createPublicAppConfig, type PublicAppConfig, type TaskRunnerSettingsPatch } from "../shared/contracts/settings";
+import {
+  createPublicAppConfig,
+  type ProactiveSettingsPatch,
+  type PublicAppConfig,
+  type TaskRunnerSettingsPatch
+} from "../shared/contracts/settings";
 import type { ModelProviderSettingsPatch } from "../shared/contracts/settings";
 
 export interface WindowController {
@@ -25,6 +30,8 @@ export interface WindowController {
   openConfigFile(): Promise<void>;
   updateTaskRunnerSettings(patch: TaskRunnerSettingsPatch): Promise<PublicAppConfig>;
   updateModelProviderSettings(patch: ModelProviderSettingsPatch): Promise<PublicAppConfig>;
+  updateProactiveSettings(patch: ProactiveSettingsPatch): Promise<PublicAppConfig>;
+  recordUserActivity(): void;
   getPetSettings(): PetSettings;
   updatePetSettings(patch: PetSettingsPatch): PetSettings;
   setPetMousePassthrough(enabled: boolean): void;
@@ -91,6 +98,10 @@ export function registerIpc(services: AppServices, windows: WindowController): v
     windows.updateModelProviderSettings(patch)
   );
 
+  ipcMain.handle(IPC_CHANNELS.updateProactiveSettings, async (_event, patch: ProactiveSettingsPatch) =>
+    windows.updateProactiveSettings(patch)
+  );
+
   ipcMain.handle(IPC_CHANNELS.getPetSettings, () => windows.getPetSettings());
 
   ipcMain.handle(IPC_CHANNELS.updatePetSettings, (_event, patch: PetSettingsPatch) =>
@@ -106,6 +117,8 @@ export function registerIpc(services: AppServices, windows: WindowController): v
   });
 
   ipcMain.handle(IPC_CHANNELS.sendChatMessage, async (_event, input: SendChatMessageInput) => {
+    windows.recordUserActivity();
+
     const result = await services.chatOrchestrator.sendMessage(input, {
       onAssistantMessageCreated: (message) => {
         if (!message) {
@@ -123,7 +136,11 @@ export function registerIpc(services: AppServices, windows: WindowController): v
         }
       }
     });
-    if (result.createdTask && shouldAutoRunTasks(services.config.taskRunner)) {
+    if (
+      result.createdTask &&
+      result.createdTask.kind === "result_output" &&
+      shouldAutoRunTasks(services.config.taskRunner)
+    ) {
       const startedTask = services.taskService.runTaskInBackground({
         profileId: result.createdTask.profileId,
         taskId: result.createdTask.id,
@@ -320,8 +337,7 @@ async function buildPetActivityFromTask(services: AppServices, task: Task): Prom
         taskTitle: task.title,
         status: task.status,
         resultSubject: task.title
-      },
-      fallbackText: task.status === "completed" ? `${task.title}弄好了，要不要看一眼？` : `${task.title}没跑通，我在这儿等你看。`
+      }
     }),
     createdAt: new Date().toISOString()
   };
@@ -388,8 +404,7 @@ export async function buildPetActivity(
           taskTitle: result.updatedTask.title,
           status: result.updatedTask.status,
           resultSubject: result.updatedTask.title
-        },
-        fallbackText: `${result.updatedTask.title}弄好了，要不要看一眼？`
+        }
       }),
       createdAt: new Date().toISOString()
     };

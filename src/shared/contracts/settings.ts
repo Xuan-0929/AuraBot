@@ -1,6 +1,12 @@
-import type { AppConfig, ModelRoleConfig, TaskCliRunnerConfig, TaskCliRunnerId } from "../schemas/config";
+import type {
+  AppConfig,
+  ModelRoleConfig,
+  ProactiveConfig,
+  TaskCliRunnerConfig,
+  TaskCliRunnerId
+} from "../schemas/config";
 
-export const MODEL_PROVIDER_OPTIONS = ["local-stub", "openai-compatible", "langchain-openai"] as const;
+export const MODEL_PROVIDER_OPTIONS = ["openai-compatible", "langchain-openai"] as const;
 
 export type ModelProviderOption = (typeof MODEL_PROVIDER_OPTIONS)[number];
 export type ModelRoleKey = "chatModel" | "gateModel" | "memoryModel";
@@ -20,6 +26,7 @@ export interface PublicAppConfig {
   gateModel: PublicModelRoleConfig;
   memoryModel: PublicModelRoleConfig;
   taskRunner: PublicTaskRunnerConfig;
+  proactive: PublicProactiveConfig;
 }
 
 export interface PublicTaskRunnerConfig {
@@ -35,6 +42,11 @@ export interface PublicTaskCliRunnerConfig {
   workingDirectory?: string;
 }
 
+export type PublicProactiveConfig = Pick<
+  ProactiveConfig,
+  "pollIntervalMs" | "followUpLookaheadMs" | "idleThresholdMs" | "idleCooldownMs"
+>;
+
 export interface TaskRunnerSettingsPatch {
   runners: Array<{
     id: TaskCliRunnerId;
@@ -42,6 +54,8 @@ export interface TaskRunnerSettingsPatch {
     priority: number;
   }>;
 }
+
+export type ProactiveSettingsPatch = Partial<Pick<ProactiveConfig, "idleThresholdMs" | "idleCooldownMs">>;
 
 export interface ModelProviderSettingsPatch {
   role: ModelRoleKey;
@@ -55,7 +69,17 @@ export function createPublicAppConfig(config: AppConfig): PublicAppConfig {
     memoryModel: createPublicModelRoleConfig(config.memoryModel),
     taskRunner: {
       runners: config.taskRunner.runners.map(createPublicTaskCliRunnerConfig)
-    }
+    },
+    proactive: createPublicProactiveConfig(config.proactive)
+  };
+}
+
+function createPublicProactiveConfig(config: ProactiveConfig): PublicProactiveConfig {
+  return {
+    pollIntervalMs: config.pollIntervalMs,
+    followUpLookaheadMs: config.followUpLookaheadMs,
+    idleThresholdMs: config.idleThresholdMs,
+    idleCooldownMs: config.idleCooldownMs
   };
 }
 

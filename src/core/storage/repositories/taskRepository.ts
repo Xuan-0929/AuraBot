@@ -1,5 +1,5 @@
 import { randomUUID } from "node:crypto";
-import type { Task, TaskEvent, TaskStatus } from "../../../shared/schemas/task";
+import type { Task, TaskEvent, TaskKind, TaskStatus } from "../../../shared/schemas/task";
 import type { AppDatabase } from "../db";
 
 interface TaskRow {
@@ -7,9 +7,11 @@ interface TaskRow {
   profile_id: string;
   parent_session_id: string;
   session_id: string;
+  task_kind?: TaskKind;
   title: string;
   status: TaskStatus;
   latest_progress: string;
+  due_at?: string | null;
   created_at: string;
   updated_at: string;
 }
@@ -29,9 +31,11 @@ export class TaskRepository {
     profileId: string;
     parentSessionId: string;
     sessionId: string;
+    kind?: TaskKind;
     title: string;
     status: TaskStatus;
     latestProgress: string;
+    dueAt?: string;
   }): Task {
     const now = new Date().toISOString();
     const task: Task = {
@@ -39,9 +43,11 @@ export class TaskRepository {
       profileId: input.profileId,
       parentSessionId: input.parentSessionId,
       sessionId: input.sessionId,
+      kind: input.kind ?? "result_output",
       title: input.title,
       status: input.status,
       latestProgress: input.latestProgress,
+      dueAt: input.dueAt,
       createdAt: now,
       updatedAt: now
     };
@@ -50,14 +56,17 @@ export class TaskRepository {
       .prepare(
         `
         insert into tasks (
-          id, profile_id, parent_session_id, session_id, title, status, latest_progress, created_at, updated_at
+          id, profile_id, parent_session_id, session_id, task_kind, title, status, latest_progress, due_at, created_at, updated_at
         )
         values (
-          @id, @profileId, @parentSessionId, @sessionId, @title, @status, @latestProgress, @createdAt, @updatedAt
+          @id, @profileId, @parentSessionId, @sessionId, @kind, @title, @status, @latestProgress, @dueAt, @createdAt, @updatedAt
         )
       `
       )
-      .run(task);
+      .run({
+        ...task,
+        dueAt: task.dueAt ?? null
+      });
 
     return task;
   }
@@ -82,6 +91,30 @@ export class TaskRepository {
         .prepare(`select * from tasks where status in (${placeholders}) order by updated_at asc`)
         .all(...statuses) as TaskRow[]
     ).map(mapTask);
+  }
+
+  listDueReminderTasks(profileId: string, nowIso: string): Task[] {
+    const nowTime = new Date(nowIso).getTime();
+    const tasks = (
+      this.database
+        .prepare(
+          `
+          select * from tasks
+          where profile_id = ?
+            and task_kind = 'time_reminder'
+            and status = 'queued'
+            and due_at is not null
+          order by due_at asc
+        `
+        )
+        .all(profileId) as TaskRow[]
+    ).map(mapTask);
+
+    return tasks.filter((task) => {
+      const dueTime = task.dueAt ? new Date(task.dueAt).getTime() : Number.NaN;
+
+      return Number.isFinite(nowTime) && Number.isFinite(dueTime) && dueTime <= nowTime;
+    });
   }
 
   getLatestByProfile(profileId: string): Task | undefined {
@@ -215,9 +248,11 @@ function mapTask(row: TaskRow): Task {
     profileId: row.profile_id,
     parentSessionId: row.parent_session_id,
     sessionId: row.session_id,
+    kind: row.task_kind ?? "result_output",
     title: row.title,
     status: row.status,
     latestProgress: row.latest_progress,
+    dueAt: row.due_at ?? undefined,
     createdAt: row.created_at,
     updatedAt: row.updated_at
   };

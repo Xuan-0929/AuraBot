@@ -76,8 +76,7 @@ export class MemoryFollowUpScheduler {
         soul: profile.soul,
         facts: {
           contents: dueFollowUps.map((memory) => memory.content)
-        },
-        fallbackText: formatFollowUpActivityMessage(dueFollowUps.map((memory) => memory.content))
+        }
       }),
       createdAt: nowIso
     };
@@ -101,21 +100,4 @@ export class MemoryFollowUpScheduler {
       });
     });
   }
-}
-
-function formatFollowUpActivityMessage(contents: string[]): string {
-  const cleanedContents = contents.map(cleanFollowUpContent).filter(Boolean);
-
-  if (cleanedContents.length === 0) {
-    return "我提醒你一下：有一件之前记下的事到时间了。";
-  }
-
-  return `我提醒你一下：${cleanedContents.join("；")}`;
-}
-
-function cleanFollowUpContent(content: string): string {
-  return content
-    .replace(/^需要跟进或提醒用户[:：]\s*/, "")
-    .replace(/^提醒用户\s*/, "")
-    .trim();
 }

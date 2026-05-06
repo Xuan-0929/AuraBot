@@ -123,11 +123,15 @@ export const MIGRATIONS: Migration[] = [
         profile_id text not null references profiles(id) on delete cascade,
         parent_session_id text not null references sessions(id) on delete cascade,
         session_id text not null references sessions(id) on delete cascade,
+        task_kind text not null default 'result_output' check (
+          task_kind in ('result_output', 'time_reminder')
+        ),
         title text not null,
         status text not null check (
           status in ('queued', 'running', 'waiting', 'completed', 'failed', 'interrupted')
         ),
         latest_progress text not null default '',
+        due_at text,
         created_at text not null,
         updated_at text not null
       );
@@ -222,6 +226,33 @@ export const MIGRATIONS: Migration[] = [
 
       if (!columns.includes("taboos_json")) {
         database.exec("alter table souls add column taboos_json text not null default '[]'");
+      }
+    }
+  },
+  {
+    id: 5,
+    name: "add_task_kind_and_due_at",
+    up: "",
+    after(database) {
+      const taskTable = database
+        .prepare("select name from sqlite_master where type = 'table' and name = 'tasks'")
+        .get();
+
+      if (!taskTable) {
+        return;
+      }
+
+      const columns = database
+        .prepare("pragma table_info(tasks)")
+        .all()
+        .map((row) => (row as { name: string }).name);
+
+      if (!columns.includes("task_kind")) {
+        database.exec("alter table tasks add column task_kind text not null default 'result_output'");
+      }
+
+      if (!columns.includes("due_at")) {
+        database.exec("alter table tasks add column due_at text");
       }
     }
   }

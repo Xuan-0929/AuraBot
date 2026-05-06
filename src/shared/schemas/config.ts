@@ -1,8 +1,8 @@
 import { z } from "zod";
 
 export const modelRoleConfigSchema = z.object({
-  provider: z.string().min(1).default("local-stub"),
-  model: z.string().min(1).default("stub"),
+  provider: z.string().min(1).default("openai-compatible"),
+  model: z.string().min(1).default("model"),
   enabled: z.boolean().default(false),
   baseUrl: z.string().url().optional(),
   apiKey: z.string().min(1).optional(),
@@ -38,17 +38,26 @@ export const taskRunnerConfigSchema = z.object({
   timeoutMs: z.number().int().positive().default(300000)
 });
 
+export const proactiveConfigSchema = z.object({
+  pollIntervalMs: z.number().int().positive().default(10000),
+  followUpLookaheadMs: z.number().int().nonnegative().default(0),
+  idleThresholdMs: z.number().int().positive().default(600000),
+  idleCooldownMs: z.number().int().positive().default(1800000)
+});
+
 export const appConfigSchema = z.object({
   storagePath: z.string().min(1),
   debugLogging: z.boolean().default(true),
   gateModel: modelRoleConfigSchema,
   chatModel: modelRoleConfigSchema,
   memoryModel: modelRoleConfigSchema,
-  taskRunner: taskRunnerConfigSchema
+  taskRunner: taskRunnerConfigSchema,
+  proactive: proactiveConfigSchema
 });
 
 export type ModelRoleConfig = z.infer<typeof modelRoleConfigSchema>;
 export type TaskCliRunnerId = z.infer<typeof taskCliRunnerIdSchema>;
 export type TaskCliRunnerConfig = z.infer<typeof taskCliRunnerConfigSchema>;
 export type TaskRunnerConfig = z.infer<typeof taskRunnerConfigSchema>;
+export type ProactiveConfig = z.infer<typeof proactiveConfigSchema>;
 export type AppConfig = z.infer<typeof appConfigSchema>;

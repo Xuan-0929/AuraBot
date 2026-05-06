@@ -1,8 +1,33 @@
 import { describe, expect, it } from "vitest";
 import { createChatModel } from "../../../../src/core/llm/chatModel";
+import { ModelConfigurationError } from "../../../../src/core/llm/modelErrors";
 import type { ChatCompletionRequest } from "../../../../src/core/llm/openAiCompatibleClient";
 
 describe("createChatModel", () => {
+  it("does not fall back to a deterministic chat model when API config is missing", async () => {
+    const model = createChatModel({
+      enabled: false,
+      provider: "openai-compatible",
+      model: "chat-model"
+    });
+
+    await expect(model.generateReply({
+      userContent: "hello",
+      writtenMemories: [],
+      recalledMemories: [],
+      dueFollowUps: [],
+      gateDecision: {
+        replyDecision: "reply",
+        inputKind: "chat",
+        memoryDecision: "skip",
+        confidence: 0.9,
+        reason: "test",
+        coalescedText: "hello",
+        topicEnded: true
+      }
+    })).rejects.toBeInstanceOf(ModelConfigurationError);
+  });
+
   it("uses a LangChain OpenAI-compatible client when requested by provider", async () => {
     let request: ChatCompletionRequest | undefined;
     const model = createChatModel(

@@ -1,5 +1,7 @@
 import type { GateDecision, InputKind, MemoryDecision, ReplyDecision } from "../../shared/contracts/chat";
 import type { MessageRole } from "../../shared/schemas/message";
+import type { TaskKind } from "../../shared/schemas/task";
+import { isReminderRequest } from "../tasks/reminderParser";
 
 export interface GateContextMessage {
   role: MessageRole;
@@ -26,6 +28,7 @@ export function evaluateGate(input: GateEvaluationInput): GateDecision {
   const recentFragments = getRecentUserMessageContents(input);
   const coalescedText = [...recentFragments, currentMessage].join("\n");
   const inputKind = classifyInputKind(currentMessage);
+  const taskKind = inputKind === "task" ? classifyTaskKind(currentMessage) : undefined;
   const replyDecision = decideReply(currentMessage, coalescedText, inputKind);
   const memoryDecision = decideMemory(currentMessage, coalescedText, inputKind, replyDecision);
   const topicEnded = decideTopicEnded(currentMessage, inputKind, replyDecision, memoryDecision);
@@ -36,9 +39,10 @@ export function evaluateGate(input: GateEvaluationInput): GateDecision {
     inputKind,
     memoryDecision,
     confidence,
-    reason: explainDecision({ currentMessage, inputKind, replyDecision, memoryDecision }),
+    reason: explainDecision({ currentMessage, inputKind, replyDecision, memoryDecision, taskKind }),
     coalescedText,
-    topicEnded
+    topicEnded,
+    taskKind
   };
 }
 
@@ -82,7 +86,15 @@ function classifyInputKind(message: string): InputKind {
     return "task_control";
   }
 
+  if (isReminderRequest(message)) {
+    return "task";
+  }
+
   return ASSISTED_TASK_PATTERN.test(message) || DIRECT_CREATION_TASK_PATTERN.test(message) ? "task" : "chat";
+}
+
+function classifyTaskKind(message: string): TaskKind {
+  return isReminderRequest(message) ? "time_reminder" : "result_output";
 }
 
 function decideReply(message: string, coalescedText: string, inputKind: InputKind): ReplyDecision {
@@ -157,9 +169,12 @@ function explainDecision(input: {
   inputKind: InputKind;
   replyDecision: ReplyDecision;
   memoryDecision: MemoryDecision;
+  taskKind?: TaskKind;
 }): string {
   if (input.inputKind === "task") {
-    return "task-request: clear command-like phrasing";
+    return input.taskKind === "time_reminder"
+      ? "task-request: scheduled reminder"
+      : "task-request: result output request";
   }
 
   if (input.inputKind === "task_control") {

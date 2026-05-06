@@ -13,7 +13,22 @@ const serviceHandles: TestServiceHandle[] = [];
 
 export function createTestServices(prefix: string): AppServices {
   const dir = mkdtempSync(join(tmpdir(), prefix));
-  const services = createServices(dir);
+  const previousDeterministicModelFallback = process.env.AURABOT_DETERMINISTIC_MODEL_FALLBACK;
+
+  process.env.AURABOT_DETERMINISTIC_MODEL_FALLBACK = "1";
+
+  let services: AppServices;
+
+  try {
+    services = createServices(dir);
+  } finally {
+    if (previousDeterministicModelFallback === undefined) {
+      delete process.env.AURABOT_DETERMINISTIC_MODEL_FALLBACK;
+    } else {
+      process.env.AURABOT_DETERMINISTIC_MODEL_FALLBACK = previousDeterministicModelFallback;
+    }
+  }
+
   serviceHandles.push({ dir, services });
 
   return services;

@@ -3,6 +3,7 @@ import type { MemoryNode } from "../../shared/schemas/memory";
 import type { ModelRoleConfig } from "../../shared/schemas/config";
 import type { ChatCompletionRequest } from "./openAiCompatibleClient";
 import type { ChatModel, ChatModelInput, ChatReplyObserver } from "./chatModel";
+import { ModelInvocationError } from "./modelErrors";
 
 export interface ChatModelClient {
   complete(input: ChatCompletionRequest): Promise<string>;
@@ -12,14 +13,12 @@ export interface ChatModelClient {
 export interface ModelBackedChatModelOptions {
   client: ChatModelClient;
   config?: ModelRoleConfig;
-  fallbackModel?: ChatModel;
 }
 
 export class ModelBackedChatModel implements ChatModel {
   constructor(private readonly options: ModelBackedChatModelOptions) {}
 
   async generateReply(input: ChatModelInput, observer?: ChatReplyObserver): Promise<string> {
-    const fallback = this.options.fallbackModel;
     const request: ChatCompletionRequest = {
       baseUrl: this.options.config?.baseUrl ?? "",
       apiKey: this.options.config?.apiKey ?? "",
@@ -41,10 +40,8 @@ export class ModelBackedChatModel implements ChatModel {
       await observer?.onDelta?.(reply);
 
       return reply;
-    } catch {
-      return fallback
-        ? fallback.generateReply(input, observer)
-        : buildDeterministicFallback(input, observer);
+    } catch (error) {
+      throw new ModelInvocationError("chatModel", error);
     }
   }
 }
@@ -103,25 +100,4 @@ function summarizeMemories(memories: MemoryNode[]): Array<{ type: string; conten
     type: memory.type,
     content: memory.content
   }));
-}
-
-async function buildDeterministicFallback(input: ChatModelInput, observer?: ChatReplyObserver): Promise<string> {
-  const recalled = input.recalledMemories;
-  const written = input.writtenMemories;
-  const dueFollowUps = input.dueFollowUps ?? [];
-  let reply: string;
-
-  if (dueFollowUps.length > 0) {
-    const joined = dueFollowUps.map((memory) => memory.content).join("；");
-    reply = `我提醒你一下：${joined}。`;
-  } else if (recalled.length > 0 || written.length > 0) {
-    const joined = [...recalled, ...written].map((memory) => memory.content).join("；");
-    reply = `我记得：${joined}。`;
-  } else {
-    reply = "嗯，我在。你继续说，我会把这段关系上下文接住。";
-  }
-
-  await observer?.onDelta?.(reply);
-
-  return reply;
 }

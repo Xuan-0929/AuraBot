@@ -4,16 +4,28 @@ import {
   OpenAICompatibleChatCompletionClient,
   type ChatCompletionRequest
 } from "../llm/openAiCompatibleClient";
+import { LangChainOpenAIChatCompletionClient } from "../llm/langChainChatModel";
+import {
+  createMissingModelConfigurationError,
+  createUnsupportedModelProviderError,
+  isUsableModelRoleConfig,
+  ModelInvocationError,
+  shouldUseDeterministicModelTestFallback
+} from "../llm/modelErrors";
 
 export type ResponseScene =
   | "task.accepted"
+  | "task.reminder_scheduled"
+  | "task.reminder_schedule_failed"
+  | "task.reminder_due"
   | "task.status"
   | "task.completed"
   | "task.failed"
   | "task.interrupted"
   | "task.control_not_found"
   | "memory.follow_up"
-  | "pet.task_activity";
+  | "pet.task_activity"
+  | "proactive.idle_nudge";
 
 export type ResponseChannel = "chat" | "pet_notice";
 
@@ -22,7 +34,6 @@ export interface VoiceRenderInput {
   channel?: ResponseChannel;
   soul?: Soul;
   facts: Record<string, unknown>;
-  fallbackText?: string;
 }
 
 export interface VoiceAdapter {
@@ -36,7 +47,11 @@ export interface VoiceAdapterClient {
 export interface ModelBackedVoiceAdapterOptions {
   client: VoiceAdapterClient;
   config?: ModelRoleConfig;
-  fallbackAdapter?: VoiceAdapter;
+}
+
+export interface VoiceAdapterFactoryDependencies {
+  openAICompatibleClient?: VoiceAdapterClient;
+  langChainClient?: VoiceAdapterClient;
 }
 
 export class DeterministicVoiceAdapter implements VoiceAdapter {
@@ -45,12 +60,18 @@ export class DeterministicVoiceAdapter implements VoiceAdapter {
   }
 }
 
+export class UnavailableVoiceAdapter implements VoiceAdapter {
+  constructor(private readonly error: Error) {}
+
+  async render(): Promise<string> {
+    throw this.error;
+  }
+}
+
 export class ModelBackedVoiceAdapter implements VoiceAdapter {
   constructor(private readonly options: ModelBackedVoiceAdapterOptions) {}
 
   async render(input: VoiceRenderInput): Promise<string> {
-    const fallback = this.options.fallbackAdapter ?? new DeterministicVoiceAdapter();
-
     try {
       const content = await this.options.client.complete({
         baseUrl: this.options.config?.baseUrl ?? "",
@@ -62,22 +83,47 @@ export class ModelBackedVoiceAdapter implements VoiceAdapter {
       });
       const sanitized = sanitizeModelText(content);
 
-      return sanitized || fallback.render(input);
-    } catch {
-      return fallback.render(input);
+      if (!sanitized) {
+        throw new Error("Voice model returned an empty response");
+      }
+
+      return sanitized;
+    } catch (error) {
+      throw new ModelInvocationError("voiceAdapter", error);
     }
   }
 }
 
-export function createVoiceAdapter(config: ModelRoleConfig): VoiceAdapter {
-  if (!config.enabled || config.provider !== "openai-compatible" || !config.baseUrl || !config.apiKey) {
+export function createVoiceAdapter(
+  config: ModelRoleConfig,
+  dependencies: VoiceAdapterFactoryDependencies = {}
+): VoiceAdapter {
+  if (!isUsableModelRoleConfig(config)) {
+    if (shouldUseDeterministicModelTestFallback()) {
+      return new DeterministicVoiceAdapter();
+    }
+
+    return new UnavailableVoiceAdapter(createMissingModelConfigurationError("voiceAdapter", config));
+  }
+
+  if (config.provider === "local-stub" && shouldUseDeterministicModelTestFallback()) {
     return new DeterministicVoiceAdapter();
   }
 
+  if (config.provider === "langchain-openai") {
+    return new ModelBackedVoiceAdapter({
+      client: dependencies.langChainClient ?? new LangChainOpenAIChatCompletionClient(),
+      config
+    });
+  }
+
+  if (config.provider !== "openai-compatible") {
+    return new UnavailableVoiceAdapter(createUnsupportedModelProviderError("voiceAdapter", config.provider));
+  }
+
   return new ModelBackedVoiceAdapter({
-    client: new OpenAICompatibleChatCompletionClient(),
-    config,
-    fallbackAdapter: new DeterministicVoiceAdapter()
+    client: dependencies.openAICompatibleClient ?? new OpenAICompatibleChatCompletionClient(),
+    config
   });
 }
 
@@ -101,8 +147,7 @@ function buildVoicePrompt(input: VoiceRenderInput): ChatCompletionRequest["messa
       content: JSON.stringify({
         soul: summarizeSoul(input.soul),
         workflow: buildWorkflow(input),
-        facts: input.facts,
-        fallbackText: input.fallbackText
+        facts: input.facts
       })
     }
   ];
@@ -118,6 +163,27 @@ function buildWorkflow(input: VoiceRenderInput): Record<string, unknown> {
         channel,
         intent: "确认收到任务并准备开始或已经开始推进。",
         requirements: ["可以提任务主题", "不要承诺一定成功", "不要像状态机播报"]
+      };
+    case "task.reminder_scheduled":
+      return {
+        scene: input.scene,
+        channel,
+        intent: "确认已经记下一个定时提醒。",
+        requirements: ["保留提醒内容", "可以自然提到会在指定时间叫用户", "不要像日历系统提示", "不要用书名号包住提醒内容"]
+      };
+    case "task.reminder_schedule_failed":
+      return {
+        scene: input.scene,
+        channel,
+        intent: "告诉用户这次没抓准提醒时间。",
+        requirements: ["简短说明需要更明确的时间", "不要责怪用户"]
+      };
+    case "task.reminder_due":
+      return {
+        scene: input.scene,
+        channel,
+        intent: "到点后自然提醒用户。",
+        requirements: ["只说提醒内容", "不要要求用户必须回复", "不要写入聊天历史", "不要用“我提醒你一下：”这种系统播报腔"]
       };
     case "task.status":
       return {
@@ -173,6 +239,13 @@ function buildWorkflow(input: VoiceRenderInput): Record<string, unknown> {
         intent: "给桌宠小提示用的极短通知。",
         requirements: ["一句话", "像轻轻提醒", "不要系统广播腔"]
       };
+    case "proactive.idle_nudge":
+      return {
+        scene: input.scene,
+        channel,
+        intent: "用户空闲一段时间后，Aura 轻轻冒出来表示自己还在。",
+        requirements: ["不要要求用户必须回复", "不要写入聊天历史", "一句话", "轻、自然、不过度打扰"]
+      };
   }
 }
 
@@ -210,6 +283,12 @@ function buildDeterministicVoiceText(input: VoiceRenderInput): string {
   switch (input.scene) {
     case "task.accepted":
       return title ? `好，我开始弄「${title}」。` : "好，我开始弄。";
+    case "task.reminder_scheduled":
+      return title ? `好，我记着啦，时间到了叫你${title}。` : "好，我记着啦，时间到了叫你。";
+    case "task.reminder_schedule_failed":
+      return "我没抓准要什么时候提醒你。你可以换成“两分钟后提醒我……”这样说。";
+    case "task.reminder_due":
+      return title ? `到点啦，记得${title}。` : "到点啦，有件事该看一下了。";
     case "task.status":
       if (readString(facts.status) === "queued") {
         return title ? `「${title}」我还没开始。你想现在做的话，直接跟我说开始。` : "这件事我还没开始。你想现在做的话，直接跟我说开始。";
@@ -242,6 +321,8 @@ function buildDeterministicVoiceText(input: VoiceRenderInput): string {
       }
 
       return `${subject}弄好了，要不要看一眼？`;
+    case "proactive.idle_nudge":
+      return "我在这儿。你要是想继续刚才的事，直接叫我就行。";
   }
 }
 

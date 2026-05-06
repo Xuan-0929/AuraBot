@@ -1,8 +1,12 @@
 import { describe, expect, it } from "vitest";
-import { createPublicAppConfig } from "../../../src/shared/contracts/settings";
+import { MODEL_PROVIDER_OPTIONS, createPublicAppConfig } from "../../../src/shared/contracts/settings";
 import type { AppConfig } from "../../../src/shared/schemas/config";
 
 describe("createPublicAppConfig", () => {
+  it("does not expose local fallback as a user-selectable model provider", () => {
+    expect(MODEL_PROVIDER_OPTIONS).toEqual(["openai-compatible", "langchain-openai"]);
+  });
+
   it("summarizes model config without exposing API keys to the renderer", () => {
     const config: AppConfig = {
       storagePath: "/tmp/aurabot.sqlite",
@@ -23,8 +27,8 @@ describe("createPublicAppConfig", () => {
         temperature: 0.7
       },
       memoryModel: {
-        provider: "local-stub",
-        model: "memory-stub",
+        provider: "openai-compatible",
+        model: "memory-model",
         enabled: false
       },
       taskRunner: {
@@ -65,6 +69,12 @@ describe("createPublicAppConfig", () => {
         sandbox: "workspace-write",
         approvalPolicy: "never",
         timeoutMs: 300000
+      },
+      proactive: {
+        idleThresholdMs: 120000,
+        idleCooldownMs: 1800000,
+        followUpLookaheadMs: 0,
+        pollIntervalMs: 10000
       }
     };
 
@@ -79,6 +89,12 @@ describe("createPublicAppConfig", () => {
       temperature: 0.7
     });
     expect(publicConfig.memoryModel.hasApiKey).toBe(false);
+    expect(publicConfig.proactive).toEqual({
+      idleThresholdMs: 120000,
+      idleCooldownMs: 1800000,
+      followUpLookaheadMs: 0,
+      pollIntervalMs: 10000
+    });
     expect(publicConfig.taskRunner.runners).toEqual([
       {
         id: "codex",

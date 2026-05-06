@@ -10,6 +10,7 @@ import type { TaskService } from "../tasks/taskService";
 import type { ProfileService } from "../profiles/profileService";
 import type { EventLogService } from "../telemetry/eventLogService";
 import { parseTaskControlRequest } from "../tasks/taskControlRouter";
+import { parseReminderRequest } from "../tasks/reminderParser";
 import type { GateModel } from "../llm/gateModel";
 import type { ChatModel } from "../llm/chatModel";
 import type { VoiceAdapter } from "../voice/voiceAdapter";
@@ -109,10 +110,90 @@ export class ChatOrchestrator {
 
     const semanticSegment = gateDecision.inputKind === "chat" ? gateDecision.coalescedText : input.content.trim();
     if (gateDecision.inputKind === "task") {
+      if (gateDecision.taskKind === "time_reminder") {
+        const reminder = parseReminderRequest({
+          message: semanticSegment,
+          nowIso: new Date().toISOString()
+        });
+
+        if (!reminder) {
+          const assistantMessage = this.dependencies.messageRepository.create({
+            sessionId: mainSession.id,
+            profileId: profile.id,
+            role: "assistant",
+            content: await this.dependencies.voiceAdapter.render({
+              scene: "task.reminder_schedule_failed",
+              channel: "chat",
+              soul: profile.soul,
+              facts: {
+                taskTitle: semanticSegment
+              }
+            })
+          });
+
+          this.dependencies.eventLogService.record("chat.message_persisted", {
+            profileId: profile.id,
+            sessionId: mainSession.id,
+            userMessageId: userMessage.id,
+            assistantMessageId: assistantMessage.id,
+            writtenMemoryIds: [],
+            gateDecision: gateDecision.replyDecision
+          });
+
+          return {
+            userMessage,
+            assistantMessage,
+            agentStatus: "idle",
+            gateDecision
+          };
+        }
+
+        const createdTask = this.dependencies.taskService.createTaskFromChat({
+          profileId: profile.id,
+          parentSessionId: mainSession.id,
+          title: reminder.content,
+          kind: "time_reminder",
+          dueAt: reminder.dueAt
+        });
+        const assistantMessage = this.dependencies.messageRepository.create({
+          sessionId: mainSession.id,
+          profileId: profile.id,
+          role: "assistant",
+          content: await this.dependencies.voiceAdapter.render({
+            scene: "task.reminder_scheduled",
+            channel: "chat",
+            soul: profile.soul,
+            facts: {
+              taskTitle: reminder.content,
+              dueAt: reminder.dueAt
+            }
+          })
+        });
+
+        this.dependencies.eventLogService.record("chat.message_persisted", {
+          profileId: profile.id,
+          sessionId: mainSession.id,
+          userMessageId: userMessage.id,
+          assistantMessageId: assistantMessage.id,
+          writtenMemoryIds: [],
+          createdTaskId: createdTask.id,
+          gateDecision: gateDecision.replyDecision
+        });
+
+        return {
+          userMessage,
+          assistantMessage,
+          agentStatus: "idle",
+          gateDecision,
+          createdTask
+        };
+      }
+
       const createdTask = this.dependencies.taskService.createTaskFromChat({
         profileId: profile.id,
         parentSessionId: mainSession.id,
-        title: semanticSegment
+        title: semanticSegment,
+        kind: "result_output"
       });
       const assistantMessage = this.dependencies.messageRepository.create({
         sessionId: mainSession.id,
@@ -124,8 +205,7 @@ export class ChatOrchestrator {
           soul: profile.soul,
           facts: {
             taskTitle: semanticSegment
-          },
-          fallbackText: "好，我开始弄。"
+          }
         })
       });
 
@@ -339,15 +419,13 @@ export class ChatOrchestrator {
             soul: input.soul,
             facts: {
               targetHint: request.targetHint
-            },
-            fallbackText: `我没有找到和「${request.targetHint}」匹配的任务。`
+            }
           })
         : await this.dependencies.voiceAdapter.render({
             scene: "task.control_not_found",
             channel: "chat",
             soul: input.soul,
-            facts: {},
-            fallbackText: "我这边还没有正在跟的任务。"
+            facts: {}
           });
     } else if (request.action === "query") {
       responseContent = await buildTaskStatusResponseWithVoice(
@@ -379,8 +457,7 @@ export class ChatOrchestrator {
             scene: "task.control_not_found",
             channel: "chat",
             soul: input.soul,
-            facts: {},
-            fallbackText: "我没有找到可开始的排队任务。"
+            facts: {}
           });
         } else if (updatedTask.status === "completed") {
           responseContent = (await buildTaskSettledMessageDraftWithVoice(
@@ -425,15 +502,13 @@ export class ChatOrchestrator {
             facts: {
               taskTitle: updatedTask.title,
               status: updatedTask.status
-            },
-            fallbackText: "好，我先停下来。你想换方向的话，直接告诉我。"
+            }
           })
         : await this.dependencies.voiceAdapter.render({
             scene: "task.control_not_found",
             channel: "chat",
             soul: input.soul,
-            facts: {},
-            fallbackText: "这件事现在不用停，我这边没有可打断的运行状态。"
+            facts: {}
           });
     } else {
       const revisedTitle = request.revisedTitle ?? input.content;
@@ -449,15 +524,13 @@ export class ChatOrchestrator {
             soul: input.soul,
             facts: {
               taskTitle: updatedTask.title
-            },
-            fallbackText: `好，我按这个新方向来：${updatedTask.title}`
+            }
           })
         : await this.dependencies.voiceAdapter.render({
             scene: "task.control_not_found",
             channel: "chat",
             soul: input.soul,
-            facts: {},
-            fallbackText: "这个任务没改成，我没有找到可修改的任务。"
+            facts: {}
           });
     }
 

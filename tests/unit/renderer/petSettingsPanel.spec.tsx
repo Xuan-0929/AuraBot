@@ -21,8 +21,8 @@ const baseProps: PetSettingsPanelProps = {
       hasApiKey: true
     },
     gateModel: {
-      provider: "local-stub",
-      model: "gate-stub",
+      provider: "openai-compatible",
+      model: "gate-model",
       enabled: false,
       hasApiKey: false
     },
@@ -57,6 +57,12 @@ const baseProps: PetSettingsPanelProps = {
           command: "hermes"
         }
       ]
+    },
+    proactive: {
+      pollIntervalMs: 10000,
+      followUpLookaheadMs: 0,
+      idleThresholdMs: 600000,
+      idleCooldownMs: 1800000
     }
   },
   onUpdate: vi.fn(async () => undefined),

@@ -37,7 +37,24 @@ describe("evaluateGate", () => {
     expect(decision.replyDecision).toBe("reply");
     expect(decision.memoryDecision).toBe("skip");
     expect(decision.inputKind).toBe("task");
+    expect(decision.taskKind).toBe("result_output");
   });
+
+  it.each(["两分钟后提醒我喝水", "提醒我两分钟后喝水"])(
+    "classifies scheduled reminder request %s as a time reminder task",
+    (content) => {
+      const decision = evaluateGate({
+        currentMessage: content,
+        recentUserMessages: []
+      });
+
+      expect(decision.replyDecision).toBe("reply");
+      expect(decision.memoryDecision).toBe("skip");
+      expect(decision.inputKind).toBe("task");
+      expect(decision.taskKind).toBe("time_reminder");
+      expect(decision.topicEnded).toBe(true);
+    }
+  );
 
   it("classifies writing a reading note as a task even without sentence punctuation", () => {
     const decision = evaluateGate({

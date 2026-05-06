@@ -2,8 +2,8 @@ import { existsSync, mkdirSync, writeFileSync } from "node:fs";
 import { join } from "node:path";
 import { app, BrowserWindow, shell } from "electron";
 import { createServices, createTaskRunner, type AppServices } from "../core/bootstrap/createServices";
-import { MemoryFollowUpScheduler } from "../core/memory/memoryFollowUpScheduler";
 import { MemoryService } from "../core/memory/memoryService";
+import { ProactiveTriggerEngine } from "../core/proactive/proactiveTriggerEngine";
 import { createChatModel } from "../core/llm/chatModel";
 import { createGateModel } from "../core/llm/gateModel";
 import { createVoiceAdapter } from "../core/voice/voiceAdapter";
@@ -30,17 +30,22 @@ import {
 import { PetSettingsStore } from "./petSettingsStore";
 import { PetWindowStateStore } from "./petWindowStateStore";
 import { registerIpc } from "./registerIpc";
-import { updateUserModelProviderSettings, updateUserTaskRunnerSettings } from "./appConfigStore";
+import {
+  updateUserModelProviderSettings,
+  updateUserProactiveSettings,
+  updateUserTaskRunnerSettings
+} from "./appConfigStore";
 import {
   createPublicAppConfig,
   type ModelProviderSettingsPatch,
+  type ProactiveSettingsPatch,
   type TaskRunnerSettingsPatch
 } from "../shared/contracts/settings";
 
 let services: AppServices | undefined;
 let petSettingsStore: PetSettingsStore | undefined;
 let petWindowStateStore: PetWindowStateStore | undefined;
-let memoryFollowUpScheduler: MemoryFollowUpScheduler | undefined;
+let proactiveTriggerEngine: ProactiveTriggerEngine | undefined;
 
 if (process.env.AURABOT_USER_DATA_DIR) {
   app.setPath("userData", process.env.AURABOT_USER_DATA_DIR);
@@ -58,6 +63,8 @@ async function bootstrap(): Promise<void> {
     openConfigFile: () => openUserConfigFile(userDataPath),
     updateTaskRunnerSettings: (patch) => updateTaskRunnerSettings(userDataPath, patch),
     updateModelProviderSettings: (patch) => updateModelProviderSettings(userDataPath, patch),
+    updateProactiveSettings: (patch) => updateProactiveSettings(userDataPath, patch),
+    recordUserActivity: () => proactiveTriggerEngine?.recordUserActivity(),
     getPetSettings: () => petSettingsStore?.get() ?? {
       clickThroughPet: false,
       displayLanguage: "en"
@@ -86,14 +93,26 @@ async function bootstrap(): Promise<void> {
     savedBounds: petWindowStateStore.getBounds(),
     onBoundsChanged: (bounds) => petWindowStateStore?.saveBounds(bounds)
   });
-  memoryFollowUpScheduler = new MemoryFollowUpScheduler({
-    profileService: services.profileService,
-    memoryService: services.memoryService,
-    eventLogService: services.eventLogService,
-    voiceAdapter: services.voiceAdapter,
-    broadcastPetActivity
-  });
-  memoryFollowUpScheduler.start();
+  proactiveTriggerEngine = new ProactiveTriggerEngine({
+    get profileService() {
+      return services!.profileService;
+    },
+    get memoryService() {
+      return services!.memoryService;
+    },
+    get taskService() {
+      return services!.taskService;
+    },
+    get eventLogService() {
+      return services!.eventLogService;
+    },
+    get voiceAdapter() {
+      return services!.voiceAdapter;
+    },
+    broadcastPetActivity,
+    broadcastTaskChanged
+  }, services.config.proactive);
+  proactiveTriggerEngine.start();
 }
 
 async function openUserConfigFile(userDataPath: string): Promise<void> {
@@ -167,6 +186,18 @@ async function updateModelProviderSettings(userDataPath: string, patch: ModelPro
   return createPublicAppConfig(services.config);
 }
 
+async function updateProactiveSettings(userDataPath: string, patch: ProactiveSettingsPatch) {
+  if (!services) {
+    throw new Error("AuraBot services are not ready.");
+  }
+
+  const nextConfig = updateUserProactiveSettings(userDataPath, services.config, patch);
+  services.config.proactive = nextConfig.proactive;
+  proactiveTriggerEngine?.updateOptions(nextConfig.proactive);
+
+  return createPublicAppConfig(services.config);
+}
+
 app.whenReady().then(bootstrap);
 
 app.on("activate", () => {
@@ -186,6 +217,6 @@ app.on("window-all-closed", () => {
 });
 
 app.on("before-quit", () => {
-  memoryFollowUpScheduler?.stop();
+  proactiveTriggerEngine?.stop();
   services?.database.close();
 });

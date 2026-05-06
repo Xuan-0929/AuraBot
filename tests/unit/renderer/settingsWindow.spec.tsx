@@ -21,8 +21,8 @@ const baseProps: SettingsWindowProps = {
       hasApiKey: true
     },
     gateModel: {
-      provider: "local-stub",
-      model: "gate-stub",
+      provider: "openai-compatible",
+      model: "gate-model",
       enabled: false,
       hasApiKey: false
     },
@@ -58,11 +58,18 @@ const baseProps: SettingsWindowProps = {
           command: "hermes"
         }
       ]
+    },
+    proactive: {
+      idleThresholdMs: 120000,
+      idleCooldownMs: 1800000,
+      followUpLookaheadMs: 0,
+      pollIntervalMs: 10000
     }
   },
   onUpdatePetSettings: vi.fn(async () => undefined),
   onUpdateTaskRunnerSettings: vi.fn(async () => undefined),
   onUpdateModelProviderSettings: vi.fn(async () => undefined),
+  onUpdateProactiveSettings: vi.fn(async () => undefined),
   onOpenConfigFile: vi.fn(async () => undefined)
 };
 
@@ -105,6 +112,9 @@ describe("SettingsWindow", () => {
     expect(container.textContent).toContain("API key saved");
     expect(container.textContent).toContain("Character");
     expect(container.textContent).toContain("Task CLI");
+    expect(container.textContent).toContain("Proactive messages");
+    expect(container.textContent).not.toContain("Local fallback");
+    expect(container.querySelector<HTMLInputElement>('[aria-label="Proactive message wait minutes"]')?.value).toBe("2");
     expect(container.textContent).toContain("Codex");
     expect(container.textContent).toContain("Claude Code");
     expect(container.textContent).toContain("Hermes");
@@ -127,6 +137,29 @@ describe("SettingsWindow", () => {
     });
 
     expect(onOpenConfigFile).toHaveBeenCalledTimes(1);
+  });
+
+  it("updates proactive wait timing from the settings page", async () => {
+    const onUpdateProactiveSettings = vi.fn(async () => undefined);
+
+    await act(async () => {
+      root.render(
+        <SettingsWindow
+          {...baseProps}
+          onUpdateProactiveSettings={onUpdateProactiveSettings}
+        />
+      );
+    });
+
+    await act(async () => {
+      const waitMinutes = container.querySelector<HTMLInputElement>('[aria-label="Proactive message wait minutes"]')!;
+      waitMinutes.value = "5";
+      waitMinutes.dispatchEvent(new Event("input", { bubbles: true }));
+    });
+
+    expect(onUpdateProactiveSettings).toHaveBeenCalledWith({
+      idleThresholdMs: 300000
+    });
   });
 
   it("updates task CLI switches and priority values from the settings page", async () => {
@@ -199,6 +232,10 @@ describe("SettingsWindow", () => {
 
     await act(async () => {
       const gateProvider = container.querySelector<HTMLSelectElement>('[aria-label="Gate provider"]')!;
+      expect(Array.from(gateProvider.options).map((option) => option.value)).toEqual([
+        "openai-compatible",
+        "langchain-openai"
+      ]);
       gateProvider.value = "langchain-openai";
       gateProvider.dispatchEvent(new Event("change", { bubbles: true }));
     });
@@ -226,6 +263,7 @@ describe("SettingsWindow", () => {
     expect(container.textContent).toContain("通用");
     expect(container.textContent).toContain("模型");
     expect(container.textContent).toContain("任务 CLI");
+    expect(container.textContent).toContain("主动消息");
     expect(container.textContent).toContain("打开 config 文件");
     expect(container.textContent).toContain("人物");
     expect(container.textContent).toContain("穿透人物点击");

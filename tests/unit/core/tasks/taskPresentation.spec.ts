@@ -13,6 +13,7 @@ const baseTask: Task = {
   profileId: "profile-1",
   parentSessionId: "session-main",
   sessionId: "session-task",
+  kind: "result_output",
   title: "帮我做一份 GitHub 周报。",
   status: "completed",
   latestProgress: "Codex 子任务完成：\nGitHub 周报写好了，文件在 /Users/xuan/project/docs/report.md",

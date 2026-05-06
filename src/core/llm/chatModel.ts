@@ -6,6 +6,12 @@ import { planAssistantResponse } from "../orchestration/responsePlanner";
 import { OpenAICompatibleChatCompletionClient } from "./openAiCompatibleClient";
 import { LangChainOpenAIChatCompletionClient } from "./langChainChatModel";
 import { ModelBackedChatModel, type ChatModelClient } from "./modelBackedChatModel";
+import {
+  createMissingModelConfigurationError,
+  createUnsupportedModelProviderError,
+  isUsableModelRoleConfig,
+  shouldUseDeterministicModelTestFallback
+} from "./modelErrors";
 
 export interface ChatModelInput {
   userContent: string;
@@ -47,26 +53,40 @@ export class DeterministicChatModel implements ChatModel {
   }
 }
 
+export class UnavailableChatModel implements ChatModel {
+  constructor(private readonly error: Error) {}
+
+  async generateReply(): Promise<string> {
+    throw this.error;
+  }
+}
+
 export function createChatModel(config: ChatModelConfig, dependencies: ChatModelFactoryDependencies = {}): ChatModel {
-  if (!config.enabled || !config.baseUrl || !config.apiKey) {
+  if (!isUsableModelRoleConfig(config)) {
+    if (shouldUseDeterministicModelTestFallback()) {
+      return new DeterministicChatModel();
+    }
+
+    return new UnavailableChatModel(createMissingModelConfigurationError("chatModel", config));
+  }
+
+  if (config.provider === "local-stub" && shouldUseDeterministicModelTestFallback()) {
     return new DeterministicChatModel();
   }
 
   if (config.provider === "langchain-openai") {
     return new ModelBackedChatModel({
       client: dependencies.langChainClient ?? new LangChainOpenAIChatCompletionClient(),
-      config,
-      fallbackModel: new DeterministicChatModel()
+      config
     });
   }
 
   if (config.provider !== "openai-compatible") {
-    return new DeterministicChatModel();
+    return new UnavailableChatModel(createUnsupportedModelProviderError("chatModel", config.provider));
   }
 
   return new ModelBackedChatModel({
     client: dependencies.openAICompatibleClient ?? new OpenAICompatibleChatCompletionClient(),
-    config,
-    fallbackModel: new DeterministicChatModel()
+    config
   });
 }

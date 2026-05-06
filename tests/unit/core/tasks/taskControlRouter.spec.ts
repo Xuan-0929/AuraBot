@@ -6,6 +6,7 @@ const baseTask = {
   profileId: "profile",
   parentSessionId: "main",
   sessionId: "task-session",
+  kind: "result_output",
   status: "queued",
   latestProgress: "",
   createdAt: "2026-05-04T00:00:00.000Z",

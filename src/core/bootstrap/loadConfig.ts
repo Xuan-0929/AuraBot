@@ -8,11 +8,14 @@ import {
   type TaskRunnerConfig
 } from "../../shared/schemas/config";
 
-type AppConfigInput = Partial<Omit<AppConfig, "gateModel" | "chatModel" | "memoryModel" | "taskRunner">> & {
+type AppConfigInput = Partial<
+  Omit<AppConfig, "gateModel" | "chatModel" | "memoryModel" | "taskRunner" | "proactive">
+> & {
   gateModel?: Partial<AppConfig["gateModel"]>;
   chatModel?: Partial<AppConfig["chatModel"]>;
   memoryModel?: Partial<AppConfig["memoryModel"]>;
   taskRunner?: Partial<AppConfig["taskRunner"]>;
+  proactive?: Partial<AppConfig["proactive"]>;
 };
 
 export function loadConfig(userDataPath: string): AppConfig {
@@ -20,18 +23,18 @@ export function loadConfig(userDataPath: string): AppConfig {
     storagePath: join(userDataPath, "aurabot.sqlite"),
     debugLogging: true,
     gateModel: {
-      provider: "local-stub",
-      model: "gate-stub",
+      provider: "openai-compatible",
+      model: "gate-model",
       enabled: false
     },
     chatModel: {
-      provider: "local-stub",
-      model: "chat-stub",
+      provider: "openai-compatible",
+      model: "chat-model",
       enabled: false
     },
     memoryModel: {
-      provider: "local-stub",
-      model: "memory-stub",
+      provider: "openai-compatible",
+      model: "memory-model",
       enabled: false
     },
     taskRunner: {
@@ -40,6 +43,12 @@ export function loadConfig(userDataPath: string): AppConfig {
       sandbox: "workspace-write",
       approvalPolicy: "never",
       timeoutMs: 300000
+    },
+    proactive: {
+      pollIntervalMs: 10000,
+      followUpLookaheadMs: 0,
+      idleThresholdMs: 600000,
+      idleCooldownMs: 1800000
     }
   };
   const fileConfig = loadConfigFile(userDataPath);
@@ -99,7 +108,11 @@ function mergeConfig(defaults: AppConfig, override: AppConfigInput): AppConfigIn
       ...defaults.memoryModel,
       ...override.memoryModel
     },
-    taskRunner
+    taskRunner,
+    proactive: {
+      ...defaults.proactive,
+      ...override.proactive
+    }
   };
 }
 
@@ -148,7 +161,23 @@ function mergeTaskCliRunners(
 function normalizeAppConfig(config: AppConfig, taskRunnerOverride?: AppConfigInput["taskRunner"]): AppConfig {
   return {
     ...config,
+    gateModel: normalizeModelRoleConfig(config.gateModel, "gate-model"),
+    chatModel: normalizeModelRoleConfig(config.chatModel, "chat-model"),
+    memoryModel: normalizeModelRoleConfig(config.memoryModel, "memory-model"),
     taskRunner: normalizeTaskRunnerConfig(config.taskRunner, taskRunnerOverride)
+  };
+}
+
+function normalizeModelRoleConfig(config: AppConfig["chatModel"], defaultModel: string): AppConfig["chatModel"] {
+  if (config.provider !== "local-stub") {
+    return config;
+  }
+
+  return {
+    ...config,
+    provider: "openai-compatible",
+    model: /-stub$/u.test(config.model) ? defaultModel : config.model,
+    enabled: false
   };
 }
 
@@ -198,8 +227,18 @@ function loadEnvironmentConfig(): AppConfigInput {
     gateModel: readModelRoleEnvironment("GATE", common),
     chatModel: readModelRoleEnvironment("CHAT", common),
     memoryModel: readModelRoleEnvironment("MEMORY", common),
-    taskRunner: readTaskRunnerEnvironment()
+    taskRunner: readTaskRunnerEnvironment(),
+    proactive: readProactiveEnvironment()
   };
+}
+
+function readProactiveEnvironment(): AppConfigInput["proactive"] {
+  return removeUndefinedValues({
+    pollIntervalMs: parseNumberEnvironment(process.env.AURABOT_PROACTIVE_POLL_INTERVAL_MS),
+    followUpLookaheadMs: parseNumberEnvironment(process.env.AURABOT_PROACTIVE_FOLLOW_UP_LOOKAHEAD_MS),
+    idleThresholdMs: parseNumberEnvironment(process.env.AURABOT_PROACTIVE_IDLE_THRESHOLD_MS),
+    idleCooldownMs: parseNumberEnvironment(process.env.AURABOT_PROACTIVE_IDLE_COOLDOWN_MS)
+  });
 }
 
 function readModelRoleEnvironment(

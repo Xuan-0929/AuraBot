@@ -13,15 +13,53 @@ export function TaskStatusOverlay({
   onCancelTask?: (taskId: string) => void;
   onDeleteTask?: (taskId: string) => void;
 }) {
-  const visibleTasks = tasks.slice(0, 3);
+  const resultTasks = tasks.filter((task) => task.kind !== "time_reminder").slice(0, 3);
+  const reminderTasks = tasks.filter((task) => task.kind === "time_reminder").slice(0, 3);
 
-  if (visibleTasks.length === 0) {
+  if (resultTasks.length === 0 && reminderTasks.length === 0) {
     return null;
   }
 
   return (
-    <aside className="task-status-overlay" aria-label={t(displayLanguage, "taskStatus")}>
-      {visibleTasks.map((task) => (
+    <div className="task-status-overlay" aria-label={t(displayLanguage, "taskStatus")}>
+      <TaskStatusColumn
+        className="task-status-overlay-result"
+        tasks={resultTasks}
+        displayLanguage={displayLanguage}
+        onCancelTask={onCancelTask}
+        onDeleteTask={onDeleteTask}
+      />
+      <TaskStatusColumn
+        className="task-status-overlay-reminder"
+        tasks={reminderTasks}
+        displayLanguage={displayLanguage}
+        onCancelTask={onCancelTask}
+        onDeleteTask={onDeleteTask}
+      />
+    </div>
+  );
+}
+
+function TaskStatusColumn({
+  className,
+  tasks,
+  displayLanguage,
+  onCancelTask,
+  onDeleteTask
+}: {
+  className: string;
+  tasks: Task[];
+  displayLanguage: PetSettings["displayLanguage"];
+  onCancelTask?: (taskId: string) => void;
+  onDeleteTask?: (taskId: string) => void;
+}) {
+  if (tasks.length === 0) {
+    return <aside className={`task-status-column ${className}`} />;
+  }
+
+  return (
+    <aside className={`task-status-column ${className}`}>
+      {tasks.map((task) => (
         <div className="task-status-card" key={task.id}>
           <span className={`task-status-dot task-status-dot-${task.status}`} />
           <span className="task-status-copy">

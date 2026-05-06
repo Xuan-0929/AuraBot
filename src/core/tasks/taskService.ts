@@ -1,4 +1,4 @@
-import type { Task, TaskEvent } from "../../shared/schemas/task";
+import type { Task, TaskEvent, TaskKind } from "../../shared/schemas/task";
 import type { TaskRunner } from "./taskRunner";
 import type { SessionRepository } from "../storage/repositories/sessionRepository";
 import type { TaskRepository } from "../storage/repositories/taskRepository";
@@ -12,6 +12,8 @@ export interface CreateTaskFromChatInput {
   profileId: string;
   parentSessionId: string;
   title: string;
+  kind?: TaskKind;
+  dueAt?: string;
 }
 
 export interface InterruptLatestActiveTaskInput {
@@ -66,9 +68,11 @@ export class TaskService {
       profileId: input.profileId,
       parentSessionId: input.parentSessionId,
       sessionId: taskSession.id,
+      kind: input.kind ?? "result_output",
       title: input.title,
       status: "queued",
-      latestProgress: "Task queued from main chat."
+      latestProgress: input.kind === "time_reminder" ? "Reminder scheduled from main chat." : "Task queued from main chat.",
+      dueAt: input.dueAt
     });
 
     this.eventLogService.record("task.created", {
@@ -76,6 +80,8 @@ export class TaskService {
       parentSessionId: input.parentSessionId,
       taskSessionId: taskSession.id,
       taskId: task.id,
+      kind: task.kind,
+      dueAt: task.dueAt ?? null,
       title: input.title,
       status: task.status
     });
@@ -123,12 +129,50 @@ export class TaskService {
     return this.taskRepository.listByProfile(profileId);
   }
 
+  listDueReminderTasks(profileId: string, nowIso: string): Task[] {
+    return this.taskRepository.listDueReminderTasks(profileId, nowIso);
+  }
+
   getLatestTaskForProfile(profileId: string): Task | undefined {
     return this.taskRepository.getLatestByProfile(profileId);
   }
 
   getTaskById(taskId: string): Task | undefined {
     return this.taskRepository.getById(taskId);
+  }
+
+  completeReminderTask(input: { profileId: string; taskId: string; summary: string }): Task | undefined {
+    const task = this.taskRepository.getById(input.taskId);
+
+    if (!task || task.profileId !== input.profileId || task.kind !== "time_reminder" || task.status !== "queued") {
+      return undefined;
+    }
+
+    this.taskRepository.appendEvent({
+      taskId: task.id,
+      eventType: "task.time_reminder_triggered",
+      summary: input.summary,
+      payload: {
+        dueAt: task.dueAt ?? null
+      }
+    });
+
+    const completed = this.taskRepository.updateStatus({
+      taskId: task.id,
+      status: "completed",
+      latestProgress: input.summary
+    });
+
+    if (completed) {
+      this.eventLogService.record("task.time_reminder_triggered", {
+        profileId: input.profileId,
+        taskId: completed.id,
+        title: completed.title,
+        dueAt: completed.dueAt ?? null
+      });
+    }
+
+    return completed;
   }
 
   findTaskForChatControl(input: {
@@ -300,7 +344,7 @@ export class TaskService {
   async runLatestQueuedTask(profileId: string): Promise<Task | undefined> {
     const task = this.taskRepository.getLatestActiveByProfile(profileId);
 
-    if (!task || task.status !== "queued") {
+    if (!task || task.status !== "queued" || task.kind === "time_reminder") {
       return task;
     }
 
@@ -316,7 +360,7 @@ export class TaskService {
           activeOnly: true
         });
 
-    if (!task || task.status !== "queued") {
+    if (!task || task.status !== "queued" || task.kind === "time_reminder") {
       return task;
     }
 
@@ -332,7 +376,7 @@ export class TaskService {
           activeOnly: true
         });
 
-    if (!task || task.status !== "queued") {
+    if (!task || task.status !== "queued" || task.kind === "time_reminder") {
       return task;
     }
 

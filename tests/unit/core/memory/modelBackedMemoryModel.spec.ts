@@ -6,7 +6,7 @@ import {
   ModelBackedMemoryRecallPlanner,
   ModelBackedMemoryRelationPlanner
 } from "../../../../src/core/memory/modelBackedMemoryModel";
-import { DeterministicMemoryExtractor } from "../../../../src/core/memory/memoryExtractor";
+import { ModelConfigurationError, ModelInvocationError } from "../../../../src/core/llm/modelErrors";
 import type { MemoryNode } from "../../../../src/shared/schemas/memory";
 
 const existingHotpotPreference: MemoryNode = {
@@ -21,6 +21,20 @@ const existingHotpotPreference: MemoryNode = {
 };
 
 describe("model-backed memory model", () => {
+  it("does not fall back to deterministic memory extraction when API config is missing", async () => {
+    const extractor = createMemoryExtractor({
+      provider: "openai-compatible",
+      model: "structured-memory-model",
+      enabled: false
+    });
+
+    await expect(extractor.extract({
+      message: "我喜欢吃火锅。",
+      nowIso: "2026-05-04T12:00:00.000+08:00",
+      timezone: "Asia/Shanghai"
+    })).rejects.toBeInstanceOf(ModelConfigurationError);
+  });
+
   it("creates memory extractors with a LangChain structured-output client when requested", async () => {
     const extractor = createMemoryExtractor(
       {
@@ -94,8 +108,7 @@ describe("model-backed memory model", () => {
         enabled: true,
         baseUrl: "https://api.example.com/v1",
         apiKey: "test-key"
-      },
-      fallbackExtractor: new DeterministicMemoryExtractor()
+      }
     });
 
     const candidates = await extractor.extract({
@@ -116,7 +129,7 @@ describe("model-backed memory model", () => {
     });
   });
 
-  it("falls back to deterministic extraction when model JSON is invalid", async () => {
+  it("propagates invalid model JSON instead of falling back to deterministic extraction", async () => {
     const extractor = new ModelBackedMemoryExtractor({
       client: {
         complete: async () => "不是 JSON"
@@ -127,17 +140,14 @@ describe("model-backed memory model", () => {
         enabled: true,
         baseUrl: "https://api.example.com/v1",
         apiKey: "test-key"
-      },
-      fallbackExtractor: new DeterministicMemoryExtractor()
+      }
     });
 
-    const candidates = await extractor.extract({
+    await expect(extractor.extract({
       message: "我喜欢吃火锅。",
       nowIso: "2026-05-04T12:00:00.000+08:00",
       timezone: "Asia/Shanghai"
-    });
-
-    expect(candidates.some((candidate) => candidate.node.content.includes("火锅"))).toBe(true);
+    })).rejects.toBeInstanceOf(ModelInvocationError);
   });
 
   it("plans semantic merges against existing memory nodes", async () => {

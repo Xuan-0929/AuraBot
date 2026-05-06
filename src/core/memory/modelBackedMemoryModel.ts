@@ -10,6 +10,13 @@ import {
 } from "../../shared/schemas/memory";
 import type { ChatCompletionRequest } from "../llm/openAiCompatibleClient";
 import { OpenAICompatibleChatCompletionClient } from "../llm/openAiCompatibleClient";
+import {
+  createMissingModelConfigurationError,
+  createUnsupportedModelProviderError,
+  isUsableModelRoleConfig,
+  ModelInvocationError,
+  shouldUseDeterministicModelTestFallback
+} from "../llm/modelErrors";
 import { buildAssociativeMemoryEdges } from "./memoryAssociations";
 import { DeterministicMemoryExtractor, type ExtractedMemoryCandidate, type MemoryExtractionInput, type MemoryExtractor } from "./memoryExtractor";
 import { LangChainStructuredMemoryClient } from "./langChainMemoryModel";
@@ -21,10 +28,6 @@ export interface MemoryModelClient {
 export interface ModelBackedMemoryOptions {
   client: MemoryModelClient;
   config?: ModelRoleConfig;
-}
-
-export interface ModelBackedMemoryExtractorOptions extends ModelBackedMemoryOptions {
-  fallbackExtractor?: MemoryExtractor;
 }
 
 export interface MemoryModelFactoryDependencies {
@@ -77,6 +80,38 @@ export interface MemoryRecallPlan {
 
 export interface MemoryRecallPlanner {
   plan(input: MemoryRecallPlannerInput): Promise<MemoryRecallPlan>;
+}
+
+class UnavailableMemoryExtractor implements MemoryExtractor {
+  constructor(private readonly error: Error) {}
+
+  async extract(): Promise<ExtractedMemoryCandidate[]> {
+    throw this.error;
+  }
+}
+
+class UnavailableMemoryMergePlanner implements MemoryMergePlanner {
+  constructor(private readonly error: Error) {}
+
+  async plan(): Promise<MemoryMergeDecision> {
+    throw this.error;
+  }
+}
+
+class UnavailableMemoryRelationPlanner implements MemoryRelationPlanner {
+  constructor(private readonly error: Error) {}
+
+  async plan(): Promise<MemoryWriteRequest["edges"]> {
+    throw this.error;
+  }
+}
+
+class UnavailableMemoryRecallPlanner implements MemoryRecallPlanner {
+  constructor(private readonly error: Error) {}
+
+  async plan(): Promise<MemoryRecallPlan> {
+    throw this.error;
+  }
 }
 
 const extractedCandidateSchema = z
@@ -133,11 +168,9 @@ const recallPlanSchema = z.object({
 });
 
 export class ModelBackedMemoryExtractor implements MemoryExtractor {
-  constructor(private readonly options: ModelBackedMemoryExtractorOptions) {}
+  constructor(private readonly options: ModelBackedMemoryOptions) {}
 
   async extract(input: MemoryExtractionInput): Promise<ExtractedMemoryCandidate[]> {
-    const fallback = this.options.fallbackExtractor ?? new DeterministicMemoryExtractor();
-
     try {
       const content = await this.options.client.complete({
         baseUrl: this.options.config?.baseUrl ?? "",
@@ -166,8 +199,8 @@ export class ModelBackedMemoryExtractor implements MemoryExtractor {
             }
           : undefined
       }));
-    } catch {
-      return fallback.extract(input);
+    } catch (error) {
+      throw new ModelInvocationError("memoryModel", error);
     }
   }
 }
@@ -193,8 +226,6 @@ export class DeterministicMemoryMergePlanner implements MemoryMergePlanner {
 }
 
 export class ModelBackedMemoryMergePlanner implements MemoryMergePlanner {
-  private readonly fallbackPlanner = new DeterministicMemoryMergePlanner();
-
   constructor(private readonly options: ModelBackedMemoryOptions) {}
 
   async plan(input: MemoryMergePlannerInput): Promise<MemoryMergeDecision> {
@@ -217,11 +248,13 @@ export class ModelBackedMemoryMergePlanner implements MemoryMergePlanner {
         return decision;
       }
 
-      return input.existingNodes.some((node) => node.id === decision.targetNodeId)
-        ? decision
-        : this.fallbackPlanner.plan(input);
-    } catch {
-      return this.fallbackPlanner.plan(input);
+      if (!input.existingNodes.some((node) => node.id === decision.targetNodeId)) {
+        throw new Error(`Memory merge model returned unknown target node id: ${decision.targetNodeId}`);
+      }
+
+      return decision;
+    } catch (error) {
+      throw new ModelInvocationError("memoryModel", error);
     }
   }
 }
@@ -236,8 +269,6 @@ export class DeterministicMemoryRelationPlanner implements MemoryRelationPlanner
 }
 
 export class ModelBackedMemoryRelationPlanner implements MemoryRelationPlanner {
-  private readonly fallbackPlanner = new DeterministicMemoryRelationPlanner();
-
   constructor(private readonly options: ModelBackedMemoryOptions) {}
 
   async plan(input: MemoryRelationPlannerInput): Promise<MemoryWriteRequest["edges"]> {
@@ -264,8 +295,8 @@ export class ModelBackedMemoryRelationPlanner implements MemoryRelationPlanner {
           relationType: edge.relationType,
           weight: edge.weight
         }));
-    } catch {
-      return this.fallbackPlanner.plan(input);
+    } catch (error) {
+      throw new ModelInvocationError("memoryModel", error);
     }
   }
 }
@@ -281,13 +312,15 @@ export class DeterministicMemoryRecallPlanner implements MemoryRecallPlanner {
 }
 
 export class ModelBackedMemoryRecallPlanner implements MemoryRecallPlanner {
-  private readonly fallbackPlanner = new DeterministicMemoryRecallPlanner();
-
   constructor(private readonly options: ModelBackedMemoryOptions) {}
 
   async plan(input: MemoryRecallPlannerInput): Promise<MemoryRecallPlan> {
     if (input.nodes.length === 0) {
-      return this.fallbackPlanner.plan(input);
+      return {
+        queryTerms: [],
+        targetTypes: [],
+        rankedNodeIds: []
+      };
     }
 
     try {
@@ -307,8 +340,8 @@ export class ModelBackedMemoryRecallPlanner implements MemoryRecallPlanner {
         targetTypes: [...new Set(parsed.targetTypes)],
         rankedNodeIds: parsed.rankedNodeIds.filter((nodeId) => allowedNodeIds.has(nodeId))
       };
-    } catch {
-      return this.fallbackPlanner.plan(input);
+    } catch (error) {
+      throw new ModelInvocationError("memoryModel", error);
     }
   }
 }
@@ -317,28 +350,32 @@ export function createMemoryExtractor(
   config: ModelRoleConfig,
   dependencies: MemoryModelFactoryDependencies = {}
 ): MemoryExtractor {
-  const fallbackExtractor = new DeterministicMemoryExtractor();
+  if (!isUsableModelRoleConfig(config)) {
+    if (shouldUseDeterministicModelTestFallback()) {
+      return new DeterministicMemoryExtractor();
+    }
 
-  if (!isModelRoleEnabled(config)) {
-    return fallbackExtractor;
+    return new UnavailableMemoryExtractor(createMissingModelConfigurationError("memoryModel", config));
+  }
+
+  if (config.provider === "local-stub" && shouldUseDeterministicModelTestFallback()) {
+    return new DeterministicMemoryExtractor();
   }
 
   if (config.provider === "langchain-openai") {
     return new ModelBackedMemoryExtractor({
       client: dependencies.langChainExtractionClient ?? new LangChainStructuredMemoryClient({ schema: extractionSchema }),
-      config,
-      fallbackExtractor
+      config
     });
   }
 
   if (config.provider !== "openai-compatible") {
-    return fallbackExtractor;
+    return new UnavailableMemoryExtractor(createUnsupportedModelProviderError("memoryModel", config.provider));
   }
 
   return new ModelBackedMemoryExtractor({
     client: dependencies.openAICompatibleClient ?? new OpenAICompatibleChatCompletionClient(),
-    config,
-    fallbackExtractor
+    config
   });
 }
 
@@ -346,7 +383,15 @@ export function createMemoryMergePlanner(
   config: ModelRoleConfig,
   dependencies: MemoryModelFactoryDependencies = {}
 ): MemoryMergePlanner {
-  if (!isModelRoleEnabled(config)) {
+  if (!isUsableModelRoleConfig(config)) {
+    if (shouldUseDeterministicModelTestFallback()) {
+      return new DeterministicMemoryMergePlanner();
+    }
+
+    return new UnavailableMemoryMergePlanner(createMissingModelConfigurationError("memoryModel", config));
+  }
+
+  if (config.provider === "local-stub" && shouldUseDeterministicModelTestFallback()) {
     return new DeterministicMemoryMergePlanner();
   }
 
@@ -358,7 +403,7 @@ export function createMemoryMergePlanner(
   }
 
   if (config.provider !== "openai-compatible") {
-    return new DeterministicMemoryMergePlanner();
+    return new UnavailableMemoryMergePlanner(createUnsupportedModelProviderError("memoryModel", config.provider));
   }
 
   return new ModelBackedMemoryMergePlanner({
@@ -371,7 +416,15 @@ export function createMemoryRelationPlanner(
   config: ModelRoleConfig,
   dependencies: MemoryModelFactoryDependencies = {}
 ): MemoryRelationPlanner {
-  if (!isModelRoleEnabled(config)) {
+  if (!isUsableModelRoleConfig(config)) {
+    if (shouldUseDeterministicModelTestFallback()) {
+      return new DeterministicMemoryRelationPlanner();
+    }
+
+    return new UnavailableMemoryRelationPlanner(createMissingModelConfigurationError("memoryModel", config));
+  }
+
+  if (config.provider === "local-stub" && shouldUseDeterministicModelTestFallback()) {
     return new DeterministicMemoryRelationPlanner();
   }
 
@@ -383,7 +436,7 @@ export function createMemoryRelationPlanner(
   }
 
   if (config.provider !== "openai-compatible") {
-    return new DeterministicMemoryRelationPlanner();
+    return new UnavailableMemoryRelationPlanner(createUnsupportedModelProviderError("memoryModel", config.provider));
   }
 
   return new ModelBackedMemoryRelationPlanner({
@@ -396,7 +449,15 @@ export function createMemoryRecallPlanner(
   config: ModelRoleConfig,
   dependencies: MemoryModelFactoryDependencies = {}
 ): MemoryRecallPlanner {
-  if (!isModelRoleEnabled(config)) {
+  if (!isUsableModelRoleConfig(config)) {
+    if (shouldUseDeterministicModelTestFallback()) {
+      return new DeterministicMemoryRecallPlanner();
+    }
+
+    return new UnavailableMemoryRecallPlanner(createMissingModelConfigurationError("memoryModel", config));
+  }
+
+  if (config.provider === "local-stub" && shouldUseDeterministicModelTestFallback()) {
     return new DeterministicMemoryRecallPlanner();
   }
 
@@ -408,17 +469,13 @@ export function createMemoryRecallPlanner(
   }
 
   if (config.provider !== "openai-compatible") {
-    return new DeterministicMemoryRecallPlanner();
+    return new UnavailableMemoryRecallPlanner(createUnsupportedModelProviderError("memoryModel", config.provider));
   }
 
   return new ModelBackedMemoryRecallPlanner({
     client: dependencies.openAICompatibleClient ?? new OpenAICompatibleChatCompletionClient(),
     config
   });
-}
-
-function isModelRoleEnabled(config: ModelRoleConfig): boolean {
-  return config.enabled && Boolean(config.baseUrl && config.apiKey);
 }
 
 function buildExtractionPrompt(input: MemoryExtractionInput): ChatCompletionRequest["messages"] {

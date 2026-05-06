@@ -1,8 +1,23 @@
 import { describe, expect, it } from "vitest";
 import { createGateModel } from "../../../../src/core/llm/gateModel";
+import { ModelConfigurationError } from "../../../../src/core/llm/modelErrors";
 import type { ChatCompletionRequest } from "../../../../src/core/llm/openAiCompatibleClient";
 
 describe("createGateModel", () => {
+  it("does not fall back to deterministic gate evaluation when API config is missing", async () => {
+    const model = createGateModel({
+      enabled: false,
+      provider: "openai-compatible",
+      model: "gate-model"
+    });
+
+    await expect(model.evaluate({
+      currentMessage: "帮我写一份周报",
+      recentUserMessages: [],
+      recentMessages: []
+    })).rejects.toBeInstanceOf(ModelConfigurationError);
+  });
+
   it("uses a LangChain structured client when requested by provider", async () => {
     let request: ChatCompletionRequest | undefined;
     const model = createGateModel(

@@ -1,6 +1,6 @@
 # AuraBot 当前记忆结构
 
-更新时间：2026-05-05
+更新时间：2026-05-06
 
 这版记忆系统是一个受控的“分层摘要 + 图状联想 + memoryModel 语义增强”结构。它还不是向量库，也不是开放式知识图谱；当前目标是先让 AuraBot 在本地、可测试、可解释的范围内做到：写入稳定事实，识别时间事件，合并重复事实，在相关记忆之间自动连边，后续对话可以沿边联想召回，并能在主聊天或后台轮询中触发到期 `follow_up`。
 
@@ -16,27 +16,30 @@ flowchart TB
 
   subgraph WritePath["记忆写入路径"]
     Segment --> Extractor["MemoryExtractor"]
-    Extractor --> ExtractMode{"memoryModel enabled?"}
+    Extractor --> ExtractMode{"memoryModel configured?"}
     ExtractMode -->|是| ModelExtract["ModelBackedMemoryExtractor<br/>API 结构化抽取"]
-    ExtractMode -->|否 / API失败 / JSON非法| RuleExtract["DeterministicMemoryExtractor<br/>本地规则抽取"]
+    ExtractMode -->|否 / API失败 / JSON非法| MemoryModelError["ModelConfigurationError / ModelInvocationError<br/>用户端不静默兜底"]
+    ExtractMode -.->|显式测试开关| RuleExtract["DeterministicMemoryExtractor<br/>开发/测试替身"]
 
     ModelExtract --> Candidates["Memory Candidates<br/>trait / preference / event / follow_up<br/>content / importance / startsAt / endsAt"]
     RuleExtract --> Candidates
 
     Candidates --> Queue["MemoryWriteQueue<br/>串行写入，避免并发改图"]
     Queue --> MergePlanner["MemoryMergePlanner<br/>判断新建还是更新旧节点"]
-    MergePlanner --> MergeMode{"memoryModel enabled?"}
+    MergePlanner --> MergeMode{"memoryModel configured?"}
     MergeMode -->|是| ModelMerge["ModelBackedMemoryMergePlanner<br/>语义去重 / 合并同一事实"]
-    MergeMode -->|否 / 失败| RuleMerge["DeterministicMemoryMergePlanner<br/>type + content 精确匹配"]
+    MergeMode -->|否 / 失败| MemoryModelError
+    MergeMode -.->|显式测试开关| RuleMerge["DeterministicMemoryMergePlanner<br/>type + content 精确匹配"]
 
     ModelMerge --> MergeDecision{"Merge Decision"}
     RuleMerge --> MergeDecision
     MergeDecision -->|update_existing| UpdateNode["更新旧 memory_node<br/>content / importance / startsAt / endsAt / updatedAt"]
     MergeDecision -->|create| RelationPlanner["MemoryRelationPlanner<br/>规划候选关系边"]
 
-    RelationPlanner --> RelationMode{"memoryModel enabled?"}
+    RelationPlanner --> RelationMode{"memoryModel configured?"}
     RelationMode -->|是| ModelRelation["ModelBackedMemoryRelationPlanner<br/>API 判断关系边<br/>过滤模型发明的 node id"]
-    RelationMode -->|否 / 失败| RuleRelation["DeterministicMemoryRelationPlanner<br/>共享概念 + 类型规则"]
+    RelationMode -->|否 / 失败| MemoryModelError
+    RelationMode -.->|显式测试开关| RuleRelation["DeterministicMemoryRelationPlanner<br/>共享概念 + 类型规则"]
     ModelRelation --> CreateNode["创建新 memory_node<br/>并写入 memory_edges"]
     RuleRelation --> CreateNode
   end
@@ -57,9 +60,10 @@ flowchart TB
 
   subgraph RecallPath["记忆召回路径"]
     RecallStart --> RecallPlanner["MemoryRecallPlanner"]
-    RecallPlanner --> RecallMode{"memoryModel enabled?"}
+    RecallPlanner --> RecallMode{"memoryModel configured?"}
     RecallMode -->|是| ModelRecall["ModelBackedMemoryRecallPlanner<br/>queryTerms / targetTypes / rankedNodeIds<br/>过滤模型发明的 node id"]
-    RecallMode -->|否 / 失败| RuleRecall["DeterministicMemoryRecallPlanner<br/>空计划，回到本地规则"]
+    RecallMode -->|否 / 失败| MemoryModelError
+    RecallMode -.->|显式测试开关| RuleRecall["DeterministicMemoryRecallPlanner<br/>空计划"]
 
     ModelRecall --> Scorer["本地 scorer<br/>query + queryTerms<br/>类型偏权 + importance"]
     RuleRecall --> Scorer
@@ -212,7 +216,7 @@ follow_up --preference_for(0.90)--> preference
 1. 未配置 `memoryModel` 时，这版联想仍是 deterministic local logic，不依赖外部 LLM 或 embedding。
 2. 显式配置 `memoryModel` 后，记忆写入层可以调用 OpenAI-compatible API 做结构化抽取、重复记忆合并和候选关系边判断；API 失败或输出不合法时回退本地规则。
 3. 图扩散有 `maxDepth` 和 `maxNodes` 上限，避免把所有记忆都拉进回复。
-4. 显式配置 `memoryModel` 后，召回入口可以调用 API 生成语义检索词、目标记忆类型和重排 node id；未配置或失败时仍走本地关键词/概念规则。
+4. 显式配置 `memoryModel` 后，召回入口可以调用 API 生成语义检索词、目标记忆类型和重排 node id；未配置或失败时用户端暴露模型错误，不再静默回到本地关键词/概念规则。开发/测试可通过显式开关使用 deterministic 替身。
 5. 已到期的 active `follow_up` 会在下一次主聊天回复中被带出，或由 `MemoryFollowUpScheduler` 通过桌宠气泡主动提醒，并在触发后标记为 `completed`，避免重复提醒。
 6. 控制台 `Memory Debug` 面板可以查看当前节点、关系边、摘要计数、最近 memory event，以及最近一次召回的 query、planner terms、seed、图扩散节点和 traversed edges。
 7. 当前已有 App 运行期间的后台 scheduler 和桌宠气泡提醒，但还没有系统级通知、开机自启或离线调度。
@@ -222,5 +226,5 @@ follow_up --preference_for(0.90)--> preference
 
 1. **扩展评估语料**：继续增加更真实的多轮对话 fixture，比较关键词召回、概念召回、图扩散召回的回复差异，避免凭感觉调参。
 2. **增强主动提醒交付面**：补系统通知、提醒权限和 App 未运行时的边界提示。
-3. **增强记忆调试视图第二版**：把模型 planner 原始响应和 fallback 原因纳入 debug event，便于区分模型输出和本地兜底。
+3. **增强记忆调试视图第二版**：把模型 planner 原始响应和失败原因纳入 debug event，便于区分模型输出和配置/调用问题。
 4. **后续可选 embedding**：如果固定评估集显示结构化 query analyzer 仍不够，再引入 embedding 和向量索引。

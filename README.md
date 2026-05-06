@@ -36,7 +36,7 @@ Console window:
 | Voice input MVP | Pet hover control can use browser SpeechRecognition when the runtime supports it. |
 | Local storage | SQLite stores profiles, souls, sessions, messages, memory, tasks, and event logs. |
 | Main chat thread | Console and pet quick-chat messages persist through typed IPC into the main process, with optimistic user messages and streaming assistant updates. |
-| Model roles | `gateModel`, `chatModel`, and `memoryModel` are injectable; all default to local deterministic fallback and can use OpenAI-compatible APIs. |
+| Model roles | `gateModel`, `chatModel`, and `memoryModel` are injectable and require API configuration in user-facing runs; tests can opt into deterministic doubles explicitly. |
 | Gate logic | Fragmented messages can wait; complete chat, task requests, task controls, and topic endings are classified, with model-backed gate decisions when configured. |
 | Memory v1/v2 | Preference, event, and follow-up memories can be written and recalled through relation edges; while the app is running, a background scheduler can surface due follow-ups through desktop-pet bubbles. |
 | Task v1 | Tasks can be created, queried, interrupted, revised, started, and completed from main chat; task cards expose quick cancel/delete controls; opt-in Codex, Claude Code, or Hermes CLI runners can execute real delegated tasks by priority. |
@@ -80,7 +80,7 @@ Run with clean temporary user data and a small Live2D debug badge:
 corepack pnpm dev:clean
 ```
 
-Clean launches create a temporary user data directory, set `AURABOT_DEBUG_PET=1`, and skip the macOS system-level AuraBot config file. Use this mode when checking whether the desktop pet and Live2D model can render without your local API config influencing the run.
+Clean launches create a temporary user data directory, set `AURABOT_DEBUG_PET=1`, and skip the macOS system-level AuraBot config file. Use this mode when checking whether the desktop pet and Live2D model can render without your local API config influencing the run; chat/model features need config before they can answer.
 
 Run the production build with clean temporary user data:
 
@@ -98,7 +98,7 @@ AuraBot now has three separate model roles:
 | `chatModel` | Stronger reasoning model for final user-facing conversation. |
 | `memoryModel` | Structured-output model for memory extraction, duplicate-memory merging, and candidate relation-edge planning. |
 
-Without config, all three roles use local deterministic fallback. To enable an OpenAI-compatible provider, create either file in the Electron user data directory:
+Without config, model calls fail visibly instead of using local deterministic text. To enable an OpenAI-compatible provider, create either file in the Electron user data directory:
 
 ```text
 aurabot.config.json
@@ -194,7 +194,7 @@ Example:
 }
 ```
 
-The `gateModel`, `chatModel`, and `memoryModel` roles also have small LangChain-backed proof-of-concept paths. Set any role's `provider` to `"langchain-openai"` to route that role through `@langchain/openai` while keeping the other roles on the existing provider path. The Settings window can switch each role between local fallback, OpenAI-compatible, and LangChain OpenAI; API keys, base URLs, and model names still live in `config.json`. For `gateModel` and `memoryModel`, AuraBot uses LangChain structured output and then keeps the existing zod validation, routing/memory logic, and deterministic fallback behavior.
+The `gateModel`, `chatModel`, and `memoryModel` roles also have small LangChain-backed proof-of-concept paths. Set any role's `provider` to `"langchain-openai"` to route that role through `@langchain/openai` while keeping the other roles on the existing provider path. The Settings window can switch each role between OpenAI-compatible and LangChain OpenAI; API keys, base URLs, and model names still live in `config.json`. For `gateModel` and `memoryModel`, AuraBot uses LangChain structured output and then keeps the existing zod validation plus routing/memory logic without user-facing deterministic fallback.
 
 For structured gate decisions through LangChain:
 
@@ -425,7 +425,7 @@ The Cubism Core runtime is bundled through `live2dcubismcore@1.0.2`; app startup
 
 This is still an MVP skeleton, not a production companion:
 
-1. Model roles default to deterministic local fallback; external calls require local config or environment variables.
+1. Model roles default to an unconfigured API state; user-facing runs require local config or environment variables and no longer fall back to deterministic local text.
 2. User messages render immediately and assistant messages can stream through update broadcasts, but user-message interruption of an in-flight generation is not implemented yet.
 3. Memory can use `memoryModel` for structured extraction, duplicate-memory merging, candidate relation-edge planning, recall query-term generation, and seed-node reranking; embedding is not implemented yet.
 4. The task runner can call local Codex, Claude Code, or Hermes when explicitly configured, broadcasts child progress, cancels the child process when interrupted, and marks orphaned running tasks failed on startup; true resume and richer artifact handling are not implemented yet.

@@ -3,6 +3,7 @@ import type { PetSettings } from "../schemas/petSettings";
 import type { Profile } from "../schemas/profile";
 import type { Task } from "../schemas/task";
 import type { PublicAppConfig } from "./settings";
+import type { TaskKind } from "../schemas/task";
 
 export type AgentStatus = "idle" | "listening" | "thinking" | "typing" | "tasking";
 export type ReplyDecision = "reply" | "wait";
@@ -17,6 +18,7 @@ export interface GateDecision {
   reason: string;
   coalescedText: string;
   topicEnded: boolean;
+  taskKind?: TaskKind;
 }
 
 export interface SendChatMessageInput {
