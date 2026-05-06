@@ -66,11 +66,45 @@ const baseProps: SettingsWindowProps = {
       pollIntervalMs: 10000
     }
   },
+  modelHealth: {
+    chatModel: {
+      role: "chatModel",
+      provider: "openai-compatible",
+      enabled: true,
+      configured: true,
+      hasApiKey: true,
+      model: "gpt-5.4",
+      baseUrl: "https://api.example.com/v1",
+      state: "connected",
+      lastCheckedAt: "2026-05-06T12:00:00.000Z"
+    },
+    gateModel: {
+      role: "gateModel",
+      provider: "openai-compatible",
+      enabled: false,
+      configured: false,
+      hasApiKey: false,
+      model: "gate-model",
+      state: "not_configured",
+      lastErrorCode: "missing_configuration"
+    },
+    memoryModel: {
+      role: "memoryModel",
+      provider: "openai-compatible",
+      enabled: true,
+      configured: true,
+      hasApiKey: true,
+      model: "memory-model",
+      baseUrl: "https://api.example.com/v1",
+      state: "configured"
+    }
+  },
   onUpdatePetSettings: vi.fn(async () => undefined),
   onUpdateTaskRunnerSettings: vi.fn(async () => undefined),
   onUpdateModelProviderSettings: vi.fn(async () => undefined),
   onUpdateProactiveSettings: vi.fn(async () => undefined),
-  onOpenConfigFile: vi.fn(async () => undefined)
+  onOpenConfigFile: vi.fn(async () => undefined),
+  onTestModelConnection: vi.fn(async () => undefined)
 };
 
 describe("SettingsWindow", () => {
@@ -110,6 +144,9 @@ describe("SettingsWindow", () => {
     expect(container.textContent).toContain("Chat");
     expect(container.textContent).toContain("gpt-5.4");
     expect(container.textContent).toContain("API key saved");
+    expect(container.textContent).toContain("Connected");
+    expect(container.textContent).toContain("Not configured");
+    expect(container.textContent).toContain("Test connection");
     expect(container.textContent).toContain("Character");
     expect(container.textContent).toContain("Task CLI");
     expect(container.textContent).toContain("Proactive messages");
@@ -244,6 +281,25 @@ describe("SettingsWindow", () => {
       role: "gateModel",
       provider: "langchain-openai"
     });
+  });
+
+  it("tests model connectivity from the settings page", async () => {
+    const onTestModelConnection = vi.fn(async () => undefined);
+
+    await act(async () => {
+      root.render(
+        <SettingsWindow
+          {...baseProps}
+          onTestModelConnection={onTestModelConnection}
+        />
+      );
+    });
+
+    await act(async () => {
+      container.querySelector<HTMLButtonElement>('[aria-label="Test Chat connection"]')!.click();
+    });
+
+    expect(onTestModelConnection).toHaveBeenCalledWith("chatModel");
   });
 
   it("localizes the settings surface when Chinese is selected", async () => {

@@ -7,9 +7,28 @@ import type {
 } from "../schemas/config";
 
 export const MODEL_PROVIDER_OPTIONS = ["openai-compatible", "langchain-openai"] as const;
+export const MODEL_HEALTH_STATES = [
+  "not_configured",
+  "configured",
+  "testing",
+  "connected",
+  "error",
+  "using_test_double"
+] as const;
+export const MODEL_HEALTH_ERROR_CODES = [
+  "missing_configuration",
+  "unsupported_provider",
+  "authentication_failed",
+  "timeout",
+  "network_error",
+  "malformed_response",
+  "invocation_failed"
+] as const;
 
 export type ModelProviderOption = (typeof MODEL_PROVIDER_OPTIONS)[number];
 export type ModelRoleKey = "chatModel" | "gateModel" | "memoryModel";
+export type ModelHealthState = (typeof MODEL_HEALTH_STATES)[number];
+export type ModelHealthErrorCode = (typeof MODEL_HEALTH_ERROR_CODES)[number];
 
 export interface PublicModelRoleConfig {
   provider: string;
@@ -20,6 +39,22 @@ export interface PublicModelRoleConfig {
   timeoutMs?: number;
   hasApiKey: boolean;
 }
+
+export interface PublicModelHealth {
+  role: ModelRoleKey;
+  provider: string;
+  enabled: boolean;
+  configured: boolean;
+  hasApiKey: boolean;
+  model?: string;
+  baseUrl?: string;
+  state: ModelHealthState;
+  lastCheckedAt?: string;
+  lastErrorCode?: ModelHealthErrorCode;
+  lastErrorMessage?: string;
+}
+
+export type PublicModelHealthMap = Record<ModelRoleKey, PublicModelHealth>;
 
 export interface PublicAppConfig {
   chatModel: PublicModelRoleConfig;
@@ -60,6 +95,10 @@ export type ProactiveSettingsPatch = Partial<Pick<ProactiveConfig, "idleThreshol
 export interface ModelProviderSettingsPatch {
   role: ModelRoleKey;
   provider: ModelProviderOption;
+}
+
+export interface ModelConnectionTestInput {
+  role: ModelRoleKey;
 }
 
 export function createPublicAppConfig(config: AppConfig): PublicAppConfig {

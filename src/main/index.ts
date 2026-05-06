@@ -6,6 +6,7 @@ import { MemoryService } from "../core/memory/memoryService";
 import { ProactiveTriggerEngine } from "../core/proactive/proactiveTriggerEngine";
 import { createChatModel } from "../core/llm/chatModel";
 import { createGateModel } from "../core/llm/gateModel";
+import { createModelHealthService, type ModelHealthService } from "../core/llm/modelHealth";
 import { createVoiceAdapter } from "../core/voice/voiceAdapter";
 import {
   createMemoryExtractor,
@@ -37,8 +38,10 @@ import {
 } from "./appConfigStore";
 import {
   createPublicAppConfig,
+  type ModelRoleKey,
   type ModelProviderSettingsPatch,
   type ProactiveSettingsPatch,
+  type PublicModelHealthMap,
   type TaskRunnerSettingsPatch
 } from "../shared/contracts/settings";
 
@@ -46,6 +49,8 @@ let services: AppServices | undefined;
 let petSettingsStore: PetSettingsStore | undefined;
 let petWindowStateStore: PetWindowStateStore | undefined;
 let proactiveTriggerEngine: ProactiveTriggerEngine | undefined;
+let modelHealthService: ModelHealthService | undefined;
+let modelHealthSnapshot: PublicModelHealthMap | undefined;
 
 if (process.env.AURABOT_USER_DATA_DIR) {
   app.setPath("userData", process.env.AURABOT_USER_DATA_DIR);
@@ -55,6 +60,8 @@ async function bootstrap(): Promise<void> {
   const userDataPath = app.getPath("userData");
 
   services = createServices(userDataPath);
+  modelHealthService = createModelHealthService();
+  modelHealthSnapshot = modelHealthService.inspectAll(services.config);
   petSettingsStore = new PetSettingsStore(userDataPath);
   petWindowStateStore = new PetWindowStateStore(userDataPath);
   registerIpc(services, {
@@ -63,6 +70,8 @@ async function bootstrap(): Promise<void> {
     openConfigFile: () => openUserConfigFile(userDataPath),
     updateTaskRunnerSettings: (patch) => updateTaskRunnerSettings(userDataPath, patch),
     updateModelProviderSettings: (patch) => updateModelProviderSettings(userDataPath, patch),
+    getModelHealth: () => getModelHealth(),
+    testModelConnection: (role) => testModelConnection(role),
     updateProactiveSettings: (patch) => updateProactiveSettings(userDataPath, patch),
     recordUserActivity: () => proactiveTriggerEngine?.recordUserActivity(),
     getPetSettings: () => petSettingsStore?.get() ?? {
@@ -183,6 +192,11 @@ async function updateModelProviderSettings(userDataPath: string, patch: ModelPro
     });
   }
 
+  modelHealthSnapshot = {
+    ...getModelHealth(),
+    [patch.role]: modelHealthService!.inspectRole(patch.role, nextConfig[patch.role])
+  };
+
   return createPublicAppConfig(services.config);
 }
 
@@ -220,3 +234,27 @@ app.on("before-quit", () => {
   proactiveTriggerEngine?.stop();
   services?.database.close();
 });
+
+function getModelHealth(): PublicModelHealthMap {
+  if (!services || !modelHealthService) {
+    throw new Error("AuraBot services are not ready.");
+  }
+
+  modelHealthSnapshot ??= modelHealthService.inspectAll(services.config);
+
+  return modelHealthSnapshot;
+}
+
+async function testModelConnection(role: ModelRoleKey) {
+  if (!services || !modelHealthService) {
+    throw new Error("AuraBot services are not ready.");
+  }
+
+  const health = await modelHealthService.testRoleConnection(role, services.config[role]);
+  modelHealthSnapshot = {
+    ...getModelHealth(),
+    [role]: health
+  };
+
+  return health;
+}

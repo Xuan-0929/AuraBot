@@ -23,6 +23,7 @@
 5. 设置窗口已新增三类模型角色的 provider 下拉选择，可在 OpenAI-compatible 和 LangChain OpenAI 之间切换；选择会写入 userData `config.json`，并在当前进程内重建对应 gate/chat/memory 服务。
 6. README 中英文已补充 `langchain-openai` 配置示例和设置页 provider 选择说明，当前可分别对 `gateModel`、`chatModel` 和 `memoryModel` 开启 LangChain。
 7. LangChain 分支 `codex/aurabot-langchain-chatmodel` 已 fast-forward 合入 `main`，当前远端 `main` 已包含 `80f3dc8 feat: add LangChain chat model adapter`、`36ab259 feat: add LangChain structured memory model` 和 `989fc03 docs: update LangChain development log`。
+8. 设置页模型卡片现已补模型健康状态和 `Test connection`，主进程会区分 `未配置 / 已配置 / 测试中 / 已连接 / 连接失败 / 测试替身`，并写入 `model.health.*` 事件日志。
 
 最近一次 LangChain gateModel 分支验证记录：
 
@@ -104,7 +105,7 @@ AuraBot 当前已经从“传统聊天界面”收敛为桌宠优先形态：
 | SQLite 数据层 | 已完成 | 已有 profiles、souls、sessions、messages、memory、tasks、event_logs 等表。 |
 | 单主聊天线程 | 已完成 MVP | 主 session 持久化消息，控制台负责完整对话；用户消息乐观上屏，不再等待 gate/chat 模型返回。 |
 | 控制台消息展示 | 已完成第二版 | assistant 回复在 UI 层按句子拆成多个连续气泡，底层消息仍保持一条完整记录；用户消息不拆，任务附件挂在最后一句气泡下。 |
-| 模型适配层 | 部分完成 | 已有 `gateModel` / `chatModel` / `memoryModel` 注入接口、OpenAI-compatible provider、三类模型角色的 LangChain POC provider、userData/系统级 JSON 配置、env 配置、chat streaming、设置页安全摘要和 provider 选择；用户端已移除本地模型 fallback，deterministic 模型仅保留给显式测试开关；还缺用户新消息打断、retry/backoff、连接测试和真实连接状态 UI。 |
+| 模型适配层 | 部分完成 | 已有 `gateModel` / `chatModel` / `memoryModel` 注入接口、OpenAI-compatible provider、三类模型角色的 LangChain POC provider、userData/系统级 JSON 配置、env 配置、chat streaming、设置页安全摘要、provider 选择、模型健康状态和按角色连接测试；用户端已移除本地模型 fallback，deterministic 模型仅保留给显式测试开关；还缺用户新消息打断、retry/backoff 和更细的错误恢复。 |
 | Gate/触发判断 | 已完成第二版 | 可判断碎片输入等待、完整输入回复、话题是否结束、聊天/任务/任务控制分类；任务内已细分 `result_output` 和 `time_reminder`，轻量 gateModel 需要给出任务子类型；外部模型异常时不再用本地 gate 兜底。 |
 | 活人感统一回复机制 | 已完成第一版 | `Soul` 只保留人格、语气、原则和语义禁忌；`ResponseWorkflow` 描述场景、事实和安全边界；`VoiceAdapter` 结合二者生成最终用户可见文本。任务完成等场景可以接近“本人自然告诉你结果并邀请你看一眼”的语感，但不会把样例当固定模板。 |
 | 主动消息触发 | 已完成第二版 | `ProactiveTriggerEngine` 统一支持到期 follow-up、到期 `time_reminder` 任务和空闲轻提醒；默认 10 秒扫描一次到期提醒；主动消息只进入桌宠气泡和事件日志，不直接写入主聊天；只有用户回应后，后续真实对话才进入主聊天历史。空闲主动消息等待时间已进入设置页。 |
@@ -202,8 +203,8 @@ AuraBot 当前已经从“传统聊天界面”收敛为桌宠优先形态：
 1. 已完成：流式回复已接入，助手消息可通过 `chat:message-updated` 增量更新。
 2. 已完成：普通 assistant 回复在控制台按句子拆成连续气泡，但底层仍保持完整 message，避免影响记忆、任务附件和历史记录。
 3. 支持用户新消息打断当前强模型生成。
-4. 为 provider 调用增加重试、超时、失败事件日志和可见错误提示。
-5. 在控制台或设置视窗暴露当前模型连接状态。
+4. 为 provider 调用增加重试和更细的失败恢复策略。
+5. 已完成第一版：设置窗口可显示当前模型连接状态并手动测试连接；下一步是把这些失败提示继续接到主聊天和更细的用户恢复路径。
 6. 为 gate 模型输出增加线上样本日志，后续评估“是否抢话/是否漏接/任务误判”。
 
 ### 2.5 活人感统一回复机制

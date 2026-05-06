@@ -18,7 +18,11 @@ import { buildTaskSettledMessageDraftWithVoice, isTaskResultPathAllowed } from "
 import { splitTextIntoSentences } from "../shared/text/sentences";
 import {
   createPublicAppConfig,
+  type ModelConnectionTestInput,
+  type ModelRoleKey,
   type ProactiveSettingsPatch,
+  type PublicModelHealth,
+  type PublicModelHealthMap,
   type PublicAppConfig,
   type TaskRunnerSettingsPatch
 } from "../shared/contracts/settings";
@@ -30,6 +34,8 @@ export interface WindowController {
   openConfigFile(): Promise<void>;
   updateTaskRunnerSettings(patch: TaskRunnerSettingsPatch): Promise<PublicAppConfig>;
   updateModelProviderSettings(patch: ModelProviderSettingsPatch): Promise<PublicAppConfig>;
+  getModelHealth(): PublicModelHealthMap;
+  testModelConnection(role: ModelRoleKey): Promise<PublicModelHealth>;
   updateProactiveSettings(patch: ProactiveSettingsPatch): Promise<PublicAppConfig>;
   recordUserActivity(): void;
   getPetSettings(): PetSettings;
@@ -76,6 +82,7 @@ export function registerIpc(services: AppServices, windows: WindowController): v
       agentStatus: "idle",
       petSettings: windows.getPetSettings(),
       appConfig: createPublicAppConfig(services.config),
+      modelHealth: windows.getModelHealth(),
       debugPetOverlay: process.env.AURABOT_DEBUG_PET === "1"
     };
   });
@@ -97,6 +104,33 @@ export function registerIpc(services: AppServices, windows: WindowController): v
   ipcMain.handle(IPC_CHANNELS.updateModelProviderSettings, async (_event, patch: ModelProviderSettingsPatch) =>
     windows.updateModelProviderSettings(patch)
   );
+
+  ipcMain.handle(IPC_CHANNELS.getModelHealth, () => windows.getModelHealth());
+
+  ipcMain.handle(IPC_CHANNELS.testModelConnection, async (_event, input: ModelConnectionTestInput) => {
+    services.eventLogService.record("model.health.test_requested", {
+      role: input.role,
+      provider: services.config[input.role].provider
+    });
+    const health = await windows.testModelConnection(input.role);
+
+    if (health.state === "connected") {
+      services.eventLogService.record("model.health.checked", {
+        role: health.role,
+        provider: health.provider,
+        state: health.state
+      });
+    } else if (health.state === "error") {
+      services.eventLogService.record("model.health.failed", {
+        role: health.role,
+        provider: health.provider,
+        state: health.state,
+        lastErrorCode: health.lastErrorCode
+      });
+    }
+
+    return health;
+  });
 
   ipcMain.handle(IPC_CHANNELS.updateProactiveSettings, async (_event, patch: ProactiveSettingsPatch) =>
     windows.updateProactiveSettings(patch)

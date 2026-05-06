@@ -1,10 +1,35 @@
 import { describe, expect, it } from "vitest";
-import { MODEL_PROVIDER_OPTIONS, createPublicAppConfig } from "../../../src/shared/contracts/settings";
+import {
+  MODEL_HEALTH_ERROR_CODES,
+  MODEL_HEALTH_STATES,
+  MODEL_PROVIDER_OPTIONS,
+  createPublicAppConfig
+} from "../../../src/shared/contracts/settings";
 import type { AppConfig } from "../../../src/shared/schemas/config";
 
 describe("createPublicAppConfig", () => {
   it("does not expose local fallback as a user-selectable model provider", () => {
     expect(MODEL_PROVIDER_OPTIONS).toEqual(["openai-compatible", "langchain-openai"]);
+  });
+
+  it("defines stable public model health states and error codes", () => {
+    expect(MODEL_HEALTH_STATES).toEqual([
+      "not_configured",
+      "configured",
+      "testing",
+      "connected",
+      "error",
+      "using_test_double"
+    ]);
+    expect(MODEL_HEALTH_ERROR_CODES).toEqual([
+      "missing_configuration",
+      "unsupported_provider",
+      "authentication_failed",
+      "timeout",
+      "network_error",
+      "malformed_response",
+      "invocation_failed"
+    ]);
   });
 
   it("summarizes model config without exposing API keys to the renderer", () => {

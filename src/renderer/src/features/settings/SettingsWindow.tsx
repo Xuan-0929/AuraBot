@@ -1,4 +1,6 @@
 import type {
+  PublicModelHealth,
+  PublicModelHealthMap,
   ModelProviderSettingsPatch,
   ModelRoleKey,
   ModelProviderOption,
@@ -15,11 +17,13 @@ import { t, type UiTextKey } from "../../i18n";
 export interface SettingsWindowProps {
   petSettings: PetSettings;
   appConfig?: PublicAppConfig;
+  modelHealth?: PublicModelHealthMap;
   onUpdatePetSettings(patch: PetSettingsPatch): Promise<void>;
   onUpdateTaskRunnerSettings(runners: TaskRunnerSettingsPatch["runners"]): Promise<void>;
   onUpdateModelProviderSettings(patch: ModelProviderSettingsPatch): Promise<void>;
   onUpdateProactiveSettings(patch: ProactiveSettingsPatch): Promise<void>;
   onOpenConfigFile(): Promise<void>;
+  onTestModelConnection(role: ModelRoleKey): Promise<void>;
 }
 
 const MODEL_CONFIG_ROWS: Array<{
@@ -43,11 +47,13 @@ const MODEL_CONFIG_ROWS: Array<{
 export function SettingsWindow({
   petSettings,
   appConfig,
+  modelHealth,
   onUpdatePetSettings,
   onUpdateTaskRunnerSettings,
   onUpdateModelProviderSettings,
   onUpdateProactiveSettings,
-  onOpenConfigFile
+  onOpenConfigFile,
+  onTestModelConnection
 }: SettingsWindowProps) {
   const displayLanguage = petSettings.displayLanguage;
   const taskRunners = appConfig?.taskRunner.runners ?? [];
@@ -104,6 +110,7 @@ export function SettingsWindow({
                 key={row.key}
                 label={t(displayLanguage, row.labelKey)}
                 config={appConfig[row.key]}
+                health={modelHealth?.[row.key]}
                 displayLanguage={displayLanguage}
                 onProviderChange={(provider) =>
                   void onUpdateModelProviderSettings({
@@ -111,6 +118,7 @@ export function SettingsWindow({
                     provider
                   })
                 }
+                onTestConnection={() => void onTestModelConnection(row.key)}
               />
             ))
           ) : (
@@ -230,19 +238,38 @@ function TaskCliRunnerCard({
 function ModelConfigCard({
   label,
   config,
+  health,
   displayLanguage,
-  onProviderChange
+  onProviderChange,
+  onTestConnection
 }: {
   label: string;
   config: PublicModelRoleConfig;
+  health?: PublicModelHealth;
   displayLanguage: PetSettings["displayLanguage"];
   onProviderChange(provider: ModelProviderOption): void;
+  onTestConnection(): void;
 }) {
   return (
     <article className="settings-model-card">
       <div className="settings-model-card-header">
         <strong>{label}</strong>
         <span>{config.enabled ? t(displayLanguage, "enabled") : t(displayLanguage, "disabled")}</span>
+      </div>
+      <div className="settings-model-card-actions">
+        <div className="settings-model-health">
+          <span className="settings-model-health-label">{t(displayLanguage, "modelHealth")}</span>
+          <span className="settings-model-health-value">{modelHealthLabel(health, displayLanguage)}</span>
+        </div>
+        <button
+          type="button"
+          className="settings-model-test-button"
+          aria-label={testConnectionAriaLabel(label, displayLanguage)}
+          onClick={onTestConnection}
+          disabled={health?.state === "testing"}
+        >
+          {t(displayLanguage, "testConnection")}
+        </button>
       </div>
       <dl>
         <dt>{t(displayLanguage, "provider")}</dt>
@@ -270,6 +297,12 @@ function ModelConfigCard({
         ) : null}
         <dt>{t(displayLanguage, "apiKey")}</dt>
         <dd>{config.hasApiKey ? t(displayLanguage, "apiKeySaved") : t(displayLanguage, "notSet")}</dd>
+        {health?.lastErrorCode ? (
+          <>
+            <dt>{t(displayLanguage, "modelStateError")}</dt>
+            <dd>{modelHealthErrorLabel(health.lastErrorCode, displayLanguage)}</dd>
+          </>
+        ) : null}
       </dl>
     </article>
   );
@@ -294,4 +327,58 @@ function getModelProviderLabel(
   }
 
   return t(displayLanguage, "providerOpenAICompatible");
+}
+
+function modelHealthLabel(
+  health: PublicModelHealth | undefined,
+  displayLanguage: PetSettings["displayLanguage"]
+): string {
+  if (!health) {
+    return t(displayLanguage, "modelStateNotConfigured");
+  }
+
+  switch (health.state) {
+    case "connected":
+      return t(displayLanguage, "modelStateConnected");
+    case "configured":
+      return t(displayLanguage, "modelStateConfigured");
+    case "testing":
+      return t(displayLanguage, "modelStateTesting");
+    case "error":
+      return t(displayLanguage, "modelStateError");
+    case "using_test_double":
+      return t(displayLanguage, "modelStateUsingTestDouble");
+    default:
+      return t(displayLanguage, "modelStateNotConfigured");
+  }
+}
+
+function modelHealthErrorLabel(
+  code: PublicModelHealth["lastErrorCode"],
+  displayLanguage: PetSettings["displayLanguage"]
+): string {
+  switch (code) {
+    case "unsupported_provider":
+      return t(displayLanguage, "modelErrorUnsupportedProvider");
+    case "authentication_failed":
+      return t(displayLanguage, "modelErrorAuthenticationFailed");
+    case "timeout":
+      return t(displayLanguage, "modelErrorTimeout");
+    case "network_error":
+      return t(displayLanguage, "modelErrorNetwork");
+    case "malformed_response":
+      return t(displayLanguage, "modelErrorMalformedResponse");
+    case "invocation_failed":
+      return t(displayLanguage, "modelErrorInvocationFailed");
+    default:
+      return t(displayLanguage, "modelErrorMissingConfiguration");
+  }
+}
+
+function testConnectionAriaLabel(label: string, displayLanguage: PetSettings["displayLanguage"]): string {
+  if (displayLanguage === "zh") {
+    return `测试${label}连接`;
+  }
+
+  return `Test ${label} connection`;
 }

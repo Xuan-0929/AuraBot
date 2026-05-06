@@ -19,6 +19,8 @@ const api: AuraBotApi = {
   updateTaskRunnerSettings: (patch) => ipcRenderer.invoke(IPC_CHANNELS.updateTaskRunnerSettings, patch),
   updateModelProviderSettings: (patch) =>
     ipcRenderer.invoke(IPC_CHANNELS.updateModelProviderSettings, patch),
+  getModelHealth: () => ipcRenderer.invoke(IPC_CHANNELS.getModelHealth),
+  testModelConnection: (input) => ipcRenderer.invoke(IPC_CHANNELS.testModelConnection, input),
   updateProactiveSettings: (patch) => ipcRenderer.invoke(IPC_CHANNELS.updateProactiveSettings, patch),
   getPetSettings: () => ipcRenderer.invoke(IPC_CHANNELS.getPetSettings),
   updatePetSettings: (patch: PetSettingsPatch) => ipcRenderer.invoke(IPC_CHANNELS.updatePetSettings, patch),

@@ -3,9 +3,11 @@ import type { AgentStatus, AppInitialState, SendChatMessageResult } from "../../
 import type { MemoryDebugSnapshot, PetCursorPosition } from "../../../shared/contracts/ipc";
 import type { PetActivity } from "../../../shared/contracts/pet";
 import type {
+  ModelRoleKey,
   ModelProviderSettingsPatch,
   ProactiveSettingsPatch,
   PublicAppConfig,
+  PublicModelHealthMap,
   TaskRunnerSettingsPatch
 } from "../../../shared/contracts/settings";
 import type { Message } from "../../../shared/schemas/message";
@@ -21,6 +23,7 @@ interface AuraBotStore {
   agentStatus: AgentStatus;
   petSettings: PetSettings;
   appConfig?: PublicAppConfig;
+  modelHealth?: PublicModelHealthMap;
   petActivity?: PetActivity;
   petActivityQueue: PetActivity[];
   petCursorPosition?: PetCursorPosition;
@@ -34,6 +37,7 @@ interface AuraBotStore {
   openConfigFile(): Promise<void>;
   updateTaskRunnerSettings(runners: TaskRunnerSettingsPatch["runners"]): Promise<void>;
   updateModelProviderSettings(patch: ModelProviderSettingsPatch): Promise<void>;
+  testModelConnection(role: ModelRoleKey): Promise<void>;
   updateProactiveSettings(patch: ProactiveSettingsPatch): Promise<void>;
   updatePetSettings(patch: PetSettingsPatch): Promise<void>;
   setPetMousePassthrough(enabled: boolean): Promise<void>;
@@ -124,7 +128,30 @@ export const useAuraBotStore = create<AuraBotStore>((set, get) => ({
   },
   async updateModelProviderSettings(patch) {
     const appConfig = await window.aurabot.updateModelProviderSettings(patch);
-    set({ appConfig });
+    const modelHealth = await window.aurabot.getModelHealth();
+    set({ appConfig, modelHealth });
+  },
+  async testModelConnection(role) {
+    set((current) => ({
+      modelHealth: current.modelHealth
+        ? {
+            ...current.modelHealth,
+            [role]: {
+              ...current.modelHealth[role],
+              state: "testing"
+            }
+          }
+        : current.modelHealth
+    }));
+    const health = await window.aurabot.testModelConnection({ role });
+    set((current) => ({
+      modelHealth: current.modelHealth
+        ? {
+            ...current.modelHealth,
+            [role]: health
+          }
+        : current.modelHealth
+    }));
   },
   async updateProactiveSettings(patch) {
     const appConfig = await window.aurabot.updateProactiveSettings(patch);

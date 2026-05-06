@@ -11,6 +11,7 @@ export function App() {
   const agentStatus = useAuraBotStore((state) => state.agentStatus);
   const petSettings = useAuraBotStore((state) => state.petSettings);
   const appConfig = useAuraBotStore((state) => state.appConfig);
+  const modelHealth = useAuraBotStore((state) => state.modelHealth);
   const petActivity = useAuraBotStore((state) => state.petActivity);
   const petCursorPosition = useAuraBotStore((state) => state.petCursorPosition);
   const memoryDebugSnapshot = useAuraBotStore((state) => state.memoryDebugSnapshot);
@@ -29,6 +30,7 @@ export function App() {
   const openConfigFile = useAuraBotStore((state) => state.openConfigFile);
   const updateTaskRunnerSettings = useAuraBotStore((state) => state.updateTaskRunnerSettings);
   const updateModelProviderSettings = useAuraBotStore((state) => state.updateModelProviderSettings);
+  const testModelConnection = useAuraBotStore((state) => state.testModelConnection);
   const updateProactiveSettings = useAuraBotStore((state) => state.updateProactiveSettings);
   const subscribeToPetEvents = useAuraBotStore((state) => state.subscribeToPetEvents);
   const surface = window.location.hash === "#console" ? "console" : window.location.hash === "#settings" ? "settings" : "pet";
@@ -60,9 +62,11 @@ export function App() {
         <SettingsWindow
           petSettings={petSettings}
           appConfig={appConfig}
+          modelHealth={modelHealth}
           onUpdatePetSettings={updatePetSettings}
           onUpdateTaskRunnerSettings={updateTaskRunnerSettings}
           onUpdateModelProviderSettings={updateModelProviderSettings}
+          onTestModelConnection={testModelConnection}
           onUpdateProactiveSettings={updateProactiveSettings}
           onOpenConfigFile={openConfigFile}
         />

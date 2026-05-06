@@ -5,9 +5,12 @@ import type { MemoryEdge, MemoryNode, MemorySummary } from "../schemas/memory";
 import type { PetSettings, PetSettingsPatch } from "../schemas/petSettings";
 import type { Task } from "../schemas/task";
 import type {
+  ModelConnectionTestInput,
   ModelProviderSettingsPatch,
   ProactiveSettingsPatch,
   PublicAppConfig,
+  PublicModelHealth,
+  PublicModelHealthMap,
   TaskRunnerSettingsPatch
 } from "./settings";
 
@@ -18,6 +21,8 @@ export const IPC_CHANNELS = {
   openConfigFile: "config:open-file",
   updateTaskRunnerSettings: "config:update-task-runner-settings",
   updateModelProviderSettings: "config:update-model-provider-settings",
+  getModelHealth: "config:get-model-health",
+  testModelConnection: "config:test-model-connection",
   updateProactiveSettings: "config:update-proactive-settings",
   getPetSettings: "pet:get-settings",
   updatePetSettings: "pet:update-settings",
@@ -110,6 +115,8 @@ export interface AuraBotApi {
   openConfigFile(): Promise<void>;
   updateTaskRunnerSettings(patch: TaskRunnerSettingsPatch): Promise<PublicAppConfig>;
   updateModelProviderSettings(patch: ModelProviderSettingsPatch): Promise<PublicAppConfig>;
+  getModelHealth(): Promise<PublicModelHealthMap>;
+  testModelConnection(input: ModelConnectionTestInput): Promise<PublicModelHealth>;
   updateProactiveSettings(patch: ProactiveSettingsPatch): Promise<PublicAppConfig>;
   getPetSettings(): Promise<PetSettings>;
   updatePetSettings(patch: PetSettingsPatch): Promise<PetSettings>;
