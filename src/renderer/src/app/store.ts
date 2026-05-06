@@ -2,6 +2,7 @@ import { create } from "zustand";
 import type { AgentStatus, AppInitialState, SendChatMessageResult } from "../../../shared/contracts/chat";
 import type { MemoryDebugSnapshot, PetCursorPosition } from "../../../shared/contracts/ipc";
 import type { PetActivity } from "../../../shared/contracts/pet";
+import type { PublicAppConfig } from "../../../shared/contracts/settings";
 import type { Message } from "../../../shared/schemas/message";
 import { DEFAULT_PET_SETTINGS, type PetSettings, type PetSettingsPatch } from "../../../shared/schemas/petSettings";
 import type { Profile } from "../../../shared/schemas/profile";
@@ -14,6 +15,7 @@ interface AuraBotStore {
   tasks: Task[];
   agentStatus: AgentStatus;
   petSettings: PetSettings;
+  appConfig?: PublicAppConfig;
   petActivity?: PetActivity;
   petActivityQueue: PetActivity[];
   petCursorPosition?: PetCursorPosition;
@@ -23,6 +25,8 @@ interface AuraBotStore {
   loadMemoryDebugSnapshot(): Promise<void>;
   subscribeToPetEvents(): () => void;
   openConsoleWindow(): Promise<void>;
+  openSettingsWindow(): Promise<void>;
+  openConfigFile(): Promise<void>;
   updatePetSettings(patch: PetSettingsPatch): Promise<void>;
   setPetMousePassthrough(enabled: boolean): Promise<void>;
   movePetWindowBy(delta: { x: number; y: number }): Promise<void>;
@@ -99,6 +103,12 @@ export const useAuraBotStore = create<AuraBotStore>((set, get) => ({
   },
   async openConsoleWindow() {
     await window.aurabot.openConsoleWindow();
+  },
+  async openSettingsWindow() {
+    await window.aurabot.openSettingsWindow();
+  },
+  async openConfigFile() {
+    await window.aurabot.openConfigFile();
   },
   async updatePetSettings(patch: PetSettingsPatch) {
     const petSettings = await window.aurabot.updatePetSettings(patch);

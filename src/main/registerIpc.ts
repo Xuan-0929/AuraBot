@@ -15,9 +15,12 @@ import type { Task } from "../shared/schemas/task";
 import type { AppServices } from "../core/bootstrap/createServices";
 import { buildTaskSettledMessageDraftWithVoice, isTaskResultPathAllowed } from "../core/tasks/taskPresentation";
 import { splitTextIntoSentences } from "../shared/text/sentences";
+import { createPublicAppConfig } from "../shared/contracts/settings";
 
 export interface WindowController {
   openConsoleWindow(): void;
+  openSettingsWindow(): void;
+  openConfigFile(): Promise<void>;
   getPetSettings(): PetSettings;
   updatePetSettings(patch: PetSettingsPatch): PetSettings;
   setPetMousePassthrough(enabled: boolean): void;
@@ -61,6 +64,7 @@ export function registerIpc(services: AppServices, windows: WindowController): v
       tasks: services.taskService.listTasksForProfile(profile.id),
       agentStatus: "idle",
       petSettings: windows.getPetSettings(),
+      appConfig: createPublicAppConfig(services.config),
       debugPetOverlay: process.env.AURABOT_DEBUG_PET === "1"
     };
   });
@@ -68,6 +72,12 @@ export function registerIpc(services: AppServices, windows: WindowController): v
   ipcMain.handle(IPC_CHANNELS.openConsoleWindow, () => {
     windows.openConsoleWindow();
   });
+
+  ipcMain.handle(IPC_CHANNELS.openSettingsWindow, () => {
+    windows.openSettingsWindow();
+  });
+
+  ipcMain.handle(IPC_CHANNELS.openConfigFile, () => windows.openConfigFile());
 
   ipcMain.handle(IPC_CHANNELS.getPetSettings, () => windows.getPetSettings());
 

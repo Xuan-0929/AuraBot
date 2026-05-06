@@ -1,8 +1,16 @@
 import { useEffect, useRef } from "react";
 import type { Message, MessageAttachment } from "../../../../shared/schemas/message";
+import type { PetSettings } from "../../../../shared/schemas/petSettings";
 import { splitTextIntoSentences } from "../../../../shared/text/sentences";
+import { t } from "../../i18n";
 
-export function MessageList({ messages }: { messages: Message[] }) {
+export function MessageList({
+  messages,
+  displayLanguage = "en"
+}: {
+  messages: Message[];
+  displayLanguage?: PetSettings["displayLanguage"];
+}) {
   const listRef = useRef<HTMLDivElement>(null);
 
   useEffect(() => {
@@ -18,20 +26,20 @@ export function MessageList({ messages }: { messages: Message[] }) {
   if (messages.length === 0) {
     return (
       <div className="empty-state">
-        <h1>AuraBot</h1>
-        <p>Ready when you are.</p>
+        <h1>{t(displayLanguage, "appTitle")}</h1>
+        <p>{t(displayLanguage, "readyWhenYouAre")}</p>
       </div>
     );
   }
 
   return (
-    <div ref={listRef} className="message-list" aria-label="Conversation messages" aria-live="polite" tabIndex={0}>
-      {messages.flatMap((message) => renderMessageBubbles(message))}
+    <div ref={listRef} className="message-list" aria-label={t(displayLanguage, "conversationMessages")} aria-live="polite" tabIndex={0}>
+      {messages.flatMap((message) => renderMessageBubbles(message, displayLanguage))}
     </div>
   );
 }
 
-function renderMessageBubbles(message: Message) {
+function renderMessageBubbles(message: Message, displayLanguage: PetSettings["displayLanguage"]) {
   const segments = getMessageDisplaySegments(message);
 
   return segments.map((segment, index) => {
@@ -41,9 +49,9 @@ function renderMessageBubbles(message: Message) {
 
     return (
       <article key={`${message.id}-${index}`} className={`message message-${message.role}`}>
-        {isFirstSegment ? <span className="message-role">{message.role === "user" ? "You" : "Aura"}</span> : null}
+        {isFirstSegment ? <span className="message-role">{message.role === "user" ? t(displayLanguage, "you") : t(displayLanguage, "aura")}</span> : null}
         <p>{segment}</p>
-        {attachments.length > 0 ? <MessageAttachments attachments={attachments} /> : null}
+        {attachments.length > 0 ? <MessageAttachments attachments={attachments} displayLanguage={displayLanguage} /> : null}
       </article>
     );
   });
@@ -61,7 +69,13 @@ function getMessageDisplaySegments(message: Message): string[] {
   return sentences.length > 0 ? sentences : [message.content];
 }
 
-function MessageAttachments({ attachments }: { attachments: MessageAttachment[] }) {
+function MessageAttachments({
+  attachments,
+  displayLanguage
+}: {
+  attachments: MessageAttachment[];
+  displayLanguage: PetSettings["displayLanguage"];
+}) {
   return (
     <div className="message-attachments">
       {attachments.map((attachment) => (
@@ -77,7 +91,7 @@ function MessageAttachments({ attachments }: { attachments: MessageAttachment[] 
                 })
               }
             >
-              打开文件
+              {t(displayLanguage, "openFile")}
             </button>
             <button
               type="button"
@@ -88,7 +102,7 @@ function MessageAttachments({ attachments }: { attachments: MessageAttachment[] 
                 })
               }
             >
-              所在文件夹
+              {t(displayLanguage, "showInFolder")}
             </button>
           </span>
         </div>

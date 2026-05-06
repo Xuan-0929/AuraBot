@@ -3,6 +3,7 @@ import type { AgentStatus } from "../../../../shared/contracts/chat";
 import type { PetCursorPosition } from "../../../../shared/contracts/ipc";
 import type { PetActivity } from "../../../../shared/contracts/pet";
 import type { PetSettings } from "../../../../shared/schemas/petSettings";
+import { t } from "../../i18n";
 import { Live2DModelCanvas } from "../live2d/Live2DModelCanvas";
 import { extractSpeechTranscript, type SpeechRecognitionEventLike } from "./speechRecognition";
 
@@ -13,6 +14,7 @@ export interface DesktopPetProps {
   petCursorPosition?: PetCursorPosition;
   debugPetOverlay: boolean;
   onOpenConsole(): Promise<void>;
+  onOpenSettings(): Promise<void>;
   onSendVoiceInput(content: string): Promise<void>;
   onSendTextInput(content: string): Promise<void>;
   onSetMousePassthrough(enabled: boolean): Promise<void>;
@@ -58,6 +60,7 @@ export function DesktopPet({
   petCursorPosition,
   debugPetOverlay,
   onOpenConsole,
+  onOpenSettings,
   onSendVoiceInput,
   onSendTextInput,
   onSetMousePassthrough,
@@ -321,13 +324,13 @@ export function DesktopPet({
   return (
     <main
       className="desktop-pet"
-      aria-label="Desktop Live2D pet"
+      aria-label={t(petSettings.displayLanguage, "desktopLive2DPet")}
       data-agent-status={agentStatus}
       data-click-through={petSettings.clickThroughPet ? "true" : "false"}
       onPointerMove={handlePetPointerMove}
     >
       {petActivity ? (
-        <aside className="pet-message-bubble" aria-label="Pet message">
+        <aside className="pet-message-bubble" aria-label={t(petSettings.displayLanguage, "petMessage")}>
           {petActivity.message}
         </aside>
       ) : null}
@@ -335,7 +338,7 @@ export function DesktopPet({
         className="desktop-pet-model-button"
         ref={modelButtonRef}
         type="button"
-        aria-label="Interact with AuraBot"
+        aria-label={t(petSettings.displayLanguage, "interactWithAuraBot")}
         onClick={() => void onOpenConsole()}
       >
         <span
@@ -356,7 +359,7 @@ export function DesktopPet({
       {isHoverUiVisible ? (
         <form
           className="pet-hover-chat"
-          aria-label="Pet quick chat"
+          aria-label={t(petSettings.displayLanguage, "petQuickChat")}
           data-side={hoverChatSide}
           data-expanded={isHoverChatExpanded ? "true" : "false"}
           onClick={focusHoverChatInput}
@@ -376,36 +379,36 @@ export function DesktopPet({
                 onFocus={() => setIsHoverChatFocused(true)}
                 onBlur={() => setIsHoverChatFocused(false)}
                 onKeyDown={handleHoverChatKeyDown}
-                placeholder="给主对话发送消息"
+                placeholder={t(petSettings.displayLanguage, "petChatPlaceholder")}
                 rows={2}
               />
               <button
                 className="pet-hover-chat-send"
                 type="submit"
                 disabled={isHoverChatSubmitting || !hoverChatContent.trim()}
-                aria-label="Send pet chat"
+                aria-label={t(petSettings.displayLanguage, "sendPetChat")}
               >
-                Send
+                {t(petSettings.displayLanguage, "send")}
               </button>
             </>
           ) : (
             <button
               className="pet-hover-chat-trigger"
               type="button"
-              aria-label="Open pet quick chat"
+              aria-label={t(petSettings.displayLanguage, "openPetQuickChat")}
               onClick={(event) => {
                 event.stopPropagation();
                 setIsHoverChatExpanded(true);
               }}
             >
-              Chat
+              {t(petSettings.displayLanguage, "chat")}
             </button>
           )}
         </form>
       ) : null}
       <div
         className="pet-quick-controls"
-        aria-label="Pet quick controls"
+        aria-label={t(petSettings.displayLanguage, "petQuickControls")}
         data-visible={isHoverUiVisible ? "true" : "false"}
         onPointerEnter={handleControlsPointerEnter}
         onPointerLeave={handleControlsPointerLeave}
@@ -413,31 +416,43 @@ export function DesktopPet({
         <button
           className="pet-action-button pet-action-drag"
           type="button"
-          aria-label="Drag pet"
+          aria-label={t(petSettings.displayLanguage, "dragPet")}
           data-dragging={isDragging ? "true" : "false"}
           onPointerDown={handleDragPointerDown}
           onPointerMove={handleDragPointerMove}
           onPointerUp={handleDragPointerEnd}
           onPointerCancel={handleDragPointerEnd}
         >
-          Drag
+          {t(petSettings.displayLanguage, "drag")}
         </button>
         <button
           className="pet-action-button"
           type="button"
-          aria-label={voiceState === "recording" ? "Stop voice recording" : "Start voice input"}
+          aria-label={
+            voiceState === "recording"
+              ? t(petSettings.displayLanguage, "stopVoiceRecording")
+              : t(petSettings.displayLanguage, "startVoiceInput")
+          }
           data-active={voiceState === "recording" ? "true" : "false"}
           onClick={handleVoiceClick}
         >
-          Voice
+          {t(petSettings.displayLanguage, "voice")}
         </button>
         <button
           className="pet-action-button"
           type="button"
-          aria-label="Open AuraBot console"
+          aria-label={t(petSettings.displayLanguage, "openAuraBotConsole")}
           onClick={() => void onOpenConsole()}
         >
-          Console
+          {t(petSettings.displayLanguage, "console")}
+        </button>
+        <button
+          className="pet-action-button"
+          type="button"
+          aria-label={t(petSettings.displayLanguage, "openAuraBotSettings")}
+          onClick={() => void onOpenSettings()}
+        >
+          {t(petSettings.displayLanguage, "settings")}
         </button>
       </div>
     </main>

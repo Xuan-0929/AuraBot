@@ -1,6 +1,14 @@
 import { FormEvent, KeyboardEvent, useState } from "react";
+import type { PetSettings } from "../../../../shared/schemas/petSettings";
+import { t } from "../../i18n";
 
-export function Composer({ onSend }: { onSend(content: string): Promise<void> }) {
+export function Composer({
+  displayLanguage = "en",
+  onSend
+}: {
+  displayLanguage?: PetSettings["displayLanguage"];
+  onSend(content: string): Promise<void>;
+}) {
   const [content, setContent] = useState("");
   const [submitting, setSubmitting] = useState(false);
 
@@ -55,11 +63,11 @@ export function Composer({ onSend }: { onSend(content: string): Promise<void> })
         value={content}
         onChange={(event) => setContent(event.target.value)}
         onKeyDown={handleKeyDown}
-        placeholder="Say something"
+        placeholder={t(displayLanguage, "saySomething")}
         rows={2}
       />
       <button type="submit" disabled={submitting || !content.trim()}>
-        Send
+        {t(displayLanguage, "send")}
       </button>
     </form>
   );

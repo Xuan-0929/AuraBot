@@ -2,6 +2,7 @@ import { useEffect } from "react";
 import { useAuraBotStore } from "./app/store";
 import { ConsoleWindow } from "./features/console/ConsoleWindow";
 import { DesktopPet } from "./features/pet/DesktopPet";
+import { SettingsWindow } from "./features/settings/SettingsWindow";
 
 export function App() {
   const loadInitialState = useAuraBotStore((state) => state.loadInitialState);
@@ -9,6 +10,7 @@ export function App() {
   const tasks = useAuraBotStore((state) => state.tasks);
   const agentStatus = useAuraBotStore((state) => state.agentStatus);
   const petSettings = useAuraBotStore((state) => state.petSettings);
+  const appConfig = useAuraBotStore((state) => state.appConfig);
   const petActivity = useAuraBotStore((state) => state.petActivity);
   const petCursorPosition = useAuraBotStore((state) => state.petCursorPosition);
   const memoryDebugSnapshot = useAuraBotStore((state) => state.memoryDebugSnapshot);
@@ -23,8 +25,10 @@ export function App() {
   const showPetNotice = useAuraBotStore((state) => state.showPetNotice);
   const clearPetActivity = useAuraBotStore((state) => state.clearPetActivity);
   const openConsoleWindow = useAuraBotStore((state) => state.openConsoleWindow);
+  const openSettingsWindow = useAuraBotStore((state) => state.openSettingsWindow);
+  const openConfigFile = useAuraBotStore((state) => state.openConfigFile);
   const subscribeToPetEvents = useAuraBotStore((state) => state.subscribeToPetEvents);
-  const surface = window.location.hash === "#console" ? "console" : "pet";
+  const surface = window.location.hash === "#console" ? "console" : window.location.hash === "#settings" ? "settings" : "pet";
 
   useEffect(() => {
     void loadInitialState();
@@ -40,12 +44,21 @@ export function App() {
           messages={messages}
           tasks={tasks}
           petSettings={petSettings}
+          appConfig={appConfig}
           memoryDebugSnapshot={memoryDebugSnapshot}
           onUpdatePetSettings={updatePetSettings}
+          onOpenSettings={openSettingsWindow}
           onLoadMemoryDebugSnapshot={loadMemoryDebugSnapshot}
           onSend={sendMessage}
           onCancelTask={cancelTask}
           onDeleteTask={deleteTask}
+        />
+      ) : surface === "settings" ? (
+        <SettingsWindow
+          petSettings={petSettings}
+          appConfig={appConfig}
+          onUpdatePetSettings={updatePetSettings}
+          onOpenConfigFile={openConfigFile}
         />
       ) : (
         <DesktopPet
@@ -55,6 +68,7 @@ export function App() {
           petCursorPosition={petCursorPosition}
           debugPetOverlay={debugPetOverlay}
           onOpenConsole={openConsoleWindow}
+          onOpenSettings={openSettingsWindow}
           onSendVoiceInput={(content) => sendMessage(content, "pet_voice")}
           onSendTextInput={(content) => sendMessage(content, "pet_text")}
           onSetMousePassthrough={setPetMousePassthrough}

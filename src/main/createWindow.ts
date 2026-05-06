@@ -11,6 +11,7 @@ import { clampWindowBoundsToWorkArea, placeWindowNearPet, type WindowRectangle }
 
 let petWindow: BrowserWindow | undefined;
 let consoleWindow: BrowserWindow | undefined;
+let settingsWindow: BrowserWindow | undefined;
 let currentPetSettings: PetSettings = { ...DEFAULT_PET_SETTINGS };
 let onPetBoundsChanged: ((bounds: WindowRectangle) => void) | undefined;
 let petCursorTrackingInterval: NodeJS.Timeout | undefined;
@@ -23,6 +24,10 @@ const PET_WINDOW_SIZE = {
 const CONSOLE_WINDOW_SIZE = {
   width: 920,
   height: 700
+};
+const SETTINGS_WINDOW_SIZE = {
+  width: 760,
+  height: 720
 };
 const PET_CURSOR_TRACKING_INTERVAL_MS = 50;
 
@@ -104,6 +109,36 @@ export function openConsoleWindow(): BrowserWindow {
   return consoleWindow;
 }
 
+export function openSettingsWindow(): BrowserWindow {
+  if (settingsWindow && !settingsWindow.isDestroyed()) {
+    settingsWindow.show();
+    settingsWindow.focus();
+    return settingsWindow;
+  }
+
+  settingsWindow = new BrowserWindow({
+    width: SETTINGS_WINDOW_SIZE.width,
+    height: SETTINGS_WINDOW_SIZE.height,
+    minWidth: 620,
+    minHeight: 560,
+    title: "AuraBot Settings",
+    backgroundColor: "#edf2f1",
+    show: false,
+    webPreferences: sharedWebPreferences()
+  });
+  positionSettingsNearPet(settingsWindow);
+  settingsWindow.on("ready-to-show", () => {
+    settingsWindow?.show();
+    settingsWindow?.focus();
+  });
+  settingsWindow.on("closed", () => {
+    settingsWindow = undefined;
+  });
+  loadRenderer(settingsWindow, "settings");
+
+  return settingsWindow;
+}
+
 export function applyPetSettings(settings: PetSettings): void {
   currentPetSettings = settings;
   setPetMousePassthrough(settings.clickThroughPet);
@@ -170,7 +205,7 @@ function sharedWebPreferences() {
   };
 }
 
-function loadRenderer(window: BrowserWindow, route: "pet" | "console"): void {
+function loadRenderer(window: BrowserWindow, route: "pet" | "console" | "settings"): void {
   const devServerUrl = process.env.ELECTRON_RENDERER_URL;
 
   if (devServerUrl) {
@@ -234,8 +269,26 @@ function positionConsoleNearPet(window: BrowserWindow): void {
   window.setPosition(position.x, position.y);
 }
 
+function positionSettingsNearPet(window: BrowserWindow): void {
+  const targetSize = window.getBounds();
+  const petBounds = petWindow && !petWindow.isDestroyed() ? petWindow.getBounds() : undefined;
+  const display = petBounds ? screen.getDisplayMatching(petBounds) : screen.getPrimaryDisplay();
+  const position = petBounds
+    ? placeWindowNearPet({
+        petBounds,
+        targetSize,
+        workArea: display.workArea
+      })
+    : {
+        x: display.workArea.x + display.workArea.width - targetSize.width - 28,
+        y: display.workArea.y + display.workArea.height - targetSize.height - 28
+      };
+
+  window.setPosition(position.x, position.y);
+}
+
 function sendToRenderer(channel: string, payload: unknown): void {
-  for (const window of [petWindow, consoleWindow]) {
+  for (const window of [petWindow, consoleWindow, settingsWindow]) {
     if (window && !window.isDestroyed()) {
       window.webContents.send(channel, payload);
     }

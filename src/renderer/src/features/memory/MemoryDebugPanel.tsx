@@ -1,16 +1,19 @@
 import type { ReactNode } from "react";
 import type { MemoryDebugSnapshot } from "../../../../shared/contracts/ipc";
+import type { PetSettings } from "../../../../shared/schemas/petSettings";
+import { t } from "../../i18n";
 
 export interface MemoryDebugPanelProps {
   snapshot?: MemoryDebugSnapshot;
   expanded: boolean;
+  displayLanguage?: PetSettings["displayLanguage"];
   onToggle(): void;
   onRefresh(): Promise<void>;
 }
 
-export function MemoryDebugPanel({ snapshot, expanded, onToggle, onRefresh }: MemoryDebugPanelProps) {
+export function MemoryDebugPanel({ snapshot, expanded, displayLanguage = "en", onToggle, onRefresh }: MemoryDebugPanelProps) {
   return (
-    <section className="memory-debug-shell" aria-label="Memory debug tools">
+    <section className="memory-debug-shell" aria-label={t(displayLanguage, "memoryDebugTools")}>
       <div className="memory-debug-toolbar">
         <button
           type="button"
@@ -23,28 +26,28 @@ export function MemoryDebugPanel({ snapshot, expanded, onToggle, onRefresh }: Me
             }
           }}
         >
-          Memory Debug
+          {t(displayLanguage, "memoryDebug")}
         </button>
         {expanded ? (
           <button type="button" className="memory-debug-refresh" onClick={() => void onRefresh()}>
-            Refresh
+            {t(displayLanguage, "refresh")}
           </button>
         ) : null}
       </div>
 
       {expanded ? (
-        <div className="memory-debug-panel" aria-label="Memory debug panel">
+        <div className="memory-debug-panel" aria-label={t(displayLanguage, "memoryDebugPanel")}>
           {snapshot ? (
             <>
-              <div className="memory-debug-metrics" aria-label="Memory debug metrics">
-                <span>Nodes {snapshot.nodes.length}</span>
-                <span>Edges {snapshot.edges.length}</span>
-                <span>Summaries {snapshot.summaries.length}</span>
-                <span>Events {snapshot.recentEvents.length}</span>
+              <div className="memory-debug-metrics" aria-label={t(displayLanguage, "memoryDebugMetrics")}>
+                <span>{t(displayLanguage, "nodes")} {snapshot.nodes.length}</span>
+                <span>{t(displayLanguage, "edges")} {snapshot.edges.length}</span>
+                <span>{t(displayLanguage, "summaries")} {snapshot.summaries.length}</span>
+                <span>{t(displayLanguage, "events")} {snapshot.recentEvents.length}</span>
               </div>
-              {snapshot.lastRecallTrace ? <LastRecallTrace snapshot={snapshot} /> : null}
+              {snapshot.lastRecallTrace ? <LastRecallTrace snapshot={snapshot} displayLanguage={displayLanguage} /> : null}
               <div className="memory-debug-grid">
-                <DebugColumn title="Nodes">
+                <DebugColumn title={t(displayLanguage, "nodes")}>
                   {snapshot.nodes.slice(0, 8).map((node) => (
                     <article className="memory-debug-item" key={node.id}>
                       <span className="memory-debug-kicker">
@@ -54,7 +57,7 @@ export function MemoryDebugPanel({ snapshot, expanded, onToggle, onRefresh }: Me
                     </article>
                   ))}
                 </DebugColumn>
-                <DebugColumn title="Edges">
+                <DebugColumn title={t(displayLanguage, "edges")}>
                   {snapshot.edges.slice(0, 8).map((edge) => (
                     <article className="memory-debug-item" key={edge.id}>
                       <span className="memory-debug-kicker">{edge.relationType}</span>
@@ -64,7 +67,7 @@ export function MemoryDebugPanel({ snapshot, expanded, onToggle, onRefresh }: Me
                     </article>
                   ))}
                 </DebugColumn>
-                <DebugColumn title="Recent Events">
+                <DebugColumn title={t(displayLanguage, "recentEvents")}>
                   {snapshot.recentEvents.slice(0, 8).map((event) => (
                     <article className="memory-debug-item" key={event.id}>
                       <span className="memory-debug-kicker">{formatTime(event.createdAt)}</span>
@@ -75,7 +78,7 @@ export function MemoryDebugPanel({ snapshot, expanded, onToggle, onRefresh }: Me
               </div>
             </>
           ) : (
-            <p className="memory-debug-empty">No memory snapshot loaded.</p>
+            <p className="memory-debug-empty">{t(displayLanguage, "noMemorySnapshot")}</p>
           )}
         </div>
       ) : null}
@@ -83,7 +86,13 @@ export function MemoryDebugPanel({ snapshot, expanded, onToggle, onRefresh }: Me
   );
 }
 
-function LastRecallTrace({ snapshot }: { snapshot: MemoryDebugSnapshot }) {
+function LastRecallTrace({
+  snapshot,
+  displayLanguage
+}: {
+  snapshot: MemoryDebugSnapshot;
+  displayLanguage: PetSettings["displayLanguage"];
+}) {
   const trace = snapshot.lastRecallTrace;
 
   if (!trace) {
@@ -91,12 +100,12 @@ function LastRecallTrace({ snapshot }: { snapshot: MemoryDebugSnapshot }) {
   }
 
   return (
-    <section className="memory-debug-recall" aria-label="Last memory recall trace">
+    <section className="memory-debug-recall" aria-label={t(displayLanguage, "lastMemoryRecallTrace")}>
       <div className="memory-debug-recall-header">
-        <h2>Last Recall</h2>
-        <span>Seeds {trace.seedNodeIds.length}</span>
-        <span>Expanded {trace.expandedNodeIds.length}</span>
-        <span>Returned {trace.returnedNodeIds.length}</span>
+        <h2>{t(displayLanguage, "lastRecall")}</h2>
+        <span>{t(displayLanguage, "seeds")} {trace.seedNodeIds.length}</span>
+        <span>{t(displayLanguage, "expanded")} {trace.expandedNodeIds.length}</span>
+        <span>{t(displayLanguage, "returned")} {trace.returnedNodeIds.length}</span>
       </div>
       <p className="memory-debug-query">{trace.query}</p>
       <div className="memory-debug-chip-row">

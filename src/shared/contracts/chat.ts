@@ -2,6 +2,7 @@ import type { Message } from "../schemas/message";
 import type { PetSettings } from "../schemas/petSettings";
 import type { Profile } from "../schemas/profile";
 import type { Task } from "../schemas/task";
+import type { PublicAppConfig } from "./settings";
 
 export type AgentStatus = "idle" | "listening" | "thinking" | "typing" | "tasking";
 export type ReplyDecision = "reply" | "wait";
@@ -39,5 +40,6 @@ export interface AppInitialState {
   tasks: Task[];
   agentStatus: AgentStatus;
   petSettings: PetSettings;
+  appConfig: PublicAppConfig;
   debugPetOverlay: boolean;
 }

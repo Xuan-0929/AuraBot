@@ -26,6 +26,7 @@ const baseProps: DesktopPetProps = {
   debugPetOverlay: false,
   petCursorPosition: undefined,
   onOpenConsole: vi.fn(async () => undefined),
+  onOpenSettings: vi.fn(async () => undefined),
   onSendVoiceInput: vi.fn(async () => undefined),
   onSendTextInput: vi.fn(async () => undefined),
   onSetMousePassthrough: vi.fn(async () => undefined),
@@ -143,6 +144,20 @@ describe("DesktopPet hover chat bubble", () => {
 
     expect(container.querySelector(".pet-hover-chat")).not.toBeNull();
     vi.useRealTimers();
+  });
+
+  it("opens the product settings window from pet quick controls", async () => {
+    const onOpenSettings = vi.fn(async () => undefined);
+
+    await renderPet({ onOpenSettings });
+    setModelRect({ left: 260, right: 530 });
+    await hoverModel();
+
+    await act(async () => {
+      container.querySelector<HTMLButtonElement>('[aria-label="打开 AuraBot 设置"]')!.click();
+    });
+
+    expect(onOpenSettings).toHaveBeenCalledTimes(1);
   });
 
   async function renderPet(overrides: Partial<DesktopPetProps> = {}) {

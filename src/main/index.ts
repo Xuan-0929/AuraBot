@@ -1,4 +1,6 @@
-import { app, BrowserWindow } from "electron";
+import { existsSync, mkdirSync, writeFileSync } from "node:fs";
+import { join } from "node:path";
+import { app, BrowserWindow, shell } from "electron";
 import { createServices, type AppServices } from "../core/bootstrap/createServices";
 import { MemoryFollowUpScheduler } from "../core/memory/memoryFollowUpScheduler";
 import {
@@ -12,6 +14,7 @@ import {
   createPetWindow,
   movePetWindowBy,
   openConsoleWindow,
+  openSettingsWindow,
   setPetMousePassthrough
 } from "./createWindow";
 import { PetSettingsStore } from "./petSettingsStore";
@@ -35,6 +38,8 @@ async function bootstrap(): Promise<void> {
   petWindowStateStore = new PetWindowStateStore(userDataPath);
   registerIpc(services, {
     openConsoleWindow,
+    openSettingsWindow,
+    openConfigFile: () => openUserConfigFile(userDataPath),
     getPetSettings: () => petSettingsStore?.get() ?? {
       clickThroughPet: false,
       displayLanguage: "en"
@@ -71,6 +76,21 @@ async function bootstrap(): Promise<void> {
     broadcastPetActivity
   });
   memoryFollowUpScheduler.start();
+}
+
+async function openUserConfigFile(userDataPath: string): Promise<void> {
+  const configPath = join(userDataPath, "config.json");
+
+  if (!existsSync(configPath)) {
+    mkdirSync(userDataPath, { recursive: true });
+    writeFileSync(configPath, "{}\n", "utf8");
+  }
+
+  const error = await shell.openPath(configPath);
+
+  if (error) {
+    shell.showItemInFolder(configPath);
+  }
 }
 
 app.whenReady().then(bootstrap);

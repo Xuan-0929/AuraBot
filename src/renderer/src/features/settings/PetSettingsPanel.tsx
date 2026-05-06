@@ -1,34 +1,86 @@
+import { useEffect, useId, useState } from "react";
+import type { PublicAppConfig } from "../../../../shared/contracts/settings";
 import type { PetSettings, PetSettingsPatch } from "../../../../shared/schemas/petSettings";
+import { t } from "../../i18n";
 
 export interface PetSettingsPanelProps {
   settings: PetSettings;
+  appConfig?: PublicAppConfig;
   onUpdate(patch: PetSettingsPatch): Promise<void>;
+  onOpenSettings(): Promise<void>;
 }
 
-export function PetSettingsPanel({ settings, onUpdate }: PetSettingsPanelProps) {
+export function PetSettingsPanel({ settings, onUpdate, onOpenSettings }: PetSettingsPanelProps) {
+  const [menuOpen, setMenuOpen] = useState(false);
+  const menuId = useId();
+  const displayLanguage = settings.displayLanguage;
+
+  useEffect(() => {
+    if (!menuOpen) {
+      return undefined;
+    }
+
+    const handleKeyDown = (event: KeyboardEvent) => {
+      if (event.key === "Escape") {
+        setMenuOpen(false);
+      }
+    };
+
+    document.addEventListener("keydown", handleKeyDown);
+
+    return () => document.removeEventListener("keydown", handleKeyDown);
+  }, [menuOpen]);
+
   return (
-    <section className="pet-settings-panel" aria-label="Pet settings">
-      <span className="pet-settings-title">Pet</span>
-      <label className="pet-settings-option">
-        <span>Language</span>
-        <select
-          value={settings.displayLanguage}
-          aria-label="Display language"
-          onChange={(event) => void onUpdate({ displayLanguage: event.currentTarget.value as PetSettings["displayLanguage"] })}
-        >
-          <option value="en">English</option>
-          <option value="zh">中文</option>
-        </select>
-      </label>
-      <label className="pet-settings-option">
-        <input
-          type="checkbox"
-          checked={settings.clickThroughPet}
-          aria-label="Click through character"
-          onChange={(event) => void onUpdate({ clickThroughPet: event.currentTarget.checked })}
-        />
-        <span>Click through</span>
-      </label>
+    <section className="settings-menu-shell" aria-label={t(displayLanguage, "settings")}>
+      <button
+        type="button"
+        className="settings-menu-button"
+        aria-label={t(displayLanguage, "openSettingsMenu")}
+        aria-haspopup="menu"
+        aria-expanded={menuOpen}
+        aria-controls={menuId}
+        onClick={() => setMenuOpen((current) => !current)}
+      >
+        {t(displayLanguage, "settings")}
+      </button>
+      {menuOpen ? (
+        <div id={menuId} className="settings-menu" role="menu" aria-label={t(displayLanguage, "settingsMenu")}>
+          <section className="settings-menu-section" aria-label={t(displayLanguage, "quickSettings")}>
+            <h2>{t(displayLanguage, "quickSettings")}</h2>
+            <button
+              className="settings-full-button"
+              type="button"
+              aria-label={t(displayLanguage, "openFullSettings")}
+              onClick={() => void onOpenSettings()}
+            >
+              {t(displayLanguage, "openFullSettings")}
+            </button>
+            <label className="settings-field">
+              <span>{t(displayLanguage, "language")}</span>
+              <select
+                value={settings.displayLanguage}
+                aria-label={t(displayLanguage, "language")}
+                onChange={(event) =>
+                  void onUpdate({ displayLanguage: event.currentTarget.value as PetSettings["displayLanguage"] })
+                }
+              >
+                <option value="en">{t(displayLanguage, "english")}</option>
+                <option value="zh">{t(displayLanguage, "chinese")}</option>
+              </select>
+            </label>
+            <label className="settings-toggle">
+              <input
+                type="checkbox"
+                checked={settings.clickThroughPet}
+                aria-label={t(displayLanguage, "clickThroughCharacter")}
+                onChange={(event) => void onUpdate({ clickThroughPet: event.currentTarget.checked })}
+              />
+              <span>{t(displayLanguage, "clickThroughCharacter")}</span>
+            </label>
+          </section>
+        </div>
+      ) : null}
     </section>
   );
 }

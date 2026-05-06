@@ -1,14 +1,40 @@
 # AuraBot 当前开发状态
 
-更新时间：2026-05-05
+更新时间：2026-05-06
 
 这份文档记录当前 live2D/console 集成分支已经完成的工程事实、最近一次验证结果，以及下一步最应该推进的任务。它是执行状态板，不替代 PRD，也不替代 MVP 计划。
 
-当前工作分支：`codex/aurabot-live2d-console-ui`
+当前工作分支：`codex/aurabot-productization`
 
-当前集成基线：`d2150a3 feat: unify soul-driven voice responses`
+当前集成基线：`d2b7660 feat: stream assistant replies as sentence bubbles`
 
 分支边界：这一侧已经集成 Live2D 桌宠体验、主控制台、任务卡控制、流式回复、模型 gate、记忆调试、follow-up 主动提醒，以及 soul 驱动的统一回复/播报机制。后续如果继续并行开发，记忆模型/配置大改、任务执行器大改、桌宠 UI 大改仍建议分支隔离，避免在 `chatOrchestrator`、`createWindow`、`store`、IPC contract 和 renderer 样式上互相抢修改权。
+
+## 2026-05-06 产品化 checkpoint
+
+本次 checkpoint 把桌宠从开发启动形态推进到可双击打开的 macOS 应用形态，并补齐设置入口、模型配置可视化和中英文界面切换。
+
+已完成：
+
+1. 新增 `corepack pnpm package:mac`，通过 `scripts/package-macos.mjs` 生成 `/Users/xuan/Documents/AuraBot/dist/AuraBot.app`，双击后默认打开透明置顶的 Live2D 桌宠窗口，不再要求用户从终端输入启动命令。
+2. 新增产品设置窗口，桌宠快捷控制区可直接打开设置；设置页包含通用设置、模型设置和人物设置。
+3. 新增设置子菜单，原先散落在控制台里的语言、人物点击穿透和完整设置入口被集中到设置菜单里。
+4. 新增 renderer i18n 层，`displayLanguage` 会驱动桌宠快捷控制、控制台、设置页、设置子菜单、聊天输入、消息附件、状态栏、记忆调试面板和任务状态卡等主要用户可见文本。
+5. 新增安全的模型配置摘要 `PublicAppConfig`，renderer 只显示 provider、model、base URL、启用状态和 `hasApiKey`，不把 API Key 明文暴露给界面层。
+6. 设置页模型区新增“打开 config 文件”入口，用 IPC 调用主进程打开 userData 下的 `config.json`，方便用户配置 API Key、Base URL 和模型名。
+7. 已把本机当前 AuraBot config 复制到 userData 路径 `/Users/xuan/Library/Application Support/AuraBot/config.json`，解决 userData 空 config 覆盖系统级 config 后打包应用读不到 API 配置的问题。
+8. 设置窗口实机验证中，中文界面下已能显示聊天、判断、记忆三组 `openai-compatible` 模型配置，并只显示“API Key 已保存”。
+
+最近一次产品化验证记录：
+
+| 命令/检查 | 结果 |
+| --- | --- |
+| `corepack pnpm typecheck` | 通过 |
+| `corepack pnpm test:unit` | 36 个 test files、116 个 tests 通过 |
+| `corepack pnpm build` | 通过 |
+| `corepack pnpm test:e2e` | 14 个 e2e tests 通过 |
+| `corepack pnpm package:mac` | 通过，生成 `dist/AuraBot.app` |
+| 打包后手动打开 `dist/AuraBot.app` 并进入设置页 | 通过，Live2D 桌宠、中文设置页、模型配置摘要和 config 文件入口均可见 |
 
 ## 当前产品形态
 
@@ -28,6 +54,8 @@ AuraBot 当前已经从“传统聊天界面”收敛为桌宠优先形态：
 12. 分句规则已抽成共享工具，当前识别 `。！？!?；;～~〜…` 等聊天句尾标点；英文句点暂不作为分隔符，避免拆坏文件名、URL 和小数。
 13. 记忆系统当前是“分层摘要 + 图状联想 + 可选 memoryModel 增强”的 MVP；已补到期 follow-up 调试评估与主动提醒通道。
 14. 普通聊天、任务播报、任务完成/失败、任务控制、pet task notice 和 memory follow-up 已开始走统一 `Soul + ResponseWorkflow + VoiceAdapter` 机制，避免聊天像人、任务像系统通知的割裂体验。
+15. 当前产品化分支已经可以打包为 `dist/AuraBot.app`，双击后直接进入桌面 Live2D 桌宠，不需要终端命令。
+16. 设置能力已经从控制台内的小控件升级为独立设置窗口，语言、模型配置摘要、config 文件入口和人物点击穿透都集中在设置页。
 
 ## 已完成
 
@@ -35,13 +63,16 @@ AuraBot 当前已经从“传统聊天界面”收敛为桌宠优先形态：
 | --- | --- | --- |
 | Electron 项目骨架 | 已完成 | `Electron + React + TypeScript + Vite + pnpm` 已可构建和运行。 |
 | 双窗口桌宠壳层 | 已完成 | `createPetWindow()` 默认创建桌面小人，`openConsoleWindow()` 按需打开控制台。 |
+| 产品设置窗口 | 已完成第一版 | `openSettingsWindow()` 可从桌宠快捷控制打开独立设置窗口，集中管理语言、模型配置摘要、config 文件入口和人物点击穿透。 |
+| macOS 应用打包 | 已完成第一版 | `corepack pnpm package:mac` 生成 `dist/AuraBot.app`，双击即可启动桌宠。 |
+| 全局界面语言 | 已完成第一版 | `displayLanguage` 已覆盖桌宠、控制台、设置、设置菜单、聊天、任务状态和记忆调试等主要 UI 文本。 |
 | Live2D 真实模型 | 已完成 | 已接入官方样例 `Hiyori`，Cubism Core 本地打包，不依赖启动时 CDN。 |
 | Live2D 桌宠交互层 | 部分完成 | 悬浮控制条、拖拽按钮、控制台按钮、点击穿透设置、任务完成气泡、位置持久化、状态 motion 映射、悬停小聊天气泡、展开式桌宠输入框和全局鼠标追踪眼动已接入。 |
 | 桌宠消息气泡 | 已完成第二版 | bot 普通输出、任务完成、语音回复和到期 follow-up 都会进入桌宠气泡通道；普通 bot 输出按句子流式排队展示，任务/提醒类气泡可优先打断过时普通聊天气泡。 |
 | SQLite 数据层 | 已完成 | 已有 profiles、souls、sessions、messages、memory、tasks、event_logs 等表。 |
 | 单主聊天线程 | 已完成 MVP | 主 session 持久化消息，控制台负责完整对话；用户消息乐观上屏，不再等待 gate/chat 模型返回。 |
 | 控制台消息展示 | 已完成第二版 | assistant 回复在 UI 层按句子拆成多个连续气泡，底层消息仍保持一条完整记录；用户消息不拆，任务附件挂在最后一句气泡下。 |
-| 模型适配层 | 部分完成 | 已有 `gateModel` / `chatModel` / `memoryModel` 注入接口、OpenAI-compatible provider、userData/系统级 JSON 配置、env 配置、deterministic fallback 和 chat streaming；还缺用户新消息打断、retry/backoff 和连接状态 UI。 |
+| 模型适配层 | 部分完成 | 已有 `gateModel` / `chatModel` / `memoryModel` 注入接口、OpenAI-compatible provider、userData/系统级 JSON 配置、env 配置、deterministic fallback、chat streaming 和设置页安全摘要；还缺用户新消息打断、retry/backoff 和真实连接状态 UI。 |
 | Gate/触发判断 | 已完成 MVP | 可判断碎片输入等待、完整输入回复、话题是否结束、聊天/任务/任务控制分类；强 gate 判定已延后到模型侧，外部模型异常时仍保留 fallback。 |
 | 活人感统一回复机制 | 已完成第一版 | `Soul` 只保留人格、语气、原则和语义禁忌；`ResponseWorkflow` 描述场景、事实和安全边界；`VoiceAdapter` 结合二者生成最终用户可见文本。任务完成等场景可以接近“本人自然告诉你结果并邀请你看一眼”的语感，但不会把样例当固定模板。 |
 | 记忆 v1/v2 写入层 | 部分完成 | 支持 preference、event、follow_up 写入，摘要层和关系边召回；显式配置 `memoryModel` 后可用 API 做结构化记忆抽取、重复记忆合并和候选关系边判断；App 运行期间到期 follow_up 可通过后台 scheduler 推送桌宠气泡。 |

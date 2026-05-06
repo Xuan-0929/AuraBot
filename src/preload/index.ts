@@ -14,6 +14,8 @@ import type { Task } from "../shared/schemas/task";
 const api: AuraBotApi = {
   getInitialState: () => ipcRenderer.invoke(IPC_CHANNELS.getInitialState),
   openConsoleWindow: () => ipcRenderer.invoke(IPC_CHANNELS.openConsoleWindow),
+  openSettingsWindow: () => ipcRenderer.invoke(IPC_CHANNELS.openSettingsWindow),
+  openConfigFile: () => ipcRenderer.invoke(IPC_CHANNELS.openConfigFile),
   getPetSettings: () => ipcRenderer.invoke(IPC_CHANNELS.getPetSettings),
   updatePetSettings: (patch: PetSettingsPatch) => ipcRenderer.invoke(IPC_CHANNELS.updatePetSettings, patch),
   setPetMousePassthrough: (enabled: boolean) =>

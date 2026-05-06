@@ -47,8 +47,17 @@ async function openConsole(electronApp: ElectronApplication, petWindow: Page): P
   await petWindow.getByTestId("live2d-model-surface").hover();
   await petWindow.getByRole("button", { name: "Open AuraBot console" }).click();
   const consoleWindow = await consolePromise;
-  await consoleWindow.getByLabel("AuraBot console window").waitFor({ state: "visible" });
+  await consoleWindow.getByRole("main", { name: "AuraBot Console" }).waitFor({ state: "visible" });
   return consoleWindow;
+}
+
+async function openSettingsFromPet(electronApp: ElectronApplication, petWindow: Page): Promise<Page> {
+  const settingsPromise = electronApp.waitForEvent("window");
+  await petWindow.getByTestId("live2d-model-surface").hover();
+  await petWindow.getByRole("button", { name: "Open AuraBot settings" }).click();
+  const settingsWindow = await settingsPromise;
+  await settingsWindow.getByRole("main", { name: "Settings" }).waitFor({ state: "visible" });
+  return settingsWindow;
 }
 
 test("launches as a small desktop pet and opens console from the hover control", async () => {
@@ -57,10 +66,9 @@ test("launches as a small desktop pet and opens console from the hover control",
   try {
     await expect(petWindow.getByLabel("Desktop Live2D pet")).toBeVisible();
     await expect(petWindow.getByTestId("live2d-model-surface")).toBeVisible();
-    await expect(petWindow.getByLabel("AuraBot console window")).toHaveCount(0);
 
     const consoleWindow = await openConsole(electronApp, petWindow);
-    await expect(consoleWindow.getByLabel("AuraBot console window")).toBeVisible();
+    await expect(consoleWindow.getByRole("main", { name: "AuraBot Console" })).toBeVisible();
     await expect(consoleWindow.getByLabel("Agent status")).toContainText("idle");
   } finally {
     await cleanupAuraBot(electronApp, userDataDir);
@@ -87,15 +95,39 @@ test("reveals pet quick controls and syncs click-through settings from the conso
     const consoleWindow = await openConsole(electronApp, petWindow);
 
     await expect(consoleWindow.getByLabel("Hide character on hover")).toHaveCount(0);
-    await consoleWindow.getByLabel("Display language").selectOption("zh");
+    await expect(consoleWindow.getByLabel("Language")).toHaveCount(0);
+    await consoleWindow.getByRole("button", { name: "Open settings menu" }).click();
+    await expect(consoleWindow.getByRole("menu", { name: "Settings menu" })).toContainText("Quick settings");
+    await expect(consoleWindow.getByRole("menu", { name: "Settings menu" })).not.toContainText("Model config");
+
+    const settingsPromise = electronApp.waitForEvent("window");
+    await consoleWindow.getByRole("button", { name: "Open full settings" }).click();
+    const settingsWindow = await settingsPromise;
+    await settingsWindow.getByRole("main", { name: "Settings" }).waitFor({ state: "visible" });
+    await expect(settingsWindow.getByLabel("Model settings")).toContainText("Chat");
+
+    await settingsWindow.getByLabel("Language").selectOption("zh");
     await expect(consoleWindow.getByLabel("Agent status")).toContainText("空闲中");
-    await consoleWindow.getByLabel("Display language").selectOption("en");
+    await settingsWindow.getByLabel("语言").selectOption("en");
     await expect(consoleWindow.getByLabel("Agent status")).toContainText("idle");
 
-    await consoleWindow.getByLabel("Click through character").check();
+    await settingsWindow.getByLabel("Click through character").check();
     await expect(petWindow.getByLabel("Desktop Live2D pet")).toHaveAttribute("data-click-through", "true");
     await petWindow.getByRole("button", { name: "Drag pet" }).hover();
     await expect(petWindow.getByLabel("Pet quick controls")).toHaveAttribute("data-visible", "true");
+  } finally {
+    await cleanupAuraBot(electronApp, userDataDir);
+  }
+});
+
+test("opens the product settings window directly from pet quick controls", async () => {
+  const { electronApp, petWindow, userDataDir } = await launchAuraBot();
+
+  try {
+    const settingsWindow = await openSettingsFromPet(electronApp, petWindow);
+
+    await expect(settingsWindow.getByRole("main", { name: "Settings" })).toBeVisible();
+    await expect(settingsWindow.getByLabel("Model settings")).toContainText("Chat");
   } finally {
     await cleanupAuraBot(electronApp, userDataDir);
   }
@@ -250,7 +282,7 @@ test("creates a visible queued task from a task-like chat request", async () => 
     await expect(consoleWindow.getByLabel("Agent status")).toContainText("tasking");
     await expect(petWindow.getByLabel("Desktop Live2D pet")).toHaveAttribute("data-agent-status", "tasking");
     await expect(petWindow.locator(".live2d-canvas-host")).toHaveAttribute("data-motion-group", "TapBody");
-    await expect(consoleWindow.locator(".task-status-card").filter({ hasText: "明天会议" })).toContainText("待开始");
+    await expect(consoleWindow.locator(".task-status-card").filter({ hasText: "明天会议" })).toContainText("queued");
     await expect(consoleWindow.locator(".task-panel")).toHaveCount(0);
   } finally {
     await cleanupAuraBot(electronApp, userDataDir);
@@ -266,7 +298,7 @@ test("controls a task through the main chat instead of task panel buttons", asyn
 
     await input.fill("帮我整理一份明天会议的清单。");
     await consoleWindow.getByRole("button", { name: "Send" }).click();
-    await expect(consoleWindow.locator(".task-status-card").filter({ hasText: "明天会议" })).toContainText("待开始");
+    await expect(consoleWindow.locator(".task-status-card").filter({ hasText: "明天会议" })).toContainText("queued");
 
     await input.fill("这个任务做到哪了？");
     await consoleWindow.getByRole("button", { name: "Send" }).click();
@@ -274,11 +306,11 @@ test("controls a task through the main chat instead of task panel buttons", asyn
 
     await input.fill("先停掉这个任务。");
     await consoleWindow.getByRole("button", { name: "Send" }).click();
-    await expect(consoleWindow.locator(".task-status-card").filter({ hasText: "明天会议" })).toContainText("已停下");
+    await expect(consoleWindow.locator(".task-status-card").filter({ hasText: "明天会议" })).toContainText("stopped");
 
     await input.fill("改成整理后天路演的清单。");
     await consoleWindow.getByRole("button", { name: "Send" }).click();
-    await expect(consoleWindow.locator(".task-status-card").filter({ hasText: "后天路演" })).toContainText("待开始");
+    await expect(consoleWindow.locator(".task-status-card").filter({ hasText: "后天路演" })).toContainText("queued");
     await expect(consoleWindow.locator(".task-panel")).toHaveCount(0);
   } finally {
     await cleanupAuraBot(electronApp, userDataDir);
@@ -295,11 +327,11 @@ test("uses task status card buttons to cancel and remove settled tasks", async (
     await input.fill("帮我整理一份明天会议的清单。");
     await consoleWindow.getByRole("button", { name: "Send" }).click();
     const meetingCard = consoleWindow.locator(".task-status-card").filter({ hasText: "明天会议" });
-    await expect(meetingCard).toContainText("待开始");
+    await expect(meetingCard).toContainText("queued");
 
-    await meetingCard.getByRole("button", { name: /取消任务/ }).click();
-    await expect(meetingCard).toContainText("已停下");
-    await meetingCard.getByRole("button", { name: /删除任务/ }).click();
+    await meetingCard.getByRole("button", { name: /Cancel task/ }).click();
+    await expect(meetingCard).toContainText("stopped");
+    await meetingCard.getByRole("button", { name: /Delete task/ }).click();
     await expect(meetingCard).toHaveCount(0);
 
     await input.fill("帮我写一份 GitHub 周报。");
@@ -307,9 +339,9 @@ test("uses task status card buttons to cancel and remove settled tasks", async (
     await input.fill("开始做这个任务。");
     await consoleWindow.getByRole("button", { name: "Send" }).click();
     const reportCard = consoleWindow.locator(".task-status-card").filter({ hasText: "GitHub 周报" });
-    await expect(reportCard).toContainText("完成");
+    await expect(reportCard).toContainText("completed");
 
-    await reportCard.getByRole("button", { name: /删除任务/ }).click();
+    await reportCard.getByRole("button", { name: /Delete task/ }).click();
     await expect(reportCard).toHaveCount(0);
   } finally {
     await cleanupAuraBot(electronApp, userDataDir);
@@ -325,21 +357,21 @@ test("targets a specific task through main chat wording when multiple tasks exis
 
     await input.fill("帮我整理一份明天会议的清单。");
     await consoleWindow.getByRole("button", { name: "Send" }).click();
-    await expect(consoleWindow.locator(".task-status-card").filter({ hasText: "明天会议" })).toContainText("待开始");
+    await expect(consoleWindow.locator(".task-status-card").filter({ hasText: "明天会议" })).toContainText("queued");
 
     await input.fill("帮我生成一份周报初稿。");
     await consoleWindow.getByRole("button", { name: "Send" }).click();
-    await expect(consoleWindow.locator(".task-status-card").filter({ hasText: "周报" })).toContainText("待开始");
+    await expect(consoleWindow.locator(".task-status-card").filter({ hasText: "周报" })).toContainText("queued");
 
     await input.fill("把会议任务改成整理后天路演的清单。");
     await consoleWindow.getByRole("button", { name: "Send" }).click();
-    await expect(consoleWindow.locator(".task-status-card").filter({ hasText: "后天路演" })).toContainText("待开始");
-    await expect(consoleWindow.locator(".task-status-card").filter({ hasText: "周报" })).toContainText("待开始");
+    await expect(consoleWindow.locator(".task-status-card").filter({ hasText: "后天路演" })).toContainText("queued");
+    await expect(consoleWindow.locator(".task-status-card").filter({ hasText: "周报" })).toContainText("queued");
 
     await input.fill("停掉周报任务。");
     await consoleWindow.getByRole("button", { name: "Send" }).click();
-    await expect(consoleWindow.locator(".task-status-card").filter({ hasText: "周报" })).toContainText("已停下");
-    await expect(consoleWindow.locator(".task-status-card").filter({ hasText: "后天路演" })).toContainText("待开始");
+    await expect(consoleWindow.locator(".task-status-card").filter({ hasText: "周报" })).toContainText("stopped");
+    await expect(consoleWindow.locator(".task-status-card").filter({ hasText: "后天路演" })).toContainText("queued");
     await expect(consoleWindow.locator(".task-panel")).toHaveCount(0);
   } finally {
     await cleanupAuraBot(electronApp, userDataDir);
@@ -355,12 +387,12 @@ test("starts a queued task from the main chat and reports completion", async () 
 
     await input.fill("帮我整理一份明天会议的清单。");
     await consoleWindow.getByRole("button", { name: "Send" }).click();
-    await expect(consoleWindow.locator(".task-status-card").filter({ hasText: "明天会议" })).toContainText("待开始");
+    await expect(consoleWindow.locator(".task-status-card").filter({ hasText: "明天会议" })).toContainText("queued");
 
     await input.fill("开始做这个任务。");
     await consoleWindow.getByRole("button", { name: "Send" }).click();
     await expect(consoleWindow.locator(".message-assistant").filter({ hasText: /整理好了/ })).toBeVisible();
-    await expect(consoleWindow.locator(".task-status-card").filter({ hasText: "明天会议" })).toContainText("完成");
+    await expect(consoleWindow.locator(".task-status-card").filter({ hasText: "明天会议" })).toContainText("completed");
     await expect(petWindow.getByLabel("Pet message")).toContainText("弄好了");
 
     await input.fill("这个任务做到哪了？");

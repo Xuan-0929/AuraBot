@@ -23,7 +23,7 @@ describe("TaskStatusOverlay", () => {
     };
 
     await act(async () => {
-      root.render(<TaskStatusOverlay tasks={[task]} />);
+      root.render(<TaskStatusOverlay tasks={[task]} displayLanguage="zh" />);
     });
 
     expect(container.textContent).toContain("完成");
@@ -63,6 +63,7 @@ describe("TaskStatusOverlay", () => {
       root.render(
         <TaskStatusOverlay
           tasks={[queuedTask, runningTask, completedTask]}
+          displayLanguage="zh"
           onCancelTask={onCancelTask}
           onDeleteTask={onDeleteTask}
         />

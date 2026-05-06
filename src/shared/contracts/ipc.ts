@@ -8,6 +8,8 @@ import type { Task } from "../schemas/task";
 export const IPC_CHANNELS = {
   getInitialState: "app:get-initial-state",
   openConsoleWindow: "window:open-console",
+  openSettingsWindow: "window:open-settings",
+  openConfigFile: "config:open-file",
   getPetSettings: "pet:get-settings",
   updatePetSettings: "pet:update-settings",
   setPetMousePassthrough: "pet:set-mouse-passthrough",
@@ -95,6 +97,8 @@ export interface TaskControlActionResult {
 export interface AuraBotApi {
   getInitialState(): Promise<AppInitialState>;
   openConsoleWindow(): Promise<void>;
+  openSettingsWindow(): Promise<void>;
+  openConfigFile(): Promise<void>;
   getPetSettings(): Promise<PetSettings>;
   updatePetSettings(patch: PetSettingsPatch): Promise<PetSettings>;
   setPetMousePassthrough(enabled: boolean): Promise<void>;
