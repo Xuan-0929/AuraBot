@@ -2,13 +2,42 @@
 
 更新时间：2026-05-06
 
-这份文档记录当前 live2D/console 集成分支已经完成的工程事实、最近一次验证结果，以及下一步最应该推进的任务。它是执行状态板，不替代 PRD，也不替代 MVP 计划。
+这份文档记录当前 main 集成线已经完成的工程事实、最近一次验证结果，以及下一步最应该推进的任务。它是执行状态板，不替代 PRD，也不替代 MVP 计划。
 
-当前工作分支：`codex/aurabot-productization`
+当前工作分支：`main`
 
-当前集成基线：`d2b7660 feat: stream assistant replies as sentence bubbles`
+当前集成基线：`36ab259 feat: add LangChain structured memory model`
 
 分支边界：这一侧已经集成 Live2D 桌宠体验、主控制台、任务卡控制、流式回复、模型 gate、记忆调试、follow-up 主动提醒，以及 soul 驱动的统一回复/播报机制。后续如果继续并行开发，记忆模型/配置大改、任务执行器大改、桌宠 UI 大改仍建议分支隔离，避免在 `chatOrchestrator`、`createWindow`、`store`、IPC contract 和 renderer 样式上互相抢修改权。
+
+## 2026-05-06 LangChain checkpoint
+
+本次 checkpoint 把 LangChain 作为可选模型 provider 接入 AuraBot，但不替换现有产品主骨架。默认 `openai-compatible` 路径仍保留，`langchain-openai` 作为可配置增强路径用于验证后续 structured output、tools 和 LangGraph 的可行性。
+
+已完成：
+
+1. 新增 `@langchain/openai` 依赖。
+2. 新增 `chatModel.provider = "langchain-openai"` 路径，通过 `LangChainOpenAIChatCompletionClient` 调用 `ChatOpenAI`，并保持现有 `ChatModel` 接口、流式 delta observer、消息持久化和 fallback 行为不变。
+3. 新增 `memoryModel.provider = "langchain-openai"` 路径，通过 `LangChainStructuredMemoryClient` 调用 `ChatOpenAI.withStructuredOutput(zodSchema)`，再复用现有 zod 校验、SQLite 记忆图、merge/relation/recall planner 和 deterministic fallback。
+4. `gateModel` 暂未迁入 LangChain；它仍走现有 `openai-compatible` / deterministic 路径，避免在未单独验证前影响“是否回复、是否任务、是否写记忆”等高敏感决策。
+5. README 中英文已补充 `langchain-openai` 配置示例，当前可分别对 `chatModel` 和 `memoryModel` 开启 LangChain。
+6. LangChain 分支 `codex/aurabot-langchain-chatmodel` 已 fast-forward 合入 `main`，当前远端 `main` 已包含 `80f3dc8 feat: add LangChain chat model adapter` 和 `36ab259 feat: add LangChain structured memory model`。
+
+最近一次 LangChain 合入验证记录：
+
+| 命令/检查 | 结果 |
+| --- | --- |
+| `corepack pnpm typecheck` | 通过 |
+| `corepack pnpm test:unit` | 39 个 test files、123 个 tests 通过 |
+| `corepack pnpm build` | 通过 |
+| `corepack pnpm test:e2e` | 14 个 e2e tests 通过 |
+| `corepack pnpm rebuild:node` | 已在 e2e 后执行，恢复 Node 侧 `better-sqlite3` native module |
+
+当前 LangChain 边界：
+
+1. LangChain 现在是可选 provider，不是强制默认；没有 API Key 或 provider 未启用时，仍保持本地 deterministic fallback。
+2. `memoryModel` 这条最适合继续加码，因为 LangChain structured output 对记忆抽取、合并、关系边和召回规划有直接价值。
+3. 下一步若要“强制使用 LangChain”，建议先接 `gateModel.provider = "langchain-openai"` 并补设置页 provider 选择，再决定是否把默认 provider 切到 LangChain。
 
 ## 2026-05-06 产品化 checkpoint
 
@@ -72,7 +101,7 @@ AuraBot 当前已经从“传统聊天界面”收敛为桌宠优先形态：
 | SQLite 数据层 | 已完成 | 已有 profiles、souls、sessions、messages、memory、tasks、event_logs 等表。 |
 | 单主聊天线程 | 已完成 MVP | 主 session 持久化消息，控制台负责完整对话；用户消息乐观上屏，不再等待 gate/chat 模型返回。 |
 | 控制台消息展示 | 已完成第二版 | assistant 回复在 UI 层按句子拆成多个连续气泡，底层消息仍保持一条完整记录；用户消息不拆，任务附件挂在最后一句气泡下。 |
-| 模型适配层 | 部分完成 | 已有 `gateModel` / `chatModel` / `memoryModel` 注入接口、OpenAI-compatible provider、userData/系统级 JSON 配置、env 配置、deterministic fallback、chat streaming 和设置页安全摘要；还缺用户新消息打断、retry/backoff 和真实连接状态 UI。 |
+| 模型适配层 | 部分完成 | 已有 `gateModel` / `chatModel` / `memoryModel` 注入接口、OpenAI-compatible provider、`chatModel`/`memoryModel` 的 LangChain POC provider、userData/系统级 JSON 配置、env 配置、deterministic fallback、chat streaming 和设置页安全摘要；还缺 `gateModel` LangChain structured output、用户新消息打断、retry/backoff 和真实连接状态 UI。 |
 | Gate/触发判断 | 已完成 MVP | 可判断碎片输入等待、完整输入回复、话题是否结束、聊天/任务/任务控制分类；强 gate 判定已延后到模型侧，外部模型异常时仍保留 fallback。 |
 | 活人感统一回复机制 | 已完成第一版 | `Soul` 只保留人格、语气、原则和语义禁忌；`ResponseWorkflow` 描述场景、事实和安全边界；`VoiceAdapter` 结合二者生成最终用户可见文本。任务完成等场景可以接近“本人自然告诉你结果并邀请你看一眼”的语感，但不会把样例当固定模板。 |
 | 记忆 v1/v2 写入层 | 部分完成 | 支持 preference、event、follow_up 写入，摘要层和关系边召回；显式配置 `memoryModel` 后可用 API 做结构化记忆抽取、重复记忆合并和候选关系边判断；App 运行期间到期 follow_up 可通过后台 scheduler 推送桌宠气泡。 |
@@ -123,7 +152,7 @@ AuraBot 当前已经从“传统聊天界面”收敛为桌宠优先形态：
 
 ## 当前边界
 
-1. 模型角色默认仍走 deterministic fallback；外部模型调用需要本地 `aurabot.config.json` / `config.json`、macOS 系统级 `/Library/Application Support/AuraBot/config.json`，或环境变量。
+1. 模型角色默认仍走 deterministic fallback；外部模型调用需要本地 `aurabot.config.json` / `config.json`、macOS 系统级 `/Library/Application Support/AuraBot/config.json`，或环境变量。`chatModel` 和 `memoryModel` 可选 `provider: "langchain-openai"`，`gateModel` 暂未接 LangChain。
 2. 用户消息已经即时显示，模型回复已支持流式 message update；还没有用户新消息打断 in-flight generation。
 3. 记忆写入层可由 `memoryModel` 接管抽取、合并和候选边判断；召回层也可由 `memoryModel` 生成语义检索词、目标类型和重排 seed node。到期 `follow_up` 可在下一次主聊天回复中触发并标记完成，也可在 App 运行期间由后台 scheduler 推送桌宠气泡；还没有系统级通知、离线调度或 embedding。
 4. 任务 runner 可显式配置为本机 Codex 子任务执行器，能广播 JSONL 子任务进度，在主聊天打断时取消子进程，并在启动时把失联运行态任务标记为失败；完成后的文件结果已可作为主聊天附件回流并打开，还没有真正 resume 和结构化 artifact registry。
