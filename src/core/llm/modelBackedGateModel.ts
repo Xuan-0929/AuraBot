@@ -15,7 +15,7 @@ export interface ModelBackedGateModelOptions {
   fallbackModel?: { evaluate(input: GateEvaluationInput): Promise<GateDecision> };
 }
 
-const gateDecisionSchema = z.object({
+export const structuredGateDecisionSchema = z.object({
   replyDecision: z.enum(["reply", "wait"]),
   inputKind: z.enum(["chat", "task", "task_control"]),
   memoryDecision: z.enum(["write_now", "defer", "skip"]),
@@ -106,7 +106,7 @@ function parseJsonFromModel(content: string): unknown {
 }
 
 function normalizeGateDecision(rawDecision: unknown, input: GateEvaluationInput): GateDecision {
-  const directDecision = gateDecisionSchema.safeParse(rawDecision);
+  const directDecision = structuredGateDecisionSchema.safeParse(rawDecision);
 
   if (directDecision.success) {
     return normalizeDirectGateDecision(directDecision.data);
@@ -137,7 +137,7 @@ function normalizeGateDecision(rawDecision: unknown, input: GateEvaluationInput)
   };
 }
 
-function normalizeDirectGateDecision(decision: z.infer<typeof gateDecisionSchema>): GateDecision {
+function normalizeDirectGateDecision(decision: z.infer<typeof structuredGateDecisionSchema>): GateDecision {
   const topicEnded =
     decision.topicEnded ?? (decision.replyDecision === "reply" && decision.memoryDecision !== "defer");
 
