@@ -194,7 +194,7 @@ sudo nano "/Library/Application Support/AuraBot/config.json"
 }
 ```
 
-`gateModel`、`chatModel` 和 `memoryModel` 现在都有小型 LangChain POC 路径。把任意一个角色的 `provider` 设为 `"langchain-openai"`，这个角色就会走 `@langchain/openai`，其他角色仍可继续使用现有 provider 路径。`gateModel` 和 `memoryModel` 会使用 LangChain structured output，然后继续复用现有 zod 校验、路由/记忆逻辑和 deterministic fallback。
+`gateModel`、`chatModel` 和 `memoryModel` 现在都有小型 LangChain POC 路径。把任意一个角色的 `provider` 设为 `"langchain-openai"`，这个角色就会走 `@langchain/openai`，其他角色仍可继续使用现有 provider 路径。设置窗口可以把每个角色切换为本地 fallback、OpenAI-compatible 或 LangChain OpenAI；API Key、Base URL 和模型名仍然在 `config.json` 里编辑。`gateModel` 和 `memoryModel` 会使用 LangChain structured output，然后继续复用现有 zod 校验、路由/记忆逻辑和 deterministic fallback。
 
 如果要让结构化 gate 判断走 LangChain：
 

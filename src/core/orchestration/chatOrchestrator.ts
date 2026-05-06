@@ -41,6 +41,17 @@ export interface SendChatMessageOptions {
 export class ChatOrchestrator {
   constructor(private readonly dependencies: ChatOrchestratorDependencies) {}
 
+  updateModelDependencies(
+    dependencies: Partial<
+      Pick<
+        ChatOrchestratorDependencies,
+        "gateModel" | "chatModel" | "voiceAdapter" | "memoryExtractor" | "memoryService"
+      >
+    >
+  ): void {
+    Object.assign(this.dependencies, dependencies);
+  }
+
   async sendMessage(input: SendChatMessageInput, options: SendChatMessageOptions = {}): Promise<SendChatMessageResult> {
     const profile = this.dependencies.profileService.getOrSeedActiveProfile();
     const mainSession = this.dependencies.sessionRepository.getOrCreateMainSession(profile.id);

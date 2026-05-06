@@ -41,6 +41,10 @@ export class MemoryService {
     this.recallPlanner = options.recallPlanner ?? new DeterministicMemoryRecallPlanner();
   }
 
+  getRepository(): MemoryRepository {
+    return this.memoryRepository;
+  }
+
   enqueueWrite(request: MemoryWriteRequest): Promise<string> {
     return this.writeQueue.enqueue(async () => {
       const context = this.memoryRepository.getMemoryContext(request.profileId);

@@ -1,9 +1,13 @@
 import type {
+  ModelProviderSettingsPatch,
+  ModelRoleKey,
+  ModelProviderOption,
   PublicAppConfig,
   PublicModelRoleConfig,
   PublicTaskCliRunnerConfig,
   TaskRunnerSettingsPatch
 } from "../../../../shared/contracts/settings";
+import { MODEL_PROVIDER_OPTIONS as modelProviderOptions } from "../../../../shared/contracts/settings";
 import type { PetSettings, PetSettingsPatch } from "../../../../shared/schemas/petSettings";
 import { t, type UiTextKey } from "../../i18n";
 
@@ -12,11 +16,12 @@ export interface SettingsWindowProps {
   appConfig?: PublicAppConfig;
   onUpdatePetSettings(patch: PetSettingsPatch): Promise<void>;
   onUpdateTaskRunnerSettings(runners: TaskRunnerSettingsPatch["runners"]): Promise<void>;
+  onUpdateModelProviderSettings(patch: ModelProviderSettingsPatch): Promise<void>;
   onOpenConfigFile(): Promise<void>;
 }
 
 const MODEL_CONFIG_ROWS: Array<{
-  key: "chatModel" | "gateModel" | "memoryModel";
+  key: ModelRoleKey;
   labelKey: UiTextKey;
 }> = [
   {
@@ -38,6 +43,7 @@ export function SettingsWindow({
   appConfig,
   onUpdatePetSettings,
   onUpdateTaskRunnerSettings,
+  onUpdateModelProviderSettings,
   onOpenConfigFile
 }: SettingsWindowProps) {
   const displayLanguage = petSettings.displayLanguage;
@@ -96,6 +102,12 @@ export function SettingsWindow({
                 label={t(displayLanguage, row.labelKey)}
                 config={appConfig[row.key]}
                 displayLanguage={displayLanguage}
+                onProviderChange={(provider) =>
+                  void onUpdateModelProviderSettings({
+                    role: row.key,
+                    provider
+                  })
+                }
               />
             ))
           ) : (
@@ -184,11 +196,13 @@ function TaskCliRunnerCard({
 function ModelConfigCard({
   label,
   config,
-  displayLanguage
+  displayLanguage,
+  onProviderChange
 }: {
   label: string;
   config: PublicModelRoleConfig;
   displayLanguage: PetSettings["displayLanguage"];
+  onProviderChange(provider: ModelProviderOption): void;
 }) {
   return (
     <article className="settings-model-card">
@@ -198,7 +212,20 @@ function ModelConfigCard({
       </div>
       <dl>
         <dt>{t(displayLanguage, "provider")}</dt>
-        <dd>{config.provider}</dd>
+        <dd>
+          <select
+            className="settings-model-provider-select"
+            value={toModelProviderOption(config.provider)}
+            aria-label={`${label} ${t(displayLanguage, "provider")}`}
+            onChange={(event) => onProviderChange(event.currentTarget.value as ModelProviderOption)}
+          >
+            {modelProviderOptions.map((provider) => (
+              <option key={provider} value={provider}>
+                {getModelProviderLabel(provider, displayLanguage)}
+              </option>
+            ))}
+          </select>
+        </dd>
         <dt>{t(displayLanguage, "model")}</dt>
         <dd>{config.model}</dd>
         {config.baseUrl ? (
@@ -212,4 +239,25 @@ function ModelConfigCard({
       </dl>
     </article>
   );
+}
+
+function toModelProviderOption(provider: string): ModelProviderOption {
+  return modelProviderOptions.includes(provider as ModelProviderOption)
+    ? (provider as ModelProviderOption)
+    : "local-stub";
+}
+
+function getModelProviderLabel(
+  provider: ModelProviderOption,
+  displayLanguage: PetSettings["displayLanguage"]
+): string {
+  if (provider === "openai-compatible") {
+    return t(displayLanguage, "providerOpenAICompatible");
+  }
+
+  if (provider === "langchain-openai") {
+    return t(displayLanguage, "providerLangChainOpenAI");
+  }
+
+  return t(displayLanguage, "providerLocalFallback");
 }

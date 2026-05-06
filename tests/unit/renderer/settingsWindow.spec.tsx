@@ -62,6 +62,7 @@ const baseProps: SettingsWindowProps = {
   },
   onUpdatePetSettings: vi.fn(async () => undefined),
   onUpdateTaskRunnerSettings: vi.fn(async () => undefined),
+  onUpdateModelProviderSettings: vi.fn(async () => undefined),
   onOpenConfigFile: vi.fn(async () => undefined)
 };
 
@@ -182,6 +183,30 @@ describe("SettingsWindow", () => {
         priority: 1
       })
     ]);
+  });
+
+  it("updates model providers from the settings page", async () => {
+    const onUpdateModelProviderSettings = vi.fn(async () => undefined);
+
+    await act(async () => {
+      root.render(
+        <SettingsWindow
+          {...baseProps}
+          onUpdateModelProviderSettings={onUpdateModelProviderSettings}
+        />
+      );
+    });
+
+    await act(async () => {
+      const gateProvider = container.querySelector<HTMLSelectElement>('[aria-label="Gate provider"]')!;
+      gateProvider.value = "langchain-openai";
+      gateProvider.dispatchEvent(new Event("change", { bubbles: true }));
+    });
+
+    expect(onUpdateModelProviderSettings).toHaveBeenCalledWith({
+      role: "gateModel",
+      provider: "langchain-openai"
+    });
   });
 
   it("localizes the settings surface when Chinese is selected", async () => {

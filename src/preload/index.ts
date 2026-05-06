@@ -17,6 +17,8 @@ const api: AuraBotApi = {
   openSettingsWindow: () => ipcRenderer.invoke(IPC_CHANNELS.openSettingsWindow),
   openConfigFile: () => ipcRenderer.invoke(IPC_CHANNELS.openConfigFile),
   updateTaskRunnerSettings: (patch) => ipcRenderer.invoke(IPC_CHANNELS.updateTaskRunnerSettings, patch),
+  updateModelProviderSettings: (patch) =>
+    ipcRenderer.invoke(IPC_CHANNELS.updateModelProviderSettings, patch),
   getPetSettings: () => ipcRenderer.invoke(IPC_CHANNELS.getPetSettings),
   updatePetSettings: (patch: PetSettingsPatch) => ipcRenderer.invoke(IPC_CHANNELS.updatePetSettings, patch),
   setPetMousePassthrough: (enabled: boolean) =>

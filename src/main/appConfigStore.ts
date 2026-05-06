@@ -1,7 +1,7 @@
 import { existsSync, mkdirSync, readFileSync, writeFileSync } from "node:fs";
 import { join } from "node:path";
 import { appConfigSchema, type AppConfig, type TaskCliRunnerConfig } from "../shared/schemas/config";
-import type { TaskRunnerSettingsPatch } from "../shared/contracts/settings";
+import type { ModelProviderSettingsPatch, TaskRunnerSettingsPatch } from "../shared/contracts/settings";
 
 type UserConfigFile = Partial<Omit<AppConfig, "taskRunner">> & {
   taskRunner?: Partial<AppConfig["taskRunner"]>;
@@ -45,6 +45,35 @@ export function updateUserTaskRunnerSettings(
   return appConfigSchema.parse({
     ...currentConfig,
     taskRunner
+  });
+}
+
+export function updateUserModelProviderSettings(
+  userDataPath: string,
+  currentConfig: AppConfig,
+  patch: ModelProviderSettingsPatch
+): AppConfig {
+  const configPath = join(userDataPath, "config.json");
+  const userConfig = readUserConfigFile(configPath);
+  const currentRoleConfig = currentConfig[patch.role];
+  const persistedRoleConfig = userConfig[patch.role] ?? {};
+  const roleConfig = {
+    ...currentRoleConfig,
+    ...persistedRoleConfig,
+    provider: patch.provider,
+    enabled: patch.provider !== "local-stub"
+  };
+  const nextUserConfig: UserConfigFile = {
+    ...userConfig,
+    [patch.role]: roleConfig
+  };
+
+  mkdirSync(userDataPath, { recursive: true });
+  writeFileSync(configPath, `${JSON.stringify(nextUserConfig, null, 2)}\n`, "utf8");
+
+  return appConfigSchema.parse({
+    ...currentConfig,
+    [patch.role]: roleConfig
   });
 }
 

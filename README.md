@@ -194,7 +194,7 @@ Example:
 }
 ```
 
-The `gateModel`, `chatModel`, and `memoryModel` roles also have small LangChain-backed proof-of-concept paths. Set any role's `provider` to `"langchain-openai"` to route that role through `@langchain/openai` while keeping the other roles on the existing provider path. For `gateModel` and `memoryModel`, AuraBot uses LangChain structured output and then keeps the existing zod validation, routing/memory logic, and deterministic fallback behavior.
+The `gateModel`, `chatModel`, and `memoryModel` roles also have small LangChain-backed proof-of-concept paths. Set any role's `provider` to `"langchain-openai"` to route that role through `@langchain/openai` while keeping the other roles on the existing provider path. The Settings window can switch each role between local fallback, OpenAI-compatible, and LangChain OpenAI; API keys, base URLs, and model names still live in `config.json`. For `gateModel` and `memoryModel`, AuraBot uses LangChain structured output and then keeps the existing zod validation, routing/memory logic, and deterministic fallback behavior.
 
 For structured gate decisions through LangChain:
 

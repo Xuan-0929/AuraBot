@@ -2,7 +2,11 @@ import { create } from "zustand";
 import type { AgentStatus, AppInitialState, SendChatMessageResult } from "../../../shared/contracts/chat";
 import type { MemoryDebugSnapshot, PetCursorPosition } from "../../../shared/contracts/ipc";
 import type { PetActivity } from "../../../shared/contracts/pet";
-import type { PublicAppConfig, TaskRunnerSettingsPatch } from "../../../shared/contracts/settings";
+import type {
+  ModelProviderSettingsPatch,
+  PublicAppConfig,
+  TaskRunnerSettingsPatch
+} from "../../../shared/contracts/settings";
 import type { Message } from "../../../shared/schemas/message";
 import { DEFAULT_PET_SETTINGS, type PetSettings, type PetSettingsPatch } from "../../../shared/schemas/petSettings";
 import type { Profile } from "../../../shared/schemas/profile";
@@ -28,6 +32,7 @@ interface AuraBotStore {
   openSettingsWindow(): Promise<void>;
   openConfigFile(): Promise<void>;
   updateTaskRunnerSettings(runners: TaskRunnerSettingsPatch["runners"]): Promise<void>;
+  updateModelProviderSettings(patch: ModelProviderSettingsPatch): Promise<void>;
   updatePetSettings(patch: PetSettingsPatch): Promise<void>;
   setPetMousePassthrough(enabled: boolean): Promise<void>;
   movePetWindowBy(delta: { x: number; y: number }): Promise<void>;
@@ -113,6 +118,10 @@ export const useAuraBotStore = create<AuraBotStore>((set, get) => ({
   },
   async updateTaskRunnerSettings(runners) {
     const appConfig = await window.aurabot.updateTaskRunnerSettings({ runners });
+    set({ appConfig });
+  },
+  async updateModelProviderSettings(patch) {
+    const appConfig = await window.aurabot.updateModelProviderSettings(patch);
     set({ appConfig });
   },
   async updatePetSettings(patch: PetSettingsPatch) {

@@ -17,12 +17,14 @@ import { shouldAutoRunTasks } from "../core/bootstrap/createServices";
 import { buildTaskSettledMessageDraftWithVoice, isTaskResultPathAllowed } from "../core/tasks/taskPresentation";
 import { splitTextIntoSentences } from "../shared/text/sentences";
 import { createPublicAppConfig, type PublicAppConfig, type TaskRunnerSettingsPatch } from "../shared/contracts/settings";
+import type { ModelProviderSettingsPatch } from "../shared/contracts/settings";
 
 export interface WindowController {
   openConsoleWindow(): void;
   openSettingsWindow(): void;
   openConfigFile(): Promise<void>;
   updateTaskRunnerSettings(patch: TaskRunnerSettingsPatch): Promise<PublicAppConfig>;
+  updateModelProviderSettings(patch: ModelProviderSettingsPatch): Promise<PublicAppConfig>;
   getPetSettings(): PetSettings;
   updatePetSettings(patch: PetSettingsPatch): PetSettings;
   setPetMousePassthrough(enabled: boolean): void;
@@ -83,6 +85,10 @@ export function registerIpc(services: AppServices, windows: WindowController): v
 
   ipcMain.handle(IPC_CHANNELS.updateTaskRunnerSettings, async (_event, patch: TaskRunnerSettingsPatch) =>
     windows.updateTaskRunnerSettings(patch)
+  );
+
+  ipcMain.handle(IPC_CHANNELS.updateModelProviderSettings, async (_event, patch: ModelProviderSettingsPatch) =>
+    windows.updateModelProviderSettings(patch)
   );
 
   ipcMain.handle(IPC_CHANNELS.getPetSettings, () => windows.getPetSettings());

@@ -1,4 +1,4 @@
-import { mkdtempSync, rmSync } from "node:fs";
+import { mkdtempSync, readFileSync, rmSync } from "node:fs";
 import { tmpdir } from "node:os";
 import { join } from "node:path";
 import { _electron as electron, expect, type ElectronApplication, type Page, test } from "@playwright/test";
@@ -131,6 +131,23 @@ test("opens the product settings window directly from pet quick controls", async
     await expect(settingsWindow.getByLabel("Task CLI settings")).toContainText("Codex");
     await expect(settingsWindow.getByLabel("Task CLI settings")).toContainText("Claude Code");
     await expect(settingsWindow.getByLabel("Task CLI settings")).toContainText("Hermes");
+    await settingsWindow.getByLabel("Gate provider").selectOption("langchain-openai");
+    await expect(settingsWindow.getByLabel("Gate provider")).toHaveValue("langchain-openai");
+    await expect
+      .poll(() => {
+        const config = JSON.parse(readFileSync(join(userDataDir, "config.json"), "utf8")) as {
+          gateModel?: {
+            provider?: string;
+            enabled?: boolean;
+          };
+        };
+
+        return config.gateModel;
+      })
+      .toMatchObject({
+        provider: "langchain-openai",
+        enabled: true
+      });
     await settingsWindow.getByLabel("Enable Claude Code task runner").check();
     await expect(settingsWindow.getByLabel("Enable Claude Code task runner")).toBeChecked();
 

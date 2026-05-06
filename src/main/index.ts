@@ -3,6 +3,16 @@ import { join } from "node:path";
 import { app, BrowserWindow, shell } from "electron";
 import { createServices, createTaskRunner, type AppServices } from "../core/bootstrap/createServices";
 import { MemoryFollowUpScheduler } from "../core/memory/memoryFollowUpScheduler";
+import { MemoryService } from "../core/memory/memoryService";
+import { createChatModel } from "../core/llm/chatModel";
+import { createGateModel } from "../core/llm/gateModel";
+import { createVoiceAdapter } from "../core/voice/voiceAdapter";
+import {
+  createMemoryExtractor,
+  createMemoryMergePlanner,
+  createMemoryRecallPlanner,
+  createMemoryRelationPlanner
+} from "../core/memory/modelBackedMemoryModel";
 import {
   applyPetSettings,
   broadcastAgentStatus,
@@ -20,8 +30,12 @@ import {
 import { PetSettingsStore } from "./petSettingsStore";
 import { PetWindowStateStore } from "./petWindowStateStore";
 import { registerIpc } from "./registerIpc";
-import { updateUserTaskRunnerSettings } from "./appConfigStore";
-import { createPublicAppConfig, type TaskRunnerSettingsPatch } from "../shared/contracts/settings";
+import { updateUserModelProviderSettings, updateUserTaskRunnerSettings } from "./appConfigStore";
+import {
+  createPublicAppConfig,
+  type ModelProviderSettingsPatch,
+  type TaskRunnerSettingsPatch
+} from "../shared/contracts/settings";
 
 let services: AppServices | undefined;
 let petSettingsStore: PetSettingsStore | undefined;
@@ -43,6 +57,7 @@ async function bootstrap(): Promise<void> {
     openSettingsWindow,
     openConfigFile: () => openUserConfigFile(userDataPath),
     updateTaskRunnerSettings: (patch) => updateTaskRunnerSettings(userDataPath, patch),
+    updateModelProviderSettings: (patch) => updateModelProviderSettings(userDataPath, patch),
     getPetSettings: () => petSettingsStore?.get() ?? {
       clickThroughPet: false,
       displayLanguage: "en"
@@ -110,6 +125,44 @@ async function updateTaskRunnerSettings(userDataPath: string, patch: TaskRunnerS
       eventLogService: services.eventLogService
     })
   );
+
+  return createPublicAppConfig(services.config);
+}
+
+async function updateModelProviderSettings(userDataPath: string, patch: ModelProviderSettingsPatch) {
+  if (!services) {
+    throw new Error("AuraBot services are not ready.");
+  }
+
+  const nextConfig = updateUserModelProviderSettings(userDataPath, services.config, patch);
+  services.config[patch.role] = nextConfig[patch.role];
+
+  if (patch.role === "gateModel") {
+    services.gateModel = createGateModel(nextConfig.gateModel);
+    services.chatOrchestrator.updateModelDependencies({ gateModel: services.gateModel });
+  }
+
+  if (patch.role === "chatModel") {
+    services.chatModel = createChatModel(nextConfig.chatModel);
+    services.voiceAdapter = createVoiceAdapter(nextConfig.chatModel);
+    services.chatOrchestrator.updateModelDependencies({
+      chatModel: services.chatModel,
+      voiceAdapter: services.voiceAdapter
+    });
+  }
+
+  if (patch.role === "memoryModel") {
+    services.memoryExtractor = createMemoryExtractor(nextConfig.memoryModel);
+    services.memoryService = new MemoryService(services.memoryService.getRepository(), {
+      mergePlanner: createMemoryMergePlanner(nextConfig.memoryModel),
+      relationPlanner: createMemoryRelationPlanner(nextConfig.memoryModel),
+      recallPlanner: createMemoryRecallPlanner(nextConfig.memoryModel)
+    });
+    services.chatOrchestrator.updateModelDependencies({
+      memoryExtractor: services.memoryExtractor,
+      memoryService: services.memoryService
+    });
+  }
 
   return createPublicAppConfig(services.config);
 }

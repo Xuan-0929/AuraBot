@@ -658,6 +658,17 @@ textarea {
   overflow-wrap: anywhere;
 }
 
+.settings-model-provider-select {
+  width: 100%;
+  min-height: 30px;
+  border: 1px solid rgba(41, 65, 67, 0.18);
+  border-radius: 6px;
+  background: rgba(255, 255, 255, 0.88);
+  color: #2d3b3c;
+  font: inherit;
+  font-weight: 700;
+}
+
 .settings-task-cli-card {
   display: grid;
   grid-template-columns: minmax(140px, 1fr) minmax(128px, auto);

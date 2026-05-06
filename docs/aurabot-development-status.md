@@ -20,8 +20,9 @@
 2. 新增 `chatModel.provider = "langchain-openai"` 路径，通过 `LangChainOpenAIChatCompletionClient` 调用 `ChatOpenAI`，并保持现有 `ChatModel` 接口、流式 delta observer、消息持久化和 fallback 行为不变。
 3. 新增 `memoryModel.provider = "langchain-openai"` 路径，通过 `LangChainStructuredMemoryClient` 调用 `ChatOpenAI.withStructuredOutput(zodSchema)`，再复用现有 zod 校验、SQLite 记忆图、merge/relation/recall planner 和 deterministic fallback。
 4. 新增 `gateModel.provider = "langchain-openai"` 路径，通过 `LangChainStructuredGateClient` 调用 `ChatOpenAI.withStructuredOutput(structuredGateDecisionSchema)`，再复用现有 gate zod 校验、聊天/任务/任务控制归一化和 deterministic fallback。
-5. README 中英文已补充 `langchain-openai` 配置示例，当前可分别对 `gateModel`、`chatModel` 和 `memoryModel` 开启 LangChain。
-6. LangChain 分支 `codex/aurabot-langchain-chatmodel` 已 fast-forward 合入 `main`，当前远端 `main` 已包含 `80f3dc8 feat: add LangChain chat model adapter`、`36ab259 feat: add LangChain structured memory model` 和 `989fc03 docs: update LangChain development log`。
+5. 设置窗口已新增三类模型角色的 provider 下拉选择，可在本地 fallback、OpenAI-compatible 和 LangChain OpenAI 之间切换；选择会写入 userData `config.json`，并在当前进程内重建对应 gate/chat/memory 服务。
+6. README 中英文已补充 `langchain-openai` 配置示例和设置页 provider 选择说明，当前可分别对 `gateModel`、`chatModel` 和 `memoryModel` 开启 LangChain。
+7. LangChain 分支 `codex/aurabot-langchain-chatmodel` 已 fast-forward 合入 `main`，当前远端 `main` 已包含 `80f3dc8 feat: add LangChain chat model adapter`、`36ab259 feat: add LangChain structured memory model` 和 `989fc03 docs: update LangChain development log`。
 
 最近一次 LangChain gateModel 分支验证记录：
 
@@ -29,7 +30,8 @@
 | --- | --- |
 | `corepack pnpm typecheck` | 通过 |
 | `corepack pnpm vitest run tests/unit/core/llm/gateModel.spec.ts tests/unit/core/llm/langChainGateModel.spec.ts tests/unit/core/llm/modelBackedGateModel.spec.ts` | 3 个 test files、13 个 tests 通过 |
-| `corepack pnpm test:unit` | 41 个 test files、125 个 tests 通过 |
+| `corepack pnpm vitest run tests/unit/renderer/settingsWindow.spec.tsx tests/unit/main/appConfigStore.spec.ts tests/unit/shared/settings.spec.ts` | 3 个 test files、7 个 tests 通过 |
+| `corepack pnpm test:unit` | 42 个 test files、128 个 tests 通过 |
 | `corepack pnpm build` | 通过 |
 | `corepack pnpm test:e2e` | 14 个 e2e tests 通过 |
 | `corepack pnpm rebuild:node` | 已在 e2e 后执行，恢复 Node 侧 `better-sqlite3` native module |
@@ -38,7 +40,7 @@
 
 1. LangChain 现在是可选 provider，不是强制默认；没有 API Key 或 provider 未启用时，仍保持本地 deterministic fallback。
 2. `memoryModel` 这条最适合继续加码，因为 LangChain structured output 对记忆抽取、合并、关系边和召回规划有直接价值。
-3. 下一步若要“强制使用 LangChain”，建议先补设置页 provider 选择和连接状态，再决定是否把默认 provider 切到 LangChain。
+3. 下一步若要“强制使用 LangChain”，建议先补模型连接状态、连接测试和失败可见提示，再决定是否把默认 provider 切到 LangChain。
 
 ## 2026-05-06 产品化 checkpoint
 
@@ -93,7 +95,7 @@ AuraBot 当前已经从“传统聊天界面”收敛为桌宠优先形态：
 | --- | --- | --- |
 | Electron 项目骨架 | 已完成 | `Electron + React + TypeScript + Vite + pnpm` 已可构建和运行。 |
 | 双窗口桌宠壳层 | 已完成 | `createPetWindow()` 默认创建桌面小人，`openConsoleWindow()` 按需打开控制台。 |
-| 产品设置窗口 | 已完成第一版 | `openSettingsWindow()` 可从桌宠快捷控制打开独立设置窗口，集中管理语言、模型配置摘要、config 文件入口和人物点击穿透。 |
+| 产品设置窗口 | 已完成第二版 | `openSettingsWindow()` 可从桌宠快捷控制打开独立设置窗口，集中管理语言、模型配置摘要、模型 provider 选择、config 文件入口和人物点击穿透。 |
 | macOS 应用打包 | 已完成第一版 | `corepack pnpm package:mac` 生成 `dist/AuraBot.app`，双击即可启动桌宠。 |
 | 全局界面语言 | 已完成第一版 | `displayLanguage` 已覆盖桌宠、控制台、设置、设置菜单、聊天、任务状态和记忆调试等主要 UI 文本。 |
 | Live2D 真实模型 | 已完成 | 已接入官方样例 `Hiyori`，Cubism Core 本地打包，不依赖启动时 CDN。 |
@@ -102,7 +104,7 @@ AuraBot 当前已经从“传统聊天界面”收敛为桌宠优先形态：
 | SQLite 数据层 | 已完成 | 已有 profiles、souls、sessions、messages、memory、tasks、event_logs 等表。 |
 | 单主聊天线程 | 已完成 MVP | 主 session 持久化消息，控制台负责完整对话；用户消息乐观上屏，不再等待 gate/chat 模型返回。 |
 | 控制台消息展示 | 已完成第二版 | assistant 回复在 UI 层按句子拆成多个连续气泡，底层消息仍保持一条完整记录；用户消息不拆，任务附件挂在最后一句气泡下。 |
-| 模型适配层 | 部分完成 | 已有 `gateModel` / `chatModel` / `memoryModel` 注入接口、OpenAI-compatible provider、三类模型角色的 LangChain POC provider、userData/系统级 JSON 配置、env 配置、deterministic fallback、chat streaming 和设置页安全摘要；还缺用户新消息打断、retry/backoff、设置页 provider 选择和真实连接状态 UI。 |
+| 模型适配层 | 部分完成 | 已有 `gateModel` / `chatModel` / `memoryModel` 注入接口、OpenAI-compatible provider、三类模型角色的 LangChain POC provider、userData/系统级 JSON 配置、env 配置、deterministic fallback、chat streaming、设置页安全摘要和 provider 选择；还缺用户新消息打断、retry/backoff、连接测试和真实连接状态 UI。 |
 | Gate/触发判断 | 已完成 MVP | 可判断碎片输入等待、完整输入回复、话题是否结束、聊天/任务/任务控制分类；强 gate 判定已延后到模型侧，外部模型异常时仍保留 fallback。 |
 | 活人感统一回复机制 | 已完成第一版 | `Soul` 只保留人格、语气、原则和语义禁忌；`ResponseWorkflow` 描述场景、事实和安全边界；`VoiceAdapter` 结合二者生成最终用户可见文本。任务完成等场景可以接近“本人自然告诉你结果并邀请你看一眼”的语感，但不会把样例当固定模板。 |
 | 记忆 v1/v2 写入层 | 部分完成 | 支持 preference、event、follow_up 写入，摘要层和关系边召回；显式配置 `memoryModel` 后可用 API 做结构化记忆抽取、重复记忆合并和候选关系边判断；App 运行期间到期 follow_up 可通过后台 scheduler 推送桌宠气泡。 |

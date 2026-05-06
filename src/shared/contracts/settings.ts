@@ -1,5 +1,10 @@
 import type { AppConfig, ModelRoleConfig, TaskCliRunnerConfig, TaskCliRunnerId } from "../schemas/config";
 
+export const MODEL_PROVIDER_OPTIONS = ["local-stub", "openai-compatible", "langchain-openai"] as const;
+
+export type ModelProviderOption = (typeof MODEL_PROVIDER_OPTIONS)[number];
+export type ModelRoleKey = "chatModel" | "gateModel" | "memoryModel";
+
 export interface PublicModelRoleConfig {
   provider: string;
   model: string;
@@ -36,6 +41,11 @@ export interface TaskRunnerSettingsPatch {
     enabled: boolean;
     priority: number;
   }>;
+}
+
+export interface ModelProviderSettingsPatch {
+  role: ModelRoleKey;
+  provider: ModelProviderOption;
 }
 
 export function createPublicAppConfig(config: AppConfig): PublicAppConfig {
