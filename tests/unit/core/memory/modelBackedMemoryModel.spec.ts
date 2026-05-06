@@ -1,5 +1,6 @@
 import { describe, expect, it } from "vitest";
 import {
+  createMemoryExtractor,
   ModelBackedMemoryExtractor,
   ModelBackedMemoryMergePlanner,
   ModelBackedMemoryRecallPlanner,
@@ -20,6 +21,45 @@ const existingHotpotPreference: MemoryNode = {
 };
 
 describe("model-backed memory model", () => {
+  it("creates memory extractors with a LangChain structured-output client when requested", async () => {
+    const extractor = createMemoryExtractor(
+      {
+        provider: "langchain-openai",
+        model: "structured-memory-model",
+        enabled: true,
+        baseUrl: "https://api.example.com/v1",
+        apiKey: "test-key"
+      },
+      {
+        langChainExtractionClient: {
+          complete: async () =>
+            JSON.stringify({
+              candidates: [
+                {
+                  type: "trait",
+                  content: "阿杰是用户的高中同学",
+                  topic: "relationships",
+                  importance: 0.74
+                }
+              ]
+            })
+        }
+      }
+    );
+
+    const candidates = await extractor.extract({
+      message: "阿杰是我高中同学。",
+      nowIso: "2026-05-04T12:00:00.000+08:00",
+      timezone: "Asia/Shanghai"
+    });
+
+    expect(candidates).toHaveLength(1);
+    expect(candidates[0]?.node).toMatchObject({
+      type: "trait",
+      content: "阿杰是用户的高中同学"
+    });
+  });
+
   it("extracts structured memory candidates from model JSON", async () => {
     const extractor = new ModelBackedMemoryExtractor({
       client: {

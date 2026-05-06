@@ -194,7 +194,7 @@ sudo nano "/Library/Application Support/AuraBot/config.json"
 }
 ```
 
-`chatModel` 现在也有一个小型 LangChain POC 路径。只把 `chatModel.provider` 设为 `"langchain-openai"`，最终对话生成就会走 `@langchain/openai`；`gateModel` 和 `memoryModel` 仍可继续使用现有 provider 路径：
+`chatModel` 和 `memoryModel` 现在都有小型 LangChain POC 路径。把任意一个角色的 `provider` 设为 `"langchain-openai"`，这个角色就会走 `@langchain/openai`，其他角色仍可继续使用现有 provider 路径。`memoryModel` 会使用 LangChain structured output，然后继续复用现有 zod 校验、记忆图和 deterministic fallback。
 
 ```json
 {
@@ -206,6 +206,22 @@ sudo nano "/Library/Application Support/AuraBot/config.json"
     "model": "your-strong-reasoning-model",
     "temperature": 0.7,
     "timeoutMs": 30000
+  }
+}
+```
+
+如果要让结构化记忆抽取和召回规划走 LangChain：
+
+```json
+{
+  "memoryModel": {
+    "enabled": true,
+    "provider": "langchain-openai",
+    "baseUrl": "https://api.example.com/v1",
+    "apiKey": "your-api-key",
+    "model": "your-structured-memory-model",
+    "temperature": 0,
+    "timeoutMs": 12000
   }
 }
 ```

@@ -12,6 +12,7 @@ import type { ChatCompletionRequest } from "../llm/openAiCompatibleClient";
 import { OpenAICompatibleChatCompletionClient } from "../llm/openAiCompatibleClient";
 import { buildAssociativeMemoryEdges } from "./memoryAssociations";
 import { DeterministicMemoryExtractor, type ExtractedMemoryCandidate, type MemoryExtractionInput, type MemoryExtractor } from "./memoryExtractor";
+import { LangChainStructuredMemoryClient } from "./langChainMemoryModel";
 
 export interface MemoryModelClient {
   complete(input: ChatCompletionRequest): Promise<string>;
@@ -24,6 +25,14 @@ export interface ModelBackedMemoryOptions {
 
 export interface ModelBackedMemoryExtractorOptions extends ModelBackedMemoryOptions {
   fallbackExtractor?: MemoryExtractor;
+}
+
+export interface MemoryModelFactoryDependencies {
+  openAICompatibleClient?: MemoryModelClient;
+  langChainExtractionClient?: MemoryModelClient;
+  langChainMergeClient?: MemoryModelClient;
+  langChainRelationClient?: MemoryModelClient;
+  langChainRecallClient?: MemoryModelClient;
 }
 
 export type MemoryMergeDecision =
@@ -304,55 +313,112 @@ export class ModelBackedMemoryRecallPlanner implements MemoryRecallPlanner {
   }
 }
 
-export function createMemoryExtractor(config: ModelRoleConfig): MemoryExtractor {
+export function createMemoryExtractor(
+  config: ModelRoleConfig,
+  dependencies: MemoryModelFactoryDependencies = {}
+): MemoryExtractor {
   const fallbackExtractor = new DeterministicMemoryExtractor();
 
-  if (!isOpenAICompatibleRoleEnabled(config)) {
+  if (!isModelRoleEnabled(config)) {
+    return fallbackExtractor;
+  }
+
+  if (config.provider === "langchain-openai") {
+    return new ModelBackedMemoryExtractor({
+      client: dependencies.langChainExtractionClient ?? new LangChainStructuredMemoryClient({ schema: extractionSchema }),
+      config,
+      fallbackExtractor
+    });
+  }
+
+  if (config.provider !== "openai-compatible") {
     return fallbackExtractor;
   }
 
   return new ModelBackedMemoryExtractor({
-    client: new OpenAICompatibleChatCompletionClient(),
+    client: dependencies.openAICompatibleClient ?? new OpenAICompatibleChatCompletionClient(),
     config,
     fallbackExtractor
   });
 }
 
-export function createMemoryMergePlanner(config: ModelRoleConfig): MemoryMergePlanner {
-  if (!isOpenAICompatibleRoleEnabled(config)) {
+export function createMemoryMergePlanner(
+  config: ModelRoleConfig,
+  dependencies: MemoryModelFactoryDependencies = {}
+): MemoryMergePlanner {
+  if (!isModelRoleEnabled(config)) {
+    return new DeterministicMemoryMergePlanner();
+  }
+
+  if (config.provider === "langchain-openai") {
+    return new ModelBackedMemoryMergePlanner({
+      client: dependencies.langChainMergeClient ?? new LangChainStructuredMemoryClient({ schema: mergeDecisionSchema }),
+      config
+    });
+  }
+
+  if (config.provider !== "openai-compatible") {
     return new DeterministicMemoryMergePlanner();
   }
 
   return new ModelBackedMemoryMergePlanner({
-    client: new OpenAICompatibleChatCompletionClient(),
+    client: dependencies.openAICompatibleClient ?? new OpenAICompatibleChatCompletionClient(),
     config
   });
 }
 
-export function createMemoryRelationPlanner(config: ModelRoleConfig): MemoryRelationPlanner {
-  if (!isOpenAICompatibleRoleEnabled(config)) {
+export function createMemoryRelationPlanner(
+  config: ModelRoleConfig,
+  dependencies: MemoryModelFactoryDependencies = {}
+): MemoryRelationPlanner {
+  if (!isModelRoleEnabled(config)) {
+    return new DeterministicMemoryRelationPlanner();
+  }
+
+  if (config.provider === "langchain-openai") {
+    return new ModelBackedMemoryRelationPlanner({
+      client: dependencies.langChainRelationClient ?? new LangChainStructuredMemoryClient({ schema: relationPlanSchema }),
+      config
+    });
+  }
+
+  if (config.provider !== "openai-compatible") {
     return new DeterministicMemoryRelationPlanner();
   }
 
   return new ModelBackedMemoryRelationPlanner({
-    client: new OpenAICompatibleChatCompletionClient(),
+    client: dependencies.openAICompatibleClient ?? new OpenAICompatibleChatCompletionClient(),
     config
   });
 }
 
-export function createMemoryRecallPlanner(config: ModelRoleConfig): MemoryRecallPlanner {
-  if (!isOpenAICompatibleRoleEnabled(config)) {
+export function createMemoryRecallPlanner(
+  config: ModelRoleConfig,
+  dependencies: MemoryModelFactoryDependencies = {}
+): MemoryRecallPlanner {
+  if (!isModelRoleEnabled(config)) {
+    return new DeterministicMemoryRecallPlanner();
+  }
+
+  if (config.provider === "langchain-openai") {
+    return new ModelBackedMemoryRecallPlanner({
+      client: dependencies.langChainRecallClient ?? new LangChainStructuredMemoryClient({ schema: recallPlanSchema }),
+      config
+    });
+  }
+
+  if (config.provider !== "openai-compatible") {
     return new DeterministicMemoryRecallPlanner();
   }
 
   return new ModelBackedMemoryRecallPlanner({
-    client: new OpenAICompatibleChatCompletionClient(),
+    client: dependencies.openAICompatibleClient ?? new OpenAICompatibleChatCompletionClient(),
     config
   });
 }
 
-function isOpenAICompatibleRoleEnabled(config: ModelRoleConfig): boolean {
-  return config.enabled && config.provider === "openai-compatible" && Boolean(config.baseUrl && config.apiKey);
+function isModelRoleEnabled(config: ModelRoleConfig): boolean {
+  return config.enabled && Boolean(config.baseUrl && config.apiKey);
 }
 
 function buildExtractionPrompt(input: MemoryExtractionInput): ChatCompletionRequest["messages"] {
