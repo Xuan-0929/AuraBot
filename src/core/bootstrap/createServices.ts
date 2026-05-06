@@ -9,7 +9,7 @@ import { SessionRepository } from "../storage/repositories/sessionRepository";
 import { TaskRepository } from "../storage/repositories/taskRepository";
 import { TaskService } from "../tasks/taskService";
 import { DeterministicTaskRunner } from "../tasks/taskRunner";
-import { CliCodexAgentClient, CodexTaskRunner } from "../tasks/codexTaskRunner";
+import { CliAgentClientImpl, MultiCliTaskRunner } from "../tasks/cliTaskRunner";
 import { EventLogService } from "../telemetry/eventLogService";
 import { ProfileService } from "../profiles/profileService";
 import { createChatModel, type ChatModel } from "../llm/chatModel";
@@ -33,6 +33,7 @@ export interface AppServices {
   profileService: ProfileService;
   sessionRepository: SessionRepository;
   messageRepository: MessageRepository;
+  taskRepository: TaskRepository;
   memoryExtractor: MemoryExtractor;
   memoryService: MemoryService;
   taskService: TaskService;
@@ -70,6 +71,7 @@ export function createServices(userDataPath: string): AppServices {
     database,
     profileService,
     sessionRepository,
+    taskRepository,
     messageRepository: new MessageRepository(database),
     memoryExtractor,
     memoryService: new MemoryService(memoryRepository, {
@@ -91,7 +93,7 @@ export function createServices(userDataPath: string): AppServices {
   };
 }
 
-function createTaskRunner(
+export function createTaskRunner(
   config: TaskRunnerConfig,
   dependencies: {
     userDataPath: string;
@@ -99,19 +101,34 @@ function createTaskRunner(
     eventLogService: EventLogService;
   }
 ): TaskRunner {
-  if (config.provider !== "codex") {
+  if (!shouldAutoRunTasks(config)) {
     return new DeterministicTaskRunner(dependencies.taskRepository, dependencies.eventLogService);
   }
 
-  return new CodexTaskRunner(dependencies.taskRepository, dependencies.eventLogService, new CliCodexAgentClient(), {
-    command: config.codexCommand ?? getDefaultCodexCommand(),
-    workingDirectory: config.workingDirectory ?? process.cwd(),
-    model: config.model,
-    sandbox: config.sandbox,
-    approvalPolicy: config.approvalPolicy,
-    timeoutMs: config.timeoutMs,
+  return new MultiCliTaskRunner(dependencies.taskRepository, dependencies.eventLogService, new CliAgentClientImpl(), {
+    runners: config.runners.map((runner) => ({
+      ...runner,
+      command: runner.command ?? getDefaultTaskCliCommand(runner.id),
+      workingDirectory: runner.workingDirectory ?? config.workingDirectory ?? process.cwd()
+    })),
     outputDirectory: join(dependencies.userDataPath, "task-agent-output")
   });
+}
+
+export function shouldAutoRunTasks(config: TaskRunnerConfig): boolean {
+  return config.runners.some((runner) => runner.enabled) || config.provider === "codex";
+}
+
+function getDefaultTaskCliCommand(id: "codex" | "claude" | "hermes"): string {
+  if (id === "codex") {
+    return getDefaultCodexCommand();
+  }
+
+  if (id === "claude") {
+    return existsSync("/opt/homebrew/bin/claude") ? "/opt/homebrew/bin/claude" : "claude";
+  }
+
+  return "hermes";
 }
 
 function getDefaultCodexCommand(): string {

@@ -1,4 +1,4 @@
-import type { AppConfig, ModelRoleConfig } from "../schemas/config";
+import type { AppConfig, ModelRoleConfig, TaskCliRunnerConfig, TaskCliRunnerId } from "../schemas/config";
 
 export interface PublicModelRoleConfig {
   provider: string;
@@ -14,13 +14,38 @@ export interface PublicAppConfig {
   chatModel: PublicModelRoleConfig;
   gateModel: PublicModelRoleConfig;
   memoryModel: PublicModelRoleConfig;
+  taskRunner: PublicTaskRunnerConfig;
+}
+
+export interface PublicTaskRunnerConfig {
+  runners: PublicTaskCliRunnerConfig[];
+}
+
+export interface PublicTaskCliRunnerConfig {
+  id: TaskCliRunnerId;
+  label: string;
+  enabled: boolean;
+  priority: number;
+  command?: string;
+  workingDirectory?: string;
+}
+
+export interface TaskRunnerSettingsPatch {
+  runners: Array<{
+    id: TaskCliRunnerId;
+    enabled: boolean;
+    priority: number;
+  }>;
 }
 
 export function createPublicAppConfig(config: AppConfig): PublicAppConfig {
   return {
     chatModel: createPublicModelRoleConfig(config.chatModel),
     gateModel: createPublicModelRoleConfig(config.gateModel),
-    memoryModel: createPublicModelRoleConfig(config.memoryModel)
+    memoryModel: createPublicModelRoleConfig(config.memoryModel),
+    taskRunner: {
+      runners: config.taskRunner.runners.map(createPublicTaskCliRunnerConfig)
+    }
   };
 }
 
@@ -34,4 +59,27 @@ function createPublicModelRoleConfig(config: ModelRoleConfig): PublicModelRoleCo
     timeoutMs: config.timeoutMs,
     hasApiKey: Boolean(config.apiKey)
   };
+}
+
+function createPublicTaskCliRunnerConfig(config: TaskCliRunnerConfig): PublicTaskCliRunnerConfig {
+  return {
+    id: config.id,
+    label: getTaskCliRunnerLabel(config.id),
+    enabled: config.enabled,
+    priority: config.priority,
+    command: config.command,
+    workingDirectory: config.workingDirectory
+  };
+}
+
+export function getTaskCliRunnerLabel(id: TaskCliRunnerId): string {
+  if (id === "codex") {
+    return "Codex";
+  }
+
+  if (id === "claude") {
+    return "Claude Code";
+  }
+
+  return "Hermes";
 }

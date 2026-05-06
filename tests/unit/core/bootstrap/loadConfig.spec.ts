@@ -212,5 +212,80 @@ describe("loadConfig", () => {
       approvalPolicy: "never",
       timeoutMs: 120000
     });
+    expect(config.taskRunner.runners.find((runner) => runner.id === "codex")).toMatchObject({
+      enabled: true,
+      priority: 1,
+      command: "/usr/local/bin/codex",
+      workingDirectory: "/Users/xuan/project",
+      model: "gpt-5.4",
+      sandbox: "workspace-write",
+      approvalPolicy: "never",
+      timeoutMs: 120000
+    });
+  });
+
+  it("loads task CLI switches and priority order for Codex, Claude Code, and Hermes", () => {
+    const userDataPath = createUserDataDir();
+    writeFileSync(
+      join(userDataPath, "config.json"),
+      JSON.stringify({
+        taskRunner: {
+          provider: "cli",
+          runners: [
+            {
+              id: "claude",
+              enabled: true,
+              priority: 1,
+              command: "/opt/homebrew/bin/claude",
+              model: "sonnet",
+              approvalPolicy: "never"
+            },
+            {
+              id: "codex",
+              enabled: true,
+              priority: 2,
+              command: "/Applications/Codex.app/Contents/Resources/codex",
+              sandbox: "workspace-write"
+            },
+            {
+              id: "hermes",
+              enabled: false,
+              priority: 3,
+              command: "hermes"
+            }
+          ]
+        }
+      }),
+      "utf8"
+    );
+
+    const config = loadConfig(userDataPath);
+
+    expect(config.taskRunner.provider).toBe("cli");
+    expect(config.taskRunner.runners.map((runner) => ({
+      id: runner.id,
+      enabled: runner.enabled,
+      priority: runner.priority,
+      command: runner.command
+    }))).toEqual([
+      {
+        id: "codex",
+        enabled: true,
+        priority: 2,
+        command: "/Applications/Codex.app/Contents/Resources/codex"
+      },
+      {
+        id: "claude",
+        enabled: true,
+        priority: 1,
+        command: "/opt/homebrew/bin/claude"
+      },
+      {
+        id: "hermes",
+        enabled: false,
+        priority: 3,
+        command: "hermes"
+      }
+    ]);
   });
 });

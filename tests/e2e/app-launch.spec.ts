@@ -128,6 +128,33 @@ test("opens the product settings window directly from pet quick controls", async
 
     await expect(settingsWindow.getByRole("main", { name: "Settings" })).toBeVisible();
     await expect(settingsWindow.getByLabel("Model settings")).toContainText("Chat");
+    await expect(settingsWindow.getByLabel("Task CLI settings")).toContainText("Codex");
+    await expect(settingsWindow.getByLabel("Task CLI settings")).toContainText("Claude Code");
+    await expect(settingsWindow.getByLabel("Task CLI settings")).toContainText("Hermes");
+    await settingsWindow.getByLabel("Enable Claude Code task runner").check();
+    await expect(settingsWindow.getByLabel("Enable Claude Code task runner")).toBeChecked();
+
+    const settingsPage = settingsWindow.getByRole("main", { name: "Settings" });
+    await expect
+      .poll(() =>
+        settingsPage.evaluate((element) => ({
+          clientHeight: element.clientHeight,
+          scrollHeight: element.scrollHeight
+        }))
+      )
+      .toMatchObject({
+        clientHeight: expect.any(Number),
+        scrollHeight: expect.any(Number)
+      });
+    const scrollMetrics = await settingsPage.evaluate((element) => ({
+      clientHeight: element.clientHeight,
+      scrollHeight: element.scrollHeight
+    }));
+    expect(scrollMetrics.scrollHeight).toBeGreaterThan(scrollMetrics.clientHeight);
+
+    await settingsPage.hover();
+    await settingsWindow.mouse.wheel(0, 500);
+    await expect.poll(() => settingsPage.evaluate((element) => element.scrollTop)).toBeGreaterThan(0);
   } finally {
     await cleanupAuraBot(electronApp, userDataDir);
   }

@@ -45,6 +45,13 @@ const UI_TEXT = {
     chatModel: "Chat",
     gateModel: "Gate",
     memoryModel: "Memory",
+    taskCli: "Task CLI",
+    taskCliSettings: "Task CLI settings",
+    taskCliHint: "Choose which command-line agent AuraBot should use for tasks. Lower priority runs first.",
+    taskRunner: "task runner",
+    taskRunnerPriority: "task runner priority",
+    enable: "Enable",
+    priority: "Priority",
     petQuickControls: "Pet quick controls",
     dragPet: "Drag pet",
     drag: "Drag",
@@ -124,6 +131,13 @@ const UI_TEXT = {
     chatModel: "聊天",
     gateModel: "判断",
     memoryModel: "记忆",
+    taskCli: "任务 CLI",
+    taskCliSettings: "任务 CLI 设置",
+    taskCliHint: "选择 AuraBot 做任务时使用哪个命令行 agent。优先级数字越小越先用。",
+    taskRunner: "任务执行器",
+    taskRunnerPriority: "任务执行器优先级",
+    enable: "启用",
+    priority: "优先级",
     petQuickControls: "桌宠快捷控制",
     dragPet: "拖动桌宠",
     drag: "拖动",
@@ -260,12 +274,12 @@ export function taskProgressLabel(displayLanguage: DisplayLanguage | undefined, 
 function cleanTaskProgress(progress: string, displayLanguage: DisplayLanguage): string {
   const fallback = displayLanguage === "zh" ? "正在处理" : "Working";
   const cleaned = progress
-    .replace(/^Codex 子任务会话已建立：.*$/u, displayLanguage === "zh" ? "已经接上任务线程" : "Task thread connected")
-    .replace(/^Codex 子任务开始处理任务。?$/u, displayLanguage === "zh" ? "正在处理" : "Working")
-    .replace(/^开始调用 Codex 子任务：.*$/u, displayLanguage === "zh" ? "正在处理" : "Working")
-    .replace(/^Codex 子任务完成命令：.*$/u, displayLanguage === "zh" ? "刚完成一步处理" : "Completed one step")
-    .replace(/^Codex 子任务(?:新增|修改|删除)文件：.*$/u, displayLanguage === "zh" ? "正在整理结果文件" : "Preparing result files")
-    .replace(/^Codex 子任务本轮处理完成，正在收尾。?$/u, displayLanguage === "zh" ? "正在收尾" : "Wrapping up")
+    .replace(/^(Codex|Claude Code|Hermes) 子任务会话已建立：.*$/u, displayLanguage === "zh" ? "已经接上任务线程" : "Task thread connected")
+    .replace(/^(Codex|Claude Code|Hermes) 子任务开始处理任务。?$/u, displayLanguage === "zh" ? "正在处理" : "Working")
+    .replace(/^开始调用 (Codex|Claude Code|Hermes) 子任务：.*$/u, displayLanguage === "zh" ? "正在处理" : "Working")
+    .replace(/^(Codex|Claude Code|Hermes) 子任务完成命令：.*$/u, displayLanguage === "zh" ? "刚完成一步处理" : "Completed one step")
+    .replace(/^(Codex|Claude Code|Hermes) 子任务(?:新增|修改|删除)文件：.*$/u, displayLanguage === "zh" ? "正在整理结果文件" : "Preparing result files")
+    .replace(/^(Codex|Claude Code|Hermes) 子任务本轮处理完成，正在收尾。?$/u, displayLanguage === "zh" ? "正在收尾" : "Wrapping up")
     .trim();
 
   return cleaned || fallback;

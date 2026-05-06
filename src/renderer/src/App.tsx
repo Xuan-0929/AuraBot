@@ -27,6 +27,7 @@ export function App() {
   const openConsoleWindow = useAuraBotStore((state) => state.openConsoleWindow);
   const openSettingsWindow = useAuraBotStore((state) => state.openSettingsWindow);
   const openConfigFile = useAuraBotStore((state) => state.openConfigFile);
+  const updateTaskRunnerSettings = useAuraBotStore((state) => state.updateTaskRunnerSettings);
   const subscribeToPetEvents = useAuraBotStore((state) => state.subscribeToPetEvents);
   const surface = window.location.hash === "#console" ? "console" : window.location.hash === "#settings" ? "settings" : "pet";
 
@@ -58,6 +59,7 @@ export function App() {
           petSettings={petSettings}
           appConfig={appConfig}
           onUpdatePetSettings={updatePetSettings}
+          onUpdateTaskRunnerSettings={updateTaskRunnerSettings}
           onOpenConfigFile={openConfigFile}
         />
       ) : (

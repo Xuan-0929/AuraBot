@@ -4,12 +4,14 @@ import type { Message } from "../schemas/message";
 import type { MemoryEdge, MemoryNode, MemorySummary } from "../schemas/memory";
 import type { PetSettings, PetSettingsPatch } from "../schemas/petSettings";
 import type { Task } from "../schemas/task";
+import type { PublicAppConfig, TaskRunnerSettingsPatch } from "./settings";
 
 export const IPC_CHANNELS = {
   getInitialState: "app:get-initial-state",
   openConsoleWindow: "window:open-console",
   openSettingsWindow: "window:open-settings",
   openConfigFile: "config:open-file",
+  updateTaskRunnerSettings: "config:update-task-runner-settings",
   getPetSettings: "pet:get-settings",
   updatePetSettings: "pet:update-settings",
   setPetMousePassthrough: "pet:set-mouse-passthrough",
@@ -99,6 +101,7 @@ export interface AuraBotApi {
   openConsoleWindow(): Promise<void>;
   openSettingsWindow(): Promise<void>;
   openConfigFile(): Promise<void>;
+  updateTaskRunnerSettings(patch: TaskRunnerSettingsPatch): Promise<PublicAppConfig>;
   getPetSettings(): Promise<PetSettings>;
   updatePetSettings(patch: PetSettingsPatch): Promise<PetSettings>;
   setPetMousePassthrough(enabled: boolean): Promise<void>;

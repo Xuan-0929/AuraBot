@@ -1,4 +1,9 @@
-import type { PublicAppConfig, PublicModelRoleConfig } from "../../../../shared/contracts/settings";
+import type {
+  PublicAppConfig,
+  PublicModelRoleConfig,
+  PublicTaskCliRunnerConfig,
+  TaskRunnerSettingsPatch
+} from "../../../../shared/contracts/settings";
 import type { PetSettings, PetSettingsPatch } from "../../../../shared/schemas/petSettings";
 import { t, type UiTextKey } from "../../i18n";
 
@@ -6,11 +11,12 @@ export interface SettingsWindowProps {
   petSettings: PetSettings;
   appConfig?: PublicAppConfig;
   onUpdatePetSettings(patch: PetSettingsPatch): Promise<void>;
+  onUpdateTaskRunnerSettings(runners: TaskRunnerSettingsPatch["runners"]): Promise<void>;
   onOpenConfigFile(): Promise<void>;
 }
 
 const MODEL_CONFIG_ROWS: Array<{
-  key: keyof PublicAppConfig;
+  key: "chatModel" | "gateModel" | "memoryModel";
   labelKey: UiTextKey;
 }> = [
   {
@@ -27,8 +33,24 @@ const MODEL_CONFIG_ROWS: Array<{
   }
 ];
 
-export function SettingsWindow({ petSettings, appConfig, onUpdatePetSettings, onOpenConfigFile }: SettingsWindowProps) {
+export function SettingsWindow({
+  petSettings,
+  appConfig,
+  onUpdatePetSettings,
+  onUpdateTaskRunnerSettings,
+  onOpenConfigFile
+}: SettingsWindowProps) {
   const displayLanguage = petSettings.displayLanguage;
+  const taskRunners = appConfig?.taskRunner.runners ?? [];
+  const updateTaskRunner = (runnerId: PublicTaskCliRunnerConfig["id"], patch: Partial<Pick<PublicTaskCliRunnerConfig, "enabled" | "priority">>) => {
+    void onUpdateTaskRunnerSettings(
+      taskRunners.map((runner) => ({
+        id: runner.id,
+        enabled: runner.id === runnerId ? patch.enabled ?? runner.enabled : runner.enabled,
+        priority: runner.id === runnerId ? patch.priority ?? runner.priority : runner.priority
+      }))
+    );
+  };
 
   return (
     <main className="settings-window" aria-label={t(displayLanguage, "settings")}>
@@ -81,6 +103,28 @@ export function SettingsWindow({ petSettings, appConfig, onUpdatePetSettings, on
           )}
         </div>
       </section>
+      <section className="settings-page-section" aria-label={t(displayLanguage, "taskCliSettings")}>
+        <div className="settings-page-section-header">
+          <div>
+            <h2>{t(displayLanguage, "taskCli")}</h2>
+            <p>{t(displayLanguage, "taskCliHint")}</p>
+          </div>
+        </div>
+        <div className="settings-task-cli-list">
+          {taskRunners.length > 0 ? (
+            taskRunners.map((runner) => (
+              <TaskCliRunnerCard
+                key={runner.id}
+                runner={runner}
+                displayLanguage={displayLanguage}
+                onChange={(patch) => updateTaskRunner(runner.id, patch)}
+              />
+            ))
+          ) : (
+            <p className="settings-empty">{t(displayLanguage, "configNotLoaded")}</p>
+          )}
+        </div>
+      </section>
       <section className="settings-page-section" aria-label={t(displayLanguage, "characterSettings")}>
         <h2>{t(displayLanguage, "character")}</h2>
         <label className="settings-page-toggle">
@@ -94,6 +138,46 @@ export function SettingsWindow({ petSettings, appConfig, onUpdatePetSettings, on
         </label>
       </section>
     </main>
+  );
+}
+
+function TaskCliRunnerCard({
+  runner,
+  displayLanguage,
+  onChange
+}: {
+  runner: PublicTaskCliRunnerConfig;
+  displayLanguage: PetSettings["displayLanguage"];
+  onChange(patch: Partial<Pick<PublicTaskCliRunnerConfig, "enabled" | "priority">>): void;
+}) {
+  return (
+    <article className="settings-task-cli-card">
+      <label className="settings-page-toggle">
+        <input
+          type="checkbox"
+          checked={runner.enabled}
+          aria-label={`${t(displayLanguage, "enable")} ${runner.label} ${t(displayLanguage, "taskRunner")}`}
+          onChange={(event) => onChange({ enabled: event.currentTarget.checked })}
+        />
+        <span>{runner.label}</span>
+      </label>
+      <label className="settings-page-field settings-task-cli-priority">
+        <span>{t(displayLanguage, "priority")}</span>
+        <input
+          type="number"
+          min={1}
+          max={99}
+          value={runner.priority}
+          aria-label={`${runner.label} ${t(displayLanguage, "taskRunnerPriority")}`}
+          onInput={(event) =>
+            onChange({
+              priority: Math.max(1, Number.parseInt(event.currentTarget.value, 10) || runner.priority)
+            })
+          }
+        />
+      </label>
+      <p>{runner.command ? runner.command : t(displayLanguage, "notSet")}</p>
+    </article>
   );
 }
 

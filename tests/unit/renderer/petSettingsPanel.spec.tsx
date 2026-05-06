@@ -32,6 +32,31 @@ const baseProps: PetSettingsPanelProps = {
       enabled: true,
       baseUrl: "https://api.example.com/v1",
       hasApiKey: true
+    },
+    taskRunner: {
+      runners: [
+        {
+          id: "codex",
+          label: "Codex",
+          enabled: true,
+          priority: 1,
+          command: "/usr/local/bin/codex"
+        },
+        {
+          id: "claude",
+          label: "Claude Code",
+          enabled: false,
+          priority: 2,
+          command: "/opt/homebrew/bin/claude"
+        },
+        {
+          id: "hermes",
+          label: "Hermes",
+          enabled: false,
+          priority: 3,
+          command: "hermes"
+        }
+      ]
     }
   },
   onUpdate: vi.fn(async () => undefined),

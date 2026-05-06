@@ -10,13 +10,31 @@ export const modelRoleConfigSchema = z.object({
   timeoutMs: z.number().int().positive().optional()
 });
 
+export const taskCliRunnerIdSchema = z.enum(["codex", "claude", "hermes"]);
+export const taskRunnerSandboxSchema = z.enum(["read-only", "workspace-write", "danger-full-access"]);
+export const taskRunnerApprovalPolicySchema = z.enum(["untrusted", "on-request", "never", "on-failure"]);
+
+export const taskCliRunnerConfigSchema = z.object({
+  id: taskCliRunnerIdSchema,
+  enabled: z.boolean().default(false),
+  priority: z.number().int().positive().default(100),
+  command: z.string().min(1).optional(),
+  workingDirectory: z.string().min(1).optional(),
+  model: z.string().min(1).optional(),
+  sandbox: taskRunnerSandboxSchema.default("workspace-write"),
+  approvalPolicy: taskRunnerApprovalPolicySchema.default("never"),
+  timeoutMs: z.number().int().positive().default(300000),
+  extraArgs: z.array(z.string()).default([])
+});
+
 export const taskRunnerConfigSchema = z.object({
-  provider: z.enum(["deterministic", "codex"]).default("deterministic"),
+  provider: z.enum(["deterministic", "codex", "cli"]).default("deterministic"),
+  runners: z.array(taskCliRunnerConfigSchema).default([]),
   codexCommand: z.string().min(1).optional(),
   workingDirectory: z.string().min(1).optional(),
   model: z.string().min(1).optional(),
-  sandbox: z.enum(["read-only", "workspace-write", "danger-full-access"]).default("workspace-write"),
-  approvalPolicy: z.enum(["untrusted", "on-request", "never", "on-failure"]).default("never"),
+  sandbox: taskRunnerSandboxSchema.default("workspace-write"),
+  approvalPolicy: taskRunnerApprovalPolicySchema.default("never"),
   timeoutMs: z.number().int().positive().default(300000)
 });
 
@@ -30,5 +48,7 @@ export const appConfigSchema = z.object({
 });
 
 export type ModelRoleConfig = z.infer<typeof modelRoleConfigSchema>;
+export type TaskCliRunnerId = z.infer<typeof taskCliRunnerIdSchema>;
+export type TaskCliRunnerConfig = z.infer<typeof taskCliRunnerConfigSchema>;
 export type TaskRunnerConfig = z.infer<typeof taskRunnerConfigSchema>;
 export type AppConfig = z.infer<typeof appConfigSchema>;

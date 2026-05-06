@@ -1,6 +1,12 @@
 import { join } from "node:path";
 import { existsSync, readFileSync } from "node:fs";
-import { appConfigSchema, type AppConfig } from "../../shared/schemas/config";
+import {
+  appConfigSchema,
+  type AppConfig,
+  type TaskCliRunnerConfig,
+  type TaskCliRunnerId,
+  type TaskRunnerConfig
+} from "../../shared/schemas/config";
 
 type AppConfigInput = Partial<Omit<AppConfig, "gateModel" | "chatModel" | "memoryModel" | "taskRunner">> & {
   gateModel?: Partial<AppConfig["gateModel"]>;
@@ -30,14 +36,16 @@ export function loadConfig(userDataPath: string): AppConfig {
     },
     taskRunner: {
       provider: "deterministic",
+      runners: createDefaultTaskCliRunners(),
       sandbox: "workspace-write",
       approvalPolicy: "never",
       timeoutMs: 300000
     }
   };
   const fileConfig = loadConfigFile(userDataPath);
-  const fileMerged = appConfigSchema.parse(mergeConfig(defaults, fileConfig));
-  const merged = mergeConfig(fileMerged, loadEnvironmentConfig());
+  const fileMerged = normalizeAppConfig(appConfigSchema.parse(mergeConfig(defaults, fileConfig)), fileConfig.taskRunner);
+  const environmentConfig = loadEnvironmentConfig();
+  const merged = normalizeAppConfig(appConfigSchema.parse(mergeConfig(fileMerged, environmentConfig)), environmentConfig.taskRunner);
 
   return appConfigSchema.parse(merged);
 }
@@ -74,6 +82,8 @@ function shouldLoadSystemConfig(): boolean {
 }
 
 function mergeConfig(defaults: AppConfig, override: AppConfigInput): AppConfigInput {
+  const taskRunner = mergeTaskRunnerConfig(defaults.taskRunner, override.taskRunner);
+
   return {
     ...defaults,
     ...override,
@@ -89,10 +99,91 @@ function mergeConfig(defaults: AppConfig, override: AppConfigInput): AppConfigIn
       ...defaults.memoryModel,
       ...override.memoryModel
     },
-    taskRunner: {
-      ...defaults.taskRunner,
-      ...override.taskRunner
+    taskRunner
+  };
+}
+
+function mergeTaskRunnerConfig(
+  defaults: TaskRunnerConfig,
+  override: AppConfigInput["taskRunner"]
+): AppConfigInput["taskRunner"] {
+  if (!override) {
+    return defaults;
+  }
+
+  return {
+    ...defaults,
+    ...override,
+    runners: override.runners ? mergeTaskCliRunners(defaults.runners, override.runners) : defaults.runners
+  };
+}
+
+function mergeTaskCliRunners(
+  defaults: TaskCliRunnerConfig[],
+  overrides: NonNullable<AppConfigInput["taskRunner"]>["runners"]
+): TaskCliRunnerConfig[] {
+  const byId = new Map<TaskCliRunnerId, TaskCliRunnerConfig>(
+    defaults.map((runner) => [runner.id, runner])
+  );
+
+  for (const override of overrides ?? []) {
+    const id = override?.id;
+
+    if (!id) {
+      continue;
     }
+
+    byId.set(id, {
+      ...byId.get(id),
+      ...override
+    } as TaskCliRunnerConfig);
+  }
+
+  return createDefaultTaskCliRunners().map((runner) => ({
+    ...runner,
+    ...byId.get(runner.id)
+  }));
+}
+
+function normalizeAppConfig(config: AppConfig, taskRunnerOverride?: AppConfigInput["taskRunner"]): AppConfig {
+  return {
+    ...config,
+    taskRunner: normalizeTaskRunnerConfig(config.taskRunner, taskRunnerOverride)
+  };
+}
+
+function normalizeTaskRunnerConfig(
+  config: TaskRunnerConfig,
+  taskRunnerOverride?: AppConfigInput["taskRunner"]
+): TaskRunnerConfig {
+  const runners = mergeTaskCliRunners(createDefaultTaskCliRunners(), config.runners);
+  const hasExplicitRunners = Boolean(taskRunnerOverride?.runners);
+
+  if (config.provider === "codex" && !hasExplicitRunners) {
+    return {
+      ...config,
+      runners: runners.map((runner) =>
+        runner.id === "codex"
+          ? {
+              ...runner,
+              enabled: true,
+              priority: 1,
+              command: config.codexCommand ?? runner.command,
+              workingDirectory: config.workingDirectory ?? runner.workingDirectory,
+              model: config.model ?? runner.model,
+              sandbox: config.sandbox,
+              approvalPolicy: config.approvalPolicy,
+              timeoutMs: config.timeoutMs
+            }
+          : runner
+      )
+    };
+  }
+
+  return {
+    ...config,
+    provider: runners.some((runner) => runner.enabled) ? "cli" : config.provider,
+    runners
   };
 }
 
@@ -156,7 +247,8 @@ function readTaskRunnerEnvironment(): AppConfigInput["taskRunner"] {
     model: process.env.AURABOT_CODEX_MODEL,
     sandbox: readCodexSandboxEnvironment(),
     approvalPolicy: readCodexApprovalPolicyEnvironment(),
-    timeoutMs: parseNumberEnvironment(process.env.AURABOT_CODEX_TIMEOUT_MS)
+    timeoutMs: parseNumberEnvironment(process.env.AURABOT_CODEX_TIMEOUT_MS),
+    runners: readTaskRunnerCliEnvironment()
   });
 }
 
@@ -172,6 +264,71 @@ function readCodexSandboxEnvironment(): AppConfig["taskRunner"]["sandbox"] | und
 
 function readCodexApprovalPolicyEnvironment(): AppConfig["taskRunner"]["approvalPolicy"] | undefined {
   return process.env.AURABOT_CODEX_APPROVAL_POLICY as AppConfig["taskRunner"]["approvalPolicy"] | undefined;
+}
+
+function readTaskRunnerCliEnvironment(): TaskCliRunnerConfig[] | undefined {
+  const hasRunnerEnvironment = createDefaultTaskCliRunners().some((runner) => {
+    const prefix = runner.id.toUpperCase();
+
+    return [
+      `AURABOT_${prefix}_RUNNER_ENABLED`,
+      `AURABOT_${prefix}_RUNNER_PRIORITY`,
+      runner.id === "codex" ? undefined : `AURABOT_${prefix}_COMMAND`,
+      runner.id === "codex" ? undefined : `AURABOT_${prefix}_WORKDIR`,
+      runner.id === "codex" ? undefined : `AURABOT_${prefix}_MODEL`,
+      `AURABOT_${prefix}_TIMEOUT_MS`
+    ].some((key) => key !== undefined && process.env[key] !== undefined);
+  });
+
+  if (!hasRunnerEnvironment) {
+    return undefined;
+  }
+
+  const runners = createDefaultTaskCliRunners().map((runner) =>
+    removeUndefinedValues({
+      ...runner,
+      enabled: parseBooleanEnvironment(process.env[`AURABOT_${runner.id.toUpperCase()}_RUNNER_ENABLED`]),
+      priority: parseNumberEnvironment(process.env[`AURABOT_${runner.id.toUpperCase()}_RUNNER_PRIORITY`]),
+      command: process.env[`AURABOT_${runner.id.toUpperCase()}_COMMAND`],
+      workingDirectory: process.env[`AURABOT_${runner.id.toUpperCase()}_WORKDIR`],
+      model: process.env[`AURABOT_${runner.id.toUpperCase()}_MODEL`],
+      timeoutMs: parseNumberEnvironment(process.env[`AURABOT_${runner.id.toUpperCase()}_TIMEOUT_MS`])
+    }) as TaskCliRunnerConfig
+  );
+
+  return runners;
+}
+
+export function createDefaultTaskCliRunners(): TaskCliRunnerConfig[] {
+  return [
+    {
+      id: "codex",
+      enabled: false,
+      priority: 1,
+      sandbox: "workspace-write",
+      approvalPolicy: "never",
+      timeoutMs: 300000,
+      extraArgs: []
+    },
+    {
+      id: "claude",
+      enabled: false,
+      priority: 2,
+      sandbox: "workspace-write",
+      approvalPolicy: "never",
+      timeoutMs: 300000,
+      extraArgs: []
+    },
+    {
+      id: "hermes",
+      enabled: false,
+      priority: 3,
+      sandbox: "workspace-write",
+      approvalPolicy: "never",
+      timeoutMs: 300000,
+      extraArgs: []
+    }
+  ];
 }
 
 function removeUndefinedValues<T extends Record<string, unknown>>(value: T): Partial<T> {

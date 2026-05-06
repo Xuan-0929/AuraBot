@@ -32,9 +32,36 @@ const baseProps: SettingsWindowProps = {
       enabled: true,
       baseUrl: "https://api.example.com/v1",
       hasApiKey: true
+    },
+    taskRunner: {
+      runners: [
+        {
+          id: "codex",
+          label: "Codex",
+          enabled: true,
+          priority: 1,
+          command: "/usr/local/bin/codex",
+          workingDirectory: "/Users/xuan/project"
+        },
+        {
+          id: "claude",
+          label: "Claude Code",
+          enabled: false,
+          priority: 2,
+          command: "/opt/homebrew/bin/claude"
+        },
+        {
+          id: "hermes",
+          label: "Hermes",
+          enabled: false,
+          priority: 3,
+          command: "hermes"
+        }
+      ]
     }
   },
   onUpdatePetSettings: vi.fn(async () => undefined),
+  onUpdateTaskRunnerSettings: vi.fn(async () => undefined),
   onOpenConfigFile: vi.fn(async () => undefined)
 };
 
@@ -76,6 +103,10 @@ describe("SettingsWindow", () => {
     expect(container.textContent).toContain("gpt-5.4");
     expect(container.textContent).toContain("API key saved");
     expect(container.textContent).toContain("Character");
+    expect(container.textContent).toContain("Task CLI");
+    expect(container.textContent).toContain("Codex");
+    expect(container.textContent).toContain("Claude Code");
+    expect(container.textContent).toContain("Hermes");
     expect(container.querySelector<HTMLSelectElement>('[aria-label="Language"]')?.value).toBe("en");
 
     await act(async () => {
@@ -97,6 +128,62 @@ describe("SettingsWindow", () => {
     expect(onOpenConfigFile).toHaveBeenCalledTimes(1);
   });
 
+  it("updates task CLI switches and priority values from the settings page", async () => {
+    const onUpdateTaskRunnerSettings = vi.fn(async () => undefined);
+
+    await act(async () => {
+      root.render(
+        <SettingsWindow
+          {...baseProps}
+          onUpdateTaskRunnerSettings={onUpdateTaskRunnerSettings}
+        />
+      );
+    });
+
+    await act(async () => {
+      container.querySelector<HTMLInputElement>('[aria-label="Enable Claude Code task runner"]')!.click();
+    });
+
+    expect(onUpdateTaskRunnerSettings).toHaveBeenCalledWith([
+      expect.objectContaining({
+        id: "codex",
+        enabled: true,
+        priority: 1
+      }),
+      expect.objectContaining({
+        id: "claude",
+        enabled: true,
+        priority: 2
+      }),
+      expect.objectContaining({
+        id: "hermes",
+        enabled: false,
+        priority: 3
+      })
+    ]);
+
+    await act(async () => {
+      const hermesPriority = container.querySelector<HTMLInputElement>('[aria-label="Hermes task runner priority"]')!;
+      hermesPriority.value = "1";
+      hermesPriority.dispatchEvent(new Event("input", { bubbles: true }));
+    });
+
+    expect(onUpdateTaskRunnerSettings).toHaveBeenLastCalledWith([
+      expect.objectContaining({
+        id: "codex",
+        priority: 1
+      }),
+      expect.objectContaining({
+        id: "claude",
+        priority: 2
+      }),
+      expect.objectContaining({
+        id: "hermes",
+        priority: 1
+      })
+    ]);
+  });
+
   it("localizes the settings surface when Chinese is selected", async () => {
     await act(async () => {
       root.render(
@@ -113,6 +200,7 @@ describe("SettingsWindow", () => {
     expect(container.textContent).toContain("设置");
     expect(container.textContent).toContain("通用");
     expect(container.textContent).toContain("模型");
+    expect(container.textContent).toContain("任务 CLI");
     expect(container.textContent).toContain("打开 config 文件");
     expect(container.textContent).toContain("人物");
     expect(container.textContent).toContain("穿透人物点击");

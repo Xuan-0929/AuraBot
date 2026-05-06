@@ -39,7 +39,7 @@ AuraBot 是一个桌面优先的陪伴型 AI MVP。它不是传统意义上常�
 | 模型角色 | `gateModel`、`chatModel` 和 `memoryModel` 可注入；默认走本地 deterministic fallback，也可以接 OpenAI-compatible API。 |
 | Gate 逻辑 | 可判断碎片输入等待、完整聊天、任务请求、任务控制和话题结束；配置模型后可使用 model-backed gate 判定。 |
 | 记忆 v1/v2 | 支持 preference、event、follow-up 记忆写入，并可通过关系边召回；App 运行期间可用后台 scheduler 触发到期提醒桌宠气泡。 |
-| 任务 v1 | 可以在主聊天里创建、查询、打断、修改、启动并完成任务；任务卡提供取消/删除快捷按钮；显式配置后可调用本机 Codex 子任务 runner 执行真实委派任务。 |
+| 任务 v1 | 可以在主聊天里创建、查询、打断、修改、启动并完成任务；任务卡提供取消/删除快捷按钮；显式配置后可按优先级调用本机 Codex、Claude Code 或 Hermes CLI runner 执行真实委派任务。 |
 | 验证 | Unit、integration、build 和 e2e 检查都已接入。 |
 
 ## 快速启动
@@ -157,9 +157,36 @@ sudo nano "/Library/Application Support/AuraBot/config.json"
     "timeoutMs": 12000
   },
   "taskRunner": {
-    "provider": "codex",
-    "codexCommand": "/Applications/Codex.app/Contents/Resources/codex",
-    "workingDirectory": "/path/to/AuraBot",
+    "provider": "cli",
+    "runners": [
+      {
+        "id": "codex",
+        "enabled": true,
+        "priority": 1,
+        "command": "/Applications/Codex.app/Contents/Resources/codex",
+        "workingDirectory": "/path/to/AuraBot",
+        "sandbox": "workspace-write",
+        "approvalPolicy": "never",
+        "timeoutMs": 300000
+      },
+      {
+        "id": "claude",
+        "enabled": false,
+        "priority": 2,
+        "command": "/opt/homebrew/bin/claude",
+        "workingDirectory": "/path/to/AuraBot",
+        "approvalPolicy": "never",
+        "timeoutMs": 300000
+      },
+      {
+        "id": "hermes",
+        "enabled": false,
+        "priority": 3,
+        "command": "hermes",
+        "workingDirectory": "/path/to/AuraBot",
+        "timeoutMs": 300000
+      }
+    ],
     "sandbox": "workspace-write",
     "approvalPolicy": "never",
     "timeoutMs": 300000
@@ -194,22 +221,24 @@ corepack pnpm dev:clean
 
 API key 只放本地，不要提交进 git。`corepack pnpm dev` 会读取正常系统级配置；`corepack pnpm dev:clean` 默认忽略系统级配置，除非你显式传入环境变量。
 
-## Codex 子任务 Runner
+## 任务 CLI Runner
 
-任务执行默认使用 deterministic runner，保证测试和 demo 稳定。如果要让 AuraBot 把排队任务委派给本机 Codex CLI，在配置里把 `taskRunner.provider` 设成 `codex`，或在环境变量里设置 `AURABOT_TASK_RUNNER=codex`。
+任务执行默认使用 deterministic runner，保证测试和 demo 稳定。如果要让 AuraBot 把排队任务委派给本机 CLI agent，可以在设置窗口的「任务 CLI」里开关 Codex、Claude Code、Hermes 并调整优先级，也可以在配置里把 `taskRunner.provider` 设成 `cli` 并写入 `taskRunner.runners`。`priority` 数字越小越先尝试；高优先级命令不可用时，会跳过并启动下一个已启用 runner。
+
+旧的 Codex-only 配置仍然兼容：`taskRunner.provider` 为 `codex`，或环境变量 `AURABOT_TASK_RUNNER=codex`，都会启用 Codex runner，并把旧的 `codexCommand`、`workingDirectory`、`model`、`sandbox`、`approvalPolicy`、`timeoutMs` 映射进新的 runner 列表。
 
 当前主聊天流程：
 
 1. 说一个任务型请求，例如 `帮我做一份 GitHub 周报。`
 2. AuraBot 创建一个子任务 session，主聊天仍作为控制面。
-3. 当 `taskRunner.provider` 是 `codex` 时，AuraBot 会立刻在后台启动 child runner，任务条会从 `queued` 进入 `running`。
-4. task runner 用子进程调用 `codex exec`，并把任务 prompt 传给 Codex。
-5. 执行过程中，Codex JSONL 进度会写入任务并广播到控制台任务条；你问 `这个任务做到哪了？`，主聊天会返回状态、最近进展和最近 task event。
-6. Codex 通过 `--output-last-message` 写出最终结果；AuraBot 把结果写入 task events，并在子任务结束后回到主控制台里回复你。
+3. 当任意任务 CLI runner 已启用时，AuraBot 会立刻在后台启动当前最高优先级且可用的 child runner，任务条会从 `queued` 进入 `running`。
+4. Codex 通过 `codex exec` 运行；Claude Code 通过 `claude --print` 运行；Hermes 作为可配置 stdin/stdout CLI 命令运行。
+5. 执行过程中，进度会写入任务并广播到控制台任务条；你问 `这个任务做到哪了？`，主聊天会返回状态、最近进展和最近 task event。
+6. AuraBot 把 CLI 最终输出写入 task events，并在子任务结束后回到主控制台里回复你。
 
 默认 deterministic runner 仍会让新任务停在 `queued`，直到主聊天说 `开始做这个任务。`。这样测试和 demo 行为更稳定。
 
-默认 Codex 执行设置偏保守：
+默认任务 CLI 执行设置偏保守：
 
 | 字段 | 默认值 |
 | --- | --- |
@@ -351,7 +380,7 @@ Cubism Core runtime 通过 `live2dcubismcore@1.0.2` 本地打包，应用启动�
 1. 模型角色默认走 deterministic local fallback；外部调用需要本地配置文件或环境变量。
 2. 用户消息已经能即时显示，助手消息可以通过 update 广播流式更新；还没有支持用户新消息打断 in-flight generation。
 3. 记忆层配置 `memoryModel` 后可用 API 做结构化抽取、重复记忆合并、候选关系边判断、召回语义检索词生成和 seed node 重排；还没有 embedding。
-4. 任务 runner 显式配置后可以调用本机 Codex、广播 JSONL 子任务进度，在主聊天打断时取消子进程，并在启动时把失联运行态任务标记为失败；真正 resume 和更完整的 artifact 管理还没有实现。
+4. 任务 runner 显式配置后可以调用本机 Codex、Claude Code 或 Hermes，广播子任务进度，在主聊天打断时取消子进程，并在启动时把失联运行态任务标记为失败；真正 resume 和更完整的 artifact 管理还没有实现。
 5. Live2D 状态行为复用 Hiyori 内置 motion group，并已接入全局鼠标追踪眼动；还没有定制表情资源或更细的动画状态机。
 6. 语音输入依赖 Chromium 的 `SpeechRecognition`；还需要稳定的本地或模型 STT adapter。
 7. Profile 切换、定时任务、桌面通知、打包发布和开机自启还没有实现。

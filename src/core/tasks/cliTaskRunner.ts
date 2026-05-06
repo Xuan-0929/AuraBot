@@ -1,13 +1,17 @@
 import { spawn } from "node:child_process";
 import { existsSync, mkdirSync, readFileSync } from "node:fs";
-import { join } from "node:path";
+import { delimiter, join } from "node:path";
+import type { TaskCliRunnerConfig, TaskCliRunnerId } from "../../shared/schemas/config";
 import type { Task } from "../../shared/schemas/task";
-import type { EventLogService } from "../telemetry/eventLogService";
+import { getTaskCliRunnerLabel } from "../../shared/contracts/settings";
 import type { TaskRepository } from "../storage/repositories/taskRepository";
+import type { EventLogService } from "../telemetry/eventLogService";
 import type { TaskRunner, TaskRunnerObserver } from "./taskRunner";
 
-export interface CodexAgentRunInput {
+export interface CliAgentRunInput {
   taskId: string;
+  runnerId: TaskCliRunnerId;
+  runnerLabel: string;
   prompt: string;
   cwd: string;
   outputFile: string;
@@ -16,53 +20,60 @@ export interface CodexAgentRunInput {
   sandbox: "read-only" | "workspace-write" | "danger-full-access";
   approvalPolicy: "untrusted" | "on-request" | "never" | "on-failure";
   timeoutMs: number;
-  onProgress?: (progress: CodexAgentProgress) => void;
+  extraArgs: string[];
+  onProgress?: (progress: CliAgentProgress) => void;
   signal?: AbortSignal;
 }
 
-export interface CodexAgentRunResult {
+export interface CliAgentRunResult {
   finalMessage: string;
   stdout: string;
   stderr: string;
 }
 
-export interface CodexAgentProgress {
+export interface CliAgentProgress {
   summary: string;
   payload?: Record<string, unknown>;
 }
 
-export interface CodexAgentClient {
-  run(input: CodexAgentRunInput): Promise<CodexAgentRunResult>;
+export interface CliAgentClient {
+  run(input: CliAgentRunInput): Promise<CliAgentRunResult>;
 }
 
-export interface CodexTaskRunnerOptions {
-  command: string;
-  workingDirectory: string;
-  model?: string;
-  sandbox: "read-only" | "workspace-write" | "danger-full-access";
-  approvalPolicy: "untrusted" | "on-request" | "never" | "on-failure";
-  timeoutMs: number;
+export interface MultiCliTaskRunnerOptions {
+  runners: TaskCliRunnerConfig[];
   outputDirectory: string;
+  isCommandAvailable?: (command: string) => boolean;
 }
 
-export class CodexTaskRunner implements TaskRunner {
+export class MultiCliTaskRunner implements TaskRunner {
   private readonly activeRuns = new Map<string, AbortController>();
 
   constructor(
     private readonly taskRepository: TaskRepository,
     private readonly eventLogService: EventLogService,
-    private readonly codexAgentClient: CodexAgentClient,
-    private readonly options: CodexTaskRunnerOptions
+    private readonly cliAgentClient: CliAgentClient,
+    private readonly options: MultiCliTaskRunnerOptions
   ) {}
 
   async run(task: Task, observer?: TaskRunnerObserver): Promise<Task | undefined> {
+    const runner = this.selectRunner(task);
+
+    if (!runner) {
+      return this.failTask(task, "没有可用的任务 CLI。请在设置里启用 Codex、Claude Code 或 Hermes，并确认命令路径可用。");
+    }
+
+    const runnerLabel = getTaskCliRunnerLabel(runner.id);
     const abortController = new AbortController();
     this.activeRuns.set(task.id, abortController);
-    const runningSummary = `开始调用 Codex 子任务：${task.title}`;
+    const runningSummary = `开始调用 ${runnerLabel} 子任务：${task.title}`;
     this.taskRepository.appendEvent({
       taskId: task.id,
       eventType: "task.running",
-      summary: runningSummary
+      summary: runningSummary,
+      payload: {
+        runnerId: runner.id
+      }
     });
     const running = this.taskRepository.updateStatus({
       taskId: task.id,
@@ -75,30 +86,33 @@ export class CodexTaskRunner implements TaskRunner {
     }
 
     mkdirSync(this.options.outputDirectory, { recursive: true });
-    const outputFile = join(this.options.outputDirectory, `${task.id}-last-message.md`);
-    const prompt = buildCodexTaskPrompt(task);
+    const outputFile = join(this.options.outputDirectory, `${task.id}-${runner.id}-last-message.md`);
     this.taskRepository.appendEvent({
       taskId: task.id,
       eventType: "task.agent.started",
-      summary: `Codex 子任务已启动：${task.title}`,
+      summary: `${runnerLabel} 子任务已启动：${task.title}`,
       payload: {
-        cwd: this.options.workingDirectory,
+        runnerId: runner.id,
+        cwd: runner.workingDirectory,
         outputFile,
-        sandbox: this.options.sandbox
+        sandbox: runner.sandbox
       }
     });
 
     try {
-      const result = await this.codexAgentClient.run({
+      const result = await this.cliAgentClient.run({
         taskId: task.id,
-        prompt,
-        cwd: this.options.workingDirectory,
+        runnerId: runner.id,
+        runnerLabel,
+        prompt: buildCliTaskPrompt(task, runnerLabel),
+        cwd: runner.workingDirectory ?? process.cwd(),
         outputFile,
-        command: this.options.command,
-        model: this.options.model,
-        sandbox: this.options.sandbox,
-        approvalPolicy: this.options.approvalPolicy,
-        timeoutMs: this.options.timeoutMs,
+        command: runner.command ?? runner.id,
+        model: runner.model,
+        sandbox: runner.sandbox,
+        approvalPolicy: runner.approvalPolicy,
+        timeoutMs: runner.timeoutMs,
+        extraArgs: runner.extraArgs,
         signal: abortController.signal,
         onProgress: (progress) => {
           this.taskRepository.appendEvent({
@@ -118,13 +132,14 @@ export class CodexTaskRunner implements TaskRunner {
           }
         }
       });
-      const finalMessage = normalizeAgentFinalMessage(result.finalMessage);
-      const completedSummary = `Codex 子任务完成：\n${finalMessage}`;
+      const finalMessage = normalizeAgentFinalMessage(result.finalMessage, runnerLabel);
+      const completedSummary = `${runnerLabel} 子任务完成：\n${finalMessage}`;
       this.taskRepository.appendEvent({
         taskId: task.id,
         eventType: "task.completed",
         summary: completedSummary,
         payload: {
+          runnerId: runner.id,
           outputFile,
           stdout: result.stdout,
           stderr: result.stderr
@@ -142,6 +157,7 @@ export class CodexTaskRunner implements TaskRunner {
           taskId: completed.id,
           title: completed.title,
           outputFile,
+          runnerId: runner.id,
           status: completed.status
         });
       }
@@ -155,34 +171,15 @@ export class CodexTaskRunner implements TaskRunner {
         this.taskRepository.appendEvent({
           taskId: task.id,
           eventType: "task.agent.cancelled",
-          summary: `Codex 子任务已停止：${message}`
+          summary: `${runnerLabel} 子任务已停止：${message}`,
+          payload: {
+            runnerId: runner.id
+          }
         });
         return currentTask;
       }
 
-      const failedSummary = `Codex 子任务失败：${message}`;
-      this.taskRepository.appendEvent({
-        taskId: task.id,
-        eventType: "task.failed",
-        summary: failedSummary
-      });
-      const failed = this.taskRepository.updateStatus({
-        taskId: task.id,
-        status: "failed",
-        latestProgress: failedSummary
-      });
-
-      if (failed) {
-        this.eventLogService.record("task.agent.failed", {
-          profileId: failed.profileId,
-          taskId: failed.id,
-          title: failed.title,
-          status: failed.status,
-          reason: message
-        });
-      }
-
-      return failed;
+      return this.failTask(task, `${runnerLabel} 子任务失败：${message}`, runner.id);
     } finally {
       this.activeRuns.delete(task.id);
     }
@@ -198,17 +195,79 @@ export class CodexTaskRunner implements TaskRunner {
     abortController.abort();
     return true;
   }
+
+  private selectRunner(task: Task): TaskCliRunnerConfig | undefined {
+    const sortedRunners = this.options.runners
+      .filter((runner) => runner.enabled)
+      .slice()
+      .sort((left, right) => left.priority - right.priority);
+
+    for (const runner of sortedRunners) {
+      const command = runner.command ?? runner.id;
+
+      if (this.isCommandAvailable(command)) {
+        return {
+          ...runner,
+          command
+        };
+      }
+
+      this.taskRepository.appendEvent({
+        taskId: task.id,
+        eventType: "task.agent.skipped",
+        summary: `${getTaskCliRunnerLabel(runner.id)} 命令不可用，切到下一个任务 CLI。`,
+        payload: {
+          runnerId: runner.id,
+          command
+        }
+      });
+    }
+
+    return undefined;
+  }
+
+  private isCommandAvailable(command: string): boolean {
+    return this.options.isCommandAvailable?.(command) ?? isCommandAvailable(command);
+  }
+
+  private failTask(task: Task, summary: string, runnerId?: TaskCliRunnerId): Task | undefined {
+    this.taskRepository.appendEvent({
+      taskId: task.id,
+      eventType: "task.failed",
+      summary,
+      payload: runnerId ? { runnerId } : undefined
+    });
+    const failed = this.taskRepository.updateStatus({
+      taskId: task.id,
+      status: "failed",
+      latestProgress: summary
+    });
+
+    if (failed) {
+      this.eventLogService.record("task.agent.failed", {
+        profileId: failed.profileId,
+        taskId: failed.id,
+        title: failed.title,
+        status: failed.status,
+        reason: summary,
+        runnerId
+      });
+    }
+
+    return failed;
+  }
 }
 
-export class CliCodexAgentClient implements CodexAgentClient {
-  async run(input: CodexAgentRunInput): Promise<CodexAgentRunResult> {
+export class CliAgentClientImpl implements CliAgentClient {
+  async run(input: CliAgentRunInput): Promise<CliAgentRunResult> {
     return new Promise((resolve, reject) => {
-      const args = buildCodexExecArgs(input);
+      const args = buildCliAgentArgs(input);
       const child = spawn(input.command, args, {
         cwd: input.cwd,
         env: {
           ...process.env,
-          AURABOT_CHILD_TASK_ID: input.taskId
+          AURABOT_CHILD_TASK_ID: input.taskId,
+          AURABOT_CHILD_TASK_RUNNER: input.runnerId
         },
         stdio: ["pipe", "pipe", "pipe"]
       });
@@ -235,7 +294,10 @@ export class CliCodexAgentClient implements CodexAgentClient {
       child.stdout.on("data", (chunk: Buffer) => {
         const text = chunk.toString("utf8");
         stdout += text;
-        stdoutLineBuffer = consumeCodexJsonlProgress(stdoutLineBuffer + text, input.onProgress);
+
+        if (input.runnerId === "codex") {
+          stdoutLineBuffer = consumeCodexJsonlProgress(stdoutLineBuffer + text, input.onProgress);
+        }
       });
       child.stderr.on("data", (chunk: Buffer) => {
         stderr += chunk.toString("utf8");
@@ -250,26 +312,22 @@ export class CliCodexAgentClient implements CodexAgentClient {
         input.signal?.removeEventListener("abort", abortRun);
 
         if (timedOut) {
-          reject(new Error(`codex task timed out after ${input.timeoutMs}ms`));
+          reject(new Error(`${input.runnerLabel} task timed out after ${input.timeoutMs}ms`));
           return;
         }
 
         if (cancelled) {
-          reject(new Error("codex task cancelled"));
+          reject(new Error(`${input.runnerLabel} task cancelled`));
           return;
         }
 
         if (code !== 0) {
-          reject(new Error(`codex exited ${code ?? `with signal ${signal ?? "unknown"}`}: ${stderr.trim()}`.trim()));
+          reject(new Error(`${input.runnerLabel} exited ${code ?? `with signal ${signal ?? "unknown"}`}: ${stderr.trim()}`.trim()));
           return;
         }
 
-        const finalMessage = existsSync(input.outputFile)
-          ? readFileSync(input.outputFile, "utf8").trim()
-          : stdout.trim();
-
         resolve({
-          finalMessage,
+          finalMessage: readFinalMessage(input, stdout),
           stdout,
           stderr
         });
@@ -279,34 +337,54 @@ export class CliCodexAgentClient implements CodexAgentClient {
   }
 }
 
-function buildCodexExecArgs(input: CodexAgentRunInput): string[] {
-  const args = [
-    "--ask-for-approval",
-    input.approvalPolicy,
-    "exec",
-    "--cd",
-    input.cwd,
-    "--sandbox",
-    input.sandbox,
-    "--json",
-    "--output-last-message",
-    input.outputFile,
-    "--color",
-    "never"
-  ];
+export function buildCliAgentArgs(input: CliAgentRunInput): string[] {
+  if (input.runnerId === "codex") {
+    const args = [
+      "--ask-for-approval",
+      input.approvalPolicy,
+      "exec",
+      "--cd",
+      input.cwd,
+      "--sandbox",
+      input.sandbox,
+      "--json",
+      "--output-last-message",
+      input.outputFile,
+      "--color",
+      "never"
+    ];
+
+    if (input.model) {
+      args.push("--model", input.model);
+    }
+
+    args.push(...input.extraArgs, "-");
+    return args;
+  }
+
+  if (input.runnerId === "claude") {
+    const args = ["--print", "--output-format", "text", "--permission-mode", mapClaudePermissionMode(input.approvalPolicy)];
+
+    if (input.model) {
+      args.push("--model", input.model);
+    }
+
+    args.push(...input.extraArgs);
+    return args;
+  }
+
+  const args = [...input.extraArgs];
 
   if (input.model) {
     args.push("--model", input.model);
   }
 
-  args.push("-");
-
   return args;
 }
 
-function buildCodexTaskPrompt(task: Task): string {
+function buildCliTaskPrompt(task: Task, runnerLabel: string): string {
   return [
-    "你是 AuraBot 派出的子任务 Codex agent。",
+    `你是 AuraBot 派出的子任务 ${runnerLabel} agent。`,
     "你运行在独立任务线程中，主聊天线程会等待你的最终结果并回流给用户。",
     "请只处理下面这个任务，不要修改与任务无关的文件。",
     "如果需要读取仓库、调用 git/gh、生成报告或写入 artifact，可以在当前工作目录内完成。",
@@ -317,9 +395,31 @@ function buildCodexTaskPrompt(task: Task): string {
   ].join("\n");
 }
 
+function readFinalMessage(input: CliAgentRunInput, stdout: string): string {
+  if (existsSync(input.outputFile)) {
+    return readFileSync(input.outputFile, "utf8").trim();
+  }
+
+  return stdout.trim();
+}
+
+function mapClaudePermissionMode(
+  approvalPolicy: "untrusted" | "on-request" | "never" | "on-failure"
+): "default" | "dontAsk" | "bypassPermissions" {
+  if (approvalPolicy === "never") {
+    return "bypassPermissions";
+  }
+
+  if (approvalPolicy === "on-request") {
+    return "dontAsk";
+  }
+
+  return "default";
+}
+
 function consumeCodexJsonlProgress(
   value: string,
-  onProgress: ((progress: CodexAgentProgress) => void) | undefined
+  onProgress: ((progress: CliAgentProgress) => void) | undefined
 ): string {
   const lines = value.split(/\r?\n/);
   const remaining = lines.pop() ?? "";
@@ -335,7 +435,7 @@ function consumeCodexJsonlProgress(
   return remaining;
 }
 
-function mapCodexJsonlEventToProgress(line: string): CodexAgentProgress | undefined {
+function mapCodexJsonlEventToProgress(line: string): CliAgentProgress | undefined {
   const trimmed = line.trim();
 
   if (!trimmed.startsWith("{")) {
@@ -374,7 +474,6 @@ function mapCodexJsonlEventToProgress(line: string): CodexAgentProgress | undefi
 
     if (type === "item.completed") {
       const item = isRecord(event.item) ? event.item : {};
-      const itemType = typeof item.type === "string" ? item.type : undefined;
 
       return {
         summary: summarizeCompletedCodexItem(item),
@@ -466,8 +565,19 @@ function isRecord(value: unknown): value is Record<string, unknown> {
   return typeof value === "object" && value !== null;
 }
 
-function normalizeAgentFinalMessage(value: string): string {
+function normalizeAgentFinalMessage(value: string, runnerLabel: string): string {
   const trimmed = value.trim();
 
-  return trimmed || "Codex 子任务完成，但没有返回最终文本。";
+  return trimmed || `${runnerLabel} 子任务完成，但没有返回最终文本。`;
+}
+
+function isCommandAvailable(command: string): boolean {
+  if (command.includes("/")) {
+    return existsSync(command);
+  }
+
+  return (process.env.PATH ?? "")
+    .split(delimiter)
+    .filter(Boolean)
+    .some((entry) => existsSync(join(entry, command)));
 }

@@ -39,7 +39,7 @@ Console window:
 | Model roles | `gateModel`, `chatModel`, and `memoryModel` are injectable; all default to local deterministic fallback and can use OpenAI-compatible APIs. |
 | Gate logic | Fragmented messages can wait; complete chat, task requests, task controls, and topic endings are classified, with model-backed gate decisions when configured. |
 | Memory v1/v2 | Preference, event, and follow-up memories can be written and recalled through relation edges; while the app is running, a background scheduler can surface due follow-ups through desktop-pet bubbles. |
-| Task v1 | Tasks can be created, queried, interrupted, revised, started, and completed from main chat; task cards expose quick cancel/delete controls; an opt-in Codex child runner can execute real delegated tasks. |
+| Task v1 | Tasks can be created, queried, interrupted, revised, started, and completed from main chat; task cards expose quick cancel/delete controls; opt-in Codex, Claude Code, or Hermes CLI runners can execute real delegated tasks by priority. |
 | Verification | Unit, integration, build, and e2e checks are wired. |
 
 ## Quick Start
@@ -157,9 +157,36 @@ Example:
     "timeoutMs": 12000
   },
   "taskRunner": {
-    "provider": "codex",
-    "codexCommand": "/Applications/Codex.app/Contents/Resources/codex",
-    "workingDirectory": "/path/to/AuraBot",
+    "provider": "cli",
+    "runners": [
+      {
+        "id": "codex",
+        "enabled": true,
+        "priority": 1,
+        "command": "/Applications/Codex.app/Contents/Resources/codex",
+        "workingDirectory": "/path/to/AuraBot",
+        "sandbox": "workspace-write",
+        "approvalPolicy": "never",
+        "timeoutMs": 300000
+      },
+      {
+        "id": "claude",
+        "enabled": false,
+        "priority": 2,
+        "command": "/opt/homebrew/bin/claude",
+        "workingDirectory": "/path/to/AuraBot",
+        "approvalPolicy": "never",
+        "timeoutMs": 300000
+      },
+      {
+        "id": "hermes",
+        "enabled": false,
+        "priority": 3,
+        "command": "hermes",
+        "workingDirectory": "/path/to/AuraBot",
+        "timeoutMs": 300000
+      }
+    ],
     "sandbox": "workspace-write",
     "approvalPolicy": "never",
     "timeoutMs": 300000
@@ -194,22 +221,24 @@ corepack pnpm dev:clean
 
 Keep API keys local and out of git. `corepack pnpm dev` reads the normal system-level config above; `corepack pnpm dev:clean` ignores it unless you pass env vars.
 
-## Codex Child Task Runner
+## Task CLI Runners
 
-Task execution defaults to the deterministic runner used by tests and demos. To let AuraBot delegate a queued task to the local Codex CLI, set `taskRunner.provider` to `codex` in config or `AURABOT_TASK_RUNNER=codex` in the environment.
+Task execution defaults to the deterministic runner used by tests and demos. To let AuraBot delegate a queued task to local CLI agents, open Settings and use the Task CLI section, or set `taskRunner.provider` to `cli` with `taskRunner.runners` in config. Lower `priority` values are tried first. If a higher-priority enabled command is unavailable, AuraBot skips it and starts the next enabled runner.
+
+Legacy Codex-only config still works: setting `taskRunner.provider` to `codex` or `AURABOT_TASK_RUNNER=codex` enables the Codex runner and maps the old `codexCommand`, `workingDirectory`, `model`, `sandbox`, `approvalPolicy`, and `timeoutMs` fields into the new runner list.
 
 Current main-chat flow:
 
 1. Say something task-like, for example `帮我做一份 GitHub 周报。`
 2. AuraBot creates a child task session and keeps the main chat as the control plane.
-3. When `taskRunner.provider` is `codex`, AuraBot immediately starts the child runner in the background and the task status strip moves from `queued` to `running`.
-4. The task runner invokes `codex exec` with the task prompt in a child process.
-5. While it runs, Codex JSONL progress updates are stored on the task and broadcast to the console status strip; asking `这个任务做到哪了？` returns the status, latest progress, and latest task event.
-6. Codex writes its final message through `--output-last-message`; AuraBot stores it in task events and replies in the main console when the child task settles.
+3. When any task CLI runner is enabled, AuraBot immediately starts the highest-priority available child runner in the background and the task status strip moves from `queued` to `running`.
+4. Codex runs through `codex exec`; Claude Code runs through `claude --print`; Hermes runs as a configurable stdin/stdout CLI command.
+5. While it runs, progress updates are stored on the task and broadcast to the console status strip; asking `这个任务做到哪了？` returns the status, latest progress, and latest task event.
+6. AuraBot stores the final CLI output in task events and replies in the main console when the child task settles.
 
 When the default deterministic runner is active, newly created tasks remain `queued` until the main chat says `开始做这个任务。`. This keeps local tests and demos predictable.
 
-Default Codex execution settings are intentionally conservative:
+Default task CLI execution settings are intentionally conservative:
 
 | Field | Default |
 | --- | --- |
@@ -351,7 +380,7 @@ This is still an MVP skeleton, not a production companion:
 1. Model roles default to deterministic local fallback; external calls require local config or environment variables.
 2. User messages render immediately and assistant messages can stream through update broadcasts, but user-message interruption of an in-flight generation is not implemented yet.
 3. Memory can use `memoryModel` for structured extraction, duplicate-memory merging, candidate relation-edge planning, recall query-term generation, and seed-node reranking; embedding is not implemented yet.
-4. The task runner can call local Codex when explicitly configured, broadcasts JSONL child progress, cancels the child process when interrupted, and marks orphaned running tasks failed on startup; true resume and richer artifact handling are not implemented yet.
+4. The task runner can call local Codex, Claude Code, or Hermes when explicitly configured, broadcasts child progress, cancels the child process when interrupted, and marks orphaned running tasks failed on startup; true resume and richer artifact handling are not implemented yet.
 5. Live2D status behavior uses the bundled Hiyori motion groups and global cursor focus; custom expressions and richer animation tuning are not implemented yet.
 6. Voice input currently depends on Chromium's `SpeechRecognition`; a stable local or model-backed STT adapter is still needed.
 7. Profile switching, scheduled jobs, desktop notifications, packaging, and auto-start are not implemented yet.

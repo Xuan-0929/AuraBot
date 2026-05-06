@@ -1,7 +1,7 @@
 import { existsSync, mkdirSync, writeFileSync } from "node:fs";
 import { join } from "node:path";
 import { app, BrowserWindow, shell } from "electron";
-import { createServices, type AppServices } from "../core/bootstrap/createServices";
+import { createServices, createTaskRunner, type AppServices } from "../core/bootstrap/createServices";
 import { MemoryFollowUpScheduler } from "../core/memory/memoryFollowUpScheduler";
 import {
   applyPetSettings,
@@ -20,6 +20,8 @@ import {
 import { PetSettingsStore } from "./petSettingsStore";
 import { PetWindowStateStore } from "./petWindowStateStore";
 import { registerIpc } from "./registerIpc";
+import { updateUserTaskRunnerSettings } from "./appConfigStore";
+import { createPublicAppConfig, type TaskRunnerSettingsPatch } from "../shared/contracts/settings";
 
 let services: AppServices | undefined;
 let petSettingsStore: PetSettingsStore | undefined;
@@ -40,6 +42,7 @@ async function bootstrap(): Promise<void> {
     openConsoleWindow,
     openSettingsWindow,
     openConfigFile: () => openUserConfigFile(userDataPath),
+    updateTaskRunnerSettings: (patch) => updateTaskRunnerSettings(userDataPath, patch),
     getPetSettings: () => petSettingsStore?.get() ?? {
       clickThroughPet: false,
       displayLanguage: "en"
@@ -91,6 +94,24 @@ async function openUserConfigFile(userDataPath: string): Promise<void> {
   if (error) {
     shell.showItemInFolder(configPath);
   }
+}
+
+async function updateTaskRunnerSettings(userDataPath: string, patch: TaskRunnerSettingsPatch) {
+  if (!services) {
+    throw new Error("AuraBot services are not ready.");
+  }
+
+  const nextConfig = updateUserTaskRunnerSettings(userDataPath, services.config, patch);
+  services.config.taskRunner = nextConfig.taskRunner;
+  services.taskService.setTaskRunner(
+    createTaskRunner(nextConfig.taskRunner, {
+      userDataPath,
+      taskRepository: services.taskRepository,
+      eventLogService: services.eventLogService
+    })
+  );
+
+  return createPublicAppConfig(services.config);
 }
 
 app.whenReady().then(bootstrap);

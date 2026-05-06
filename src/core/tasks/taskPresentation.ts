@@ -205,8 +205,8 @@ function getLatestMeaningfulSummary(task: Task, events: TaskEvent[]): string {
 
 function cleanTaskResultText(value: string): string {
   return value
-    .replace(/^Codex 子任务完成：\s*/u, "")
-    .replace(/^Codex 子任务失败：\s*/u, "")
+    .replace(/^(Codex|Claude Code|Hermes) 子任务完成：\s*/u, "")
+    .replace(/^(Codex|Claude Code|Hermes) 子任务失败：\s*/u, "")
     .replace(/^任务执行异常：\s*/u, "")
     .replace(/^已完成：\s*/u, "")
     .replace(/^开始处理：\s*/u, "")
@@ -234,10 +234,10 @@ function formatCompletedText(task: Task, resultText: string): string {
 
 function cleanTaskProgressText(value: string): string {
   const cleaned = cleanTaskResultText(value)
-    .replace(/^Codex 子任务已启动：.*$/u, "已经开始处理")
-    .replace(/^开始调用 Codex 子任务：.*$/u, "已经开始处理")
-    .replace(/^Codex 子任务开始处理任务。?$/u, "已经开始处理")
-    .replace(/^Codex 子任务本轮处理完成，正在收尾。?$/u, "正在收尾");
+    .replace(/^(Codex|Claude Code|Hermes) 子任务已启动：.*$/u, "已经开始处理")
+    .replace(/^开始调用 (Codex|Claude Code|Hermes) 子任务：.*$/u, "已经开始处理")
+    .replace(/^(Codex|Claude Code|Hermes) 子任务开始处理任务。?$/u, "已经开始处理")
+    .replace(/^(Codex|Claude Code|Hermes) 子任务本轮处理完成，正在收尾。?$/u, "正在收尾");
 
   return cleaned || "已经开始处理";
 }

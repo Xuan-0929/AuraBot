@@ -13,14 +13,16 @@ import type { PetActivity } from "../shared/contracts/pet";
 import { parsePetSettingsPatch, type PetSettings, type PetSettingsPatch } from "../shared/schemas/petSettings";
 import type { Task } from "../shared/schemas/task";
 import type { AppServices } from "../core/bootstrap/createServices";
+import { shouldAutoRunTasks } from "../core/bootstrap/createServices";
 import { buildTaskSettledMessageDraftWithVoice, isTaskResultPathAllowed } from "../core/tasks/taskPresentation";
 import { splitTextIntoSentences } from "../shared/text/sentences";
-import { createPublicAppConfig } from "../shared/contracts/settings";
+import { createPublicAppConfig, type PublicAppConfig, type TaskRunnerSettingsPatch } from "../shared/contracts/settings";
 
 export interface WindowController {
   openConsoleWindow(): void;
   openSettingsWindow(): void;
   openConfigFile(): Promise<void>;
+  updateTaskRunnerSettings(patch: TaskRunnerSettingsPatch): Promise<PublicAppConfig>;
   getPetSettings(): PetSettings;
   updatePetSettings(patch: PetSettingsPatch): PetSettings;
   setPetMousePassthrough(enabled: boolean): void;
@@ -79,6 +81,10 @@ export function registerIpc(services: AppServices, windows: WindowController): v
 
   ipcMain.handle(IPC_CHANNELS.openConfigFile, () => windows.openConfigFile());
 
+  ipcMain.handle(IPC_CHANNELS.updateTaskRunnerSettings, async (_event, patch: TaskRunnerSettingsPatch) =>
+    windows.updateTaskRunnerSettings(patch)
+  );
+
   ipcMain.handle(IPC_CHANNELS.getPetSettings, () => windows.getPetSettings());
 
   ipcMain.handle(IPC_CHANNELS.updatePetSettings, (_event, patch: PetSettingsPatch) =>
@@ -111,7 +117,7 @@ export function registerIpc(services: AppServices, windows: WindowController): v
         }
       }
     });
-    if (result.createdTask && services.config.taskRunner.provider === "codex") {
+    if (result.createdTask && shouldAutoRunTasks(services.config.taskRunner)) {
       const startedTask = services.taskService.runTaskInBackground({
         profileId: result.createdTask.profileId,
         taskId: result.createdTask.id,

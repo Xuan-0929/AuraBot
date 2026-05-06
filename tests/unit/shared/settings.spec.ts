@@ -29,6 +29,39 @@ describe("createPublicAppConfig", () => {
       },
       taskRunner: {
         provider: "deterministic",
+        runners: [
+          {
+            id: "codex",
+            enabled: true,
+            priority: 1,
+            command: "/usr/local/bin/codex",
+            workingDirectory: "/Users/xuan/project",
+            sandbox: "workspace-write",
+            approvalPolicy: "never",
+            timeoutMs: 300000,
+            extraArgs: []
+          },
+          {
+            id: "claude",
+            enabled: false,
+            priority: 2,
+            command: "/opt/homebrew/bin/claude",
+            sandbox: "workspace-write",
+            approvalPolicy: "never",
+            timeoutMs: 300000,
+            extraArgs: []
+          },
+          {
+            id: "hermes",
+            enabled: true,
+            priority: 3,
+            command: "hermes",
+            sandbox: "workspace-write",
+            approvalPolicy: "never",
+            timeoutMs: 300000,
+            extraArgs: []
+          }
+        ],
         sandbox: "workspace-write",
         approvalPolicy: "never",
         timeoutMs: 300000
@@ -46,6 +79,32 @@ describe("createPublicAppConfig", () => {
       temperature: 0.7
     });
     expect(publicConfig.memoryModel.hasApiKey).toBe(false);
+    expect(publicConfig.taskRunner.runners).toEqual([
+      {
+        id: "codex",
+        label: "Codex",
+        enabled: true,
+        priority: 1,
+        command: "/usr/local/bin/codex",
+        workingDirectory: "/Users/xuan/project"
+      },
+      {
+        id: "claude",
+        label: "Claude Code",
+        enabled: false,
+        priority: 2,
+        command: "/opt/homebrew/bin/claude",
+        workingDirectory: undefined
+      },
+      {
+        id: "hermes",
+        label: "Hermes",
+        enabled: true,
+        priority: 3,
+        command: "hermes",
+        workingDirectory: undefined
+      }
+    ]);
     expect(JSON.stringify(publicConfig)).not.toContain("secret");
   });
 });

@@ -49,8 +49,12 @@ export class TaskService {
     private readonly taskRepository: TaskRepository,
     private readonly sessionRepository: SessionRepository,
     private readonly eventLogService: EventLogService,
-    private readonly taskRunner: TaskRunner
+    private taskRunner: TaskRunner
   ) {}
+
+  setTaskRunner(taskRunner: TaskRunner): void {
+    this.taskRunner = taskRunner;
+  }
 
   createTaskFromChat(input: CreateTaskFromChatInput): Task {
     const taskSession = this.sessionRepository.createTaskSession({
