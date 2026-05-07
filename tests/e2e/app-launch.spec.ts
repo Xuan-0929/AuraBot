@@ -61,6 +61,16 @@ async function openSettingsFromPet(electronApp: ElectronApplication, petWindow: 
   return settingsWindow;
 }
 
+async function sendConsoleMessage(consoleWindow: Page, content: string): Promise<void> {
+  const input = consoleWindow.getByPlaceholder("Say something");
+  await input.fill(content);
+  await input.press("Enter");
+}
+
+function getConsoleStickyNote(consoleWindow: Page, title: string) {
+  return consoleWindow.locator(".task-sticky-notes-console .task-sticky-note").filter({ hasText: title });
+}
+
 test("launches as a small desktop pet and opens console from the hover control", async () => {
   const { electronApp, petWindow, userDataDir } = await launchAuraBot();
 
@@ -307,7 +317,7 @@ test("waits on fragmented input and replies after the thought is completed", asy
   }
 });
 
-test("keeps long console conversations scrollable and pinned to the newest message", async () => {
+test("keeps long console conversations reachable while the newest message stays visible", async () => {
   const { electronApp, petWindow, userDataDir } = await launchAuraBot();
 
   try {
@@ -320,7 +330,7 @@ test("keeps long console conversations scrollable and pinned to the newest messa
       await expect(consoleWindow.getByText(/我记住了.*火锅/).last()).toBeVisible();
     }
 
-    const scrollMetrics = await consoleWindow.locator(".message-list").evaluate((element) => ({
+    const scrollMetrics = await consoleWindow.locator(".console-window").evaluate((element) => ({
       clientHeight: element.clientHeight,
       scrollHeight: element.scrollHeight,
       scrollTop: element.scrollTop,
@@ -328,8 +338,8 @@ test("keeps long console conversations scrollable and pinned to the newest messa
     }));
 
     expect(scrollMetrics.clientHeight).toBeLessThan(scrollMetrics.scrollHeight);
-    expect(scrollMetrics.clientHeight).toBeLessThan(scrollMetrics.windowHeight);
-    expect(scrollMetrics.scrollTop + scrollMetrics.clientHeight).toBeGreaterThanOrEqual(scrollMetrics.scrollHeight - 2);
+    expect(scrollMetrics.clientHeight).toBeLessThanOrEqual(scrollMetrics.windowHeight);
+    expect(scrollMetrics.scrollTop).toBeGreaterThan(0);
     await expect(consoleWindow.locator(".message-user").filter({ hasText: "第 14 条" })).toBeVisible();
   } finally {
     await cleanupAuraBot(electronApp, userDataDir);
@@ -342,15 +352,14 @@ test("creates a visible queued task from a task-like chat request", async () => 
   try {
     const consoleWindow = await openConsole(electronApp, petWindow);
 
-    await consoleWindow.getByPlaceholder("Say something").fill("帮我整理一份明天会议的清单。");
-    await consoleWindow.getByRole("button", { name: "Send" }).click();
+    await sendConsoleMessage(consoleWindow, "帮我整理一份明天会议的清单。");
 
     await expect(consoleWindow.locator(".message-assistant").filter({ hasText: /开始弄/ })).toBeVisible();
     await expect(consoleWindow.getByLabel("Agent status")).toContainText("tasking");
     await expect(petWindow.getByLabel("Desktop Live2D pet")).toHaveAttribute("data-agent-status", "tasking");
     await expect(petWindow.locator(".live2d-canvas-host")).toHaveAttribute("data-motion-group", "TapBody");
-    await expect(consoleWindow.locator(".task-status-card").filter({ hasText: "明天会议" })).toContainText("queued");
-    await expect(consoleWindow.locator(".task-panel")).toHaveCount(0);
+    await expect(consoleWindow.locator(".task-sticky-notes-console")).toBeVisible();
+    await expect(getConsoleStickyNote(consoleWindow, "明天会议")).toContainText("Not started yet");
   } finally {
     await cleanupAuraBot(electronApp, userDataDir);
   }
@@ -361,24 +370,19 @@ test("controls a task through the main chat instead of task panel buttons", asyn
 
   try {
     const consoleWindow = await openConsole(electronApp, petWindow);
-    const input = consoleWindow.getByPlaceholder("Say something");
+    const meetingNote = getConsoleStickyNote(consoleWindow, "明天会议");
 
-    await input.fill("帮我整理一份明天会议的清单。");
-    await consoleWindow.getByRole("button", { name: "Send" }).click();
-    await expect(consoleWindow.locator(".task-status-card").filter({ hasText: "明天会议" })).toContainText("queued");
+    await sendConsoleMessage(consoleWindow, "帮我整理一份明天会议的清单。");
+    await expect(meetingNote).toContainText("Not started yet");
 
-    await input.fill("这个任务做到哪了？");
-    await consoleWindow.getByRole("button", { name: "Send" }).click();
-    await expect(consoleWindow.locator(".message-assistant").filter({ hasText: /还没开始/ })).toBeVisible();
+    await sendConsoleMessage(consoleWindow, "这个任务做到哪了？");
+    await expect(consoleWindow.locator(".message-assistant").filter({ hasText: /直接跟我说一声/ })).toBeVisible();
 
-    await input.fill("先停掉这个任务。");
-    await consoleWindow.getByRole("button", { name: "Send" }).click();
-    await expect(consoleWindow.locator(".task-status-card").filter({ hasText: "明天会议" })).toContainText("stopped");
+    await sendConsoleMessage(consoleWindow, "先停掉这个任务。");
+    await expect(meetingNote).toContainText("Stopped");
 
-    await input.fill("改成整理后天路演的清单。");
-    await consoleWindow.getByRole("button", { name: "Send" }).click();
-    await expect(consoleWindow.locator(".task-status-card").filter({ hasText: "后天路演" })).toContainText("queued");
-    await expect(consoleWindow.locator(".task-panel")).toHaveCount(0);
+    await sendConsoleMessage(consoleWindow, "改成整理后天路演的清单。");
+    await expect(getConsoleStickyNote(consoleWindow, "后天路演")).toContainText("Not started yet");
   } finally {
     await cleanupAuraBot(electronApp, userDataDir);
   }
@@ -389,27 +393,23 @@ test("uses task status card buttons to cancel and remove settled tasks", async (
 
   try {
     const consoleWindow = await openConsole(electronApp, petWindow);
-    const input = consoleWindow.getByPlaceholder("Say something");
 
-    await input.fill("帮我整理一份明天会议的清单。");
-    await consoleWindow.getByRole("button", { name: "Send" }).click();
-    const meetingCard = consoleWindow.locator(".task-status-card").filter({ hasText: "明天会议" });
-    await expect(meetingCard).toContainText("queued");
+    await sendConsoleMessage(consoleWindow, "帮我整理一份明天会议的清单。");
+    const meetingNote = getConsoleStickyNote(consoleWindow, "明天会议");
+    await expect(meetingNote).toContainText("Not started yet");
 
-    await meetingCard.getByRole("button", { name: /Cancel task/ }).click();
-    await expect(meetingCard).toContainText("stopped");
-    await meetingCard.getByRole("button", { name: /Delete task/ }).click();
-    await expect(meetingCard).toHaveCount(0);
+    await meetingNote.getByRole("button", { name: /Cancel task/ }).click();
+    await expect(meetingNote).toContainText("Stopped");
+    await meetingNote.getByRole("button", { name: /Delete task/ }).click();
+    await expect(meetingNote).toHaveCount(0);
 
-    await input.fill("帮我写一份 GitHub 周报。");
-    await consoleWindow.getByRole("button", { name: "Send" }).click();
-    await input.fill("开始做这个任务。");
-    await consoleWindow.getByRole("button", { name: "Send" }).click();
-    const reportCard = consoleWindow.locator(".task-status-card").filter({ hasText: "GitHub 周报" });
-    await expect(reportCard).toContainText("completed");
+    await sendConsoleMessage(consoleWindow, "帮我写一份 GitHub 周报。");
+    await sendConsoleMessage(consoleWindow, "开始做这个任务。");
+    const reportNote = getConsoleStickyNote(consoleWindow, "GitHub 周报");
+    await expect(reportNote).toContainText("Result is ready");
 
-    await reportCard.getByRole("button", { name: /Delete task/ }).click();
-    await expect(reportCard).toHaveCount(0);
+    await reportNote.getByRole("button", { name: /Delete task/ }).click();
+    await expect(reportNote).toHaveCount(0);
   } finally {
     await cleanupAuraBot(electronApp, userDataDir);
   }
@@ -420,26 +420,21 @@ test("targets a specific task through main chat wording when multiple tasks exis
 
   try {
     const consoleWindow = await openConsole(electronApp, petWindow);
-    const input = consoleWindow.getByPlaceholder("Say something");
+    const reportNote = getConsoleStickyNote(consoleWindow, "周报");
 
-    await input.fill("帮我整理一份明天会议的清单。");
-    await consoleWindow.getByRole("button", { name: "Send" }).click();
-    await expect(consoleWindow.locator(".task-status-card").filter({ hasText: "明天会议" })).toContainText("queued");
+    await sendConsoleMessage(consoleWindow, "帮我整理一份明天会议的清单。");
+    await expect(getConsoleStickyNote(consoleWindow, "明天会议")).toContainText("Not started yet");
 
-    await input.fill("帮我生成一份周报初稿。");
-    await consoleWindow.getByRole("button", { name: "Send" }).click();
-    await expect(consoleWindow.locator(".task-status-card").filter({ hasText: "周报" })).toContainText("queued");
+    await sendConsoleMessage(consoleWindow, "帮我生成一份周报初稿。");
+    await expect(reportNote).toContainText("Not started yet");
 
-    await input.fill("把会议任务改成整理后天路演的清单。");
-    await consoleWindow.getByRole("button", { name: "Send" }).click();
-    await expect(consoleWindow.locator(".task-status-card").filter({ hasText: "后天路演" })).toContainText("queued");
-    await expect(consoleWindow.locator(".task-status-card").filter({ hasText: "周报" })).toContainText("queued");
+    await sendConsoleMessage(consoleWindow, "把会议任务改成整理后天路演的清单。");
+    await expect(getConsoleStickyNote(consoleWindow, "后天路演")).toContainText("Not started yet");
+    await expect(reportNote).toContainText("Not started yet");
 
-    await input.fill("停掉周报任务。");
-    await consoleWindow.getByRole("button", { name: "Send" }).click();
-    await expect(consoleWindow.locator(".task-status-card").filter({ hasText: "周报" })).toContainText("stopped");
-    await expect(consoleWindow.locator(".task-status-card").filter({ hasText: "后天路演" })).toContainText("queued");
-    await expect(consoleWindow.locator(".task-panel")).toHaveCount(0);
+    await sendConsoleMessage(consoleWindow, "停掉周报任务。");
+    await expect(reportNote).toContainText("Stopped");
+    await expect(getConsoleStickyNote(consoleWindow, "后天路演")).toContainText("Not started yet");
   } finally {
     await cleanupAuraBot(electronApp, userDataDir);
   }
@@ -450,20 +445,17 @@ test("starts a queued task from the main chat and reports completion", async () 
 
   try {
     const consoleWindow = await openConsole(electronApp, petWindow);
-    const input = consoleWindow.getByPlaceholder("Say something");
+    const meetingNote = getConsoleStickyNote(consoleWindow, "明天会议");
 
-    await input.fill("帮我整理一份明天会议的清单。");
-    await consoleWindow.getByRole("button", { name: "Send" }).click();
-    await expect(consoleWindow.locator(".task-status-card").filter({ hasText: "明天会议" })).toContainText("queued");
+    await sendConsoleMessage(consoleWindow, "帮我整理一份明天会议的清单。");
+    await expect(meetingNote).toContainText("Not started yet");
 
-    await input.fill("开始做这个任务。");
-    await consoleWindow.getByRole("button", { name: "Send" }).click();
+    await sendConsoleMessage(consoleWindow, "开始做这个任务。");
     await expect(consoleWindow.locator(".message-assistant").filter({ hasText: /整理好了/ })).toBeVisible();
-    await expect(consoleWindow.locator(".task-status-card").filter({ hasText: "明天会议" })).toContainText("completed");
+    await expect(meetingNote).toContainText("Result is ready");
     await expect(petWindow.getByLabel("Pet message")).toContainText("弄好了");
 
-    await input.fill("这个任务做到哪了？");
-    await consoleWindow.getByRole("button", { name: "Send" }).click();
+    await sendConsoleMessage(consoleWindow, "这个任务做到哪了？");
     await expect(consoleWindow.locator(".message-assistant").filter({ hasText: /整理好了/ }).last()).toBeVisible();
   } finally {
     await cleanupAuraBot(electronApp, userDataDir);

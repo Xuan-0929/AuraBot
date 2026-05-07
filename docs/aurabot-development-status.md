@@ -1,6 +1,6 @@
 # AuraBot 当前开发状态
 
-更新时间：2026-05-06
+更新时间：2026-05-07
 
 这份文档记录当前 main 集成线已经完成的工程事实、最近一次验证结果，以及下一步最应该推进的任务。它是执行状态板，不替代 PRD，也不替代 MVP 计划。
 
@@ -9,6 +9,33 @@
 当前集成基线：`989fc03 docs: update LangChain development log`
 
 分支边界：这一侧已经集成 Live2D 桌宠体验、主控制台、任务卡控制、流式回复、模型 gate、记忆调试、follow-up 主动提醒，以及 soul 驱动的统一回复/播报机制。后续如果继续并行开发，记忆模型/配置大改、任务执行器大改、桌宠 UI 大改仍建议分支隔离，避免在 `chatOrchestrator`、`createWindow`、`store`、IPC contract 和 renderer 样式上互相抢修改权。
+
+## 2026-05-07 A1 UI productization checkpoint
+
+本次 checkpoint 把 A1 产品化界面收口到“陪伴优先”的稳定形态，并把验证口径同步到了当前真实 UI。`codex/aurabot-ui-productization-a1` 这一轮确认的不是新功能草图，而是已经能跑通的主舞台、控制台、设置中心和任务文案出口。
+
+已完成：
+
+1. 桌宠已经收敛成 A1 陪伴主舞台：默认启动仍然先进入 Live2D 桌面小人，聊天、任务提醒和状态变化都以桌宠为第一触点，而不是先打开传统应用壳。
+2. 控制台已经切成“聊天室 + 右侧轻便签”结构；旧 task overlay 不再作为主路径，任务在 A1 控制台里以 sticky notes 形式贴在右侧，保留轻量的取消/删除动作。
+3. Settings Center 已完成 A1 小屋式收口：设置页作为独立中心存在，承接 persona、pet behavior、Live2D、notification 和 model/provider 这些产品化入口，而不是把设置继续散落在控制台里。
+4. 任务相关可见话术已经统一到 companion-first 口吻，覆盖 `task.status`、`task.interrupted`、`task.failed` 和完成后回流这些路径；用户看到的是 Aura 在陪着推进，而不是 runner/系统提示语。
+5. `tests/e2e/app-launch.spec.ts` 已对齐当前 A1 UI：旧 `.task-status-card` / overlay 断言改成 console sticky notes 结构，任务状态文案断言改成当前真实 copy，并把长对话可达性断言切到当前控制台滚动行为。
+
+本轮验证记录：
+
+| 命令/检查 | 结果 |
+| --- | --- |
+| `corepack pnpm test:e2e tests/e2e/app-launch.spec.ts --grep "task|sticky|queued|cancel|remove|multiple|completion"` | 5 个 task/console 定向 e2e 通过 |
+| `corepack pnpm vitest run tests/unit/renderer/desktopPet.spec.tsx tests/unit/renderer/taskStickyNotes.spec.tsx tests/unit/renderer/consoleWindow.spec.tsx tests/unit/renderer/settingsWindow.spec.tsx tests/unit/renderer/personaSettingsPage.spec.tsx tests/unit/renderer/notificationSettingsPage.spec.tsx tests/unit/core/tasks/taskPresentation.spec.ts tests/unit/core/voice/voiceAdapter.spec.ts tests/integration/orchestration/chat-task.spec.ts` | 9 个 test files、57 个 tests 通过 |
+| `corepack pnpm typecheck` | 通过 |
+| `corepack pnpm build` | 通过 |
+| `corepack pnpm test:e2e` | 14 个 e2e tests 通过 |
+
+补充说明：
+
+1. 在先跑定向 e2e 后，Node 侧 `vitest` 首次执行遇到 `better-sqlite3` native module 被 `electron-rebuild` 切到 Electron ABI 的环境性报错；执行 `corepack pnpm rebuild:node` 后恢复，再按原验证命令重跑通过。
+2. 本轮没有发现需要改应用代码的 blocker；剩余修复都收口在 `tests/e2e/app-launch.spec.ts` 的选择器、任务发送交互和滚动断言上。
 
 ## 2026-05-06 LangChain checkpoint
 
