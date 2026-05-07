@@ -192,6 +192,7 @@ function buildWorkflow(input: VoiceRenderInput): Record<string, unknown> {
         intent: "以陪在用户旁边的口吻回答任务目前状态。",
         requirements: [
           "只使用当前状态和最新进展",
+          "更像陪在旁边自然交代进展",
           "queued 时更像先替用户记在旁边，不要像还未启动的状态播报",
           "running 时更像我已经在弄了，弄好后会回来告诉用户",
           "不要像 runner 日志、系统广播或任务状态机"
@@ -217,9 +218,8 @@ function buildWorkflow(input: VoiceRenderInput): Record<string, unknown> {
         channel,
         intent: "像陪在用户旁边的人一样告诉用户这次先卡住了。",
         requirements: [
-          "保留安全失败原因",
+          "保留失败事实但不要推卸责任",
           "结论先行，像先卡在某一步",
-          "不要推卸责任",
           "自然留下继续一起修改的入口",
           "不要像报错日志或失败广播"
         ]
@@ -229,7 +229,7 @@ function buildWorkflow(input: VoiceRenderInput): Record<string, unknown> {
         scene: input.scene,
         channel,
         intent: "用陪伴式口吻告诉用户这里先停一下。",
-        requirements: ["表达已经先停一下", "可以让用户给新方向", "不要像系统中止通知"]
+        requirements: ["表达已经停下并允许用户给新方向", "不要像系统中止通知"]
       };
     case "task.control_not_found":
       return {

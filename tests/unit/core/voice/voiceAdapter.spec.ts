@@ -246,6 +246,87 @@ describe("VoiceAdapter", () => {
     expect(request?.messages[1]?.content).not.toContain("fallbackText");
   });
 
+  it.each([
+    {
+      scene: "task.status" as const,
+      facts: {
+        taskTitle: "帮我做一个 GitHub 周报。",
+        status: "running",
+        latestProgress: "正在整理本周合并记录"
+      },
+      expectedWorkflowSnippets: [
+        "\"scene\":\"task.status\"",
+        "以陪在用户旁边的口吻回答任务目前状态",
+        "更像陪在旁边自然交代进展",
+        "queued 时更像先替用户记在旁边",
+        "running 时更像我已经在弄了",
+        "不要像 runner 日志、系统广播或任务状态机"
+      ]
+    },
+    {
+      scene: "task.failed" as const,
+      facts: {
+        taskTitle: "帮我做一份 GitHub 周报。",
+        resultSummary: "codex exited 1"
+      },
+      expectedWorkflowSnippets: [
+        "\"scene\":\"task.failed\"",
+        "告诉用户这次先卡住了",
+        "保留失败事实但不要推卸责任",
+        "自然留下继续一起修改的入口",
+        "不要像报错日志或失败广播"
+      ]
+    },
+    {
+      scene: "task.interrupted" as const,
+      facts: {
+        taskTitle: "帮我做一份 GitHub 周报。"
+      },
+      expectedWorkflowSnippets: [
+        "\"scene\":\"task.interrupted\"",
+        "用陪伴式口吻告诉用户这里先停一下",
+        "表达已经停下并允许用户给新方向",
+        "不要像系统中止通知"
+      ]
+    }
+  ])("passes companion-first model-backed prompt contracts for $scene", async ({
+    scene,
+    facts,
+    expectedWorkflowSnippets
+  }) => {
+    let request: ChatCompletionRequest | undefined;
+    const adapter = new ModelBackedVoiceAdapter({
+      client: {
+        complete: async (input) => {
+          request = input;
+
+          return "收到。";
+        }
+      },
+      config: {
+        enabled: true,
+        provider: "openai-compatible",
+        baseUrl: "https://example.test/v1",
+        apiKey: "key",
+        model: "voice-model"
+      }
+    });
+
+    const reply = await adapter.render({
+      scene,
+      channel: "chat",
+      soul,
+      facts
+    });
+
+    expect(reply).toBe("收到。");
+    expect(request?.messages[0]?.content).toContain("而不是客服、工单、系统通知、运行日志或任务广播");
+    expect(request?.messages[0]?.content).toContain("facts 是权威事实");
+    for (const snippet of expectedWorkflowSnippets) {
+      expect(request?.messages[1]?.content).toContain(snippet);
+    }
+  });
+
   it("propagates voice model failures instead of rendering deterministic task notices", async () => {
     const adapter = new ModelBackedVoiceAdapter({
       client: {
