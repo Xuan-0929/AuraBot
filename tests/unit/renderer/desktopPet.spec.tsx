@@ -168,7 +168,22 @@ describe("DesktopPet hover chat bubble", () => {
     });
 
     expect(container.querySelector(".desktop-pet-sticky-notes")).not.toBeNull();
-    expect(container.textContent).toContain("写周报");
+    expect(container.textContent).toContain("周报");
+  });
+
+  it("still opens the main console when the model is clicked with sticky notes visible", async () => {
+    const onOpenConsole = vi.fn(async () => undefined);
+
+    await renderPet({
+      tasks: [makeTask({ id: "task-1", title: "帮我写周报。", status: "running" })],
+      onOpenConsole
+    });
+
+    await act(async () => {
+      container.querySelector<HTMLButtonElement>(".desktop-pet-model-button")!.click();
+    });
+
+    expect(onOpenConsole).toHaveBeenCalledTimes(1);
   });
 
   async function renderPet(overrides: Partial<DesktopPetProps> = {}) {

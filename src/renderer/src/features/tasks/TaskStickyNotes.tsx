@@ -15,7 +15,7 @@ export function TaskStickyNotes({
   onCancelTask?: (taskId: string) => void;
   onDeleteTask?: (taskId: string) => void;
 }) {
-  const visibleTasks = pickVisibleTasks(tasks, variant);
+  const visibleTasks = variant === "pet" ? pickVisiblePetTasks(tasks) : tasks;
 
   if (visibleTasks.length === 0) {
     return null;
@@ -46,20 +46,16 @@ export function TaskStickyNotes({
   );
 }
 
-function pickVisibleTasks(tasks: Task[], variant: "pet" | "console"): Task[] {
-  if (variant === "pet") {
-    return tasks.filter((task) => isActive(task.status)).slice(0, 2);
-  }
-
-  return tasks.slice(0, 3);
-}
-
 function summarizeTitle(title: string): string {
   const cleaned = title
     .trim()
     .replace(/[。.!！]*$/u, "")
-    .replace(/^(请你|请|麻烦你|麻烦|帮忙)\s*/u, "")
-    .replace(/^(帮我把|帮我先把|帮我先|帮我给|帮我)\s*/u, "")
+    .replace(/^(请|麻烦)\s*/u, "")
+    .replace(
+      /^(帮我把|帮我做一下|帮我写一下|帮我整理一下|帮我生成一下|帮我做|帮我写|帮我整理|帮我生成|帮我|做一下|写一下|整理一下|生成一下|做|写|整理|生成)\s*/u,
+      ""
+    )
+    .replace(/^(一份|一个|一篇|一版|这份|这个|一下)\s*/u, "")
     .trim();
 
   return cleaned || title;
@@ -67,6 +63,10 @@ function summarizeTitle(title: string): string {
 
 function summarizeMeta(task: Task, displayLanguage: PetSettings["displayLanguage"]): string {
   return taskProgressLabel(displayLanguage, task);
+}
+
+function pickVisiblePetTasks(tasks: Task[]): Task[] {
+  return tasks.filter((task) => isActive(task.status)).slice(0, 2);
 }
 
 function isActive(status: Task["status"]): boolean {
