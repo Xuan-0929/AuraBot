@@ -1,4 +1,6 @@
 import type { Message } from "../schemas/message";
+import type { Live2DModelState } from "./live2dModel";
+import type { NotificationSettings } from "./notificationSettings";
 import type { PetSettings } from "../schemas/petSettings";
 import type { Profile } from "../schemas/profile";
 import type { Task } from "../schemas/task";
@@ -44,5 +46,7 @@ export interface AppInitialState {
   petSettings: PetSettings;
   appConfig: PublicAppConfig;
   modelHealth: PublicModelHealthMap;
+  live2dModelState: Live2DModelState;
+  notificationSettings: NotificationSettings;
   debugPetOverlay: boolean;
 }

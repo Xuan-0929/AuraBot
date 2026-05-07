@@ -9,6 +9,7 @@ import { extractSpeechTranscript, type SpeechRecognitionEventLike } from "./spee
 
 export interface DesktopPetProps {
   agentStatus: AgentStatus;
+  modelPath?: string;
   petSettings: PetSettings;
   petActivity?: PetActivity;
   petCursorPosition?: PetCursorPosition;
@@ -23,7 +24,7 @@ export interface DesktopPetProps {
   onClearPetActivity(id?: string): void;
 }
 
-const MODEL_PATH = "assets/live2d/hiyori/Hiyori.model3.json";
+const DEFAULT_MODEL_PATH = "assets/live2d/hiyori/Hiyori.model3.json";
 const PET_ACTIVITY_TIMEOUT_MS = 7000;
 const HOVER_CHAT_WIDTH_PX = 224;
 const HOVER_CHAT_GAP_PX = 12;
@@ -55,6 +56,7 @@ declare global {
 
 export function DesktopPet({
   agentStatus,
+  modelPath,
   petSettings,
   petActivity,
   petCursorPosition,
@@ -348,7 +350,7 @@ export function DesktopPet({
           onPointerLeave={handleModelPointerLeave}
         >
           <Live2DModelCanvas
-            modelPath={MODEL_PATH}
+            modelPath={modelPath ?? DEFAULT_MODEL_PATH}
             agentStatus={agentStatus}
             compact
             debug={debugPetOverlay}

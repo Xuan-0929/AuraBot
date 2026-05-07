@@ -344,6 +344,7 @@ export function createDefaultTaskCliRunners(): TaskCliRunnerConfig[] {
       id: "codex",
       enabled: false,
       priority: 1,
+      command: detectTaskCliCommand("codex"),
       sandbox: "workspace-write",
       approvalPolicy: "never",
       timeoutMs: 300000,
@@ -353,6 +354,7 @@ export function createDefaultTaskCliRunners(): TaskCliRunnerConfig[] {
       id: "claude",
       enabled: false,
       priority: 2,
+      command: detectTaskCliCommand("claude"),
       sandbox: "workspace-write",
       approvalPolicy: "never",
       timeoutMs: 300000,
@@ -362,12 +364,53 @@ export function createDefaultTaskCliRunners(): TaskCliRunnerConfig[] {
       id: "hermes",
       enabled: false,
       priority: 3,
+      command: detectTaskCliCommand("hermes"),
       sandbox: "workspace-write",
       approvalPolicy: "never",
       timeoutMs: 300000,
       extraArgs: []
     }
   ];
+}
+
+function detectTaskCliCommand(id: TaskCliRunnerId): string | undefined {
+  const candidates =
+    id === "codex"
+      ? ["/Applications/Codex.app/Contents/Resources/codex", "codex"]
+      : id === "claude"
+        ? ["/opt/homebrew/bin/claude", "claude"]
+        : ["/opt/homebrew/bin/hermes", "hermes"];
+
+  for (const candidate of candidates) {
+    const resolved = resolveCommandCandidate(candidate);
+
+    if (resolved) {
+      return resolved;
+    }
+  }
+
+  return undefined;
+}
+
+function resolveCommandCandidate(candidate: string): string | undefined {
+  if (candidate.includes("/")) {
+    return existsSync(candidate) ? candidate : undefined;
+  }
+
+  const pathEntries = (process.env.PATH ?? "")
+    .split(":")
+    .map((entry) => entry.trim())
+    .filter(Boolean);
+
+  for (const entry of pathEntries) {
+    const resolved = join(entry, candidate);
+
+    if (existsSync(resolved)) {
+      return resolved;
+    }
+  }
+
+  return undefined;
 }
 
 function removeUndefinedValues<T extends Record<string, unknown>>(value: T): Partial<T> {

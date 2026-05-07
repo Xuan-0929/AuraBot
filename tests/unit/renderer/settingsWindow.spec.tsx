@@ -8,6 +8,31 @@ import { SettingsWindow, type SettingsWindowProps } from "../../../src/renderer/
 (globalThis as { IS_REACT_ACT_ENVIRONMENT?: boolean }).IS_REACT_ACT_ENVIRONMENT = true;
 
 const baseProps: SettingsWindowProps = {
+  profile: {
+    id: "profile-1",
+    displayName: "Aura",
+    active: true,
+    createdAt: "2026-05-04T00:00:00.000Z",
+    updatedAt: "2026-05-04T00:00:00.000Z",
+    soul: {
+      id: "soul-1",
+      profileId: "profile-1",
+      name: "Aura",
+      persona: "会陪我聊天，也会顺手帮我推进事情。",
+      tone: "轻松、短句、自然",
+      proactiveLevel: "balanced",
+      principles: ["先把事情接住。"],
+      taboos: ["不要像客服一样说话。"],
+      reminderStyle: "",
+      replyPreference: "",
+      speakingStyle: "自然、短句",
+      relationship: "像熟悉的长期搭子",
+      boundaries: [],
+      topicPreferences: [],
+      createdAt: "2026-05-04T00:00:00.000Z",
+      updatedAt: "2026-05-04T00:00:00.000Z"
+    }
+  },
   petSettings: {
     clickThroughPet: false,
     displayLanguage: "en"
@@ -99,10 +124,33 @@ const baseProps: SettingsWindowProps = {
       state: "configured"
     }
   },
+  live2dModelState: {
+    currentModelId: "hiyori",
+    currentModelPath: "assets/live2d/hiyori/Hiyori.model3.json",
+    models: [
+      {
+        id: "hiyori",
+        displayName: "Hiyori",
+        folderName: "hiyori",
+        manifestFileName: "Hiyori.model3.json",
+        manifestPath: "assets/live2d/hiyori/Hiyori.model3.json"
+      }
+    ]
+  },
+  notificationSettings: {
+    systemNotificationsEnabled: true,
+    permissionState: "system_managed",
+    followUpNotificationsEnabled: true,
+    timeReminderNotificationsEnabled: true,
+    idleNudgeNotificationsEnabled: false
+  },
   onUpdatePetSettings: vi.fn(async () => undefined),
   onUpdateTaskRunnerSettings: vi.fn(async () => undefined),
   onUpdateModelProviderSettings: vi.fn(async () => undefined),
   onUpdateProactiveSettings: vi.fn(async () => undefined),
+  onUpdatePersonaSettings: vi.fn(async () => undefined),
+  onSetCurrentLive2DModel: vi.fn(async () => undefined),
+  onUpdateNotificationSettings: vi.fn(async () => undefined),
   onOpenConfigFile: vi.fn(async () => undefined),
   onTestModelConnection: vi.fn(async () => undefined)
 };
@@ -140,21 +188,12 @@ describe("SettingsWindow", () => {
     });
 
     expect(container.querySelector<HTMLElement>('[aria-label="Settings"]')?.textContent).toContain("Settings");
+    expect(container.textContent).toContain("General");
+    expect(container.textContent).toContain("Pet Behavior");
     expect(container.textContent).toContain("Model");
-    expect(container.textContent).toContain("Chat");
-    expect(container.textContent).toContain("gpt-5.4");
-    expect(container.textContent).toContain("API key saved");
-    expect(container.textContent).toContain("Connected");
-    expect(container.textContent).toContain("Not configured");
-    expect(container.textContent).toContain("Test connection");
-    expect(container.textContent).toContain("Character");
-    expect(container.textContent).toContain("Task CLI");
-    expect(container.textContent).toContain("Proactive messages");
-    expect(container.textContent).not.toContain("Local fallback");
-    expect(container.querySelector<HTMLInputElement>('[aria-label="Proactive message wait minutes"]')?.value).toBe("2");
-    expect(container.textContent).toContain("Codex");
-    expect(container.textContent).toContain("Claude Code");
-    expect(container.textContent).toContain("Hermes");
+    expect(container.textContent).toContain("Persona");
+    expect(container.textContent).toContain("Live2D Model");
+    expect(container.textContent).toContain("Notifications");
     expect(container.querySelector<HTMLSelectElement>('[aria-label="Language"]')?.value).toBe("en");
 
     await act(async () => {
@@ -163,11 +202,18 @@ describe("SettingsWindow", () => {
       language.dispatchEvent(new Event("change", { bubbles: true }));
     });
     await act(async () => {
+      container.querySelector<HTMLButtonElement>('[role="tab"][aria-label="Pet Behavior"]')!.click();
+    });
+    await act(async () => {
       container.querySelector<HTMLInputElement>('[aria-label="Click through character"]')!.click();
     });
 
     expect(onUpdatePetSettings).toHaveBeenCalledWith({ displayLanguage: "zh" });
     expect(onUpdatePetSettings).toHaveBeenCalledWith({ clickThroughPet: true });
+
+    await act(async () => {
+      container.querySelector<HTMLButtonElement>('[role="tab"][aria-label="Model"]')!.click();
+    });
 
     await act(async () => {
       container.querySelector<HTMLButtonElement>(".settings-config-button")!.click();
@@ -186,6 +232,10 @@ describe("SettingsWindow", () => {
           onUpdateProactiveSettings={onUpdateProactiveSettings}
         />
       );
+    });
+
+    await act(async () => {
+      container.querySelector<HTMLButtonElement>('[role="tab"][aria-label="Notifications"]')!.click();
     });
 
     await act(async () => {
@@ -209,6 +259,10 @@ describe("SettingsWindow", () => {
           onUpdateTaskRunnerSettings={onUpdateTaskRunnerSettings}
         />
       );
+    });
+
+    await act(async () => {
+      container.querySelector<HTMLButtonElement>('[role="tab"][aria-label="Model"]')!.click();
     });
 
     await act(async () => {
@@ -268,6 +322,10 @@ describe("SettingsWindow", () => {
     });
 
     await act(async () => {
+      container.querySelector<HTMLButtonElement>('[role="tab"][aria-label="Model"]')!.click();
+    });
+
+    await act(async () => {
       const gateProvider = container.querySelector<HTMLSelectElement>('[aria-label="Gate provider"]')!;
       expect(Array.from(gateProvider.options).map((option) => option.value)).toEqual([
         "openai-compatible",
@@ -296,6 +354,10 @@ describe("SettingsWindow", () => {
     });
 
     await act(async () => {
+      container.querySelector<HTMLButtonElement>('[role="tab"][aria-label="Model"]')!.click();
+    });
+
+    await act(async () => {
       container.querySelector<HTMLButtonElement>('[aria-label="Test Chat connection"]')!.click();
     });
 
@@ -317,13 +379,11 @@ describe("SettingsWindow", () => {
 
     expect(container.textContent).toContain("设置");
     expect(container.textContent).toContain("通用");
+    expect(container.textContent).toContain("桌宠行为");
     expect(container.textContent).toContain("模型");
-    expect(container.textContent).toContain("任务 CLI");
-    expect(container.textContent).toContain("主动消息");
-    expect(container.textContent).toContain("打开 config 文件");
-    expect(container.textContent).toContain("人物");
-    expect(container.textContent).toContain("穿透人物点击");
-    expect(container.textContent).toContain("API Key 已保存");
+    expect(container.textContent).toContain("人格");
+    expect(container.textContent).toContain("Live2D 模型");
+    expect(container.textContent).toContain("通知");
     expect(container.textContent).not.toContain("Product-level configuration");
     expect(container.textContent).not.toContain("Click through character");
   });

@@ -316,4 +316,56 @@ describe("loadConfig", () => {
       }
     ]);
   });
+
+  it("auto-discovers available local task CLI commands without enabling them", () => {
+    const userDataPath = createUserDataDir();
+    const fakeBinDir = mkdtempSync(join(tmpdir(), "aurabot-cli-bin-"));
+    tempDirs.push(fakeBinDir);
+
+    writeFileSync(join(fakeBinDir, "codex"), "#!/bin/sh\n", "utf8");
+    writeFileSync(join(fakeBinDir, "claude"), "#!/bin/sh\n", "utf8");
+    writeFileSync(join(fakeBinDir, "hermes"), "#!/bin/sh\n", "utf8");
+    process.env.PATH = `${fakeBinDir}:${originalEnvironment.PATH ?? ""}`;
+
+    const config = loadConfig(userDataPath);
+    const codexRunner = config.taskRunner.runners.find((runner) => runner.id === "codex");
+    const claudeRunner = config.taskRunner.runners.find((runner) => runner.id === "claude");
+    const hermesRunner = config.taskRunner.runners.find((runner) => runner.id === "hermes");
+
+    expect(config.taskRunner.provider).toBe("deterministic");
+    expect(codexRunner?.enabled).toBe(false);
+    expect(claudeRunner?.enabled).toBe(false);
+    expect(hermesRunner?.enabled).toBe(false);
+    expect(codexRunner?.command).toMatch(/codex$/u);
+    expect(claudeRunner?.command).toMatch(/claude$/u);
+    expect(hermesRunner?.command).toBe(join(fakeBinDir, "hermes"));
+  });
+
+  it("keeps explicit configured task runner commands over auto-discovered local paths", () => {
+    const userDataPath = createUserDataDir();
+    const fakeBinDir = mkdtempSync(join(tmpdir(), "aurabot-cli-bin-"));
+    tempDirs.push(fakeBinDir);
+
+    writeFileSync(join(fakeBinDir, "codex"), "#!/bin/sh\n", "utf8");
+    process.env.PATH = `${fakeBinDir}:${originalEnvironment.PATH ?? ""}`;
+    writeFileSync(
+      join(userDataPath, "config.json"),
+      JSON.stringify({
+        taskRunner: {
+          runners: [
+            {
+              id: "codex",
+              command: "/custom/codex"
+            }
+          ]
+        }
+      }),
+      "utf8"
+    );
+
+    const config = loadConfig(userDataPath);
+    const codexRunner = config.taskRunner.runners.find((runner) => runner.id === "codex");
+
+    expect(codexRunner?.command).toBe("/custom/codex");
+  });
 });

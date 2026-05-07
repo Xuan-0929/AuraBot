@@ -1,7 +1,8 @@
 import { existsSync, mkdirSync, writeFileSync } from "node:fs";
 import { join } from "node:path";
-import { app, BrowserWindow, shell } from "electron";
+import { app, BrowserWindow, Notification, shell } from "electron";
 import { createServices, createTaskRunner, type AppServices } from "../core/bootstrap/createServices";
+import { createLive2DModelRegistry, type Live2DModelRegistry } from "../core/live2d/modelRegistry";
 import { MemoryService } from "../core/memory/memoryService";
 import { ProactiveTriggerEngine } from "../core/proactive/proactiveTriggerEngine";
 import { createChatModel } from "../core/llm/chatModel";
@@ -19,6 +20,8 @@ import {
   broadcastAgentStatus,
   broadcastChatMessage,
   broadcastChatMessageUpdated,
+  broadcastLive2DModelState,
+  broadcastNotificationSettings,
   broadcastPetActivity,
   broadcastTaskChanged,
   broadcastTaskDeleted,
@@ -29,6 +32,8 @@ import {
   setPetMousePassthrough
 } from "./createWindow";
 import { PetSettingsStore } from "./petSettingsStore";
+import { Live2DModelStore } from "./live2dModelStore";
+import { NotificationSettingsStore } from "./notificationSettingsStore";
 import { PetWindowStateStore } from "./petWindowStateStore";
 import { registerIpc } from "./registerIpc";
 import {
@@ -44,13 +49,20 @@ import {
   type PublicModelHealthMap,
   type TaskRunnerSettingsPatch
 } from "../shared/contracts/settings";
+import type { PersonaSettings } from "../shared/contracts/personaSettings";
+import type { Live2DModelState } from "../shared/contracts/live2dModel";
+import type { NotificationSettings } from "../shared/contracts/notificationSettings";
+import type { Profile } from "../shared/schemas/profile";
 
 let services: AppServices | undefined;
 let petSettingsStore: PetSettingsStore | undefined;
+let live2dModelStore: Live2DModelStore | undefined;
+let notificationSettingsStore: NotificationSettingsStore | undefined;
 let petWindowStateStore: PetWindowStateStore | undefined;
 let proactiveTriggerEngine: ProactiveTriggerEngine | undefined;
 let modelHealthService: ModelHealthService | undefined;
 let modelHealthSnapshot: PublicModelHealthMap | undefined;
+let live2dModelRegistry: Live2DModelRegistry | undefined;
 
 if (process.env.AURABOT_USER_DATA_DIR) {
   app.setPath("userData", process.env.AURABOT_USER_DATA_DIR);
@@ -63,6 +75,11 @@ async function bootstrap(): Promise<void> {
   modelHealthService = createModelHealthService();
   modelHealthSnapshot = modelHealthService.inspectAll(services.config);
   petSettingsStore = new PetSettingsStore(userDataPath);
+  live2dModelStore = new Live2DModelStore(userDataPath);
+  notificationSettingsStore = new NotificationSettingsStore(userDataPath);
+  live2dModelRegistry = createLive2DModelRegistry({
+    modelRootPath: resolveLive2DModelRootPath()
+  });
   petWindowStateStore = new PetWindowStateStore(userDataPath);
   registerIpc(services, {
     openConsoleWindow,
@@ -73,6 +90,11 @@ async function bootstrap(): Promise<void> {
     getModelHealth: () => getModelHealth(),
     testModelConnection: (role) => testModelConnection(role),
     updateProactiveSettings: (patch) => updateProactiveSettings(userDataPath, patch),
+    updatePersonaSettings: (settings) => updatePersonaSettings(settings),
+    getLive2DModelState: () => getLive2DModelState(),
+    setCurrentLive2DModel: (modelId) => setCurrentLive2DModel(modelId),
+    getNotificationSettings: () => getNotificationSettings(),
+    updateNotificationSettings: (patch) => updateNotificationSettings(patch),
     recordUserActivity: () => proactiveTriggerEngine?.recordUserActivity(),
     getPetSettings: () => petSettingsStore?.get() ?? {
       clickThroughPet: false,
@@ -99,6 +121,7 @@ async function bootstrap(): Promise<void> {
   });
   createPetWindow({
     settings: petSettingsStore.get(),
+    live2dModelState: getLive2DModelState(),
     savedBounds: petWindowStateStore.getBounds(),
     onBoundsChanged: (bounds) => petWindowStateStore?.saveBounds(bounds)
   });
@@ -212,12 +235,79 @@ async function updateProactiveSettings(userDataPath: string, patch: ProactiveSet
   return createPublicAppConfig(services.config);
 }
 
+function updatePersonaSettings(settings: PersonaSettings): Profile {
+  if (!services) {
+    throw new Error("AuraBot services are not ready.");
+  }
+
+  return services.personaSettingsService.updateActivePersonaSettings(settings);
+}
+
+function getLive2DModelState(): Live2DModelState {
+  if (!live2dModelRegistry || !live2dModelStore) {
+    throw new Error("AuraBot Live2D model services are not ready.");
+  }
+
+  const currentModel = live2dModelRegistry.resolveCurrentModel(live2dModelStore.get().currentModelId);
+  const models = live2dModelRegistry.listAvailableModels();
+
+  return {
+    currentModelId: currentModel?.id ?? "",
+    currentModelPath: currentModel?.manifestPath ?? "",
+    models
+  };
+}
+
+function setCurrentLive2DModel(modelId: string): Live2DModelState {
+  if (!live2dModelStore) {
+    throw new Error("AuraBot Live2D model services are not ready.");
+  }
+
+  live2dModelStore.update({ currentModelId: modelId });
+  const state = getLive2DModelState();
+  broadcastLive2DModelState(state);
+
+  return state;
+}
+
+function getNotificationSettings(): NotificationSettings {
+  if (!notificationSettingsStore) {
+    throw new Error("AuraBot notification settings are not ready.");
+  }
+
+  return notificationSettingsStore.get(resolveNotificationPermissionState());
+}
+
+function updateNotificationSettings(
+  patch: Partial<Omit<NotificationSettings, "permissionState">>
+): NotificationSettings {
+  if (!notificationSettingsStore) {
+    throw new Error("AuraBot notification settings are not ready.");
+  }
+
+  const settings = notificationSettingsStore.update(patch, resolveNotificationPermissionState());
+  broadcastNotificationSettings(settings);
+
+  return settings;
+}
+
+function resolveNotificationPermissionState(): NotificationSettings["permissionState"] {
+  return Notification.isSupported() ? "system_managed" : "unsupported";
+}
+
+function resolveLive2DModelRootPath(): string {
+  return app.isPackaged
+    ? join(__dirname, "../renderer/assets/live2d")
+    : join(process.cwd(), "src/renderer/public/assets/live2d");
+}
+
 app.whenReady().then(bootstrap);
 
 app.on("activate", () => {
   if (services && BrowserWindow.getAllWindows().length === 0) {
     createPetWindow({
       settings: petSettingsStore?.get(),
+      live2dModelState: getLive2DModelState(),
       savedBounds: petWindowStateStore?.getBounds(),
       onBoundsChanged: (bounds) => petWindowStateStore?.saveBounds(bounds)
     });

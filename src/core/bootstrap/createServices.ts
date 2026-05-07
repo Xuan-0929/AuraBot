@@ -12,6 +12,7 @@ import { DeterministicTaskRunner } from "../tasks/taskRunner";
 import { CliAgentClientImpl, MultiCliTaskRunner } from "../tasks/cliTaskRunner";
 import { EventLogService } from "../telemetry/eventLogService";
 import { ProfileService } from "../profiles/profileService";
+import { PersonaSettingsService } from "../profiles/personaSettingsService";
 import { createChatModel, type ChatModel } from "../llm/chatModel";
 import { createGateModel, type GateModel } from "../llm/gateModel";
 import { createVoiceAdapter, type VoiceAdapter } from "../voice/voiceAdapter";
@@ -31,6 +32,7 @@ export interface AppServices {
   config: AppConfig;
   database: AppDatabase;
   profileService: ProfileService;
+  personaSettingsService: PersonaSettingsService;
   sessionRepository: SessionRepository;
   messageRepository: MessageRepository;
   taskRepository: TaskRepository;
@@ -49,6 +51,7 @@ export function createServices(userDataPath: string): AppServices {
   const database = createAppDatabase({ filePath: config.storagePath });
   const profileRepository = new ProfileRepository(database);
   const profileService = new ProfileService(profileRepository);
+  const personaSettingsService = new PersonaSettingsService(profileService, profileRepository);
   const memoryRepository = new MemoryRepository(database);
   const sessionRepository = new SessionRepository(database);
   const eventLogService = new EventLogService(database);
@@ -70,6 +73,7 @@ export function createServices(userDataPath: string): AppServices {
     config,
     database,
     profileService,
+    personaSettingsService,
     sessionRepository,
     taskRepository,
     messageRepository: new MessageRepository(database),

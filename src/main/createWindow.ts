@@ -2,6 +2,8 @@ import { join } from "node:path";
 import { BrowserWindow, screen } from "electron";
 import { IPC_CHANNELS } from "../shared/contracts/ipc";
 import type { AgentStatus } from "../shared/contracts/chat";
+import type { Live2DModelState } from "../shared/contracts/live2dModel";
+import type { NotificationSettings } from "../shared/contracts/notificationSettings";
 import type { Message } from "../shared/schemas/message";
 import type { PetActivity } from "../shared/contracts/pet";
 import { DEFAULT_PET_SETTINGS, type PetSettings } from "../shared/schemas/petSettings";
@@ -33,6 +35,7 @@ const PET_CURSOR_TRACKING_INTERVAL_MS = 50;
 
 export interface CreatePetWindowOptions {
   settings?: PetSettings;
+  live2dModelState?: Live2DModelState;
   savedBounds?: WindowRectangle;
   onBoundsChanged?: (bounds: WindowRectangle) => void;
 }
@@ -171,6 +174,14 @@ export function movePetWindowBy(delta: { x: number; y: number }): void {
 
 export function broadcastPetActivity(activity: PetActivity): void {
   sendToRenderer(IPC_CHANNELS.petActivity, activity);
+}
+
+export function broadcastLive2DModelState(state: Live2DModelState): void {
+  sendToRenderer(IPC_CHANNELS.live2dModelStateChanged, state);
+}
+
+export function broadcastNotificationSettings(settings: NotificationSettings): void {
+  sendToRenderer(IPC_CHANNELS.notificationSettingsChanged, settings);
 }
 
 export function broadcastAgentStatus(status: AgentStatus): void {

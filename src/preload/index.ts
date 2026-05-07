@@ -6,6 +6,8 @@ import {
   type TaskResultFileActionInput
 } from "../shared/contracts/ipc";
 import type { AgentStatus, SendChatMessageInput } from "../shared/contracts/chat";
+import type { Live2DModelState } from "../shared/contracts/live2dModel";
+import type { NotificationSettings } from "../shared/contracts/notificationSettings";
 import type { Message } from "../shared/schemas/message";
 import type { PetActivity } from "../shared/contracts/pet";
 import type { PetSettings, PetSettingsPatch } from "../shared/schemas/petSettings";
@@ -22,6 +24,11 @@ const api: AuraBotApi = {
   getModelHealth: () => ipcRenderer.invoke(IPC_CHANNELS.getModelHealth),
   testModelConnection: (input) => ipcRenderer.invoke(IPC_CHANNELS.testModelConnection, input),
   updateProactiveSettings: (patch) => ipcRenderer.invoke(IPC_CHANNELS.updateProactiveSettings, patch),
+  updatePersonaSettings: (settings) => ipcRenderer.invoke(IPC_CHANNELS.updatePersonaSettings, settings),
+  getLive2DModelState: () => ipcRenderer.invoke(IPC_CHANNELS.getLive2DModelState),
+  setCurrentLive2DModel: (modelId: string) => ipcRenderer.invoke(IPC_CHANNELS.setCurrentLive2DModel, modelId),
+  getNotificationSettings: () => ipcRenderer.invoke(IPC_CHANNELS.getNotificationSettings),
+  updateNotificationSettings: (patch) => ipcRenderer.invoke(IPC_CHANNELS.updateNotificationSettings, patch),
   getPetSettings: () => ipcRenderer.invoke(IPC_CHANNELS.getPetSettings),
   updatePetSettings: (patch: PetSettingsPatch) => ipcRenderer.invoke(IPC_CHANNELS.updatePetSettings, patch),
   setPetMousePassthrough: (enabled: boolean) =>
@@ -41,6 +48,20 @@ const api: AuraBotApi = {
     ipcRenderer.on(IPC_CHANNELS.petActivity, handler);
 
     return () => ipcRenderer.removeListener(IPC_CHANNELS.petActivity, handler);
+  },
+  onLive2DModelStateChanged: (listener: (state: Live2DModelState) => void) => {
+    const handler = (_event: Electron.IpcRendererEvent, state: Live2DModelState) => listener(state);
+
+    ipcRenderer.on(IPC_CHANNELS.live2dModelStateChanged, handler);
+
+    return () => ipcRenderer.removeListener(IPC_CHANNELS.live2dModelStateChanged, handler);
+  },
+  onNotificationSettingsChanged: (listener: (settings: NotificationSettings) => void) => {
+    const handler = (_event: Electron.IpcRendererEvent, settings: NotificationSettings) => listener(settings);
+
+    ipcRenderer.on(IPC_CHANNELS.notificationSettingsChanged, handler);
+
+    return () => ipcRenderer.removeListener(IPC_CHANNELS.notificationSettingsChanged, handler);
   },
   onPetCursorPosition: (listener) => {
     const handler = (_event: Electron.IpcRendererEvent, position: Parameters<typeof listener>[0]) => listener(position);

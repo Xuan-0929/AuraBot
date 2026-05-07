@@ -530,6 +530,158 @@ textarea {
   font-size: 13px;
 }
 
+.settings-center {
+  display: grid;
+  grid-template-columns: 220px minmax(0, 1fr);
+  gap: 18px;
+  min-height: calc(100vh - 92px);
+}
+
+.settings-center-sidebar {
+  align-self: start;
+  border: 1px solid rgba(41, 65, 67, 0.12);
+  border-radius: 10px;
+  background: rgba(248, 251, 250, 0.88);
+  box-shadow: 0 12px 30px rgba(63, 76, 77, 0.08);
+  padding: 12px;
+}
+
+.settings-center-nav {
+  display: grid;
+  gap: 8px;
+}
+
+.settings-center-tab {
+  width: 100%;
+  padding: 10px 12px;
+  border: 1px solid rgba(41, 65, 67, 0.12);
+  border-radius: 10px;
+  background: rgba(255, 255, 255, 0.86);
+  color: #314142;
+  font: inherit;
+  font-size: 13px;
+  font-weight: 800;
+  text-align: left;
+  cursor: pointer;
+  transition:
+    background 140ms ease,
+    border-color 140ms ease;
+}
+
+.settings-center-tab[data-active="true"] {
+  background: #e7f2ee;
+  border-color: rgba(47, 98, 107, 0.28);
+  color: #244048;
+}
+
+.settings-center-tab:hover {
+  background: rgba(244, 251, 247, 0.96);
+}
+
+.settings-center-content {
+  min-width: 0;
+}
+
+.settings-page-field textarea,
+.settings-page-field input,
+.settings-page-field select {
+  min-width: 220px;
+  max-width: 100%;
+}
+
+.settings-page-field textarea {
+  min-height: 82px;
+  resize: vertical;
+}
+
+.settings-persona-advanced {
+  display: grid;
+  gap: 12px;
+  padding-top: 8px;
+  border-top: 1px dashed rgba(41, 65, 67, 0.16);
+}
+
+.settings-page-actions {
+  display: flex;
+  justify-content: flex-end;
+}
+
+.settings-live2d-layout {
+  display: grid;
+  grid-template-columns: minmax(0, 1.1fr) minmax(0, 0.9fr);
+  gap: 16px;
+}
+
+.settings-live2d-preview-card,
+.settings-live2d-list {
+  display: grid;
+  gap: 12px;
+  padding: 12px;
+  border: 1px solid rgba(41, 65, 67, 0.14);
+  border-radius: 10px;
+  background: rgba(255, 255, 255, 0.72);
+}
+
+.settings-live2d-preview {
+  position: relative;
+  min-height: 260px;
+  border-radius: 10px;
+  background:
+    radial-gradient(circle at top, rgba(244, 251, 247, 0.96), rgba(232, 241, 236, 0.72)),
+    #edf2f1;
+  overflow: hidden;
+}
+
+.settings-live2d-meta {
+  display: grid;
+  grid-template-columns: 110px minmax(0, 1fr);
+  gap: 8px 12px;
+  margin: 0;
+}
+
+.settings-live2d-meta dt {
+  color: #596465;
+  font-size: 12px;
+  font-weight: 800;
+}
+
+.settings-live2d-meta dd {
+  margin: 0;
+  color: #243235;
+  font-size: 12px;
+  word-break: break-word;
+}
+
+.settings-live2d-list h3 {
+  margin: 0;
+  color: #263334;
+  font-size: 14px;
+}
+
+.settings-live2d-model-item {
+  display: grid;
+  gap: 4px;
+  width: 100%;
+  padding: 10px 12px;
+  border: 1px solid rgba(41, 65, 67, 0.14);
+  border-radius: 10px;
+  background: rgba(255, 255, 255, 0.88);
+  color: #243235;
+  text-align: left;
+  cursor: pointer;
+}
+
+.settings-live2d-model-item[data-active="true"] {
+  background: #e7f2ee;
+  border-color: rgba(47, 98, 107, 0.28);
+}
+
+.settings-live2d-model-item span {
+  color: #5f6969;
+  font-size: 11px;
+  word-break: break-word;
+}
+
 .settings-page-section {
   display: grid;
   gap: 12px;

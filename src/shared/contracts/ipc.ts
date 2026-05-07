@@ -1,8 +1,12 @@
 import type { AppInitialState, SendChatMessageInput, SendChatMessageResult } from "./chat";
+import type { Live2DModelState } from "./live2dModel";
+import type { NotificationSettings } from "./notificationSettings";
 import type { PetActivity } from "./pet";
 import type { Message } from "../schemas/message";
 import type { MemoryEdge, MemoryNode, MemorySummary } from "../schemas/memory";
 import type { PetSettings, PetSettingsPatch } from "../schemas/petSettings";
+import type { PersonaSettings } from "./personaSettings";
+import type { Profile } from "../schemas/profile";
 import type { Task } from "../schemas/task";
 import type {
   ModelConnectionTestInput,
@@ -24,12 +28,19 @@ export const IPC_CHANNELS = {
   getModelHealth: "config:get-model-health",
   testModelConnection: "config:test-model-connection",
   updateProactiveSettings: "config:update-proactive-settings",
+  updatePersonaSettings: "config:update-persona-settings",
+  getLive2DModelState: "live2d:get-model-state",
+  setCurrentLive2DModel: "live2d:set-current-model",
+  getNotificationSettings: "notifications:get-settings",
+  updateNotificationSettings: "notifications:update-settings",
   getPetSettings: "pet:get-settings",
   updatePetSettings: "pet:update-settings",
   setPetMousePassthrough: "pet:set-mouse-passthrough",
   movePetWindowBy: "pet:move-window-by",
   petSettingsChanged: "pet:settings-changed",
   petActivity: "pet:activity",
+  live2dModelStateChanged: "live2d:model-state-changed",
+  notificationSettingsChanged: "notifications:settings-changed",
   petCursorPosition: "pet:cursor-position",
   agentStatusChanged: "agent:status-changed",
   chatMessageCreated: "chat:message-created",
@@ -118,12 +129,21 @@ export interface AuraBotApi {
   getModelHealth(): Promise<PublicModelHealthMap>;
   testModelConnection(input: ModelConnectionTestInput): Promise<PublicModelHealth>;
   updateProactiveSettings(patch: ProactiveSettingsPatch): Promise<PublicAppConfig>;
+  updatePersonaSettings(settings: PersonaSettings): Promise<Profile>;
+  getLive2DModelState(): Promise<Live2DModelState>;
+  setCurrentLive2DModel(modelId: string): Promise<Live2DModelState>;
+  getNotificationSettings(): Promise<NotificationSettings>;
+  updateNotificationSettings(
+    patch: Partial<Omit<NotificationSettings, "permissionState">>
+  ): Promise<NotificationSettings>;
   getPetSettings(): Promise<PetSettings>;
   updatePetSettings(patch: PetSettingsPatch): Promise<PetSettings>;
   setPetMousePassthrough(enabled: boolean): Promise<void>;
   movePetWindowBy(delta: { x: number; y: number }): Promise<void>;
   onPetSettingsChanged(listener: (settings: PetSettings) => void): () => void;
   onPetActivity(listener: (activity: PetActivity) => void): () => void;
+  onLive2DModelStateChanged(listener: (state: Live2DModelState) => void): () => void;
+  onNotificationSettingsChanged(listener: (settings: NotificationSettings) => void): () => void;
   onPetCursorPosition(listener: (position: PetCursorPosition) => void): () => void;
   onAgentStatusChanged(listener: (status: import("./chat").AgentStatus) => void): () => void;
   onChatMessageCreated(listener: (message: Message) => void): () => void;

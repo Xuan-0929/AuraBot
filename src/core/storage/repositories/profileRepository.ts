@@ -1,3 +1,4 @@
+import type { PersonaSettings } from "../../../shared/contracts/personaSettings";
 import type { Profile, Soul } from "../../../shared/schemas/profile";
 import type { AppDatabase } from "../db";
 
@@ -11,8 +12,11 @@ interface ProfileRow {
   soul_name: string | null;
   persona: string | null;
   tone: string | null;
+  proactive_level: string | null;
   principles_json: string | null;
   taboos_json: string | null;
+  reminder_style: string | null;
+  reply_preference: string | null;
   speaking_style: string | null;
   relationship: string | null;
   boundaries_json: string | null;
@@ -38,8 +42,11 @@ export class ProfileRepository {
           souls.name as soul_name,
           souls.persona,
           souls.tone,
+          souls.proactive_level,
           souls.principles_json,
           souls.taboos_json,
+          souls.reminder_style,
+          souls.reply_preference,
           souls.speaking_style,
           souls.relationship,
           souls.boundaries_json,
@@ -84,8 +91,11 @@ export class ProfileRepository {
             name,
             persona,
             tone,
+            proactive_level,
             principles_json,
             taboos_json,
+            reminder_style,
+            reply_preference,
             speaking_style,
             relationship,
             boundaries_json,
@@ -99,8 +109,11 @@ export class ProfileRepository {
             @name,
             @persona,
             @tone,
+            @proactiveLevel,
             @principlesJson,
             @taboosJson,
+            @reminderStyle,
+            @replyPreference,
             @speakingStyle,
             @relationship,
             @boundariesJson,
@@ -112,8 +125,11 @@ export class ProfileRepository {
             name = excluded.name,
             persona = excluded.persona,
             tone = excluded.tone,
+            proactive_level = excluded.proactive_level,
             principles_json = excluded.principles_json,
             taboos_json = excluded.taboos_json,
+            reminder_style = excluded.reminder_style,
+            reply_preference = excluded.reply_preference,
             speaking_style = excluded.speaking_style,
             relationship = excluded.relationship,
             boundaries_json = excluded.boundaries_json,
@@ -123,14 +139,66 @@ export class ProfileRepository {
         )
         .run({
           ...soul,
+          proactiveLevel: soul.proactiveLevel,
           principlesJson: JSON.stringify(soul.principles),
           taboosJson: JSON.stringify(soul.taboos),
+          reminderStyle: soul.reminderStyle,
+          replyPreference: soul.replyPreference,
           boundariesJson: JSON.stringify(soul.boundaries),
           topicPreferencesJson: JSON.stringify(soul.topicPreferences)
         });
     });
 
     write();
+  }
+
+  updateActivePersonaSettings(profileId: string, settings: PersonaSettings, now: string): Profile | undefined {
+    const write = this.database.transaction(() => {
+      this.database
+        .prepare(
+          `
+          update profiles
+          set display_name = ?, updated_at = ?
+          where id = ?
+        `
+        )
+        .run(settings.name, now, profileId);
+
+      this.database
+        .prepare(
+          `
+          update souls
+          set
+            name = ?,
+            persona = ?,
+            tone = ?,
+            proactive_level = ?,
+            principles_json = ?,
+            taboos_json = ?,
+            reminder_style = ?,
+            reply_preference = ?,
+            relationship = ?,
+            updated_at = ?
+          where profile_id = ?
+        `
+        )
+        .run(
+          settings.name,
+          settings.shortPersonaDescription,
+          settings.tone,
+          settings.proactiveLevel,
+          JSON.stringify(settings.principles),
+          JSON.stringify(settings.taboos),
+          settings.reminderStyle,
+          settings.replyPreference,
+          settings.relationshipStyle,
+          now,
+          profileId
+        );
+      return this.getActiveProfile();
+    });
+
+    return write();
   }
 }
 
@@ -148,8 +216,11 @@ function mapProfile(row: ProfileRow): Profile {
           name: row.soul_name ?? "Aura",
           persona: row.persona ?? "",
           tone: row.tone || row.speaking_style || "",
+          proactiveLevel: normalizeProactiveLevel(row.proactive_level),
           principles: JSON.parse(row.principles_json ?? "[]") as string[],
           taboos: JSON.parse(row.taboos_json ?? "[]") as string[],
+          reminderStyle: row.reminder_style ?? "",
+          replyPreference: row.reply_preference ?? "",
           speakingStyle: row.speaking_style ?? "",
           relationship: row.relationship ?? "",
           boundaries: JSON.parse(row.boundaries_json ?? "[]") as string[],
@@ -159,4 +230,12 @@ function mapProfile(row: ProfileRow): Profile {
         }
       : undefined
   };
+}
+
+function normalizeProactiveLevel(value: string | null): Soul["proactiveLevel"] {
+  if (value === "low" || value === "high") {
+    return value;
+  }
+
+  return "balanced";
 }

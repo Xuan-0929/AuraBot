@@ -255,5 +255,36 @@ export const MIGRATIONS: Migration[] = [
         database.exec("alter table tasks add column due_at text");
       }
     }
+  },
+  {
+    id: 6,
+    name: "add_persona_settings_fields_to_souls",
+    up: "",
+    after(database) {
+      const soulTable = database
+        .prepare("select name from sqlite_master where type = 'table' and name = 'souls'")
+        .get();
+
+      if (!soulTable) {
+        return;
+      }
+
+      const columns = database
+        .prepare("pragma table_info(souls)")
+        .all()
+        .map((row) => (row as { name: string }).name);
+
+      if (!columns.includes("proactive_level")) {
+        database.exec("alter table souls add column proactive_level text not null default 'balanced'");
+      }
+
+      if (!columns.includes("reminder_style")) {
+        database.exec("alter table souls add column reminder_style text not null default ''");
+      }
+
+      if (!columns.includes("reply_preference")) {
+        database.exec("alter table souls add column reply_preference text not null default ''");
+      }
+    }
   }
 ];

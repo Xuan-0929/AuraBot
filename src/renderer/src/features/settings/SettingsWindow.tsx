@@ -1,71 +1,61 @@
+import { useState } from "react";
+import type { Live2DModelState } from "../../../../shared/contracts/live2dModel";
+import type { NotificationSettings } from "../../../../shared/contracts/notificationSettings";
 import type {
-  PublicModelHealth,
   PublicModelHealthMap,
   ModelProviderSettingsPatch,
   ModelRoleKey,
-  ModelProviderOption,
   PublicAppConfig,
-  PublicModelRoleConfig,
-  PublicTaskCliRunnerConfig,
   ProactiveSettingsPatch,
   TaskRunnerSettingsPatch
 } from "../../../../shared/contracts/settings";
-import { MODEL_PROVIDER_OPTIONS as modelProviderOptions } from "../../../../shared/contracts/settings";
+import { createPersonaSettingsFromProfile, type PersonaSettings } from "../../../../shared/contracts/personaSettings";
 import type { PetSettings, PetSettingsPatch } from "../../../../shared/schemas/petSettings";
-import { t, type UiTextKey } from "../../i18n";
+import type { Profile } from "../../../../shared/schemas/profile";
+import { t } from "../../i18n";
+import { SettingsCenterShell, type SettingsNavItem, type SettingsPageKey } from "./SettingsCenterShell";
+import {
+  GeneralSettingsPage,
+  Live2DModelSettingsPage,
+  ModelSettingsPage,
+  NotificationSettingsPage,
+  PersonaSettingsPage,
+  PetBehaviorSettingsPage
+} from "./pages";
 
 export interface SettingsWindowProps {
+  profile?: Profile;
   petSettings: PetSettings;
   appConfig?: PublicAppConfig;
   modelHealth?: PublicModelHealthMap;
+  live2dModelState?: Live2DModelState;
+  notificationSettings?: NotificationSettings;
   onUpdatePetSettings(patch: PetSettingsPatch): Promise<void>;
   onUpdateTaskRunnerSettings(runners: TaskRunnerSettingsPatch["runners"]): Promise<void>;
   onUpdateModelProviderSettings(patch: ModelProviderSettingsPatch): Promise<void>;
   onUpdateProactiveSettings(patch: ProactiveSettingsPatch): Promise<void>;
+  onUpdatePersonaSettings(settings: PersonaSettings): Promise<void>;
+  onSetCurrentLive2DModel(modelId: string): Promise<void>;
+  onUpdateNotificationSettings(
+    patch: Partial<Omit<NotificationSettings, "permissionState">>
+  ): Promise<void>;
   onOpenConfigFile(): Promise<void>;
   onTestModelConnection(role: ModelRoleKey): Promise<void>;
 }
 
-const MODEL_CONFIG_ROWS: Array<{
-  key: ModelRoleKey;
-  labelKey: UiTextKey;
-}> = [
-  {
-    key: "chatModel",
-    labelKey: "chatModel"
-  },
-  {
-    key: "gateModel",
-    labelKey: "gateModel"
-  },
-  {
-    key: "memoryModel",
-    labelKey: "memoryModel"
-  }
-];
+export function SettingsWindow(props: SettingsWindowProps) {
+  const displayLanguage = props.petSettings.displayLanguage;
+  const [currentPage, setCurrentPage] = useState<SettingsPageKey>("general");
+  const personaSettings = createPersonaSettingsFromProfile(props.profile);
 
-export function SettingsWindow({
-  petSettings,
-  appConfig,
-  modelHealth,
-  onUpdatePetSettings,
-  onUpdateTaskRunnerSettings,
-  onUpdateModelProviderSettings,
-  onUpdateProactiveSettings,
-  onOpenConfigFile,
-  onTestModelConnection
-}: SettingsWindowProps) {
-  const displayLanguage = petSettings.displayLanguage;
-  const taskRunners = appConfig?.taskRunner.runners ?? [];
-  const updateTaskRunner = (runnerId: PublicTaskCliRunnerConfig["id"], patch: Partial<Pick<PublicTaskCliRunnerConfig, "enabled" | "priority">>) => {
-    void onUpdateTaskRunnerSettings(
-      taskRunners.map((runner) => ({
-        id: runner.id,
-        enabled: runner.id === runnerId ? patch.enabled ?? runner.enabled : runner.enabled,
-        priority: runner.id === runnerId ? patch.priority ?? runner.priority : runner.priority
-      }))
-    );
-  };
+  const navItems: SettingsNavItem[] = [
+    { key: "general", label: t(displayLanguage, "general") },
+    { key: "petBehavior", label: t(displayLanguage, "petBehavior") },
+    { key: "model", label: t(displayLanguage, "model") },
+    { key: "persona", label: t(displayLanguage, "persona") },
+    { key: "live2dModel", label: t(displayLanguage, "live2dModel") },
+    { key: "notifications", label: t(displayLanguage, "notifications") }
+  ];
 
   return (
     <main className="settings-window" aria-label={t(displayLanguage, "settings")}>
@@ -75,310 +65,59 @@ export function SettingsWindow({
           <p>{t(displayLanguage, "productSettingsSubtitle")}</p>
         </div>
       </header>
-      <section className="settings-page-section" aria-label={t(displayLanguage, "general")}>
-        <h2>{t(displayLanguage, "general")}</h2>
-        <label className="settings-page-field">
-          <span>{t(displayLanguage, "language")}</span>
-          <select
-            value={petSettings.displayLanguage}
-            aria-label={t(displayLanguage, "language")}
-            onChange={(event) =>
-              void onUpdatePetSettings({
-                displayLanguage: event.currentTarget.value as PetSettings["displayLanguage"]
-              })
-            }
-          >
-            <option value="en">{t(displayLanguage, "english")}</option>
-            <option value="zh">{t(displayLanguage, "chinese")}</option>
-          </select>
-        </label>
-      </section>
-      <section className="settings-page-section" aria-label={t(displayLanguage, "modelSettings")}>
-        <div className="settings-page-section-header">
-          <div>
-            <h2>{t(displayLanguage, "model")}</h2>
-            <p>{t(displayLanguage, "openConfigFileHint")}</p>
-          </div>
-          <button type="button" className="settings-config-button" onClick={() => void onOpenConfigFile()}>
-            {t(displayLanguage, "openConfigFile")}
-          </button>
-        </div>
-        <div className="settings-page-model-list">
-          {appConfig ? (
-            MODEL_CONFIG_ROWS.map((row) => (
-              <ModelConfigCard
-                key={row.key}
-                label={t(displayLanguage, row.labelKey)}
-                config={appConfig[row.key]}
-                health={modelHealth?.[row.key]}
-                displayLanguage={displayLanguage}
-                onProviderChange={(provider) =>
-                  void onUpdateModelProviderSettings({
-                    role: row.key,
-                    provider
-                  })
-                }
-                onTestConnection={() => void onTestModelConnection(row.key)}
-              />
-            ))
-          ) : (
-            <p className="settings-empty">{t(displayLanguage, "configNotLoaded")}</p>
-          )}
-        </div>
-      </section>
-      <section className="settings-page-section" aria-label={t(displayLanguage, "taskCliSettings")}>
-        <div className="settings-page-section-header">
-          <div>
-            <h2>{t(displayLanguage, "taskCli")}</h2>
-            <p>{t(displayLanguage, "taskCliHint")}</p>
-          </div>
-        </div>
-        <div className="settings-task-cli-list">
-          {taskRunners.length > 0 ? (
-            taskRunners.map((runner) => (
-              <TaskCliRunnerCard
-                key={runner.id}
-                runner={runner}
-                displayLanguage={displayLanguage}
-                onChange={(patch) => updateTaskRunner(runner.id, patch)}
-              />
-            ))
-          ) : (
-            <p className="settings-empty">{t(displayLanguage, "configNotLoaded")}</p>
-          )}
-        </div>
-      </section>
-      <section className="settings-page-section" aria-label={t(displayLanguage, "proactiveMessages")}>
-        <div className="settings-page-section-header">
-          <div>
-            <h2>{t(displayLanguage, "proactiveMessages")}</h2>
-            <p>{t(displayLanguage, "proactiveMessagesHint")}</p>
-          </div>
-        </div>
-        <label className="settings-page-field settings-proactive-wait">
-          <span>{t(displayLanguage, "proactiveWaitMinutes")}</span>
-          <input
-            type="number"
-            min={1}
-            max={240}
-            value={millisecondsToMinutes(appConfig?.proactive.idleThresholdMs ?? 600000)}
-            aria-label={t(displayLanguage, "proactiveMessageWaitMinutes")}
-            onInput={(event) =>
-              void onUpdateProactiveSettings({
-                idleThresholdMs: minutesToMilliseconds(Number.parseInt(event.currentTarget.value, 10) || 1)
-              })
-            }
+      <SettingsCenterShell
+        displayLanguage={displayLanguage}
+        currentPage={currentPage}
+        items={navItems}
+        onSelect={setCurrentPage}
+      >
+        {currentPage === "general" ? (
+          <GeneralSettingsPage
+            petSettings={props.petSettings}
+            onUpdatePetSettings={props.onUpdatePetSettings}
           />
-        </label>
-      </section>
-      <section className="settings-page-section" aria-label={t(displayLanguage, "characterSettings")}>
-        <h2>{t(displayLanguage, "character")}</h2>
-        <label className="settings-page-toggle">
-          <input
-            type="checkbox"
-            checked={petSettings.clickThroughPet}
-            aria-label={t(displayLanguage, "clickThroughCharacter")}
-            onChange={(event) => void onUpdatePetSettings({ clickThroughPet: event.currentTarget.checked })}
+        ) : null}
+        {currentPage === "petBehavior" ? (
+          <PetBehaviorSettingsPage
+            petSettings={props.petSettings}
+            onUpdatePetSettings={props.onUpdatePetSettings}
           />
-          <span>{t(displayLanguage, "clickThroughCharacter")}</span>
-        </label>
-      </section>
+        ) : null}
+        {currentPage === "model" ? (
+          <ModelSettingsPage
+            petSettings={props.petSettings}
+            appConfig={props.appConfig}
+            modelHealth={props.modelHealth}
+            onUpdateTaskRunnerSettings={props.onUpdateTaskRunnerSettings}
+            onUpdateModelProviderSettings={props.onUpdateModelProviderSettings}
+            onOpenConfigFile={props.onOpenConfigFile}
+            onTestModelConnection={props.onTestModelConnection}
+          />
+        ) : null}
+        {currentPage === "persona" ? (
+          <PersonaSettingsPage
+            petSettings={props.petSettings}
+            personaSettings={personaSettings}
+            onUpdatePersonaSettings={props.onUpdatePersonaSettings}
+          />
+        ) : null}
+        {currentPage === "live2dModel" ? (
+          <Live2DModelSettingsPage
+            petSettings={props.petSettings}
+            live2dModelState={props.live2dModelState}
+            onSelectModel={props.onSetCurrentLive2DModel}
+          />
+        ) : null}
+        {currentPage === "notifications" ? (
+          <NotificationSettingsPage
+            petSettings={props.petSettings}
+            appConfig={props.appConfig}
+            notificationSettings={props.notificationSettings}
+            onUpdateNotificationSettings={props.onUpdateNotificationSettings}
+            onUpdateProactiveSettings={props.onUpdateProactiveSettings}
+          />
+        ) : null}
+      </SettingsCenterShell>
     </main>
   );
-}
-
-function millisecondsToMinutes(value: number): number {
-  return Math.max(1, Math.round(value / 60_000));
-}
-
-function minutesToMilliseconds(value: number): number {
-  return Math.max(1, value) * 60_000;
-}
-
-function TaskCliRunnerCard({
-  runner,
-  displayLanguage,
-  onChange
-}: {
-  runner: PublicTaskCliRunnerConfig;
-  displayLanguage: PetSettings["displayLanguage"];
-  onChange(patch: Partial<Pick<PublicTaskCliRunnerConfig, "enabled" | "priority">>): void;
-}) {
-  return (
-    <article className="settings-task-cli-card">
-      <label className="settings-page-toggle">
-        <input
-          type="checkbox"
-          checked={runner.enabled}
-          aria-label={`${t(displayLanguage, "enable")} ${runner.label} ${t(displayLanguage, "taskRunner")}`}
-          onChange={(event) => onChange({ enabled: event.currentTarget.checked })}
-        />
-        <span>{runner.label}</span>
-      </label>
-      <label className="settings-page-field settings-task-cli-priority">
-        <span>{t(displayLanguage, "priority")}</span>
-        <input
-          type="number"
-          min={1}
-          max={99}
-          value={runner.priority}
-          aria-label={`${runner.label} ${t(displayLanguage, "taskRunnerPriority")}`}
-          onInput={(event) =>
-            onChange({
-              priority: Math.max(1, Number.parseInt(event.currentTarget.value, 10) || runner.priority)
-            })
-          }
-        />
-      </label>
-      <p>{runner.command ? runner.command : t(displayLanguage, "notSet")}</p>
-    </article>
-  );
-}
-
-function ModelConfigCard({
-  label,
-  config,
-  health,
-  displayLanguage,
-  onProviderChange,
-  onTestConnection
-}: {
-  label: string;
-  config: PublicModelRoleConfig;
-  health?: PublicModelHealth;
-  displayLanguage: PetSettings["displayLanguage"];
-  onProviderChange(provider: ModelProviderOption): void;
-  onTestConnection(): void;
-}) {
-  return (
-    <article className="settings-model-card">
-      <div className="settings-model-card-header">
-        <strong>{label}</strong>
-        <span>{config.enabled ? t(displayLanguage, "enabled") : t(displayLanguage, "disabled")}</span>
-      </div>
-      <div className="settings-model-card-actions">
-        <div className="settings-model-health">
-          <span className="settings-model-health-label">{t(displayLanguage, "modelHealth")}</span>
-          <span className="settings-model-health-value">{modelHealthLabel(health, displayLanguage)}</span>
-        </div>
-        <button
-          type="button"
-          className="settings-model-test-button"
-          aria-label={testConnectionAriaLabel(label, displayLanguage)}
-          onClick={onTestConnection}
-          disabled={health?.state === "testing"}
-        >
-          {t(displayLanguage, "testConnection")}
-        </button>
-      </div>
-      <dl>
-        <dt>{t(displayLanguage, "provider")}</dt>
-        <dd>
-          <select
-            className="settings-model-provider-select"
-            value={toModelProviderOption(config.provider)}
-            aria-label={`${label} ${t(displayLanguage, "provider")}`}
-            onChange={(event) => onProviderChange(event.currentTarget.value as ModelProviderOption)}
-          >
-            {modelProviderOptions.map((provider) => (
-              <option key={provider} value={provider}>
-                {getModelProviderLabel(provider, displayLanguage)}
-              </option>
-            ))}
-          </select>
-        </dd>
-        <dt>{t(displayLanguage, "model")}</dt>
-        <dd>{config.model}</dd>
-        {config.baseUrl ? (
-          <>
-            <dt>Base URL</dt>
-            <dd>{config.baseUrl}</dd>
-          </>
-        ) : null}
-        <dt>{t(displayLanguage, "apiKey")}</dt>
-        <dd>{config.hasApiKey ? t(displayLanguage, "apiKeySaved") : t(displayLanguage, "notSet")}</dd>
-        {health?.lastErrorCode ? (
-          <>
-            <dt>{t(displayLanguage, "modelStateError")}</dt>
-            <dd>{modelHealthErrorLabel(health.lastErrorCode, displayLanguage)}</dd>
-          </>
-        ) : null}
-      </dl>
-    </article>
-  );
-}
-
-function toModelProviderOption(provider: string): ModelProviderOption {
-  return modelProviderOptions.includes(provider as ModelProviderOption)
-    ? (provider as ModelProviderOption)
-    : "openai-compatible";
-}
-
-function getModelProviderLabel(
-  provider: ModelProviderOption,
-  displayLanguage: PetSettings["displayLanguage"]
-): string {
-  if (provider === "openai-compatible") {
-    return t(displayLanguage, "providerOpenAICompatible");
-  }
-
-  if (provider === "langchain-openai") {
-    return t(displayLanguage, "providerLangChainOpenAI");
-  }
-
-  return t(displayLanguage, "providerOpenAICompatible");
-}
-
-function modelHealthLabel(
-  health: PublicModelHealth | undefined,
-  displayLanguage: PetSettings["displayLanguage"]
-): string {
-  if (!health) {
-    return t(displayLanguage, "modelStateNotConfigured");
-  }
-
-  switch (health.state) {
-    case "connected":
-      return t(displayLanguage, "modelStateConnected");
-    case "configured":
-      return t(displayLanguage, "modelStateConfigured");
-    case "testing":
-      return t(displayLanguage, "modelStateTesting");
-    case "error":
-      return t(displayLanguage, "modelStateError");
-    case "using_test_double":
-      return t(displayLanguage, "modelStateUsingTestDouble");
-    default:
-      return t(displayLanguage, "modelStateNotConfigured");
-  }
-}
-
-function modelHealthErrorLabel(
-  code: PublicModelHealth["lastErrorCode"],
-  displayLanguage: PetSettings["displayLanguage"]
-): string {
-  switch (code) {
-    case "unsupported_provider":
-      return t(displayLanguage, "modelErrorUnsupportedProvider");
-    case "authentication_failed":
-      return t(displayLanguage, "modelErrorAuthenticationFailed");
-    case "timeout":
-      return t(displayLanguage, "modelErrorTimeout");
-    case "network_error":
-      return t(displayLanguage, "modelErrorNetwork");
-    case "malformed_response":
-      return t(displayLanguage, "modelErrorMalformedResponse");
-    case "invocation_failed":
-      return t(displayLanguage, "modelErrorInvocationFailed");
-    default:
-      return t(displayLanguage, "modelErrorMissingConfiguration");
-  }
-}
-
-function testConnectionAriaLabel(label: string, displayLanguage: PetSettings["displayLanguage"]): string {
-  if (displayLanguage === "zh") {
-    return `测试${label}连接`;
-  }
-
-  return `Test ${label} connection`;
 }

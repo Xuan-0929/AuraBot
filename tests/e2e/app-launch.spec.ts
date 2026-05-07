@@ -105,13 +105,17 @@ test("reveals pet quick controls and syncs click-through settings from the conso
     await consoleWindow.getByRole("button", { name: "Open full settings" }).click();
     const settingsWindow = await settingsPromise;
     await settingsWindow.getByRole("main", { name: "Settings" }).waitFor({ state: "visible" });
-    await expect(settingsWindow.getByLabel("Model settings")).toContainText("Chat");
+    const settingsNav = settingsWindow.getByRole("tablist", { name: "Settings navigation" });
+    await expect(settingsNav).toContainText("General");
+    await expect(settingsNav).toContainText("Pet Behavior");
+    await expect(settingsNav).toContainText("Model");
 
     await settingsWindow.getByLabel("Language").selectOption("zh");
     await expect(consoleWindow.getByLabel("Agent status")).toContainText("空闲中");
     await settingsWindow.getByLabel("语言").selectOption("en");
     await expect(consoleWindow.getByLabel("Agent status")).toContainText("idle");
 
+    await settingsWindow.getByRole("tab", { name: "Pet Behavior" }).click();
     await settingsWindow.getByLabel("Click through character").check();
     await expect(petWindow.getByLabel("Desktop Live2D pet")).toHaveAttribute("data-click-through", "true");
     await petWindow.getByRole("button", { name: "Drag pet" }).hover();
@@ -128,6 +132,12 @@ test("opens the product settings window directly from pet quick controls", async
     const settingsWindow = await openSettingsFromPet(electronApp, petWindow);
 
     await expect(settingsWindow.getByRole("main", { name: "Settings" })).toBeVisible();
+    const settingsNav = settingsWindow.getByRole("tablist", { name: "Settings navigation" });
+    await expect(settingsNav).toContainText("Persona");
+    await expect(settingsNav).toContainText("Live2D Model");
+    await expect(settingsNav).toContainText("Notifications");
+
+    await settingsWindow.getByRole("tab", { name: "Model", exact: true }).click();
     await expect(settingsWindow.getByLabel("Model settings")).toContainText("Chat");
     await expect(settingsWindow.getByLabel("Task CLI settings")).toContainText("Codex");
     await expect(settingsWindow.getByLabel("Task CLI settings")).toContainText("Claude Code");
@@ -151,6 +161,18 @@ test("opens the product settings window directly from pet quick controls", async
       });
     await settingsWindow.getByLabel("Enable Claude Code task runner").check();
     await expect(settingsWindow.getByLabel("Enable Claude Code task runner")).toBeChecked();
+
+    await settingsWindow.getByRole("tab", { name: "Persona", exact: true }).click();
+    await expect(settingsWindow.getByRole("region", { name: "Persona" })).toContainText("Name");
+    await settingsWindow.getByLabel("Open advanced persona editing").click();
+    await expect(settingsWindow.getByRole("region", { name: "Persona" })).toContainText("Principles");
+
+    await settingsWindow.getByRole("tab", { name: "Live2D Model", exact: true }).click();
+    await expect(settingsWindow.getByRole("region", { name: "Live2D Model" })).toContainText("Current model");
+    await expect(settingsWindow.getByRole("region", { name: "Live2D Model" })).toContainText("Hiyori");
+
+    await settingsWindow.getByRole("tab", { name: "Notifications", exact: true }).click();
+    await expect(settingsWindow.getByRole("region", { name: "Notifications" })).toContainText("System notifications");
 
     const settingsPage = settingsWindow.getByRole("main", { name: "Settings" });
     await expect

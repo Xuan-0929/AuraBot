@@ -9,8 +9,12 @@ import {
 } from "../shared/contracts/ipc";
 import type { AgentStatus, SendChatMessageInput, SendChatMessageResult } from "../shared/contracts/chat";
 import type { Message } from "../shared/schemas/message";
+import type { Live2DModelState } from "../shared/contracts/live2dModel";
+import type { NotificationSettings } from "../shared/contracts/notificationSettings";
 import type { PetActivity } from "../shared/contracts/pet";
 import { parsePetSettingsPatch, type PetSettings, type PetSettingsPatch } from "../shared/schemas/petSettings";
+import type { PersonaSettings } from "../shared/contracts/personaSettings";
+import type { Profile } from "../shared/schemas/profile";
 import type { Task } from "../shared/schemas/task";
 import type { AppServices } from "../core/bootstrap/createServices";
 import { shouldAutoRunTasks } from "../core/bootstrap/createServices";
@@ -37,6 +41,13 @@ export interface WindowController {
   getModelHealth(): PublicModelHealthMap;
   testModelConnection(role: ModelRoleKey): Promise<PublicModelHealth>;
   updateProactiveSettings(patch: ProactiveSettingsPatch): Promise<PublicAppConfig>;
+  updatePersonaSettings(settings: PersonaSettings): Profile;
+  getLive2DModelState(): Live2DModelState;
+  setCurrentLive2DModel(modelId: string): Live2DModelState;
+  getNotificationSettings(): NotificationSettings;
+  updateNotificationSettings(
+    patch: Partial<Omit<NotificationSettings, "permissionState">>
+  ): NotificationSettings;
   recordUserActivity(): void;
   getPetSettings(): PetSettings;
   updatePetSettings(patch: PetSettingsPatch): PetSettings;
@@ -83,6 +94,8 @@ export function registerIpc(services: AppServices, windows: WindowController): v
       petSettings: windows.getPetSettings(),
       appConfig: createPublicAppConfig(services.config),
       modelHealth: windows.getModelHealth(),
+      live2dModelState: windows.getLive2DModelState(),
+      notificationSettings: windows.getNotificationSettings(),
       debugPetOverlay: process.env.AURABOT_DEBUG_PET === "1"
     };
   });
@@ -134,6 +147,24 @@ export function registerIpc(services: AppServices, windows: WindowController): v
 
   ipcMain.handle(IPC_CHANNELS.updateProactiveSettings, async (_event, patch: ProactiveSettingsPatch) =>
     windows.updateProactiveSettings(patch)
+  );
+
+  ipcMain.handle(IPC_CHANNELS.updatePersonaSettings, (_event, settings: PersonaSettings) =>
+    windows.updatePersonaSettings(settings)
+  );
+
+  ipcMain.handle(IPC_CHANNELS.getLive2DModelState, () => windows.getLive2DModelState());
+
+  ipcMain.handle(IPC_CHANNELS.setCurrentLive2DModel, (_event, modelId: string) =>
+    windows.setCurrentLive2DModel(modelId)
+  );
+
+  ipcMain.handle(IPC_CHANNELS.getNotificationSettings, () => windows.getNotificationSettings());
+
+  ipcMain.handle(
+    IPC_CHANNELS.updateNotificationSettings,
+    (_event, patch: Partial<Omit<NotificationSettings, "permissionState">>) =>
+      windows.updateNotificationSettings(patch)
   );
 
   ipcMain.handle(IPC_CHANNELS.getPetSettings, () => windows.getPetSettings());

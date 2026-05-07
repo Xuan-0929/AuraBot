@@ -9,7 +9,7 @@ export class ProfileService {
     const existing = this.profileRepository.getActiveProfile();
 
     if (existing) {
-      if (existing.id === DEFAULT_PROFILE_ID && existing.soul?.id === "soul_default") {
+      if (shouldUpgradeDefaultProfile(existing)) {
         const { profile, soul } = createDefaultProfile(new Date().toISOString());
         this.profileRepository.upsertDefaultProfile(
           {
@@ -18,7 +18,7 @@ export class ProfileService {
           },
           {
             ...soul,
-            createdAt: existing.soul.createdAt
+            createdAt: existing.soul?.createdAt ?? existing.createdAt
           }
         );
 
@@ -32,4 +32,14 @@ export class ProfileService {
     this.profileRepository.upsertDefaultProfile(profile, soul);
     return { ...profile, soul };
   }
+}
+
+function shouldUpgradeDefaultProfile(profile: Profile): boolean {
+  const soul = profile.soul;
+
+  return (
+    profile.id === DEFAULT_PROFILE_ID &&
+    soul?.id === "soul_default" &&
+    (!!soul && (!soul.tone || soul.principles.length === 0 || soul.taboos.length === 0))
+  );
 }

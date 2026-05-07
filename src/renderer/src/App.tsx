@@ -9,9 +9,12 @@ export function App() {
   const messages = useAuraBotStore((state) => state.messages);
   const tasks = useAuraBotStore((state) => state.tasks);
   const agentStatus = useAuraBotStore((state) => state.agentStatus);
+  const profile = useAuraBotStore((state) => state.profile);
   const petSettings = useAuraBotStore((state) => state.petSettings);
   const appConfig = useAuraBotStore((state) => state.appConfig);
   const modelHealth = useAuraBotStore((state) => state.modelHealth);
+  const live2dModelState = useAuraBotStore((state) => state.live2dModelState);
+  const notificationSettings = useAuraBotStore((state) => state.notificationSettings);
   const petActivity = useAuraBotStore((state) => state.petActivity);
   const petCursorPosition = useAuraBotStore((state) => state.petCursorPosition);
   const memoryDebugSnapshot = useAuraBotStore((state) => state.memoryDebugSnapshot);
@@ -32,6 +35,9 @@ export function App() {
   const updateModelProviderSettings = useAuraBotStore((state) => state.updateModelProviderSettings);
   const testModelConnection = useAuraBotStore((state) => state.testModelConnection);
   const updateProactiveSettings = useAuraBotStore((state) => state.updateProactiveSettings);
+  const updatePersonaSettings = useAuraBotStore((state) => state.updatePersonaSettings);
+  const setCurrentLive2DModel = useAuraBotStore((state) => state.setCurrentLive2DModel);
+  const updateNotificationSettings = useAuraBotStore((state) => state.updateNotificationSettings);
   const subscribeToPetEvents = useAuraBotStore((state) => state.subscribeToPetEvents);
   const surface = window.location.hash === "#console" ? "console" : window.location.hash === "#settings" ? "settings" : "pet";
 
@@ -60,19 +66,26 @@ export function App() {
         />
       ) : surface === "settings" ? (
         <SettingsWindow
+          profile={profile}
           petSettings={petSettings}
           appConfig={appConfig}
           modelHealth={modelHealth}
+          live2dModelState={live2dModelState}
+          notificationSettings={notificationSettings}
           onUpdatePetSettings={updatePetSettings}
           onUpdateTaskRunnerSettings={updateTaskRunnerSettings}
           onUpdateModelProviderSettings={updateModelProviderSettings}
           onTestModelConnection={testModelConnection}
           onUpdateProactiveSettings={updateProactiveSettings}
+          onUpdatePersonaSettings={updatePersonaSettings}
+          onSetCurrentLive2DModel={setCurrentLive2DModel}
+          onUpdateNotificationSettings={updateNotificationSettings}
           onOpenConfigFile={openConfigFile}
         />
       ) : (
         <DesktopPet
           agentStatus={agentStatus}
+          modelPath={live2dModelState?.currentModelPath}
           petSettings={petSettings}
           petActivity={petActivity}
           petCursorPosition={petCursorPosition}

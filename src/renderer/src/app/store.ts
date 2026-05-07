@@ -1,6 +1,8 @@
 import { create } from "zustand";
 import type { AgentStatus, AppInitialState, SendChatMessageResult } from "../../../shared/contracts/chat";
+import type { Live2DModelState } from "../../../shared/contracts/live2dModel";
 import type { MemoryDebugSnapshot, PetCursorPosition } from "../../../shared/contracts/ipc";
+import type { NotificationSettings } from "../../../shared/contracts/notificationSettings";
 import type { PetActivity } from "../../../shared/contracts/pet";
 import type {
   ModelRoleKey,
@@ -10,6 +12,7 @@ import type {
   PublicModelHealthMap,
   TaskRunnerSettingsPatch
 } from "../../../shared/contracts/settings";
+import type { PersonaSettings } from "../../../shared/contracts/personaSettings";
 import type { Message } from "../../../shared/schemas/message";
 import { DEFAULT_PET_SETTINGS, type PetSettings, type PetSettingsPatch } from "../../../shared/schemas/petSettings";
 import type { Profile } from "../../../shared/schemas/profile";
@@ -24,6 +27,8 @@ interface AuraBotStore {
   petSettings: PetSettings;
   appConfig?: PublicAppConfig;
   modelHealth?: PublicModelHealthMap;
+  live2dModelState?: Live2DModelState;
+  notificationSettings?: NotificationSettings;
   petActivity?: PetActivity;
   petActivityQueue: PetActivity[];
   petCursorPosition?: PetCursorPosition;
@@ -39,6 +44,11 @@ interface AuraBotStore {
   updateModelProviderSettings(patch: ModelProviderSettingsPatch): Promise<void>;
   testModelConnection(role: ModelRoleKey): Promise<void>;
   updateProactiveSettings(patch: ProactiveSettingsPatch): Promise<void>;
+  updatePersonaSettings(settings: PersonaSettings): Promise<void>;
+  setCurrentLive2DModel(modelId: string): Promise<void>;
+  updateNotificationSettings(
+    patch: Partial<Omit<NotificationSettings, "permissionState">>
+  ): Promise<void>;
   updatePetSettings(patch: PetSettingsPatch): Promise<void>;
   setPetMousePassthrough(enabled: boolean): Promise<void>;
   movePetWindowBy(delta: { x: number; y: number }): Promise<void>;
@@ -70,6 +80,12 @@ export const useAuraBotStore = create<AuraBotStore>((set, get) => ({
     });
     const unsubscribeActivity = window.aurabot.onPetActivity((petActivity) => {
       set((current) => enqueuePetActivity(current, petActivity));
+    });
+    const unsubscribeLive2DModelState = window.aurabot.onLive2DModelStateChanged((live2dModelState) => {
+      set({ live2dModelState });
+    });
+    const unsubscribeNotificationSettings = window.aurabot.onNotificationSettingsChanged((notificationSettings) => {
+      set({ notificationSettings });
     });
     const unsubscribePetCursorPosition = window.aurabot.onPetCursorPosition((petCursorPosition) => {
       set({ petCursorPosition });
@@ -105,6 +121,8 @@ export const useAuraBotStore = create<AuraBotStore>((set, get) => ({
     return () => {
       unsubscribeSettings();
       unsubscribeActivity();
+      unsubscribeLive2DModelState();
+      unsubscribeNotificationSettings();
       unsubscribePetCursorPosition();
       unsubscribeAgentStatus();
       unsubscribeChatMessage();
@@ -156,6 +174,18 @@ export const useAuraBotStore = create<AuraBotStore>((set, get) => ({
   async updateProactiveSettings(patch) {
     const appConfig = await window.aurabot.updateProactiveSettings(patch);
     set({ appConfig });
+  },
+  async updatePersonaSettings(settings) {
+    const profile = await window.aurabot.updatePersonaSettings(settings);
+    set({ profile });
+  },
+  async setCurrentLive2DModel(modelId) {
+    const live2dModelState = await window.aurabot.setCurrentLive2DModel(modelId);
+    set({ live2dModelState });
+  },
+  async updateNotificationSettings(patch) {
+    const notificationSettings = await window.aurabot.updateNotificationSettings(patch);
+    set({ notificationSettings });
   },
   async updatePetSettings(patch: PetSettingsPatch) {
     const petSettings = await window.aurabot.updatePetSettings(patch);
