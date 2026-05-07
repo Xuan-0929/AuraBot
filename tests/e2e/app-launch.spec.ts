@@ -334,13 +334,8 @@ test("keeps long conversations pinned in the conversation message list once chat
 
     await sendConsoleMessage(consoleWindow, "第 1 条，我喜欢吃火锅。");
     await expect(consoleWindow.getByText(/我记住了.*火锅/).last()).toBeVisible();
-    // Constrain the real chat rail so the actual message list becomes the scroll container.
-    await messageList.evaluate((element) => {
-      element.style.height = "280px";
-      element.style.maxHeight = "280px";
-    });
 
-    for (let index = 2; index <= 14; index += 1) {
+    for (let index = 2; index <= 24; index += 1) {
       await sendConsoleMessage(consoleWindow, `第 ${index} 条，我喜欢吃火锅。`);
       await expect(consoleWindow.getByText(/我记住了.*火锅/).last()).toBeVisible();
     }

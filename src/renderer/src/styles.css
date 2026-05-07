@@ -496,7 +496,6 @@ textarea {
   flex: 1 1 auto;
   display: grid;
   grid-template-columns: minmax(0, 1fr) minmax(220px, 248px);
-  align-items: start;
   gap: 18px;
   min-height: 0;
 }
