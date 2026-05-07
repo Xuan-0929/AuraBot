@@ -387,4 +387,12 @@ describe("SettingsWindow", () => {
     expect(container.textContent).not.toContain("Product-level configuration");
     expect(container.textContent).not.toContain("Click through character");
   });
+
+  it("uses the A1 settings subtitle in English", async () => {
+    await act(async () => {
+      root.render(<SettingsWindow {...baseProps} />);
+    });
+
+    expect(container.textContent).toContain("Shape Aura into the kind of companion you want beside you.");
+  });
 });
