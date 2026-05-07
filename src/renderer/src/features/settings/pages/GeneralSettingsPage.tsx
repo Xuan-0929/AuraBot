@@ -1,5 +1,6 @@
 import { t } from "../../../i18n";
 import type { PetSettings, PetSettingsPatch } from "../../../../../shared/schemas/petSettings";
+import { SettingsPageLead } from "../SettingsPageLead";
 
 export function GeneralSettingsPage({
   petSettings,
@@ -12,7 +13,10 @@ export function GeneralSettingsPage({
 
   return (
     <section className="settings-page-section" aria-label={t(displayLanguage, "general")}>
-      <h2>{t(displayLanguage, "general")}</h2>
+      <SettingsPageLead
+        title={t(displayLanguage, "general")}
+        hint={t(displayLanguage, "generalSettingsHint")}
+      />
       <label className="settings-page-field">
         <span>{t(displayLanguage, "language")}</span>
         <select

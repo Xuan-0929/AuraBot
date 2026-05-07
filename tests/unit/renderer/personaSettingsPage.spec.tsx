@@ -50,6 +50,9 @@ describe("PersonaSettingsPage", () => {
     });
 
     expect(container.textContent).toContain("Persona");
+    expect(container.textContent).toContain(
+      "Shape how Aura sounds and feels, then open the deeper notes only when you need them."
+    );
     expect(container.textContent).toContain("Name");
     expect(container.textContent).toContain("Tone");
     expect(container.textContent).toContain("Relationship");

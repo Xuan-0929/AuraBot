@@ -2,6 +2,7 @@ import { useEffect, useState } from "react";
 import type { PersonaSettings } from "../../../../../shared/contracts/personaSettings";
 import type { PetSettings } from "../../../../../shared/schemas/petSettings";
 import { t } from "../../../i18n";
+import { SettingsPageLead } from "../SettingsPageLead";
 
 export function PersonaSettingsPage({
   petSettings,
@@ -23,10 +24,10 @@ export function PersonaSettingsPage({
   return (
     <section className="settings-page-section" aria-label={t(displayLanguage, "persona")}>
       <div className="settings-page-section-header">
-        <div>
-          <h2>{t(displayLanguage, "persona")}</h2>
-          <p>{t(displayLanguage, "personaSettingsHint")}</p>
-        </div>
+        <SettingsPageLead
+          title={t(displayLanguage, "persona")}
+          hint={t(displayLanguage, "personaSettingsHint")}
+        />
         <button
           type="button"
           className="settings-config-button"

@@ -33,6 +33,7 @@ export function SettingsCenterShell({
   return (
     <div className="settings-center">
       <aside className="settings-center-sidebar" aria-label={t(displayLanguage, "settingsNavigation")}>
+        <p className="settings-center-sidebar-note">{t(displayLanguage, "settingsSidebarHint")}</p>
         <nav className="settings-center-nav" role="tablist" aria-label={t(displayLanguage, "settingsNavigation")}>
           {items.map((item) => (
             <button

@@ -1,5 +1,6 @@
 import { t } from "../../../i18n";
 import type { PetSettings, PetSettingsPatch } from "../../../../../shared/schemas/petSettings";
+import { SettingsPageLead } from "../SettingsPageLead";
 
 export function PetBehaviorSettingsPage({
   petSettings,
@@ -12,7 +13,10 @@ export function PetBehaviorSettingsPage({
 
   return (
     <section className="settings-page-section" aria-label={t(displayLanguage, "petBehavior")}>
-      <h2>{t(displayLanguage, "petBehavior")}</h2>
+      <SettingsPageLead
+        title={t(displayLanguage, "petBehavior")}
+        hint={t(displayLanguage, "petBehaviorSettingsHint")}
+      />
       <label className="settings-page-toggle">
         <input
           type="checkbox"

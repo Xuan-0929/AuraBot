@@ -388,6 +388,8 @@ describe("SettingsWindow", () => {
     expect(container.textContent).toContain("人格");
     expect(container.textContent).toContain("Live2D 模型");
     expect(container.textContent).toContain("通知");
+    expect(container.textContent).toContain("把这间小屋慢慢收拾成你和 Aura 都住得舒服的样子。");
+    expect(container.textContent).toContain("先把这间小屋最常用的习惯放顺手。");
     expect(container.textContent).not.toContain("Product-level configuration");
     expect(container.textContent).not.toContain("Click through character");
   });
@@ -397,7 +399,8 @@ describe("SettingsWindow", () => {
       root.render(<SettingsWindow {...baseProps} />);
     });
 
-    expect(container.textContent).toContain("Shape Aura into the kind of companion you want beside you.");
+    expect(container.textContent).toContain("Settle this little room until Aura feels right beside you.");
+    expect(container.textContent).toContain("Start with the everyday basics that make the room feel easy to live in.");
   });
 
   it("wires the A1 tokens into the console and settings shell styles", () => {

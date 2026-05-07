@@ -12,6 +12,7 @@ import type {
 import { MODEL_PROVIDER_OPTIONS as modelProviderOptions } from "../../../../../shared/contracts/settings";
 import type { PetSettings } from "../../../../../shared/schemas/petSettings";
 import { t, type UiTextKey } from "../../../i18n";
+import { SettingsPageLead } from "../SettingsPageLead";
 
 const MODEL_CONFIG_ROWS: Array<{
   key: ModelRoleKey;
@@ -55,10 +56,10 @@ export function ModelSettingsPage({
     <>
       <section className="settings-page-section" aria-label={t(displayLanguage, "modelSettings")}>
         <div className="settings-page-section-header">
-          <div>
-            <h2>{t(displayLanguage, "model")}</h2>
-            <p>{t(displayLanguage, "openConfigFileHint")}</p>
-          </div>
+          <SettingsPageLead
+            title={t(displayLanguage, "model")}
+            hint={t(displayLanguage, "modelSettingsHint")}
+          />
           <button type="button" className="settings-config-button" onClick={() => void onOpenConfigFile()}>
             {t(displayLanguage, "openConfigFile")}
           </button>

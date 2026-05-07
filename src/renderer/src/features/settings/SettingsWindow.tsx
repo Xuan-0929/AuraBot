@@ -60,7 +60,8 @@ export function SettingsWindow(props: SettingsWindowProps) {
   return (
     <main className="settings-window" aria-label={t(displayLanguage, "settings")}>
       <header className="settings-window-header">
-        <div>
+        <div className="settings-window-copy">
+          <span className="settings-window-kicker">{t(displayLanguage, "settingsWindowEyebrow")}</span>
           <h1>{t(displayLanguage, "settings")}</h1>
           <p>{t(displayLanguage, "productSettingsSubtitle")}</p>
         </div>

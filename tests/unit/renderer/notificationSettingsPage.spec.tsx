@@ -79,6 +79,7 @@ describe("NotificationSettingsPage", () => {
     });
 
     expect(container.textContent).toContain("Notifications");
+    expect(container.textContent).toContain("Choose which little taps on the shoulder Aura is allowed to send.");
     expect(container.textContent).toContain("System notifications");
     expect(container.textContent).toContain("Permission");
     expect(container.textContent).toContain("Managed by system");

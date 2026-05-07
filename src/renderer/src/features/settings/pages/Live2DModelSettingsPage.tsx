@@ -2,6 +2,7 @@ import { Live2DModelCanvas } from "../../live2d/Live2DModelCanvas";
 import type { Live2DModelState } from "../../../../../shared/contracts/live2dModel";
 import { t } from "../../../i18n";
 import type { PetSettings } from "../../../../../shared/schemas/petSettings";
+import { SettingsPageLead } from "../SettingsPageLead";
 
 export function Live2DModelSettingsPage({
   petSettings,
@@ -18,10 +19,10 @@ export function Live2DModelSettingsPage({
   return (
     <section className="settings-page-section" aria-label={t(displayLanguage, "live2dModel")}>
       <div className="settings-page-section-header">
-        <div>
-          <h2>{t(displayLanguage, "live2dModel")}</h2>
-          <p>{t(displayLanguage, "live2dModelSettingsHint")}</p>
-        </div>
+        <SettingsPageLead
+          title={t(displayLanguage, "live2dModel")}
+          hint={t(displayLanguage, "live2dModelSettingsHint")}
+        />
       </div>
       {currentModel ? (
         <div className="settings-live2d-layout">

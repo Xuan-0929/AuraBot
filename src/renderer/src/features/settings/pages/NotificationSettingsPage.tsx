@@ -2,6 +2,7 @@ import type { NotificationSettings } from "../../../../../shared/contracts/notif
 import { t } from "../../../i18n";
 import type { ProactiveSettingsPatch, PublicAppConfig } from "../../../../../shared/contracts/settings";
 import type { PetSettings } from "../../../../../shared/schemas/petSettings";
+import { SettingsPageLead } from "../SettingsPageLead";
 
 export function NotificationSettingsPage({
   petSettings,
@@ -23,10 +24,10 @@ export function NotificationSettingsPage({
   return (
     <section className="settings-page-section" aria-label={t(displayLanguage, "notifications")}>
       <div className="settings-page-section-header">
-        <div>
-          <h2>{t(displayLanguage, "notifications")}</h2>
-          <p>{t(displayLanguage, "proactiveMessagesHint")}</p>
-        </div>
+        <SettingsPageLead
+          title={t(displayLanguage, "notifications")}
+          hint={t(displayLanguage, "notificationSettingsHint")}
+        />
       </div>
       <label className="settings-page-toggle">
         <input
