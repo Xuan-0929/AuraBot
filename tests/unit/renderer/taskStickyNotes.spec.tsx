@@ -3,7 +3,12 @@
 import { act } from "react";
 import { createRoot } from "react-dom/client";
 import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
-import { TaskStickyNotes } from "../../../src/renderer/src/features/tasks/TaskStickyNotes";
+import {
+  TaskStickyNotes,
+  isStickyTaskActive,
+  isStickyTaskSettled,
+  pickConsoleStickyTasks
+} from "../../../src/renderer/src/features/tasks/TaskStickyNotes";
 import type { Task } from "../../../src/shared/schemas/task";
 
 (globalThis as { IS_REACT_ACT_ENVIRONMENT?: boolean }).IS_REACT_ACT_ENVIRONMENT = true;
@@ -41,6 +46,28 @@ describe("TaskStickyNotes", () => {
     expect(notes?.textContent).toContain("周报");
     expect(notes?.textContent).toContain("晚上提醒我回消息");
     expect(notes?.textContent).not.toContain("整理文档");
+  });
+
+  it("keeps the console sticky-note policy in one shared helper with active-first max-three selection", () => {
+    const tasks = [
+      makeTask({ id: "settled-newest", title: "帮我整理回顾。", status: "completed", updatedAt: "2026-05-07T10:30:00.000Z" }),
+      makeTask({ id: "active-oldest", title: "帮我写日报。", status: "queued", updatedAt: "2026-05-07T08:00:00.000Z" }),
+      makeTask({ id: "active-newest", title: "帮我整理周报。", status: "running", updatedAt: "2026-05-07T10:00:00.000Z" }),
+      makeTask({ id: "settled-middle", title: "帮我做海报。", status: "failed", updatedAt: "2026-05-07T09:30:00.000Z" }),
+      makeTask({ id: "active-middle", title: "帮我记一下明天的事。", status: "waiting", updatedAt: "2026-05-07T09:00:00.000Z" }),
+      makeTask({ id: "settled-oldest", title: "帮我整理会议纪要。", status: "completed", updatedAt: "2026-05-07T07:00:00.000Z" })
+    ];
+
+    expect(isStickyTaskActive("queued")).toBe(true);
+    expect(isStickyTaskActive("completed")).toBe(false);
+    expect(isStickyTaskSettled("failed")).toBe(true);
+    expect(isStickyTaskSettled("running")).toBe(false);
+
+    expect(pickConsoleStickyTasks(tasks).map((task) => task.id)).toEqual([
+      "active-newest",
+      "active-middle",
+      "active-oldest"
+    ]);
   });
 
   it("renders subtle console actions only for the tasks passed in by the caller", async () => {

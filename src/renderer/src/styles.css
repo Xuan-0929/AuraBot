@@ -256,9 +256,11 @@ textarea {
 }
 
 .task-sticky-notes-console {
+  justify-self: end;
   align-self: start;
-  width: 100%;
+  width: min(100%, 248px);
   max-width: 248px;
+  margin-inline-start: auto;
   padding-top: 4px;
 }
 
@@ -1180,7 +1182,10 @@ textarea {
   }
 
   .task-sticky-notes-console {
-    max-width: none;
+    justify-self: end;
+    width: min(100%, 248px);
+    max-width: 248px;
+    margin-inline-start: auto;
     padding-top: 0;
   }
 }

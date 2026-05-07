@@ -76,7 +76,7 @@ function summarizeMeta(task: Task, displayLanguage: PetSettings["displayLanguage
 }
 
 function pickVisiblePetTasks(tasks: Task[]): Task[] {
-  return tasks.filter((task) => isActive(task.status)).slice(0, 2);
+  return tasks.filter((task) => isStickyTaskActive(task.status)).slice(0, 2);
 }
 
 function TaskStickyNoteActions({
@@ -92,7 +92,7 @@ function TaskStickyNoteActions({
 }) {
   const title = summarizeTitle(task.title);
 
-  if (isActive(task.status) && onCancelTask) {
+  if (isStickyTaskActive(task.status) && onCancelTask) {
     return (
       <div className="task-sticky-note-actions">
         <button
@@ -107,7 +107,7 @@ function TaskStickyNoteActions({
     );
   }
 
-  if (isSettled(task.status) && onDeleteTask) {
+  if (isStickyTaskSettled(task.status) && onDeleteTask) {
     return (
       <div className="task-sticky-note-actions">
         <button
@@ -125,10 +125,32 @@ function TaskStickyNoteActions({
   return null;
 }
 
-function isActive(status: Task["status"]): boolean {
+export function pickConsoleStickyTasks(tasks: Task[]): Task[] {
+  const activeTasks = tasks
+    .filter((task) => isStickyTaskActive(task.status))
+    .sort(compareStickyTasksByUpdatedAt)
+    .slice(0, 3);
+
+  if (activeTasks.length >= 3) {
+    return activeTasks;
+  }
+
+  const settledTasks = tasks
+    .filter((task) => isStickyTaskSettled(task.status))
+    .sort(compareStickyTasksByUpdatedAt)
+    .slice(0, 3 - activeTasks.length);
+
+  return [...activeTasks, ...settledTasks];
+}
+
+export function isStickyTaskActive(status: Task["status"]): boolean {
   return status === "queued" || status === "running" || status === "waiting";
 }
 
-function isSettled(status: Task["status"]): boolean {
+export function isStickyTaskSettled(status: Task["status"]): boolean {
   return status === "completed" || status === "failed" || status === "interrupted";
+}
+
+function compareStickyTasksByUpdatedAt(left: Task, right: Task): number {
+  return Date.parse(right.updatedAt) - Date.parse(left.updatedAt);
 }
