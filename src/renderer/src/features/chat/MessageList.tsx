@@ -26,7 +26,7 @@ export function MessageList({
   if (messages.length === 0) {
     return (
       <div className="empty-state">
-        <h1>{t(displayLanguage, "appTitle")}</h1>
+        <span className="empty-state-kicker">{t(displayLanguage, "mainConversation")}</span>
         <p>{t(displayLanguage, "readyWhenYouAre")}</p>
       </div>
     );

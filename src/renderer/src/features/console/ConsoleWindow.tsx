@@ -7,7 +7,7 @@ import type { PetSettings, PetSettingsPatch } from "../../../../shared/schemas/p
 import type { Task } from "../../../../shared/schemas/task";
 import { Composer } from "../chat/Composer";
 import { MessageList } from "../chat/MessageList";
-import { TaskStatusOverlay } from "../tasks/TaskStatusOverlay";
+import { TaskStickyNotes } from "../tasks/TaskStickyNotes";
 import { AgentStatusBar } from "../status/AgentStatusBar";
 import { PetSettingsPanel } from "../settings/PetSettingsPanel";
 import { MemoryDebugPanel } from "../memory/MemoryDebugPanel";
@@ -43,6 +43,7 @@ export function ConsoleWindow({
   onDeleteTask
 }: ConsoleWindowProps) {
   const [memoryDebugExpanded, setMemoryDebugExpanded] = useState(false);
+  const consoleTasks = pickConsoleStickyTasks(tasks);
 
   return (
     <main className="console-window" aria-label={t(petSettings.displayLanguage, "consoleTitle")}>
@@ -61,12 +62,6 @@ export function ConsoleWindow({
           />
         </div>
       </header>
-      <TaskStatusOverlay
-        tasks={tasks}
-        displayLanguage={petSettings.displayLanguage}
-        onCancelTask={onCancelTask}
-        onDeleteTask={onDeleteTask}
-      />
       <MemoryDebugPanel
         snapshot={memoryDebugSnapshot}
         expanded={memoryDebugExpanded}
@@ -74,10 +69,53 @@ export function ConsoleWindow({
         onToggle={() => setMemoryDebugExpanded((current) => !current)}
         onRefresh={onLoadMemoryDebugSnapshot}
       />
-      <section className="console-chat" aria-label={t(petSettings.displayLanguage, "mainConversation")}>
-        <MessageList messages={messages} displayLanguage={petSettings.displayLanguage} />
-        <Composer displayLanguage={petSettings.displayLanguage} onSend={onSend} />
-      </section>
+      <div className="console-body">
+        <section className="console-chat" aria-label={t(petSettings.displayLanguage, "mainConversation")}>
+          <MessageList messages={messages} displayLanguage={petSettings.displayLanguage} />
+          <Composer displayLanguage={petSettings.displayLanguage} onSend={onSend} />
+        </section>
+        <TaskStickyNotes
+          tasks={consoleTasks}
+          variant="console"
+          displayLanguage={petSettings.displayLanguage}
+          onCancelTask={(taskId) => {
+            void onCancelTask(taskId);
+          }}
+          onDeleteTask={(taskId) => {
+            void onDeleteTask(taskId);
+          }}
+        />
+      </div>
     </main>
   );
+}
+
+function pickConsoleStickyTasks(tasks: Task[]): Task[] {
+  const activeTasks = tasks
+    .filter((task) => isActive(task.status))
+    .sort((left, right) => compareByUpdatedAt(right, left))
+    .slice(0, 3);
+
+  if (activeTasks.length >= 3) {
+    return activeTasks;
+  }
+
+  const settledTasks = tasks
+    .filter((task) => isSettled(task.status))
+    .sort((left, right) => compareByUpdatedAt(right, left))
+    .slice(0, 3 - activeTasks.length);
+
+  return [...activeTasks, ...settledTasks];
+}
+
+function isActive(status: Task["status"]): boolean {
+  return status === "queued" || status === "running" || status === "waiting";
+}
+
+function isSettled(status: Task["status"]): boolean {
+  return status === "completed" || status === "failed" || status === "interrupted";
+}
+
+function compareByUpdatedAt(left: Task, right: Task): number {
+  return Date.parse(left.updatedAt) - Date.parse(right.updatedAt);
 }

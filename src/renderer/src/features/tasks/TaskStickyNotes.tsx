@@ -6,8 +6,8 @@ export function TaskStickyNotes({
   tasks,
   displayLanguage,
   variant,
-  onCancelTask: _onCancelTask,
-  onDeleteTask: _onDeleteTask
+  onCancelTask,
+  onDeleteTask
 }: {
   tasks: Task[];
   displayLanguage: PetSettings["displayLanguage"];
@@ -38,8 +38,18 @@ export function TaskStickyNotes({
       </header>
       {visibleTasks.map((task) => (
         <article key={task.id} className="task-sticky-note">
-          <strong>{summarizeTitle(task.title)}</strong>
-          <span>{summarizeMeta(task, displayLanguage)}</span>
+          <div className="task-sticky-note-copy">
+            <strong>{summarizeTitle(task.title)}</strong>
+            <span>{summarizeMeta(task, displayLanguage)}</span>
+          </div>
+          {variant === "console" ? (
+            <TaskStickyNoteActions
+              task={task}
+              displayLanguage={displayLanguage}
+              onCancelTask={onCancelTask}
+              onDeleteTask={onDeleteTask}
+            />
+          ) : null}
         </article>
       ))}
     </aside>
@@ -69,6 +79,56 @@ function pickVisiblePetTasks(tasks: Task[]): Task[] {
   return tasks.filter((task) => isActive(task.status)).slice(0, 2);
 }
 
+function TaskStickyNoteActions({
+  task,
+  displayLanguage,
+  onCancelTask,
+  onDeleteTask
+}: {
+  task: Task;
+  displayLanguage: PetSettings["displayLanguage"];
+  onCancelTask?: (taskId: string) => void;
+  onDeleteTask?: (taskId: string) => void;
+}) {
+  const title = summarizeTitle(task.title);
+
+  if (isActive(task.status) && onCancelTask) {
+    return (
+      <div className="task-sticky-note-actions">
+        <button
+          className="task-sticky-note-action task-sticky-note-action-cancel"
+          type="button"
+          aria-label={`${t(displayLanguage, "cancelTask")}: ${title}`}
+          onClick={() => onCancelTask(task.id)}
+        >
+          {t(displayLanguage, "cancel")}
+        </button>
+      </div>
+    );
+  }
+
+  if (isSettled(task.status) && onDeleteTask) {
+    return (
+      <div className="task-sticky-note-actions">
+        <button
+          className="task-sticky-note-action task-sticky-note-action-delete"
+          type="button"
+          aria-label={`${t(displayLanguage, "deleteTask")}: ${title}`}
+          onClick={() => onDeleteTask(task.id)}
+        >
+          {t(displayLanguage, "delete")}
+        </button>
+      </div>
+    );
+  }
+
+  return null;
+}
+
 function isActive(status: Task["status"]): boolean {
   return status === "queued" || status === "running" || status === "waiting";
+}
+
+function isSettled(status: Task["status"]): boolean {
+  return status === "completed" || status === "failed" || status === "interrupted";
 }

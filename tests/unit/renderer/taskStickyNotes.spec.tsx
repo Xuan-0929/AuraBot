@@ -2,7 +2,7 @@
 
 import { act } from "react";
 import { createRoot } from "react-dom/client";
-import { afterEach, beforeEach, describe, expect, it } from "vitest";
+import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
 import { TaskStickyNotes } from "../../../src/renderer/src/features/tasks/TaskStickyNotes";
 import type { Task } from "../../../src/shared/schemas/task";
 
@@ -43,11 +43,13 @@ describe("TaskStickyNotes", () => {
     expect(notes?.textContent).not.toContain("整理文档");
   });
 
-  it("does not render console action buttons in task 2 even when action handlers are provided", async () => {
+  it("renders subtle console actions only for the tasks passed in by the caller", async () => {
     const tasks = [
       makeTask({ id: "task-1", title: "帮我写周报。", status: "running" }),
       makeTask({ id: "task-2", title: "晚上提醒我回消息。", kind: "time_reminder", status: "completed" })
     ];
+    const onCancelTask = vi.fn();
+    const onDeleteTask = vi.fn();
 
     await act(async () => {
       root.render(
@@ -55,15 +57,24 @@ describe("TaskStickyNotes", () => {
           tasks={tasks}
           variant="console"
           displayLanguage="zh"
-          onCancelTask={() => undefined}
-          onDeleteTask={() => undefined}
+          onCancelTask={onCancelTask}
+          onDeleteTask={onDeleteTask}
         />
       );
     });
 
     expect(container.textContent).toContain("周报");
-    expect(container.querySelector(".task-sticky-note-actions")).toBeNull();
-    expect(container.querySelector("button")).toBeNull();
+    const buttons = Array.from(container.querySelectorAll("button"));
+    expect(container.querySelector(".task-sticky-note-actions")).not.toBeNull();
+    expect(buttons.map((button) => button.textContent)).toEqual(["取消", "删除"]);
+
+    await act(async () => {
+      buttons[0]?.dispatchEvent(new MouseEvent("click", { bubbles: true }));
+      buttons[1]?.dispatchEvent(new MouseEvent("click", { bubbles: true }));
+    });
+
+    expect(onCancelTask).toHaveBeenCalledWith("task-1");
+    expect(onDeleteTask).toHaveBeenCalledWith("task-2");
   });
 
   it("renders the full console task list without choosing a console subset internally", async () => {

@@ -255,6 +255,13 @@ textarea {
   gap: 8px;
 }
 
+.task-sticky-notes-console {
+  align-self: start;
+  width: 100%;
+  max-width: 248px;
+  padding-top: 4px;
+}
+
 .task-sticky-notes-pet {
   pointer-events: none;
 }
@@ -289,6 +296,11 @@ textarea {
   backdrop-filter: blur(10px);
 }
 
+.task-sticky-note-copy {
+  display: grid;
+  gap: 4px;
+}
+
 .task-sticky-note strong {
   color: var(--aura-ink);
   font-size: 12px;
@@ -299,6 +311,38 @@ textarea {
   color: var(--aura-muted);
   font-size: 10px;
   line-height: 1.35;
+}
+
+.task-sticky-note-actions {
+  display: flex;
+  justify-content: flex-end;
+  margin-top: 2px;
+}
+
+.task-sticky-note-action {
+  min-height: 24px;
+  padding: 0 8px;
+  border: 1px solid rgba(132, 101, 86, 0.16);
+  border-radius: 999px;
+  background: rgba(255, 255, 255, 0.56);
+  color: var(--aura-muted);
+  cursor: pointer;
+  font-size: 10px;
+  font-weight: 700;
+  letter-spacing: 0;
+}
+
+.task-sticky-note-action:hover {
+  background: rgba(255, 255, 255, 0.8);
+  color: var(--aura-ink);
+}
+
+.task-sticky-note-action-cancel {
+  color: #8a6d61;
+}
+
+.task-sticky-note-action-delete {
+  color: #9b5a55;
 }
 
 .pet-action-button {
@@ -444,6 +488,15 @@ textarea {
     radial-gradient(circle at 86% 10%, rgba(246, 236, 227, 0.72), transparent 30%),
     linear-gradient(135deg, var(--aura-paper-soft) 0%, var(--aura-warm-bg) 52%, var(--aura-paper) 100%);
   overflow: hidden;
+}
+
+.console-body {
+  flex: 1 1 auto;
+  display: grid;
+  grid-template-columns: minmax(0, 1fr) minmax(220px, 248px);
+  align-items: start;
+  gap: 18px;
+  min-height: 0;
 }
 
 .console-header {
@@ -940,6 +993,7 @@ textarea {
   grid-template-rows: minmax(0, 1fr) auto;
   min-height: 0;
   gap: 12px;
+  min-width: 0;
 }
 
 .message-list {
@@ -1049,25 +1103,30 @@ textarea {
 }
 
 .empty-state {
-  align-self: flex-end;
-  max-width: 360px;
-  padding: 12px 14px;
-  border: 1px solid rgba(41, 65, 67, 0.14);
-  border-radius: 8px;
-  background: rgba(255, 255, 255, 0.64);
+  align-self: center;
+  max-width: 340px;
+  padding: 14px 16px;
+  border: 1px solid rgba(41, 65, 67, 0.1);
+  border-radius: 16px;
+  background: rgba(255, 255, 255, 0.54);
   color: #4a5656;
-  box-shadow: 0 14px 38px rgba(63, 76, 77, 0.12);
+  box-shadow: 0 14px 38px rgba(63, 76, 77, 0.08);
 }
 
-.empty-state h1 {
-  margin: 0 0 4px;
-  font-size: 18px;
-  letter-spacing: 0;
+.empty-state-kicker {
+  display: block;
+  margin-bottom: 6px;
+  color: var(--aura-muted);
+  font-size: 11px;
+  font-weight: 700;
+  letter-spacing: 0.04em;
+  text-transform: uppercase;
 }
 
 .empty-state p {
   margin: 0;
   font-size: 13px;
+  line-height: 1.6;
 }
 
 .composer {
@@ -1115,130 +1174,14 @@ textarea {
   opacity: 0.52;
 }
 
-.task-status-overlay {
-  flex: 0 0 auto;
-  display: grid;
-  grid-template-columns: minmax(0, 420px) minmax(0, 420px);
-  justify-content: space-between;
-  gap: 12px;
-  width: 100%;
-  margin-bottom: 12px;
-}
-
-.task-status-column {
-  display: grid;
-  gap: 8px;
-  min-width: 0;
-}
-
-.task-status-overlay-result {
-  justify-self: start;
-  width: min(100%, 420px);
-}
-
-.task-status-overlay-reminder {
-  justify-self: end;
-  width: min(100%, 420px);
-}
-
-.task-status-card {
-  display: grid;
-  grid-template-columns: auto minmax(0, 1fr) auto auto;
-  align-items: center;
-  gap: 8px;
-  min-height: 34px;
-  padding: 8px 10px;
-  border: 1px solid rgba(41, 65, 67, 0.16);
-  border-radius: 8px;
-  background: rgba(255, 255, 255, 0.72);
-  color: #344041;
-  font-size: 12px;
-  box-shadow: 0 12px 30px rgba(63, 76, 77, 0.1);
-}
-
-.task-status-title {
-  overflow: hidden;
-  text-overflow: ellipsis;
-  white-space: nowrap;
-}
-
-.task-status-copy {
-  min-width: 0;
-  display: grid;
-  gap: 2px;
-}
-
-.task-status-progress {
-  overflow: hidden;
-  color: #687678;
-  font-size: 11px;
-  text-overflow: ellipsis;
-  white-space: nowrap;
-}
-
-.task-status-value {
-  font-weight: 800;
-}
-
-.task-status-action {
-  min-width: 42px;
-  min-height: 24px;
-  padding: 0 8px;
-  border: 1px solid rgba(41, 65, 67, 0.16);
-  border-radius: 7px;
-  background: rgba(255, 255, 255, 0.68);
-  color: #405052;
-  cursor: pointer;
-  font-size: 11px;
-  font-weight: 800;
-}
-
-.task-status-action:hover {
-  background: rgba(255, 255, 255, 0.92);
-}
-
-.task-status-action-cancel {
-  color: #8a5c1d;
-}
-
-.task-status-action-delete {
-  color: #9b4845;
-}
-
-.task-status-dot {
-  width: 7px;
-  height: 7px;
-  border-radius: 999px;
-  background: #77858a;
-}
-
-.task-status-dot-queued,
-.task-status-dot-waiting {
-  background: #bf8a34;
-}
-
-.task-status-dot-running {
-  background: #327c90;
-}
-
-.task-status-dot-completed {
-  background: #4f8f67;
-}
-
-.task-status-dot-failed,
-.task-status-dot-interrupted {
-  background: #b84d4a;
-}
-
-@media (max-width: 860px) {
-  .task-status-overlay {
+@media (max-width: 920px) {
+  .console-body {
     grid-template-columns: 1fr;
   }
 
-  .task-status-overlay-result,
-  .task-status-overlay-reminder {
-    justify-self: stretch;
-    width: 100%;
+  .task-sticky-notes-console {
+    max-width: none;
+    padding-top: 0;
   }
 }
 

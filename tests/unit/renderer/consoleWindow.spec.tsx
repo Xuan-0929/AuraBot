@@ -4,6 +4,7 @@ import { act } from "react";
 import { createRoot, type Root } from "react-dom/client";
 import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
 import { ConsoleWindow, type ConsoleWindowProps } from "../../../src/renderer/src/features/console/ConsoleWindow";
+import type { Task } from "../../../src/shared/schemas/task";
 
 (globalThis as { IS_REACT_ACT_ENVIRONMENT?: boolean }).IS_REACT_ACT_ENVIRONMENT = true;
 
@@ -63,4 +64,42 @@ describe("ConsoleWindow localization", () => {
     expect(container.textContent).toContain("想认真聊的时候，我们就在这里慢慢说。");
     expect(container.textContent).toContain("我在，今天想先从哪件事开始？");
   });
+
+  it("replaces the old task overlay with console sticky notes beside the chat stream", async () => {
+    const tasks = [
+      makeTask({ id: "task-running", title: "帮我整理周报。", status: "running", updatedAt: "2026-05-07T09:00:00.000Z" }),
+      makeTask({ id: "task-completed", title: "帮我写读书笔记。", status: "completed", updatedAt: "2026-05-07T08:00:00.000Z" }),
+      makeTask({ id: "task-failed", title: "帮我生成海报。", status: "failed", updatedAt: "2026-05-07T07:00:00.000Z" }),
+      makeTask({ id: "task-old", title: "帮我整理会议纪要。", status: "completed", updatedAt: "2026-05-07T06:00:00.000Z" })
+    ];
+
+    await act(async () => {
+      root.render(<ConsoleWindow {...baseProps} tasks={tasks} />);
+    });
+
+    expect(container.querySelector(".task-status-overlay")).toBeNull();
+
+    const stickyNotes = container.querySelector(".task-sticky-notes-console");
+    expect(stickyNotes).not.toBeNull();
+    expect(stickyNotes?.textContent).toContain("周报");
+    expect(stickyNotes?.textContent).toContain("读书笔记");
+    expect(stickyNotes?.textContent).toContain("海报");
+    expect(stickyNotes?.textContent).not.toContain("会议纪要");
+  });
 });
+
+function makeTask(overrides: Partial<Task>): Task {
+  return {
+    id: "task-1",
+    profileId: "profile-1",
+    parentSessionId: "session-1",
+    sessionId: "task-session-1",
+    kind: "result_output",
+    title: "帮我写一份 GitHub 周报。",
+    status: "queued",
+    latestProgress: "Task queued from main chat.",
+    createdAt: "2026-05-05T00:00:00.000Z",
+    updatedAt: "2026-05-05T00:00:02.000Z",
+    ...overrides
+  };
+}

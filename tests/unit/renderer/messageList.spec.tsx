@@ -6,6 +6,8 @@ import { afterEach, describe, expect, it, vi } from "vitest";
 import { MessageList } from "../../../src/renderer/src/features/chat/MessageList";
 import type { Message } from "../../../src/shared/schemas/message";
 
+(globalThis as { IS_REACT_ACT_ENVIRONMENT?: boolean }).IS_REACT_ACT_ENVIRONMENT = true;
+
 describe("MessageList task result attachments", () => {
   afterEach(() => {
     vi.restoreAllMocks();
@@ -113,6 +115,23 @@ describe("MessageList task result attachments", () => {
     const userBubbles = Array.from(container.querySelectorAll(".message-user"));
     expect(userBubbles).toHaveLength(1);
     expect(userBubbles[0]?.textContent).toBe("You第一句。第二句。");
+
+    await act(async () => {
+      root.unmount();
+    });
+  });
+
+  it("uses a quieter empty state for the chat room shell", async () => {
+    const container = document.createElement("div");
+    const root = createRoot(container);
+
+    await act(async () => {
+      root.render(<MessageList messages={[]} displayLanguage="zh" />);
+    });
+
+    expect(container.textContent).toContain("主对话");
+    expect(container.textContent).toContain("我在，今天想先从哪件事开始？");
+    expect(container.querySelector("h1")).toBeNull();
 
     await act(async () => {
       root.unmount();
