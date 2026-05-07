@@ -1,11 +1,15 @@
 // @vitest-environment jsdom
 
+import { readFileSync } from "node:fs";
+import { resolve } from "node:path";
 import { act } from "react";
 import { createRoot, type Root } from "react-dom/client";
 import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
 import { SettingsWindow, type SettingsWindowProps } from "../../../src/renderer/src/features/settings/SettingsWindow";
 
 (globalThis as { IS_REACT_ACT_ENVIRONMENT?: boolean }).IS_REACT_ACT_ENVIRONMENT = true;
+
+const stylesheetText = readFileSync(resolve(process.cwd(), "src/renderer/src/styles.css"), "utf8");
 
 const baseProps: SettingsWindowProps = {
   profile: {
@@ -394,5 +398,12 @@ describe("SettingsWindow", () => {
     });
 
     expect(container.textContent).toContain("Shape Aura into the kind of companion you want beside you.");
+  });
+
+  it("wires the A1 tokens into the console and settings shell styles", () => {
+    expect(stylesheetText).toMatch(/\.app-shell-settings\s*{[^}]*background:\s*var\(--aura-warm-bg\);/s);
+    expect(stylesheetText).toMatch(/\.console-window\s*{[^}]*color:\s*var\(--aura-ink\);[^}]*var\(--aura-warm-bg\)/s);
+    expect(stylesheetText).toMatch(/\.settings-window\s*{[^}]*var\(--aura-warm-bg\)/s);
+    expect(stylesheetText).toMatch(/\.settings-center-sidebar\s*{[^}]*border:\s*1px solid var\(--aura-border\);[^}]*background:\s*var\(--aura-paper-strong\);[^}]*box-shadow:\s*var\(--aura-shadow\);/s);
   });
 });

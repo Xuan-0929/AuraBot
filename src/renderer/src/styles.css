@@ -43,7 +43,8 @@ textarea {
   height: 100vh;
   min-height: 0;
   overflow: hidden;
-  background: #edf2f1;
+  color: var(--aura-ink);
+  background: var(--aura-warm-bg);
 }
 
 .desktop-pet {
@@ -370,10 +371,11 @@ textarea {
   height: 100vh;
   min-height: 0;
   padding: 18px;
+  color: var(--aura-ink);
   background:
-    radial-gradient(circle at 14% 12%, rgba(255, 244, 213, 0.86), transparent 26%),
-    radial-gradient(circle at 86% 10%, rgba(178, 220, 232, 0.7), transparent 30%),
-    linear-gradient(135deg, #e8f0ed 0%, #f8efe2 52%, #dce9ef 100%);
+    radial-gradient(circle at 14% 12%, rgba(255, 255, 255, 0.56), transparent 26%),
+    radial-gradient(circle at 86% 10%, rgba(246, 236, 227, 0.72), transparent 30%),
+    linear-gradient(135deg, var(--aura-paper-soft) 0%, var(--aura-warm-bg) 52%, var(--aura-paper) 100%);
   overflow: hidden;
 }
 
@@ -396,14 +398,14 @@ textarea {
 
 .console-header h1 {
   margin: 0 0 4px;
-  color: #263334;
+  color: var(--aura-ink);
   font-size: 23px;
   letter-spacing: 0;
 }
 
 .console-header p {
   margin: 0;
-  color: #5f6969;
+  color: var(--aura-muted);
   font-size: 13px;
 }
 
@@ -415,11 +417,11 @@ textarea {
 .settings-menu-button {
   min-height: 34px;
   padding: 0 12px;
-  border: 1px solid rgba(41, 65, 67, 0.18);
+  border: 1px solid var(--aura-border);
   border-radius: 8px;
-  background: rgba(255, 255, 255, 0.78);
-  color: #314142;
-  box-shadow: 0 5px 14px rgba(63, 76, 77, 0.1);
+  background: var(--aura-paper-soft);
+  color: var(--aura-ink);
+  box-shadow: var(--aura-shadow);
   font: inherit;
   font-size: 12px;
   font-weight: 900;
@@ -429,8 +431,8 @@ textarea {
 
 .settings-menu-button:hover,
 .settings-menu-button[aria-expanded="true"] {
-  background: rgba(244, 251, 247, 0.96);
-  border-color: rgba(47, 98, 107, 0.32);
+  background: var(--aura-paper-strong);
+  border-color: var(--aura-border);
 }
 
 .settings-menu {
@@ -445,10 +447,10 @@ textarea {
   max-height: min(560px, calc(100vh - 110px));
   overflow: auto;
   padding: 14px;
-  border: 1px solid rgba(41, 65, 67, 0.16);
+  border: 1px solid var(--aura-border);
   border-radius: 8px;
-  background: rgba(255, 255, 255, 0.97);
-  box-shadow: 0 18px 48px rgba(38, 51, 52, 0.18);
+  background: var(--aura-paper-strong);
+  box-shadow: var(--aura-shadow);
 }
 
 .settings-menu-section {
@@ -459,7 +461,7 @@ textarea {
 
 .settings-menu-section h2 {
   margin: 0;
-  color: #263334;
+  color: var(--aura-ink);
   font-size: 13px;
   line-height: 1.2;
   letter-spacing: 0;
@@ -512,9 +514,10 @@ textarea {
   height: 100vh;
   min-height: 0;
   padding: 22px;
+  color: var(--aura-ink);
   background:
-    linear-gradient(180deg, rgba(255, 255, 255, 0.72), rgba(255, 255, 255, 0.38)),
-    #edf2f1;
+    linear-gradient(180deg, var(--aura-paper-strong), rgba(255, 255, 255, 0.38)),
+    var(--aura-warm-bg);
   overflow-y: auto;
   overscroll-behavior: contain;
   scrollbar-gutter: stable;
@@ -526,14 +529,14 @@ textarea {
 
 .settings-window-header h1 {
   margin: 0 0 4px;
-  color: #263334;
+  color: var(--aura-ink);
   font-size: 24px;
   letter-spacing: 0;
 }
 
 .settings-window-header p {
   margin: 0;
-  color: #5f6969;
+  color: var(--aura-muted);
   font-size: 13px;
 }
 
@@ -546,10 +549,10 @@ textarea {
 
 .settings-center-sidebar {
   align-self: start;
-  border: 1px solid rgba(41, 65, 67, 0.12);
+  border: 1px solid var(--aura-border);
   border-radius: 10px;
-  background: rgba(248, 251, 250, 0.88);
-  box-shadow: 0 12px 30px rgba(63, 76, 77, 0.08);
+  background: var(--aura-paper-strong);
+  box-shadow: var(--aura-shadow);
   padding: 12px;
 }
 
@@ -561,10 +564,10 @@ textarea {
 .settings-center-tab {
   width: 100%;
   padding: 10px 12px;
-  border: 1px solid rgba(41, 65, 67, 0.12);
+  border: 1px solid var(--aura-border);
   border-radius: 10px;
-  background: rgba(255, 255, 255, 0.86);
-  color: #314142;
+  background: var(--aura-paper-soft);
+  color: var(--aura-ink);
   font: inherit;
   font-size: 13px;
   font-weight: 800;
@@ -576,13 +579,13 @@ textarea {
 }
 
 .settings-center-tab[data-active="true"] {
-  background: #e7f2ee;
-  border-color: rgba(47, 98, 107, 0.28);
-  color: #244048;
+  background: var(--aura-paper);
+  border-color: var(--aura-border);
+  color: var(--aura-ink);
 }
 
 .settings-center-tab:hover {
-  background: rgba(244, 251, 247, 0.96);
+  background: var(--aura-paper-strong);
 }
 
 .settings-center-content {

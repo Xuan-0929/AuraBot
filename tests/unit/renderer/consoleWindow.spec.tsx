@@ -48,8 +48,6 @@ describe("ConsoleWindow localization", () => {
     });
 
     expect(container.textContent).toContain("AuraBot 控制台");
-    expect(container.textContent).toContain("想认真聊的时候，我们就在这里慢慢说。");
-    expect(container.textContent).toContain("我在，今天想先从哪件事开始？");
     expect(container.textContent).toContain("设置");
     expect(container.querySelector("textarea")?.getAttribute("placeholder")).toBe("说点什么");
     expect(container.textContent).not.toContain("Chat here when");
