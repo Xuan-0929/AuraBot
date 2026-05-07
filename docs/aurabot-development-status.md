@@ -26,7 +26,7 @@
 
 | 命令/检查 | 结果 |
 | --- | --- |
-| `corepack pnpm test:e2e tests/e2e/app-launch.spec.ts --grep "task|sticky|queued|cancel|remove|multiple|completion"` | 5 个 task/console 定向 e2e 通过 |
+| `corepack pnpm test:e2e tests/e2e/app-launch.spec.ts --grep "task|sticky|queued|cancel|remove|multiple|completion|long"` | 6 个 task/console 定向 e2e 通过 |
 | `corepack pnpm vitest run tests/unit/renderer/desktopPet.spec.tsx tests/unit/renderer/taskStickyNotes.spec.tsx tests/unit/renderer/consoleWindow.spec.tsx tests/unit/renderer/settingsWindow.spec.tsx tests/unit/renderer/personaSettingsPage.spec.tsx tests/unit/renderer/notificationSettingsPage.spec.tsx tests/unit/core/tasks/taskPresentation.spec.ts tests/unit/core/voice/voiceAdapter.spec.ts tests/integration/orchestration/chat-task.spec.ts` | 9 个 test files、57 个 tests 通过 |
 | `corepack pnpm typecheck` | 通过 |
 | `corepack pnpm build` | 通过 |
