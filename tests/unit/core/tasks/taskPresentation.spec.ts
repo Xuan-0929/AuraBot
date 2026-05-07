@@ -4,6 +4,7 @@ import {
   buildTaskSettledMessageDraft,
   buildTaskSettledMessageDraftWithVoice,
   buildTaskStatusResponse,
+  buildTaskStatusResponseWithVoice,
   isTaskResultPathAllowed
 } from "../../../../src/core/tasks/taskPresentation";
 import { DeterministicVoiceAdapter } from "../../../../src/core/voice/voiceAdapter";
@@ -147,6 +148,47 @@ describe("task presentation", () => {
     expect(draft.attachments).toEqual([]);
   });
 
+  it("keeps queued task status companion-first through the voice adapter path", async () => {
+    const response = await buildTaskStatusResponseWithVoice(
+      {
+        ...baseTask,
+        status: "queued",
+        title: "帮我做一个 GitHub 周报。",
+        latestProgress: "Task queued from main chat."
+      },
+      [],
+      {
+        voiceAdapter: new DeterministicVoiceAdapter()
+      }
+    );
+
+    expect(response).toBe("「GitHub 周报」这件事我先替你记在旁边了。你想让我现在开始的话，直接跟我说一声就行。");
+    expect(response).not.toContain("queued");
+    expect(response).not.toContain("还没开始");
+  });
+
+  it("keeps failed task wording aligned through the voice adapter path", async () => {
+    const draft = await buildTaskSettledMessageDraftWithVoice(
+      {
+        ...baseTask,
+        status: "failed",
+        latestProgress: "Codex 子任务失败：codex exited 1"
+      },
+      [
+        taskEvent({
+          eventType: "task.failed",
+          summary: "Codex 子任务失败：codex exited 1"
+        })
+      ],
+      {
+        voiceAdapter: new DeterministicVoiceAdapter()
+      }
+    );
+
+    expect(draft.content).toBe("这次我先卡在 codex exited 1 这一步了。你要是愿意，我们接着一起改。");
+    expect(draft.content).not.toContain("没跑通");
+  });
+
   it("routes settled task text through the voice adapter while preserving attachments", async () => {
     const events = [
       taskEvent({
@@ -169,8 +211,7 @@ describe("task presentation", () => {
       voiceAdapter: new DeterministicVoiceAdapter()
     });
 
-    expect(draft.content).toContain("GitHub 周报");
-    expect(draft.content).toContain("看一眼");
+    expect(draft.content).toBe("好啦，GitHub 周报写好了。文件我放在下面，你先看一眼，还想改的话我接着调。");
     expect(draft.content).not.toContain("任务完成：");
     expect(draft.content).not.toContain("Codex");
     expect(draft.attachments).toHaveLength(1);

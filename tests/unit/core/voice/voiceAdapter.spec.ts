@@ -58,9 +58,7 @@ describe("VoiceAdapter", () => {
       }
     });
 
-    expect(reply).toContain("GitHub 周报");
-    expect(reply).toContain("文件在下面");
-    expect(reply).toContain("看一眼");
+    expect(reply).toBe("好啦，GitHub 周报写好了。文件我放在下面，你先看一眼，还想改的话我接着调。");
     expect(reply).not.toContain("任务完成：");
     expect(reply).not.toContain("Codex");
   });
@@ -78,8 +76,66 @@ describe("VoiceAdapter", () => {
       }
     });
 
-    expect(reply).toContain("面试清单");
+    expect(reply).toBe("好啦，面试清单整理好了。你先看一眼，还想改的话我接着调。");
     expect(reply).not.toContain("文件");
+  });
+
+  it("keeps deterministic task status companion-first for queued and running updates", async () => {
+    const adapter = new DeterministicVoiceAdapter();
+    const queued = await adapter.render({
+      scene: "task.status",
+      channel: "chat",
+      soul,
+      facts: {
+        taskTitle: "帮我做一个 GitHub 周报。",
+        status: "queued",
+        latestProgress: "Task queued from main chat."
+      }
+    });
+    const running = await adapter.render({
+      scene: "task.status",
+      channel: "chat",
+      soul,
+      facts: {
+        taskTitle: "帮我做一个 GitHub 周报。",
+        status: "running",
+        latestProgress: "正在整理本周合并记录"
+      }
+    });
+
+    expect(queued).toBe("「GitHub 周报」这件事我先替你记在旁边了。你想让我现在开始的话，直接跟我说一声就行。");
+    expect(running).toBe("「GitHub 周报」这件事我已经在弄了，最近一步是：正在整理本周合并记录。\n弄好后我会回来跟你说。");
+  });
+
+  it("keeps deterministic failed replies gentle while preserving the failure detail", async () => {
+    const adapter = new DeterministicVoiceAdapter();
+    const reply = await adapter.render({
+      scene: "task.failed",
+      channel: "chat",
+      soul,
+      facts: {
+        taskTitle: "帮我做一份 GitHub 周报。",
+        resultSummary: "codex exited 1"
+      }
+    });
+
+    expect(reply).toBe("这次我先卡在 codex exited 1 这一步了。你要是愿意，我们接着一起改。");
+    expect(reply).not.toContain("没跑通");
+  });
+
+  it("keeps deterministic interrupted replies aligned with the companion-first tone", async () => {
+    const adapter = new DeterministicVoiceAdapter();
+    const reply = await adapter.render({
+      scene: "task.interrupted",
+      channel: "chat",
+      soul,
+      facts: {
+        taskTitle: "帮我做一份 GitHub 周报。"
+      }
+    });
+
+    expect(reply).toBe("我先在这里停一下。你想换个方向的话，直接跟我说新的要求就行。");
+    expect(reply).not.toContain("停下来了");
   });
 
   it("keeps deterministic reminder wording natural", async () => {
@@ -185,6 +241,7 @@ describe("VoiceAdapter", () => {
     expect(request?.messages[0]?.content).toContain("不要固定套用任何一句样例");
     expect(request?.messages[1]?.content).toContain("完成事情时像本人把结果告诉用户");
     expect(request?.messages[1]?.content).toContain("任务完成后可以自然邀请用户看一眼");
+    expect(request?.messages[1]?.content).toContain("陪在用户旁边");
     expect(request?.messages[1]?.content).toContain("hasAttachments");
     expect(request?.messages[1]?.content).not.toContain("fallbackText");
   });

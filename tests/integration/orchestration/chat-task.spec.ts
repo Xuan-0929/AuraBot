@@ -73,11 +73,12 @@ describe("chat task integration", () => {
     const tasks = services.taskService.listTasksForProfile(profile.id);
 
     expect(query.gateDecision?.inputKind).toBe("task_control");
-    expect(query.assistantMessage?.content).toContain("还没开始");
+    expect(query.assistantMessage?.content).toContain("先替你记在旁边了");
     expect(query.assistantMessage?.content).toContain("明天会议");
-    expect(query.assistantMessage?.content).toContain("开始");
+    expect(query.assistantMessage?.content).toContain("直接跟我说一声就行");
     expect(interrupt.updatedTask?.status).toBe("interrupted");
-    expect(interrupt.assistantMessage?.content).toContain("停下");
+    expect(interrupt.assistantMessage?.content).toContain("先在这里停一下");
+    expect(interrupt.assistantMessage?.content).toContain("新的要求");
     expect(revise.updatedTask?.status).toBe("queued");
     expect(revise.updatedTask?.title).toContain("后天路演");
     expect(revise.assistantMessage?.content).toContain("后天路演");
@@ -131,9 +132,10 @@ describe("chat task integration", () => {
 
     const query = await orchestrator.sendMessage({ content: "这个任务做到哪了？" });
 
-    expect(query.assistantMessage?.content).toContain("还在弄");
+    expect(query.assistantMessage?.content).toContain("已经在弄了");
     expect(query.assistantMessage?.content).toContain("GitHub 周报");
     expect(query.assistantMessage?.content).toContain("已经开始处理");
+    expect(query.assistantMessage?.content).toContain("回来跟你说");
     expect(query.assistantMessage?.content).not.toContain("running");
     expect(query.assistantMessage?.content).not.toContain("Codex");
     expect(query.assistantMessage?.content).not.toContain("/Users/xuan/project");
@@ -166,8 +168,9 @@ describe("chat task integration", () => {
     const start = await orchestrator.sendMessage({ content: "开始做这个任务。" });
 
     expect(start.updatedTask?.status).toBe("failed");
-    expect(start.assistantMessage?.content).toContain("这次没跑通");
+    expect(start.assistantMessage?.content).toContain("这次我先卡在");
     expect(start.assistantMessage?.content).toContain("codex exited 1");
+    expect(start.assistantMessage?.content).toContain("接着一起改");
   });
 
   it("uses task hints in the main chat to query, revise, and interrupt a specific task", async () => {

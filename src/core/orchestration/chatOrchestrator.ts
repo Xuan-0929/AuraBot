@@ -515,15 +515,14 @@ export class ChatOrchestrator {
         reason: "用户在主聊天线程要求停掉"
       });
       responseContent = updatedTask
-        ? await this.dependencies.voiceAdapter.render({
-            scene: "task.interrupted",
-            channel: "chat",
-            soul: input.soul,
-            facts: {
-              taskTitle: updatedTask.title,
-              status: updatedTask.status
+        ? (await buildTaskSettledMessageDraftWithVoice(
+            updatedTask,
+            this.dependencies.taskService.listTaskEvents(updatedTask.id),
+            {
+              soul: input.soul,
+              voiceAdapter: this.dependencies.voiceAdapter
             }
-          })
+          )).content
         : await this.dependencies.voiceAdapter.render({
             scene: "task.control_not_found",
             channel: "chat",

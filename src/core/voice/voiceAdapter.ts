@@ -189,34 +189,47 @@ function buildWorkflow(input: VoiceRenderInput): Record<string, unknown> {
       return {
         scene: input.scene,
         channel,
-        intent: "回答任务目前状态。",
-        requirements: ["只使用当前状态和最新进展", "简短告诉用户接下来会继续或等他指令"]
+        intent: "以陪在用户旁边的口吻回答任务目前状态。",
+        requirements: [
+          "只使用当前状态和最新进展",
+          "queued 时更像先替用户记在旁边，不要像还未启动的状态播报",
+          "running 时更像我已经在弄了，弄好后会回来告诉用户",
+          "不要像 runner 日志、系统广播或任务状态机"
+        ]
       };
     case "task.completed":
       return {
         scene: input.scene,
         channel,
-        intent: "告诉用户任务已经完成。",
+        intent: "像 Aura 本人回来告诉用户任务已经完成。",
         requirements: [
           "必须保留完成事实",
           "有附件才提文件在下面",
+          "语气像陪在用户旁边自然交代结果",
           "可以自然邀请用户看一眼或继续修改",
-          "不要展示内部路径或 runner 细节"
+          "不要展示内部路径或 runner 细节",
+          "不要像状态播报或工单通知"
         ]
       };
     case "task.failed":
       return {
         scene: input.scene,
         channel,
-        intent: "告诉用户这次没有跑通。",
-        requirements: ["保留安全失败原因", "不要推卸责任", "自然留下继续修改的入口"]
+        intent: "像陪在用户旁边的人一样告诉用户这次先卡住了。",
+        requirements: [
+          "保留安全失败原因",
+          "结论先行，像先卡在某一步",
+          "不要推卸责任",
+          "自然留下继续一起修改的入口",
+          "不要像报错日志或失败广播"
+        ]
       };
     case "task.interrupted":
       return {
         scene: input.scene,
         channel,
-        intent: "告诉用户已经停下来了。",
-        requirements: ["表达已经停止", "可以让用户给新方向"]
+        intent: "用陪伴式口吻告诉用户这里先停一下。",
+        requirements: ["表达已经先停一下", "可以让用户给新方向", "不要像系统中止通知"]
       };
     case "task.control_not_found":
       return {
@@ -291,22 +304,26 @@ function buildDeterministicVoiceText(input: VoiceRenderInput): string {
       return title ? `到点啦，记得${title}。` : "到点啦，有件事该看一下了。";
     case "task.status":
       if (readString(facts.status) === "queued") {
-        return title ? `「${title}」我还没开始。你想现在做的话，直接跟我说开始。` : "这件事我还没开始。你想现在做的话，直接跟我说开始。";
+        return title
+          ? `「${title}」这件事我先替你记在旁边了。你想让我现在开始的话，直接跟我说一声就行。`
+          : "这件事我先替你记在旁边了。你想让我现在开始的话，直接跟我说一声就行。";
       }
 
       return summary
-        ? `${title || "这件事"}我还在弄，最近一步是：${summary}。`
-        : `${title || "这件事"}我还在弄，弄完我告诉你。`;
+        ? `${formatTaskReference(title)}我已经在弄了，最近一步是：${ensureSentenceEnding(summary)}\n弄好后我会回来跟你说。`
+        : `${formatTaskReference(title)}我已经在弄了。\n弄好后我会回来跟你说。`;
     case "task.completed":
       if (hasAttachments) {
-        return `${subject}我弄好了，文件在下面。你先看一眼，有要改的我接着调。`;
+        return `好啦，${formatCompletedSubject(subject)}文件我放在下面，你先看一眼，还想改的话我接着调。`;
       }
 
-      return `${formatCompletedSubject(subject)}你看下还要不要再调。`;
+      return `好啦，${formatCompletedSubject(subject)}你先看一眼，还想改的话我接着调。`;
     case "task.failed":
-      return summary ? `这次没跑通，卡在：${summary}。我可以接着帮你改。` : "这次没跑通。我可以接着帮你改。";
+      return summary
+        ? `这次我先卡在 ${summary} 这一步了。你要是愿意，我们接着一起改。`
+        : "这次我先卡住了一下。你要是愿意，我们接着一起改。";
     case "task.interrupted":
-      return "好，我先停下来了。你想换方向的话，直接跟我说。";
+      return "我先在这里停一下。你想换个方向的话，直接跟我说新的要求就行。";
     case "task.control_not_found": {
       const targetHint = readString(facts.targetHint);
       return targetHint ? `我没找到和「${targetHint}」匹配的任务。你换个说法我再找。` : "我这边还没有正在跟的任务。";
@@ -341,14 +358,18 @@ function formatCompletedSubject(subject: string): string {
   }
 
   if (/周报|报告|文档|总结|摘要/u.test(subject)) {
-    return `${subject}我写好了。`;
+    return `${subject}写好了。`;
   }
 
   if (/清单|表格|列表/u.test(subject)) {
-    return `${subject}我整理好了。`;
+    return `${subject}整理好了。`;
   }
 
-  return `${subject}我处理好了。`;
+  return `${subject}处理好了。`;
+}
+
+function formatTaskReference(title: string): string {
+  return title ? `「${title}」这件事` : "这件事";
 }
 
 function cleanTaskTitle(value: string): string {
@@ -362,6 +383,20 @@ function cleanTaskTitle(value: string): string {
     )
     .replace(/^(一份|一个|一篇|一版|这份|这个|一下)\s*/u, "")
     .trim();
+}
+
+function ensureSentenceEnding(value: string): string {
+  const trimmed = value.trim();
+
+  if (!trimmed) {
+    return "已经开始处理。";
+  }
+
+  if (/[。！？!?…]$/u.test(trimmed)) {
+    return trimmed;
+  }
+
+  return `${trimmed}。`;
 }
 
 function cleanFollowUpContent(content: string): string {
