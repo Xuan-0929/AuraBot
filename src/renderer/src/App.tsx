@@ -85,6 +85,7 @@ export function App() {
       ) : (
         <DesktopPet
           agentStatus={agentStatus}
+          tasks={tasks}
           modelPath={live2dModelState?.currentModelPath}
           petSettings={petSettings}
           petActivity={petActivity}

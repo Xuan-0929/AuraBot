@@ -5,6 +5,7 @@ import { createRoot, type Root } from "react-dom/client";
 import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
 import { DesktopPet, type DesktopPetProps } from "../../../src/renderer/src/features/pet/DesktopPet";
 import type { PetCursorPosition } from "../../../src/shared/contracts/ipc";
+import type { Task } from "../../../src/shared/schemas/task";
 
 const live2DProps: Array<{ cursorPosition?: PetCursorPosition }> = [];
 vi.mock("../../../src/renderer/src/features/live2d/Live2DModelCanvas", () => ({
@@ -19,6 +20,7 @@ vi.mock("../../../src/renderer/src/features/live2d/Live2DModelCanvas", () => ({
 
 const baseProps: DesktopPetProps = {
   agentStatus: "idle",
+  tasks: [],
   petSettings: {
     clickThroughPet: false,
     displayLanguage: "zh"
@@ -160,6 +162,15 @@ describe("DesktopPet hover chat bubble", () => {
     expect(onOpenSettings).toHaveBeenCalledTimes(1);
   });
 
+  it("renders the pet sticky note beside the model surface", async () => {
+    await renderPet({
+      tasks: [makeTask({ id: "task-1", title: "帮我写周报。", status: "running" })]
+    });
+
+    expect(container.querySelector(".desktop-pet-sticky-notes")).not.toBeNull();
+    expect(container.textContent).toContain("写周报");
+  });
+
   async function renderPet(overrides: Partial<DesktopPetProps> = {}) {
     await act(async () => {
       root.render(<DesktopPet {...baseProps} {...overrides} />);
@@ -188,3 +199,19 @@ describe("DesktopPet hover chat bubble", () => {
     });
   }
 });
+
+function makeTask(overrides: Partial<Task>): Task {
+  return {
+    id: "task-1",
+    profileId: "profile-1",
+    parentSessionId: "session-1",
+    sessionId: "task-session-1",
+    kind: "result_output",
+    title: "帮我写一份 GitHub 周报。",
+    status: "queued",
+    latestProgress: "Task queued from main chat.",
+    createdAt: "2026-05-05T00:00:00.000Z",
+    updatedAt: "2026-05-05T00:00:02.000Z",
+    ...overrides
+  };
+}

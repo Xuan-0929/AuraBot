@@ -57,6 +57,14 @@ textarea {
   background: transparent;
 }
 
+.desktop-pet-stage {
+  position: relative;
+  display: grid;
+  place-items: center;
+  width: 100%;
+  height: 100%;
+}
+
 .desktop-pet-model-button {
   display: grid;
   place-items: center;
@@ -232,6 +240,83 @@ textarea {
   opacity: 1;
   pointer-events: auto;
   transform: translate(-50%, 0);
+}
+
+.desktop-pet-sticky-notes,
+.task-sticky-notes-pet {
+  position: absolute;
+  right: 10px;
+  bottom: 26px;
+  width: min(132px, 34vw);
+}
+
+.task-sticky-notes {
+  display: grid;
+  gap: 8px;
+}
+
+.task-sticky-notes-pet {
+  pointer-events: none;
+}
+
+.task-sticky-notes-header {
+  display: grid;
+  gap: 2px;
+  padding: 0 2px;
+}
+
+.task-sticky-notes-header strong {
+  color: var(--aura-ink);
+  font-size: 11px;
+  font-weight: 700;
+  line-height: 1.2;
+}
+
+.task-sticky-notes-header span {
+  color: var(--aura-muted);
+  font-size: 10px;
+  line-height: 1.35;
+}
+
+.task-sticky-note {
+  display: grid;
+  gap: 4px;
+  padding: 10px 11px;
+  border: 1px solid var(--aura-border);
+  border-radius: 16px;
+  background: rgba(255, 250, 244, 0.78);
+  box-shadow: var(--aura-shadow);
+  backdrop-filter: blur(10px);
+}
+
+.task-sticky-note strong {
+  color: var(--aura-ink);
+  font-size: 12px;
+  line-height: 1.35;
+}
+
+.task-sticky-note span {
+  color: var(--aura-muted);
+  font-size: 10px;
+  line-height: 1.35;
+}
+
+.task-sticky-note-actions {
+  display: flex;
+  gap: 6px;
+  padding-top: 2px;
+}
+
+.task-sticky-note-actions button {
+  min-height: 28px;
+  padding: 0 10px;
+  border: 1px solid var(--aura-border);
+  border-radius: 999px;
+  background: rgba(255, 255, 255, 0.72);
+  color: var(--aura-ink);
+  cursor: pointer;
+  font-size: 11px;
+  font-weight: 700;
 }
 
 .pet-action-button {

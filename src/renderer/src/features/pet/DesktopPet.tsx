@@ -3,12 +3,15 @@ import type { AgentStatus } from "../../../../shared/contracts/chat";
 import type { PetCursorPosition } from "../../../../shared/contracts/ipc";
 import type { PetActivity } from "../../../../shared/contracts/pet";
 import type { PetSettings } from "../../../../shared/schemas/petSettings";
+import type { Task } from "../../../../shared/schemas/task";
 import { t } from "../../i18n";
 import { Live2DModelCanvas } from "../live2d/Live2DModelCanvas";
+import { TaskStickyNotes } from "../tasks/TaskStickyNotes";
 import { extractSpeechTranscript, type SpeechRecognitionEventLike } from "./speechRecognition";
 
 export interface DesktopPetProps {
   agentStatus: AgentStatus;
+  tasks: Task[];
   modelPath?: string;
   petSettings: PetSettings;
   petActivity?: PetActivity;
@@ -56,6 +59,7 @@ declare global {
 
 export function DesktopPet({
   agentStatus,
+  tasks,
   modelPath,
   petSettings,
   petActivity,
@@ -336,28 +340,31 @@ export function DesktopPet({
           {petActivity.message}
         </aside>
       ) : null}
-      <button
-        className="desktop-pet-model-button"
-        ref={modelButtonRef}
-        type="button"
-        aria-label={t(petSettings.displayLanguage, "interactWithAuraBot")}
-        onClick={() => void onOpenConsole()}
-      >
-        <span
-          className="desktop-pet-model-shell"
-          data-testid="live2d-model-surface"
-          onPointerEnter={handleModelPointerEnter}
-          onPointerLeave={handleModelPointerLeave}
+      <div className="desktop-pet-stage">
+        <button
+          className="desktop-pet-model-button"
+          ref={modelButtonRef}
+          type="button"
+          aria-label={t(petSettings.displayLanguage, "interactWithAuraBot")}
+          onClick={() => void onOpenConsole()}
         >
-          <Live2DModelCanvas
-            modelPath={modelPath ?? DEFAULT_MODEL_PATH}
-            agentStatus={agentStatus}
-            compact
-            debug={debugPetOverlay}
-            cursorPosition={petCursorPosition}
-          />
-        </span>
-      </button>
+          <span
+            className="desktop-pet-model-shell"
+            data-testid="live2d-model-surface"
+            onPointerEnter={handleModelPointerEnter}
+            onPointerLeave={handleModelPointerLeave}
+          >
+            <Live2DModelCanvas
+              modelPath={modelPath ?? DEFAULT_MODEL_PATH}
+              agentStatus={agentStatus}
+              compact
+              debug={debugPetOverlay}
+              cursorPosition={petCursorPosition}
+            />
+          </span>
+        </button>
+        <TaskStickyNotes tasks={tasks} displayLanguage={petSettings.displayLanguage} variant="pet" />
+      </div>
       {isHoverUiVisible ? (
         <form
           className="pet-hover-chat"
