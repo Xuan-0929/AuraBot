@@ -4,9 +4,9 @@
 
 这份文档记录当前 main 集成线已经完成的工程事实、最近一次验证结果，以及下一步最应该推进的任务。它是执行状态板，不替代 PRD，也不替代 MVP 计划。
 
-当前工作分支：`codex/aurabot-persona-feel`
+当前工作分支：`codex/aurabot-ui-productization-a1`
 
-当前集成基线：`989fc03 docs: update LangChain development log`
+当前集成基线：`943dcd9 docs: record A1 UI productization checkpoint`
 
 分支边界：这一侧已经集成 Live2D 桌宠体验、主控制台、任务卡控制、流式回复、模型 gate、记忆调试、follow-up 主动提醒，以及 soul 驱动的统一回复/播报机制。后续如果继续并行开发，记忆模型/配置大改、任务执行器大改、桌宠 UI 大改仍建议分支隔离，避免在 `chatOrchestrator`、`createWindow`、`store`、IPC contract 和 renderer 样式上互相抢修改权。
 
