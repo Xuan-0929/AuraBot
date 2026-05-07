@@ -1,6 +1,8 @@
 import { afterEach, describe, expect, it } from "vitest";
 import type { ChatModel } from "../../../src/core/llm/chatModel";
 import type { GateModel } from "../../../src/core/llm/gateModel";
+import { ModelConfigurationError, ModelInvocationError } from "../../../src/core/llm/modelErrors";
+import type { MemoryExtractor } from "../../../src/core/memory/memoryExtractor";
 import type { Message } from "../../../src/shared/schemas/message";
 import { cleanupTestServices, createTestServices } from "../../helpers/testServices";
 import { ChatOrchestrator } from "../../../src/core/orchestration/chatOrchestrator";
@@ -86,5 +88,104 @@ describe("chat model integration", () => {
     ]);
     expect(result.assistantMessage?.content).toBe("这是流式回复。");
     expect(new Set(updatedMessages.map((message) => message.id))).toEqual(new Set([createdMessages[0]?.id]));
+  });
+
+  it("returns a recovery message when chatModel is not configured", async () => {
+    const services = createTestServices("aurabot-chat-unavailable-");
+    const gateModel: GateModel = {
+      evaluate: async (input) => ({
+        replyDecision: "reply",
+        inputKind: "chat",
+        memoryDecision: "skip",
+        confidence: 0.92,
+        reason: "model gate",
+        coalescedText: input.currentMessage,
+        topicEnded: true
+      })
+    };
+    const chatModel: ChatModel = {
+      generateReply: async () => {
+        throw new ModelConfigurationError("chatModel", "model API is not configured; missing apiKey.");
+      }
+    };
+    const orchestrator = new ChatOrchestrator({
+      ...services,
+      gateModel,
+      chatModel
+    });
+
+    const result = await orchestrator.sendMessage({ content: "你在吗？" });
+
+    expect(result.assistantMessage?.content).toContain("聊天模型");
+    expect(result.assistantMessage?.content).toContain("设置");
+    expect(result.assistantMessage?.content).toContain("测试");
+    expect(result.agentStatus).toBe("idle");
+  });
+
+  it("returns a recovery message when chatModel invocation fails", async () => {
+    const services = createTestServices("aurabot-chat-invocation-failed-");
+    const gateModel: GateModel = {
+      evaluate: async (input) => ({
+        replyDecision: "reply",
+        inputKind: "chat",
+        memoryDecision: "skip",
+        confidence: 0.92,
+        reason: "model gate",
+        coalescedText: input.currentMessage,
+        topicEnded: true
+      })
+    };
+    const chatModel: ChatModel = {
+      generateReply: async () => {
+        throw new ModelInvocationError("chatModel", new Error("OpenAI-compatible request failed with status 401"));
+      }
+    };
+    const orchestrator = new ChatOrchestrator({
+      ...services,
+      gateModel,
+      chatModel
+    });
+
+    const result = await orchestrator.sendMessage({ content: "你在吗？" });
+
+    expect(result.assistantMessage?.content).toContain("聊天模型");
+    expect(result.assistantMessage?.content).toContain("API Key");
+    expect(result.assistantMessage?.content).toContain("设置");
+    expect(result.agentStatus).toBe("idle");
+  });
+
+  it("returns a recovery message when memory extraction fails for the current chat turn", async () => {
+    const services = createTestServices("aurabot-memory-failed-");
+    const gateModel: GateModel = {
+      evaluate: async (input) => ({
+        replyDecision: "reply",
+        inputKind: "chat",
+        memoryDecision: "write_now",
+        confidence: 0.92,
+        reason: "model gate",
+        coalescedText: input.currentMessage,
+        topicEnded: true
+      })
+    };
+    const chatModel: ChatModel = {
+      generateReply: async () => "这条不该出现。"
+    };
+    const memoryExtractor: MemoryExtractor = {
+      extract: async () => {
+        throw new ModelConfigurationError("memoryModel", "model API is not configured; missing apiKey.");
+      }
+    };
+    const orchestrator = new ChatOrchestrator({
+      ...services,
+      gateModel,
+      chatModel,
+      memoryExtractor
+    });
+
+    const result = await orchestrator.sendMessage({ content: "记一下，我喜欢吃火锅。" });
+
+    expect(result.assistantMessage?.content).toContain("记忆模型");
+    expect(result.assistantMessage?.content).toContain("设置");
+    expect(result.agentStatus).toBe("idle");
   });
 });

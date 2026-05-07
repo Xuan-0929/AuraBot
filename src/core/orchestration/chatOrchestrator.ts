@@ -15,6 +15,12 @@ import type { GateModel } from "../llm/gateModel";
 import type { ChatModel } from "../llm/chatModel";
 import type { VoiceAdapter } from "../voice/voiceAdapter";
 import {
+  ModelConfigurationError,
+  ModelInvocationError,
+  summarizeModelError,
+  type ModelRoleName
+} from "../llm/modelErrors";
+import {
   buildTaskSettledMessageDraftWithVoice,
   buildTaskStatusResponseWithVoice
 } from "../tasks/taskPresentation";
@@ -74,59 +80,102 @@ export class ChatOrchestrator {
     const recentUserMessages = recentMessages
       .filter((message) => message.role === "user")
       .map((message) => message.content);
-    const gateDecision = await this.dependencies.gateModel.evaluate({
-      currentMessage: input.content,
-      recentUserMessages,
-      recentMessages
-    });
+    let assistantMessage: Message | undefined;
+    let gateDecision: SendChatMessageResult["gateDecision"];
 
-    this.dependencies.eventLogService.record("gate.decision", {
-      profileId: profile.id,
-      sessionId: mainSession.id,
-      replyDecision: gateDecision.replyDecision,
-      inputKind: gateDecision.inputKind,
-      memoryDecision: gateDecision.memoryDecision,
-      confidence: gateDecision.confidence,
-      reason: gateDecision.reason,
-      topicEnded: gateDecision.topicEnded
-    });
-
-    if (gateDecision.replyDecision === "wait") {
-      this.dependencies.eventLogService.record("chat.message_persisted", {
-        profileId: profile.id,
-        sessionId: mainSession.id,
-        userMessageId: userMessage.id,
-        assistantMessageId: null,
-        writtenMemoryIds: [],
-        gateDecision: gateDecision.replyDecision
+    try {
+      gateDecision = await this.dependencies.gateModel.evaluate({
+        currentMessage: input.content,
+        recentUserMessages,
+        recentMessages
       });
 
-      return {
-        userMessage,
-        agentStatus: "listening",
-        gateDecision
-      };
-    }
+      this.dependencies.eventLogService.record("gate.decision", {
+        profileId: profile.id,
+        sessionId: mainSession.id,
+        replyDecision: gateDecision.replyDecision,
+        inputKind: gateDecision.inputKind,
+        memoryDecision: gateDecision.memoryDecision,
+        confidence: gateDecision.confidence,
+        reason: gateDecision.reason,
+        topicEnded: gateDecision.topicEnded
+      });
 
-    const semanticSegment = gateDecision.inputKind === "chat" ? gateDecision.coalescedText : input.content.trim();
-    if (gateDecision.inputKind === "task") {
-      if (gateDecision.taskKind === "time_reminder") {
-        const reminder = parseReminderRequest({
-          message: semanticSegment,
-          nowIso: new Date().toISOString()
+      if (gateDecision.replyDecision === "wait") {
+        this.dependencies.eventLogService.record("chat.message_persisted", {
+          profileId: profile.id,
+          sessionId: mainSession.id,
+          userMessageId: userMessage.id,
+          assistantMessageId: null,
+          writtenMemoryIds: [],
+          gateDecision: gateDecision.replyDecision
         });
 
-        if (!reminder) {
-          const assistantMessage = this.dependencies.messageRepository.create({
+        return {
+          userMessage,
+          agentStatus: "listening",
+          gateDecision
+        };
+      }
+
+      const semanticSegment = gateDecision.inputKind === "chat" ? gateDecision.coalescedText : input.content.trim();
+      if (gateDecision.inputKind === "task") {
+        if (gateDecision.taskKind === "time_reminder") {
+          const reminder = parseReminderRequest({
+            message: semanticSegment,
+            nowIso: new Date().toISOString()
+          });
+
+          if (!reminder) {
+            assistantMessage = this.dependencies.messageRepository.create({
+              sessionId: mainSession.id,
+              profileId: profile.id,
+              role: "assistant",
+              content: await this.dependencies.voiceAdapter.render({
+                scene: "task.reminder_schedule_failed",
+                channel: "chat",
+                soul: profile.soul,
+                facts: {
+                  taskTitle: semanticSegment
+                }
+              })
+            });
+
+            this.dependencies.eventLogService.record("chat.message_persisted", {
+              profileId: profile.id,
+              sessionId: mainSession.id,
+              userMessageId: userMessage.id,
+              assistantMessageId: assistantMessage.id,
+              writtenMemoryIds: [],
+              gateDecision: gateDecision.replyDecision
+            });
+
+            return {
+              userMessage,
+              assistantMessage,
+              agentStatus: "idle",
+              gateDecision
+            };
+          }
+
+          const createdTask = this.dependencies.taskService.createTaskFromChat({
+            profileId: profile.id,
+            parentSessionId: mainSession.id,
+            title: reminder.content,
+            kind: "time_reminder",
+            dueAt: reminder.dueAt
+          });
+          assistantMessage = this.dependencies.messageRepository.create({
             sessionId: mainSession.id,
             profileId: profile.id,
             role: "assistant",
             content: await this.dependencies.voiceAdapter.render({
-              scene: "task.reminder_schedule_failed",
+              scene: "task.reminder_scheduled",
               channel: "chat",
               soul: profile.soul,
               facts: {
-                taskTitle: semanticSegment
+                taskTitle: reminder.content,
+                dueAt: reminder.dueAt
               }
             })
           });
@@ -137,6 +186,7 @@ export class ChatOrchestrator {
             userMessageId: userMessage.id,
             assistantMessageId: assistantMessage.id,
             writtenMemoryIds: [],
+            createdTaskId: createdTask.id,
             gateDecision: gateDecision.replyDecision
           });
 
@@ -144,28 +194,27 @@ export class ChatOrchestrator {
             userMessage,
             assistantMessage,
             agentStatus: "idle",
-            gateDecision
+            gateDecision,
+            createdTask
           };
         }
 
         const createdTask = this.dependencies.taskService.createTaskFromChat({
           profileId: profile.id,
           parentSessionId: mainSession.id,
-          title: reminder.content,
-          kind: "time_reminder",
-          dueAt: reminder.dueAt
+          title: semanticSegment,
+          kind: "result_output"
         });
-        const assistantMessage = this.dependencies.messageRepository.create({
+        assistantMessage = this.dependencies.messageRepository.create({
           sessionId: mainSession.id,
           profileId: profile.id,
           role: "assistant",
           content: await this.dependencies.voiceAdapter.render({
-            scene: "task.reminder_scheduled",
+            scene: "task.accepted",
             channel: "chat",
             soul: profile.soul,
             facts: {
-              taskTitle: reminder.content,
-              dueAt: reminder.dueAt
+              taskTitle: semanticSegment
             }
           })
         });
@@ -183,174 +232,145 @@ export class ChatOrchestrator {
         return {
           userMessage,
           assistantMessage,
-          agentStatus: "idle",
+          agentStatus: "tasking",
           gateDecision,
           createdTask
         };
       }
 
-      const createdTask = this.dependencies.taskService.createTaskFromChat({
-        profileId: profile.id,
-        parentSessionId: mainSession.id,
-        title: semanticSegment,
-        kind: "result_output"
-      });
-      const assistantMessage = this.dependencies.messageRepository.create({
+      if (gateDecision.inputKind === "task_control") {
+        const taskControlResult = await this.handleTaskControl({
+          profileId: profile.id,
+          sessionId: mainSession.id,
+          userMessageId: userMessage.id,
+          content: input.content,
+          soul: profile.soul
+        });
+
+        return {
+          userMessage,
+          assistantMessage: taskControlResult.assistantMessage,
+          agentStatus: taskControlResult.updatedTask ? "tasking" : "idle",
+          gateDecision,
+          updatedTask: taskControlResult.updatedTask
+        };
+      }
+
+      const writtenMemoryIds =
+        gateDecision.memoryDecision === "write_now"
+          ? await this.writeMemoriesFromMessage({
+              profileId: profile.id,
+              sessionId: mainSession.id,
+              content: semanticSegment
+            })
+          : [];
+      const memoryContext = await this.dependencies.memoryService.retrieveRelevant(profile.id, semanticSegment);
+      const dueFollowUps = this.dependencies.memoryService.retrieveDueFollowUps(
+        profile.id,
+        new Date().toISOString()
+      );
+      const writtenMemories = memoryContext.nodes.filter((node) => writtenMemoryIds.includes(node.id));
+      const recalledMemories = dedupeMemoryNodes([
+        ...dueFollowUps,
+        ...memoryContext.nodes.filter((node) => !writtenMemoryIds.includes(node.id))
+      ]);
+
+      if (memoryContext.nodes.length > 0 && shouldAskMemoryRecall(semanticSegment)) {
+        this.dependencies.eventLogService.record("memory.recall_used", {
+          profileId: profile.id,
+          sessionId: mainSession.id,
+          nodeIds: memoryContext.nodes.map((node) => node.id),
+          summaryTopics: memoryContext.summaries.map((summary) => summary.topic)
+        });
+      }
+
+      assistantMessage = this.dependencies.messageRepository.create({
         sessionId: mainSession.id,
         profileId: profile.id,
         role: "assistant",
-        content: await this.dependencies.voiceAdapter.render({
-          scene: "task.accepted",
-          channel: "chat",
-          soul: profile.soul,
-          facts: {
-            taskTitle: semanticSegment
-          }
-        })
+        content: ""
       });
+      options.onAssistantMessageCreated?.(assistantMessage);
+
+      let streamedContent = "";
+      const finalReply = await this.dependencies.chatModel.generateReply(
+        {
+          userContent: semanticSegment,
+          soul: profile.soul,
+          writtenMemories,
+          recalledMemories: shouldAskMemoryRecall(semanticSegment) ? memoryContext.nodes : recalledMemories,
+          dueFollowUps,
+          gateDecision
+        },
+        {
+          onDelta: (delta) => {
+            if (!delta) {
+              return;
+            }
+
+            streamedContent += delta;
+            const updatedMessage = this.dependencies.messageRepository.updateContent({
+              messageId: assistantMessage!.id,
+              content: streamedContent
+            });
+
+            if (updatedMessage) {
+              assistantMessage = updatedMessage;
+              options.onAssistantMessageUpdated?.(assistantMessage);
+            }
+          }
+        }
+      );
+
+      if (finalReply !== assistantMessage.content) {
+        const updatedMessage = this.dependencies.messageRepository.updateContent({
+          messageId: assistantMessage.id,
+          content: finalReply
+        });
+
+        if (updatedMessage) {
+          assistantMessage = updatedMessage;
+          options.onAssistantMessageUpdated?.(assistantMessage);
+        }
+      }
+
+      if (dueFollowUps.length > 0) {
+        this.dependencies.memoryService.completeFollowUps(
+          profile.id,
+          dueFollowUps.map((memory) => memory.id)
+        );
+        this.dependencies.eventLogService.record("memory.follow_up_triggered", {
+          profileId: profile.id,
+          sessionId: mainSession.id,
+          nodeIds: dueFollowUps.map((memory) => memory.id)
+        });
+      }
 
       this.dependencies.eventLogService.record("chat.message_persisted", {
         profileId: profile.id,
         sessionId: mainSession.id,
         userMessageId: userMessage.id,
         assistantMessageId: assistantMessage.id,
-        writtenMemoryIds: [],
-        createdTaskId: createdTask.id,
+        writtenMemoryIds,
         gateDecision: gateDecision.replyDecision
       });
 
       return {
         userMessage,
         assistantMessage,
-        agentStatus: "tasking",
-        gateDecision,
-        createdTask
-      };
-    }
-
-    if (gateDecision.inputKind === "task_control") {
-      const taskControlResult = await this.handleTaskControl({
-        profileId: profile.id,
-        sessionId: mainSession.id,
-        userMessageId: userMessage.id,
-        content: input.content,
-        soul: profile.soul
-      });
-
-      return {
-        userMessage,
-        assistantMessage: taskControlResult.assistantMessage,
-        agentStatus: taskControlResult.updatedTask ? "tasking" : "idle",
-        gateDecision,
-        updatedTask: taskControlResult.updatedTask
-      };
-    }
-
-    const writtenMemoryIds =
-      gateDecision.memoryDecision === "write_now"
-        ? await this.writeMemoriesFromMessage({
-            profileId: profile.id,
-            sessionId: mainSession.id,
-            content: semanticSegment
-          })
-        : [];
-    const memoryContext = await this.dependencies.memoryService.retrieveRelevant(profile.id, semanticSegment);
-    const dueFollowUps = this.dependencies.memoryService.retrieveDueFollowUps(
-      profile.id,
-      new Date().toISOString()
-    );
-    const writtenMemories = memoryContext.nodes.filter((node) => writtenMemoryIds.includes(node.id));
-    const recalledMemories = dedupeMemoryNodes([
-      ...dueFollowUps,
-      ...memoryContext.nodes.filter((node) => !writtenMemoryIds.includes(node.id))
-    ]);
-
-    if (memoryContext.nodes.length > 0 && shouldAskMemoryRecall(semanticSegment)) {
-      this.dependencies.eventLogService.record("memory.recall_used", {
-        profileId: profile.id,
-        sessionId: mainSession.id,
-        nodeIds: memoryContext.nodes.map((node) => node.id),
-        summaryTopics: memoryContext.summaries.map((summary) => summary.topic)
-      });
-    }
-
-    let assistantMessage = this.dependencies.messageRepository.create({
-      sessionId: mainSession.id,
-      profileId: profile.id,
-      role: "assistant",
-      content: ""
-    });
-    options.onAssistantMessageCreated?.(assistantMessage);
-
-    let streamedContent = "";
-    const finalReply = await this.dependencies.chatModel.generateReply(
-      {
-        userContent: semanticSegment,
-        soul: profile.soul,
-        writtenMemories,
-        recalledMemories: shouldAskMemoryRecall(semanticSegment) ? memoryContext.nodes : recalledMemories,
-        dueFollowUps,
+        agentStatus: "idle",
         gateDecision
-      },
-      {
-        onDelta: (delta) => {
-          if (!delta) {
-            return;
-          }
-
-          streamedContent += delta;
-          const updatedMessage = this.dependencies.messageRepository.updateContent({
-            messageId: assistantMessage.id,
-            content: streamedContent
-          });
-
-          if (updatedMessage) {
-            assistantMessage = updatedMessage;
-            options.onAssistantMessageUpdated?.(assistantMessage);
-          }
-        }
-      }
-    );
-
-    if (finalReply !== assistantMessage.content) {
-      const updatedMessage = this.dependencies.messageRepository.updateContent({
-        messageId: assistantMessage.id,
-        content: finalReply
-      });
-
-      if (updatedMessage) {
-        assistantMessage = updatedMessage;
-        options.onAssistantMessageUpdated?.(assistantMessage);
-      }
-    }
-
-    if (dueFollowUps.length > 0) {
-      this.dependencies.memoryService.completeFollowUps(
-        profile.id,
-        dueFollowUps.map((memory) => memory.id)
-      );
-      this.dependencies.eventLogService.record("memory.follow_up_triggered", {
+      };
+    } catch (error) {
+      return this.handleModelFailure({
         profileId: profile.id,
         sessionId: mainSession.id,
-        nodeIds: dueFollowUps.map((memory) => memory.id)
+        userMessage,
+        gateDecision,
+        assistantMessage,
+        error
       });
     }
-
-    this.dependencies.eventLogService.record("chat.message_persisted", {
-      profileId: profile.id,
-      sessionId: mainSession.id,
-      userMessageId: userMessage.id,
-      assistantMessageId: assistantMessage.id,
-      writtenMemoryIds,
-      gateDecision: gateDecision.replyDecision
-    });
-
-    return {
-      userMessage,
-      assistantMessage,
-      agentStatus: "idle",
-      gateDecision
-    };
   }
 
   private async writeMemoriesFromMessage(input: {
@@ -559,6 +579,55 @@ export class ChatOrchestrator {
     };
   }
 
+  private handleModelFailure(input: {
+    profileId: string;
+    sessionId: string;
+    userMessage: Message;
+    gateDecision?: SendChatMessageResult["gateDecision"];
+    assistantMessage?: Message;
+    error: unknown;
+  }): SendChatMessageResult {
+    const content = buildModelRecoveryMessage(input.error);
+    const assistantMessage =
+      input.assistantMessage
+        ? this.dependencies.messageRepository.updateContent({
+            messageId: input.assistantMessage.id,
+            content
+          }) ?? input.assistantMessage
+        : this.dependencies.messageRepository.create({
+            sessionId: input.sessionId,
+            profileId: input.profileId,
+            role: "assistant",
+            content
+          });
+    const summary = summarizeModelError(input.error);
+
+    this.dependencies.eventLogService.record("chat.model_recovery_emitted", {
+      profileId: input.profileId,
+      sessionId: input.sessionId,
+      userMessageId: input.userMessage.id,
+      assistantMessageId: assistantMessage.id,
+      modelRole: getModelRoleFromError(input.error),
+      errorCode: summary.code
+    });
+
+    this.dependencies.eventLogService.record("chat.message_persisted", {
+      profileId: input.profileId,
+      sessionId: input.sessionId,
+      userMessageId: input.userMessage.id,
+      assistantMessageId: assistantMessage.id,
+      writtenMemoryIds: [],
+      gateDecision: input.gateDecision?.replyDecision ?? "reply"
+    });
+
+    return {
+      userMessage: input.userMessage,
+      assistantMessage,
+      agentStatus: "idle",
+      gateDecision: input.gateDecision
+    };
+  }
+
 }
 
 function dedupeMemoryNodes(memories: MemoryNode[]): MemoryNode[] {
@@ -575,4 +644,43 @@ function dedupeMemoryNodes(memories: MemoryNode[]): MemoryNode[] {
   }
 
   return result;
+}
+
+function buildModelRecoveryMessage(error: unknown): string {
+  const summary = summarizeModelError(error);
+  const role = getModelRoleFromError(error);
+
+  if (role === "memoryModel") {
+    return "我这边记忆模型现在没连好，这句我先不敢乱记。你可以先继续聊，或者去设置里测一下记忆模型连接。";
+  }
+
+  if (role === "gateModel") {
+    if (summary.code === "authentication_failed") {
+      return "我这边判断模型没连好，这句没法稳稳接住。你去设置里检查一下判断模型的 API Key，再测一下连接，然后把这句话重新发我一次。";
+    }
+
+    return "我这边判断模型刚刚没连上，这句没能稳稳接住。你去设置里测试一下判断模型连接，连好后再发我一次。";
+  }
+
+  if (summary.code === "authentication_failed") {
+    return "我这边聊天模型现在没连好，API Key 这边像是有点问题。你去设置里检查一下聊天模型配置，再测一下连接，然后我就能继续接着回你。";
+  }
+
+  if (summary.code === "missing_configuration" || summary.code === "unsupported_provider") {
+    return "我这边聊天模型还没接好，先没法正常回你。你去设置里看一下聊天模型配置，再测试一下连接，连上之后再发我一次。";
+  }
+
+  if (role === "voiceAdapter") {
+    return "我这边回复模型刚刚掉了一下线，这句没能正常说出来。你去设置里测一下聊天模型连接，我们马上继续。";
+  }
+
+  return "我这边聊天模型刚刚没连上，这句先没法好好接住。你去设置里测一下聊天模型连接，连好后我继续。";
+}
+
+function getModelRoleFromError(error: unknown): ModelRoleName | undefined {
+  if (error instanceof ModelConfigurationError || error instanceof ModelInvocationError) {
+    return error.role;
+  }
+
+  return undefined;
 }

@@ -1,4 +1,5 @@
 import { afterEach, describe, expect, it } from "vitest";
+import { ModelConfigurationError, ModelInvocationError } from "../../../src/core/llm/modelErrors";
 import type { GateDecision } from "../../../src/shared/contracts/chat";
 import type { GateEvaluationInput } from "../../../src/core/orchestration/gateEvaluator";
 import { ChatOrchestrator } from "../../../src/core/orchestration/chatOrchestrator";
@@ -118,5 +119,42 @@ describe("chat gate integration", () => {
       "用户上下文 5",
       "用户上下文 6"
     ]);
+  });
+
+  it("returns a recovery message when gateModel is not configured", async () => {
+    const services = createTestServices("aurabot-gate-unavailable-");
+    const orchestrator = new ChatOrchestrator({
+      ...services,
+      gateModel: {
+        evaluate: async () => {
+          throw new ModelConfigurationError("gateModel", "model API is not configured; missing apiKey.");
+        }
+      }
+    });
+
+    const result = await orchestrator.sendMessage({ content: "你在吗？" });
+
+    expect(result.assistantMessage?.content).toContain("判断模型");
+    expect(result.assistantMessage?.content).toContain("设置");
+    expect(result.gateDecision).toBeUndefined();
+    expect(result.agentStatus).toBe("idle");
+  });
+
+  it("returns a recovery message when gateModel invocation fails", async () => {
+    const services = createTestServices("aurabot-gate-invocation-");
+    const orchestrator = new ChatOrchestrator({
+      ...services,
+      gateModel: {
+        evaluate: async () => {
+          throw new ModelInvocationError("gateModel", new Error("fetch failed"));
+        }
+      }
+    });
+
+    const result = await orchestrator.sendMessage({ content: "你在吗？" });
+
+    expect(result.assistantMessage?.content).toContain("判断模型");
+    expect(result.assistantMessage?.content).toContain("测试");
+    expect(result.agentStatus).toBe("idle");
   });
 });

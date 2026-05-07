@@ -5,19 +5,23 @@ export type ModelRoleName = "chatModel" | "gateModel" | "memoryModel" | "voiceAd
 
 export class ModelConfigurationError extends Error {
   readonly code = "MODEL_CONFIGURATION_ERROR";
+  readonly role: ModelRoleName;
 
   constructor(role: ModelRoleName, message: string) {
     super(`[${role}] ${message}`);
     this.name = "ModelConfigurationError";
+    this.role = role;
   }
 }
 
 export class ModelInvocationError extends Error {
   readonly code = "MODEL_INVOCATION_ERROR";
+  readonly role: ModelRoleName;
 
   constructor(role: ModelRoleName, error: unknown) {
     super(`[${role}] ${formatModelError(error)}`);
     this.name = "ModelInvocationError";
+    this.role = role;
   }
 }
 
