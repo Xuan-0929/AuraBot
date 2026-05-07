@@ -2,13 +2,13 @@
 
 更新时间：2026-05-07
 
-这份文档记录当前 main 集成线已经完成的工程事实、最近一次验证结果，以及下一步最应该推进的任务。它是执行状态板，不替代 PRD，也不替代 MVP 计划。
+这份文档记录当前工作分支与近期已集成分支已经完成的工程事实、最近一次验证结果，以及下一步最应该推进的任务。它是执行状态板，不替代 PRD，也不替代 MVP 计划。
 
 当前工作分支：`codex/aurabot-ui-productization-a1`
 
 当前集成基线：`943dcd9 docs: record A1 UI productization checkpoint`
 
-分支边界：这一侧已经集成 Live2D 桌宠体验、主控制台、任务卡控制、流式回复、模型 gate、记忆调试、follow-up 主动提醒，以及 soul 驱动的统一回复/播报机制。后续如果继续并行开发，记忆模型/配置大改、任务执行器大改、桌宠 UI 大改仍建议分支隔离，避免在 `chatOrchestrator`、`createWindow`、`store`、IPC contract 和 renderer 样式上互相抢修改权。
+分支边界：这一侧已经集成 Live2D 桌宠体验、主控制台、任务便签快捷操作、流式回复、模型 gate、记忆调试、follow-up 主动提醒，以及 soul 驱动的统一回复/播报机制。后续如果继续并行开发，记忆模型/配置大改、任务执行器大改、桌宠 UI 大改仍建议分支隔离，避免在 `chatOrchestrator`、`createWindow`、`store`、IPC contract 和 renderer 样式上互相抢修改权。
 
 ## 2026-05-07 A1 UI productization checkpoint
 
@@ -107,7 +107,7 @@ AuraBot 当前已经从“传统聊天界面”收敛为桌宠优先形态：
 5. 用户点击控制台按钮后，打开或聚焦独立控制台视窗进行完整主线程对话。
 6. 控制台输入 `Enter` 直接发送，`Ctrl+Enter` 换行；用户消息和输入框清空都先本地即时完成，gate/模型结果随后回填。
 7. `chatModel` 已支持流式回复保存和广播，控制台能接收 `chat:message-updated` 逐步更新助手消息。
-8. 任务创建、查询、打断、修改、启动都通过控制台里的主聊天线程完成；任务状态卡也提供取消和删除按钮作为快速控制。
+8. 任务创建、查询、打断、修改、启动都通过控制台里的主聊天线程完成；右侧轻便签会保留当前任务与提醒，并提供取消和删除按钮作为快捷控制。
 9. 任务完成、桌宠语音回复和到期 follow-up 可以通过小人气泡临时浮现。
 10. 普通 bot 输出现在会同步进入桌宠头顶气泡，不再只在任务完成时弹出提示。
 11. bot 输出的头顶气泡会按句子流式展示，控制台里的 assistant 回复也会按句拆成连续聊天气泡，视觉上更接近真实网络聊天。
@@ -137,7 +137,7 @@ AuraBot 当前已经从“传统聊天界面”收敛为桌宠优先形态：
 | 活人感统一回复机制 | 已完成第一版 | `Soul` 只保留人格、语气、原则和语义禁忌；`ResponseWorkflow` 描述场景、事实和安全边界；`VoiceAdapter` 结合二者生成最终用户可见文本。任务完成等场景可以接近“本人自然告诉你结果并邀请你看一眼”的语感，但不会把样例当固定模板。 |
 | 主动消息触发 | 已完成第二版 | `ProactiveTriggerEngine` 统一支持到期 follow-up、到期 `time_reminder` 任务和空闲轻提醒；默认 10 秒扫描一次到期提醒；主动消息只进入桌宠气泡和事件日志，不直接写入主聊天；只有用户回应后，后续真实对话才进入主聊天历史。空闲主动消息等待时间已进入设置页。 |
 | 记忆 v1/v2 写入层 | 部分完成 | 支持 preference、event、follow_up 写入，摘要层和关系边召回；显式配置 `memoryModel` 后可用 API 做结构化记忆抽取、重复记忆合并和候选关系边判断；App 运行期间到期 follow_up 可通过后台 scheduler 推送桌宠气泡。 |
-| 任务 v1 | 已完成第二版 | 任务已细分为结果产出型 `result_output` 和时间提醒型 `time_reminder`。结果产出任务可从主聊天创建、按聊天 hint 命中特定任务、查询状态、打断、修改、启动；默认 deterministic runner，显式配置后可调用本机 Codex 子任务 runner。时间提醒任务可由“两分钟后提醒我……”这类输入创建，记录 `dueAt`，到点由桌宠气泡提醒并标记完成。控制台左上展示结果产出任务，右上展示时间提醒任务。 |
+| 任务 v1 | 已完成第二版 | 任务已细分为结果产出型 `result_output` 和时间提醒型 `time_reminder`。结果产出任务可从主聊天创建、按聊天 hint 命中特定任务、查询状态、打断、修改、启动；默认 deterministic runner，显式配置后可调用本机 Codex 子任务 runner。时间提醒任务可由“两分钟后提醒我……”这类输入创建，记录 `dueAt`，到点由桌宠气泡提醒并标记完成。A1 控制台当前通过右侧轻便签展示任务与提醒，并保留取消/删除快捷操作。 |
 | 任务体验文案 | 已完成第二版 | 任务创建、查询、完成、失败、重复开始和状态条都已去掉内部状态词，并接入 `VoiceAdapter`。任务事实由 workflow 提供，最终表达由 soul 约束为更自然的伴侣兼助手式回复。 |
 | 记忆调试视图 | 已完成第二版 | 控制台 `Memory Debug` 面板可查看当前 memory nodes、edges、summaries、最近 memory event，以及最近一次 recall 的 query、planner terms、seed、扩散节点和 traversed edges。 |
 | 记忆评估语料 | 已完成第一版 | `corepack pnpm eval:memory` 可跑固定 recall fixture，覆盖直接偏好召回、事件到偏好图跳转、follow_up 排除不相关提醒。 |
@@ -301,29 +301,29 @@ AuraBot 当前已经从“传统聊天界面”收敛为桌宠优先形态：
 3. 已完成：任务状态条用人话展示 `待开始 / 处理中 / 完成 / 没跑成 / 已停下`，并清理 `Codex 子任务`、`queued`、`completed` 等内部词。
 4. 已完成：任务 gate 覆盖直接产出型请求，`做一份读书笔记`、`写一份GitHub周报` 和 `帮我写一份实践论的读书笔记` 都会进入任务流；外部轻量 gate 误判时会被本地 `local-task-guard` 拉回任务。
 5. 已完成：启动时会把上次遗留的 running/waiting 任务标记为失联失败，避免永久卡在运行态。
-6. 已完成：任务状态卡提供取消和删除按钮，用于快速处理排队/运行/结束后的任务卡。
+6. 已完成：右侧任务便签提供取消和删除按钮，用于快速处理排队/运行/结束后的任务。
 7. 下一步：设计 `TaskRegistry` 的真实任务类型、输入输出协议和结构化 artifact registry。
 8. 下一步：设计真正 resume 策略，确保应用重启后能恢复或准确解释子任务状态。
-9. 继续保持主聊天为主要控制面，任务卡按钮只作为快捷操作。
+9. 继续保持主聊天为主要控制面，任务便签按钮只作为快捷操作。
 
 ### 5. 文档和交付整理
 
 目标：让项目可以被继续开发、评审和 push。
 
-当前状态：
+历史状态：
 
 1. `README.md` 和 `README.zh-CN.md` 已补，包含本地安装、运行、验证、模型配置、Codex 子任务 runner 配置、截图路径、当前边界和下一步。
 2. `docs/TODO.md` 已同步任务执行 v2 当前进展：opt-in Codex 子任务 runner、JSONL 进度广播、打断取消子进程、失联运行态任务失败式恢复、任务结果附件回流和后续 resume / artifact registry。
-3. 当前 live2D/console 集成分支已合入 memory follow-up debug、任务卡控制、流式回复、模型 gate 延后、悬停聊天气泡和全局鼠标追踪眼动，可以 push 为 `codex/aurabot-live2d-console-ui`。
-4. 当前 persona-feel 分支已补 soul response workflow 文档、voice adapter 第一版和相关测试，等待继续验证实际模型输出的活人感。
+3. 当时 live2D/console 集成分支已合入 memory follow-up debug、任务便签快捷操作、流式回复、模型 gate 延后、悬停聊天气泡和全局鼠标追踪眼动，可以 push 为 `codex/aurabot-live2d-console-ui`。
+4. 当时 persona-feel 分支已补 soul response workflow 文档、voice adapter 第一版和相关测试，等待继续验证实际模型输出的活人感。
 
-## Push 准备
+## 历史 Push 准备记录
 
-当前准备 push 当前分支 `codex/aurabot-live2d-console-ui`。本分支包含：
+以下为当时准备 push `codex/aurabot-live2d-console-ui` 时的交付清单：
 
 1. 任务结果展示和文件附件回流。
 2. 主聊天任务创建、查询、打断、修改、启动和重复查询的人话回复。
-3. 任务状态卡取消/删除按钮。
+3. 右侧任务便签取消/删除按钮。
 4. 模型侧 gate 判定、chat streaming 和消息更新广播。
 5. 桌宠悬停 `Chat` 小气泡、展开式输入框、`pet_text` 主聊天来源。
 6. 主进程全局鼠标追踪和 Live2D 窗口外眼动。

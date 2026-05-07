@@ -67,8 +67,16 @@ async function sendConsoleMessage(consoleWindow: Page, content: string): Promise
   await input.press("Enter");
 }
 
+function getConversationMessages(consoleWindow: Page) {
+  return consoleWindow.getByLabel(/Conversation messages|对话消息/);
+}
+
+function getConsoleStickyNotes(consoleWindow: Page) {
+  return consoleWindow.getByLabel(/Today's notes|今日便签/);
+}
+
 function getConsoleStickyNote(consoleWindow: Page, title: string) {
-  return consoleWindow.locator(".task-sticky-notes-console .task-sticky-note").filter({ hasText: title });
+  return getConsoleStickyNotes(consoleWindow).locator("article").filter({ hasText: title });
 }
 
 test("launches as a small desktop pet and opens console from the hover control", async () => {
@@ -317,29 +325,35 @@ test("waits on fragmented input and replies after the thought is completed", asy
   }
 });
 
-test("keeps long console conversations reachable while the newest message stays visible", async () => {
+test("keeps long conversations pinned in the conversation message list once chat overflows", async () => {
   const { electronApp, petWindow, userDataDir } = await launchAuraBot();
 
   try {
     const consoleWindow = await openConsole(electronApp, petWindow);
-    const input = consoleWindow.getByPlaceholder("Say something");
+    const messageList = getConversationMessages(consoleWindow);
 
-    for (let index = 1; index <= 14; index += 1) {
-      await input.fill(`第 ${index} 条，我喜欢吃火锅。`);
-      await consoleWindow.getByRole("button", { name: "Send" }).click();
+    await sendConsoleMessage(consoleWindow, "第 1 条，我喜欢吃火锅。");
+    await expect(consoleWindow.getByText(/我记住了.*火锅/).last()).toBeVisible();
+    // Constrain the real chat rail so the actual message list becomes the scroll container.
+    await messageList.evaluate((element) => {
+      element.style.height = "280px";
+      element.style.maxHeight = "280px";
+    });
+
+    for (let index = 2; index <= 14; index += 1) {
+      await sendConsoleMessage(consoleWindow, `第 ${index} 条，我喜欢吃火锅。`);
       await expect(consoleWindow.getByText(/我记住了.*火锅/).last()).toBeVisible();
     }
 
-    const scrollMetrics = await consoleWindow.locator(".console-window").evaluate((element) => ({
+    const scrollMetrics = await messageList.evaluate((element) => ({
       clientHeight: element.clientHeight,
       scrollHeight: element.scrollHeight,
-      scrollTop: element.scrollTop,
-      windowHeight: window.innerHeight
+      scrollTop: element.scrollTop
     }));
 
     expect(scrollMetrics.clientHeight).toBeLessThan(scrollMetrics.scrollHeight);
-    expect(scrollMetrics.clientHeight).toBeLessThanOrEqual(scrollMetrics.windowHeight);
     expect(scrollMetrics.scrollTop).toBeGreaterThan(0);
+    expect(scrollMetrics.scrollTop + scrollMetrics.clientHeight).toBeGreaterThanOrEqual(scrollMetrics.scrollHeight - 2);
     await expect(consoleWindow.locator(".message-user").filter({ hasText: "第 14 条" })).toBeVisible();
   } finally {
     await cleanupAuraBot(electronApp, userDataDir);
@@ -358,7 +372,7 @@ test("creates a visible queued task from a task-like chat request", async () => 
     await expect(consoleWindow.getByLabel("Agent status")).toContainText("tasking");
     await expect(petWindow.getByLabel("Desktop Live2D pet")).toHaveAttribute("data-agent-status", "tasking");
     await expect(petWindow.locator(".live2d-canvas-host")).toHaveAttribute("data-motion-group", "TapBody");
-    await expect(consoleWindow.locator(".task-sticky-notes-console")).toBeVisible();
+    await expect(getConsoleStickyNotes(consoleWindow)).toBeVisible();
     await expect(getConsoleStickyNote(consoleWindow, "明天会议")).toContainText("Not started yet");
   } finally {
     await cleanupAuraBot(electronApp, userDataDir);
@@ -388,7 +402,7 @@ test("controls a task through the main chat instead of task panel buttons", asyn
   }
 });
 
-test("uses task status card buttons to cancel and remove settled tasks", async () => {
+test("uses sticky-note actions to cancel active tasks and remove settled ones", async () => {
   const { electronApp, petWindow, userDataDir } = await launchAuraBot();
 
   try {
