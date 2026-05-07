@@ -10,6 +10,34 @@
 
 分支边界：这一侧已经集成 Live2D 桌宠体验、主控制台、任务便签快捷操作、流式回复、模型 gate、记忆调试、follow-up 主动提醒，以及 soul 驱动的统一回复/播报机制。后续如果继续并行开发，记忆模型/配置大改、任务执行器大改、桌宠 UI 大改仍建议分支隔离，避免在 `chatOrchestrator`、`createWindow`、`store`、IPC contract 和 renderer 样式上互相抢修改权。
 
+## 2026-05-07 UI polish + notifications checkpoint
+
+本次 checkpoint 继续承接 A1 产品化，不再是改大方向，而是把界面层级和提醒交付面做成真正可用的版本。
+
+已完成：
+
+1. 桌宠周围的悬浮控件、聊天浮层和控制台主界面继续收口到 A1 语言，减少工具后台感，保留更清晰的陪伴型入口层级。
+2. 控制台正文已移除常驻 `Memory Debug`；深层调试能力不再占用日常主聊天空间。
+3. 完整设置已新增独立 `记忆调试` 页，`Memory Debug` 现在通过完整设置承接，而不是散落在控制台首层。
+4. 控制台右上角设置菜单继续保持“日常快捷设置”定位，只保留语言、点击穿透和完整设置入口。
+5. App 运行中的系统通知 MVP 已接上 `follow_up / time_reminder / idle_nudge` 三类 trigger；桌宠气泡仍保留，系统通知作为第二条补充触达通道。
+6. 点击系统通知后的默认回流行为已统一为：优先聚焦控制台；若控制台未打开，则打开并聚焦控制台。
+7. 通知页已明确说明当前边界：系统通知只在 AuraBot 已运行时生效，尚未覆盖 App 未运行时的离线提醒。
+
+本轮验证记录：
+
+| 命令/检查 | 结果 |
+| --- | --- |
+| `corepack pnpm vitest run tests/unit/renderer/desktopPet.spec.tsx tests/unit/renderer/consoleWindow.spec.tsx tests/unit/renderer/messageList.spec.tsx tests/unit/renderer/settingsWindow.spec.tsx tests/unit/renderer/settingsCenterShell.spec.tsx tests/unit/renderer/memoryDebugPanel.spec.tsx tests/unit/renderer/notificationSettingsPage.spec.tsx tests/unit/main/systemNotificationService.spec.ts tests/unit/main/notificationSettingsStore.spec.ts tests/unit/core/proactive/proactiveTriggerEngine.spec.ts tests/unit/core/voice/voiceAdapter.spec.ts tests/unit/core/tasks/taskPresentation.spec.ts tests/integration/orchestration/chat-task.spec.ts` | 13 个 test files、67 个 tests 通过 |
+| `corepack pnpm typecheck` | 通过 |
+| `corepack pnpm build` | 通过 |
+| `corepack pnpm test:e2e` | 14 个 e2e tests 通过 |
+
+补充说明：
+
+1. 在 `test:e2e` 之后，如需再跑 Node 侧 Vitest，仍可能需要执行一次 `corepack pnpm rebuild:node`，把 `better-sqlite3` 从 Electron ABI 切回 Node ABI。
+2. 本阶段不包含 App 未运行时的离线通知、开机自启、复杂通知编排或系统通知 action button。
+
 ## 2026-05-07 A1 UI productization checkpoint
 
 本次 checkpoint 把 A1 产品化界面收口到“陪伴优先”的稳定形态，并把验证口径同步到了当前真实 UI。`codex/aurabot-ui-productization-a1` 这一轮确认的不是新功能草图，而是已经能跑通的主舞台、控制台、设置中心和任务文案出口。
@@ -112,10 +140,10 @@ AuraBot 当前已经从“传统聊天界面”收敛为桌宠优先形态：
 10. 普通 bot 输出现在会同步进入桌宠头顶气泡，不再只在任务完成时弹出提示。
 11. bot 输出的头顶气泡会按句子流式展示，控制台里的 assistant 回复也会按句拆成连续聊天气泡，视觉上更接近真实网络聊天。
 12. 分句规则已抽成共享工具，当前识别 `。！？!?；;～~〜…` 等聊天句尾标点；英文句点暂不作为分隔符，避免拆坏文件名、URL 和小数。
-13. 记忆系统当前是“分层摘要 + 图状联想 + 可选 memoryModel 增强”的 MVP；已补到期 follow-up 调试评估与主动提醒通道。
+13. 记忆系统当前是“分层摘要 + 图状联想 + 可选 memoryModel 增强”的 MVP；已补到期 follow-up 调试评估、主动提醒通道和完整设置中的独立记忆调试页。
 14. 普通聊天、任务播报、任务完成/失败、任务控制、pet task notice 和 memory follow-up 已开始走统一 `Soul + ResponseWorkflow + VoiceAdapter` 机制，避免聊天像人、任务像系统通知的割裂体验。
 15. 当前产品化分支已经可以打包为 `dist/AuraBot.app`，双击后直接进入桌面 Live2D 桌宠，不需要终端命令。
-16. 设置能力已经从控制台内的小控件升级为独立设置窗口，语言、模型配置摘要、config 文件入口和人物点击穿透都集中在设置页。
+16. 设置能力已经从控制台内的小控件升级为独立设置窗口，语言、模型配置摘要、config 文件入口、人物点击穿透、通知和记忆调试都已集中到设置体系里。
 
 ## 已完成
 
@@ -135,11 +163,11 @@ AuraBot 当前已经从“传统聊天界面”收敛为桌宠优先形态：
 | 模型适配层 | 部分完成 | 已有 `gateModel` / `chatModel` / `memoryModel` 注入接口、OpenAI-compatible provider、三类模型角色的 LangChain POC provider、userData/系统级 JSON 配置、env 配置、chat streaming、设置页安全摘要、provider 选择、模型健康状态和按角色连接测试；用户端已移除本地模型 fallback，deterministic 模型仅保留给显式测试开关；还缺用户新消息打断、retry/backoff 和更细的错误恢复。 |
 | Gate/触发判断 | 已完成第二版 | 可判断碎片输入等待、完整输入回复、话题是否结束、聊天/任务/任务控制分类；任务内已细分 `result_output` 和 `time_reminder`，轻量 gateModel 需要给出任务子类型；外部模型异常时不再用本地 gate 兜底。 |
 | 活人感统一回复机制 | 已完成第一版 | `Soul` 只保留人格、语气、原则和语义禁忌；`ResponseWorkflow` 描述场景、事实和安全边界；`VoiceAdapter` 结合二者生成最终用户可见文本。任务完成等场景可以接近“本人自然告诉你结果并邀请你看一眼”的语感，但不会把样例当固定模板。 |
-| 主动消息触发 | 已完成第二版 | `ProactiveTriggerEngine` 统一支持到期 follow-up、到期 `time_reminder` 任务和空闲轻提醒；默认 10 秒扫描一次到期提醒；主动消息只进入桌宠气泡和事件日志，不直接写入主聊天；只有用户回应后，后续真实对话才进入主聊天历史。空闲主动消息等待时间已进入设置页。 |
+| 主动消息触发 | 已完成第三版 | `ProactiveTriggerEngine` 统一支持到期 follow-up、到期 `time_reminder` 任务和空闲轻提醒；默认 10 秒扫描一次到期提醒；主动消息继续进入桌宠气泡和事件日志，同时在 App 运行中可走系统通知通道；只有用户回应后，后续真实对话才进入主聊天历史。空闲主动消息等待时间已进入设置页。 |
 | 记忆 v1/v2 写入层 | 部分完成 | 支持 preference、event、follow_up 写入，摘要层和关系边召回；显式配置 `memoryModel` 后可用 API 做结构化记忆抽取、重复记忆合并和候选关系边判断；App 运行期间到期 follow_up 可通过后台 scheduler 推送桌宠气泡。 |
 | 任务 v1 | 已完成第二版 | 任务已细分为结果产出型 `result_output` 和时间提醒型 `time_reminder`。结果产出任务可从主聊天创建、按聊天 hint 命中特定任务、查询状态、打断、修改、启动；默认 deterministic runner，显式配置后可调用本机 Codex 子任务 runner。时间提醒任务可由“两分钟后提醒我……”这类输入创建，记录 `dueAt`，到点由桌宠气泡提醒并标记完成。A1 控制台当前通过右侧轻便签展示任务与提醒，并保留取消/删除快捷操作。 |
 | 任务体验文案 | 已完成第二版 | 任务创建、查询、完成、失败、重复开始和状态条都已去掉内部状态词，并接入 `VoiceAdapter`。任务事实由 workflow 提供，最终表达由 soul 约束为更自然的伴侣兼助手式回复。 |
-| 记忆调试视图 | 已完成第二版 | 控制台 `Memory Debug` 面板可查看当前 memory nodes、edges、summaries、最近 memory event，以及最近一次 recall 的 query、planner terms、seed、扩散节点和 traversed edges。 |
+| 记忆调试视图 | 已完成第三版 | `Memory Debug` 已从控制台正文迁移到完整设置中的独立页，可查看当前 memory nodes、edges、summaries、最近 memory event，以及最近一次 recall 的 query、planner terms、seed、扩散节点和 traversed edges。 |
 | 记忆评估语料 | 已完成第一版 | `corepack pnpm eval:memory` 可跑固定 recall fixture，覆盖直接偏好召回、事件到偏好图跳转、follow_up 排除不相关提醒。 |
 | 事件日志 | 部分完成 | 已写入 gate、memory、task、chat 关键日志；已有 memory debug 读取面板，还缺更完整的日志开关和路径可视化。 |
 | E2E 演示流 | 已完成 MVP | 桌宠启动、悬浮控制开控制台、桌宠设置同步、位置持久化、状态同步、记忆、碎片等待、任务控制路径都有 e2e 覆盖。 |
@@ -197,12 +225,12 @@ AuraBot 当前已经从“传统聊天界面”收敛为桌宠优先形态：
 
 1. 模型角色默认进入未配置状态，不再走用户端 deterministic fallback；外部模型调用需要本地 `aurabot.config.json` / `config.json`、macOS 系统级 `/Library/Application Support/AuraBot/config.json`，或环境变量。`gateModel`、`chatModel` 和 `memoryModel` 均可选 `provider: "langchain-openai"`。
 2. 用户消息已经即时显示，模型回复已支持流式 message update；还没有用户新消息打断 in-flight generation。
-3. 记忆写入层可由 `memoryModel` 接管抽取、合并和候选边判断；召回层也可由 `memoryModel` 生成语义检索词、目标类型和重排 seed node。到期 `follow_up` 可在下一次主聊天回复中触发并标记完成，也可在 App 运行期间由后台 scheduler 推送桌宠气泡；还没有系统级通知、离线调度或 embedding。
+3. 记忆写入层可由 `memoryModel` 接管抽取、合并和候选边判断；召回层也可由 `memoryModel` 生成语义检索词、目标类型和重排 seed node。到期 `follow_up` 可在下一次主聊天回复中触发并标记完成，也可在 App 运行期间同时走桌宠气泡与系统通知；还没有 App 未运行时的离线调度或 embedding。
 4. 任务 runner 可显式配置为本机 Codex 子任务执行器，能广播 JSONL 子任务进度，在主聊天打断时取消子进程，并在启动时把失联运行态任务标记为失败；完成后的文件结果已可作为主聊天附件回流并打开，还没有真正 resume 和结构化 artifact registry。
 5. `Soul + ResponseWorkflow + VoiceAdapter` 已覆盖任务和提醒类文本出口的第一批场景；普通聊天仍由 `chatModel` 直接生成，但已经读取同一套 soul 字段。下一步要继续补错误提示和设置页提示等剩余用户可见文本。
 6. Live2D 状态行为当前复用 Hiyori 现有 motion group；全局鼠标追踪眼动已接入，但还没有定制表情资源或更细的动画状态机。
 7. 语音输入当前走 Chromium 原生 `SpeechRecognition`，运行时不支持时只显示轻提示；还没有稳定 STT adapter。
-8. 还没有 Profile 切换 UI、定时任务、桌面通知、打包发布、开机自启。
+8. 还没有 Profile 切换 UI、App 未运行时的离线提醒、开机自启和复杂通知编排。
 
 ## 下一步推荐
 
