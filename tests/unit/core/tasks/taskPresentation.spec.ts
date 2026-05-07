@@ -92,7 +92,7 @@ describe("task presentation", () => {
     expect(draft.attachments).toEqual([]);
   });
 
-  it("cleans command prefixes from task status replies", () => {
+  it("uses a companion-first queued reply instead of a runner-style status", () => {
     const response = buildTaskStatusResponse({
       ...baseTask,
       status: "queued",
@@ -100,14 +100,34 @@ describe("task presentation", () => {
       latestProgress: "Task queued from main chat."
     });
 
-    expect(response).toContain("GitHub 周报");
-    expect(response).toContain("还没开始处理");
+    expect(response).toBe("「GitHub 周报」这件事我先替你记在旁边了。你想让我现在开始的话，直接跟我说一声就行。");
     expect(response).not.toContain("帮我");
     expect(response).not.toContain("做一个");
     expect(response).not.toContain("queued");
   });
 
-  it("keeps failed task messages human without leaking runner status words", () => {
+  it("keeps running task updates in Aura's voice instead of task-runner wording", () => {
+    const response = buildTaskStatusResponse(
+      {
+        ...baseTask,
+        status: "running",
+        title: "帮我做一个 GitHub 周报。",
+        latestProgress: "正在整理本周合并记录"
+      },
+      [
+        taskEvent({
+          eventType: "task.agent.progress",
+          summary: "正在整理本周合并记录"
+        })
+      ]
+    );
+
+    expect(response).toBe("「GitHub 周报」这件事我已经在弄了，最近一步是：正在整理本周合并记录。\n弄好后我会回来跟你说。");
+    expect(response).not.toContain("正在处理");
+    expect(response).not.toContain("runner");
+  });
+
+  it("keeps failed task messages gentle while preserving the key failure detail", () => {
     const draft = buildTaskSettledMessageDraft(
       {
         ...baseTask,
@@ -122,7 +142,7 @@ describe("task presentation", () => {
       ]
     );
 
-    expect(draft.content).toBe("这次没跑成，卡在：codex exited 1。我们可以接着改。");
+    expect(draft.content).toBe("这次我先卡在 codex exited 1 这一步了。你要是愿意，我们接着一起改。");
     expect(draft.content).not.toContain("failed");
     expect(draft.attachments).toEqual([]);
   });

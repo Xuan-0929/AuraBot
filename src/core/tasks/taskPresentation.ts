@@ -32,21 +32,25 @@ export function buildTaskSettledMessageDraft(task: Task, events: TaskEvent[] = [
   }
 
   if (task.status === "failed") {
+    const failureDetail = cleanTaskResultText(getLatestMeaningfulSummary(task, events));
+
     return {
-      content: `这次没跑成，卡在：${cleanTaskResultText(getLatestMeaningfulSummary(task, events))}。我们可以接着改。`,
+      content: failureDetail
+        ? `这次我先卡在 ${failureDetail} 这一步了。你要是愿意，我们接着一起改。`
+        : "这次我先卡住了一下。你要是愿意，我们接着一起改。",
       attachments: []
     };
   }
 
   if (task.status === "interrupted") {
     return {
-      content: "我先停下来了。你想改方向的话，直接跟我说新的要求就行。",
+      content: "我先在这里停一下。你想换个方向的话，直接跟我说新的要求就行。",
       attachments: []
     };
   }
 
   return {
-    content: `我还在处理，最近一步是：${cleanTaskResultText(task.latestProgress)}`,
+    content: `这件事我已经在弄了，最近一步是：${ensureSentenceEnding(cleanTaskProgressText(task.latestProgress))}\n弄好后我会回来跟你说。`,
     attachments: []
   };
 }
@@ -77,11 +81,11 @@ export function buildTaskStatusResponse(task: Task, events: TaskEvent[] = []): s
   }
 
   if (task.status === "queued") {
-    return `我还没开始处理「${cleanTaskTitle(task.title)}」。你想现在启动的话，直接说“开始做这个任务”。`;
+    return `${formatTaskReference(task)}我先替你记在旁边了。你想让我现在开始的话，直接跟我说一声就行。`;
   }
 
   const latestSummary = cleanTaskProgressText(getLatestMeaningfulSummary(task, events));
-  return `我正在处理「${cleanTaskTitle(task.title)}」，最近一步是：${latestSummary}\n完成后我会回来告诉你。`;
+  return `${formatTaskReference(task)}我已经在弄了，最近一步是：${ensureSentenceEnding(latestSummary)}\n弄好后我会回来跟你说。`;
 }
 
 export async function buildTaskStatusResponseWithVoice(
@@ -249,6 +253,30 @@ function cleanTaskTitle(value: string): string {
     )
     .replace(/^(一份|一个|一篇|一版|这份|这个|一下)\s*/u, "")
     .trim();
+}
+
+function formatTaskReference(task: Task): string {
+  const title = cleanTaskTitle(task.title);
+
+  if (!title) {
+    return "这件事";
+  }
+
+  return `「${title}」这件事`;
+}
+
+function ensureSentenceEnding(value: string): string {
+  const trimmed = value.trim();
+
+  if (!trimmed) {
+    return "已经开始处理。";
+  }
+
+  if (/[。！？!?…]$/u.test(trimmed)) {
+    return trimmed;
+  }
+
+  return `${trimmed}。`;
 }
 
 function describeTaskResultSubject(task: Task): string {
