@@ -7,8 +7,8 @@ export function SettingsPageLead({
 }) {
   return (
     <div className="settings-page-lead">
-      <h2>{title}</h2>
-      <p>{hint}</p>
+      <h2 className="settings-page-lead-title">{title}</h2>
+      <p className="settings-page-lead-hint">{hint}</p>
     </div>
   );
 }

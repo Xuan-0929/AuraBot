@@ -49,16 +49,31 @@ describe("PersonaSettingsPage", () => {
       );
     });
 
-    expect(container.textContent).toContain("Persona");
-    expect(container.textContent).toContain(
-      "Shape how Aura sounds and feels, then open the deeper notes only when you need them."
-    );
+    const englishTitle = container.querySelector<HTMLElement>(".settings-page-lead h2")?.textContent;
+    const englishHint = container.querySelector<HTMLElement>(".settings-page-lead p")?.textContent;
+
+    expect(englishTitle).toBe("Persona");
+    expect(englishHint).toBeTruthy();
     expect(container.textContent).toContain("Name");
     expect(container.textContent).toContain("Tone");
     expect(container.textContent).toContain("Relationship");
     expect(container.textContent).toContain("Proactive level");
     expect(container.textContent).not.toContain("Principles");
     expect(container.textContent).not.toContain("Taboos");
+
+    await act(async () => {
+      root.render(
+        <PersonaSettingsPage
+          petSettings={{ clickThroughPet: false, displayLanguage: "zh" }}
+          personaSettings={personaSettings}
+          onUpdatePersonaSettings={vi.fn(async () => undefined)}
+        />
+      );
+    });
+
+    expect(container.querySelector<HTMLElement>(".settings-page-lead h2")?.textContent).toBe("人格");
+    expect(container.querySelector<HTMLElement>(".settings-page-lead p")?.textContent).toBeTruthy();
+    expect(container.querySelector<HTMLElement>(".settings-page-lead p")?.textContent).not.toBe(englishHint);
   });
 
   it("reveals semi-pro fields after entering advanced editing", async () => {

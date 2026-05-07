@@ -78,14 +78,32 @@ describe("NotificationSettingsPage", () => {
       );
     });
 
-    expect(container.textContent).toContain("Notifications");
-    expect(container.textContent).toContain("Choose which little taps on the shoulder Aura is allowed to send.");
+    const englishHint = container.querySelector<HTMLElement>(".settings-page-lead p")?.textContent;
+
+    expect(container.querySelector<HTMLElement>(".settings-page-lead h2")?.textContent).toBe("Notifications");
+    expect(englishHint).toBeTruthy();
     expect(container.textContent).toContain("System notifications");
     expect(container.textContent).toContain("Permission");
     expect(container.textContent).toContain("Managed by system");
     expect(container.textContent).toContain("Follow-up reminders");
     expect(container.textContent).toContain("Time reminder tasks");
     expect(container.textContent).toContain("Idle nudges");
+
+    await act(async () => {
+      root.render(
+        <NotificationSettingsPage
+          petSettings={{ clickThroughPet: false, displayLanguage: "zh" }}
+          appConfig={appConfig}
+          notificationSettings={notificationSettings}
+          onUpdateNotificationSettings={vi.fn(async () => undefined)}
+          onUpdateProactiveSettings={vi.fn(async () => undefined)}
+        />
+      );
+    });
+
+    expect(container.querySelector<HTMLElement>(".settings-page-lead h2")?.textContent).toBe("通知");
+    expect(container.querySelector<HTMLElement>(".settings-page-lead p")?.textContent).toBeTruthy();
+    expect(container.querySelector<HTMLElement>(".settings-page-lead p")?.textContent).not.toBe(englishHint);
   });
 
   it("updates notification toggles and proactive wait time", async () => {

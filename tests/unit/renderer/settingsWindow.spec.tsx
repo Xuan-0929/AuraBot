@@ -370,6 +370,14 @@ describe("SettingsWindow", () => {
 
   it("localizes the settings surface when Chinese is selected", async () => {
     await act(async () => {
+      root.render(<SettingsWindow {...baseProps} />);
+    });
+
+    const englishSubtitle =
+      container.querySelector<HTMLElement>(".settings-window-copy p")?.textContent ?? "";
+    const englishLead = container.querySelector<HTMLElement>(".settings-page-lead p")?.textContent ?? "";
+
+    await act(async () => {
       root.render(
         <SettingsWindow
           {...baseProps}
@@ -381,32 +389,48 @@ describe("SettingsWindow", () => {
       );
     });
 
-    expect(container.textContent).toContain("设置");
-    expect(container.textContent).toContain("通用");
+    const localizedSubtitle =
+      container.querySelector<HTMLElement>(".settings-window-copy p")?.textContent ?? "";
+    const localizedLead = container.querySelector<HTMLElement>(".settings-page-lead p")?.textContent ?? "";
+
+    expect(container.querySelector<HTMLElement>(".settings-window-header h1")?.textContent).toBe("设置");
+    expect(container.querySelector<HTMLElement>(".settings-page-lead h2")?.textContent).toBe("通用");
     expect(container.textContent).toContain("桌宠行为");
     expect(container.textContent).toContain("模型");
     expect(container.textContent).toContain("人格");
     expect(container.textContent).toContain("Live2D 模型");
     expect(container.textContent).toContain("通知");
-    expect(container.textContent).toContain("把这间小屋慢慢收拾成你和 Aura 都住得舒服的样子。");
-    expect(container.textContent).toContain("先把这间小屋最常用的习惯放顺手。");
+    expect(localizedSubtitle).not.toBe("");
+    expect(localizedLead).not.toBe("");
+    expect(localizedSubtitle).not.toBe(englishSubtitle);
+    expect(localizedLead).not.toBe(englishLead);
     expect(container.textContent).not.toContain("Product-level configuration");
     expect(container.textContent).not.toContain("Click through character");
   });
 
-  it("uses the A1 settings subtitle in English", async () => {
+  it("renders the settings header and general lead structure in English", async () => {
     await act(async () => {
       root.render(<SettingsWindow {...baseProps} />);
     });
 
-    expect(container.textContent).toContain("Settle this little room until Aura feels right beside you.");
-    expect(container.textContent).toContain("Start with the everyday basics that make the room feel easy to live in.");
+    expect(container.querySelector<HTMLElement>(".settings-window-kicker")?.textContent).toBeTruthy();
+    expect(container.querySelector<HTMLElement>(".settings-window-header h1")?.textContent).toBe("Settings");
+    expect(container.querySelector<HTMLElement>(".settings-window-copy p")?.textContent).toContain("Aura");
+    expect(container.querySelectorAll(".settings-page-lead")).toHaveLength(1);
+    expect(container.querySelector<HTMLElement>(".settings-page-lead h2")?.textContent).toBe("General");
+    expect(container.querySelector<HTMLElement>(".settings-page-lead p")?.textContent).toBeTruthy();
+    expect(container.textContent).toContain("Language");
   });
 
-  it("wires the A1 tokens into the console and settings shell styles", () => {
+  it("wires the A1 tokens and stable lead/tab contracts into the settings shell styles", () => {
     expect(stylesheetText).toMatch(/\.app-shell-settings\s*{[^}]*background:\s*var\(--aura-warm-bg\);/s);
     expect(stylesheetText).toMatch(/\.console-window\s*{[^}]*color:\s*var\(--aura-ink\);[^}]*var\(--aura-warm-bg\)/s);
     expect(stylesheetText).toMatch(/\.settings-window\s*{[^}]*var\(--aura-warm-bg\)/s);
     expect(stylesheetText).toMatch(/\.settings-center-sidebar\s*{[^}]*border:\s*1px solid var\(--aura-border\);[^}]*background:\s*var\(--aura-paper-strong\);[^}]*box-shadow:\s*var\(--aura-shadow\);/s);
+    expect(stylesheetText).toMatch(/\.settings-page-section\s+\.settings-page-lead\s*>\s*h2\s*{/s);
+    expect(stylesheetText).toMatch(/\.settings-page-section\s+\.settings-page-lead\s*>\s*p\s*{/s);
+    expect(stylesheetText).toMatch(
+      /\.settings-center-tab\[data-active="true"\]:hover\s*{[^}]*rgba\(255,\s*251,\s*247,\s*0\.96\)[^}]*var\(--aura-paper\)/s
+    );
   });
 });

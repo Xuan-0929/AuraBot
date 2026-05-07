@@ -755,10 +755,6 @@ textarea {
   transform: translateY(-1px);
 }
 
-.settings-center-tab:hover {
-  background: rgba(255, 255, 255, 0.92);
-}
-
 .settings-center-content {
   min-width: 0;
   display: grid;
@@ -775,20 +771,6 @@ textarea {
   display: grid;
   gap: 6px;
   max-width: 640px;
-}
-
-.settings-page-lead h2 {
-  margin: 0;
-  color: var(--aura-ink);
-  font-size: 19px;
-  letter-spacing: 0;
-}
-
-.settings-page-lead p {
-  margin: 0;
-  color: var(--aura-muted);
-  font-size: 13px;
-  line-height: 1.6;
 }
 
 .settings-page-field textarea,
@@ -932,6 +914,20 @@ textarea {
   color: var(--aura-muted);
   font-size: 12px;
   line-height: 1.5;
+}
+
+.settings-page-section .settings-page-lead > h2 {
+  margin: 0;
+  color: var(--aura-ink);
+  font-size: 19px;
+  letter-spacing: 0;
+}
+
+.settings-page-section .settings-page-lead > p {
+  margin: 0;
+  color: var(--aura-muted);
+  font-size: 13px;
+  line-height: 1.6;
 }
 
 .settings-config-button {
@@ -1086,6 +1082,20 @@ textarea {
   font-size: 12px;
   font-weight: 800;
   cursor: pointer;
+}
+
+.settings-center-tab:hover {
+  background: rgba(255, 255, 255, 0.92);
+}
+
+.settings-center-tab[data-active="true"]:hover {
+  background:
+    linear-gradient(180deg, rgba(255, 251, 247, 0.96), rgba(245, 235, 226, 0.96)),
+    var(--aura-paper);
+  border-color: rgba(132, 101, 86, 0.22);
+  color: var(--aura-ink);
+  box-shadow: 0 10px 22px rgba(123, 96, 81, 0.12);
+  transform: translateY(-1px);
 }
 
 .settings-task-cli-card {
