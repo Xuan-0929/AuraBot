@@ -42,6 +42,29 @@ describe("TaskStickyNotes", () => {
     expect(notes?.textContent).toContain("晚上提醒我回消息");
     expect(notes?.textContent).not.toContain("整理文档");
   });
+
+  it("does not render console action buttons in task 2 even when action handlers are provided", async () => {
+    const tasks = [
+      makeTask({ id: "task-1", title: "帮我写周报。", status: "running" }),
+      makeTask({ id: "task-2", title: "晚上提醒我回消息。", kind: "time_reminder", status: "completed" })
+    ];
+
+    await act(async () => {
+      root.render(
+        <TaskStickyNotes
+          tasks={tasks}
+          variant="console"
+          displayLanguage="zh"
+          onCancelTask={() => undefined}
+          onDeleteTask={() => undefined}
+        />
+      );
+    });
+
+    expect(container.textContent).toContain("写周报");
+    expect(container.querySelector(".task-sticky-note-actions")).toBeNull();
+    expect(container.querySelector("button")).toBeNull();
+  });
 });
 
 function makeTask(overrides: Partial<Task>): Task {

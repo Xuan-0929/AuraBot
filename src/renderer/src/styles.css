@@ -301,24 +301,6 @@ textarea {
   line-height: 1.35;
 }
 
-.task-sticky-note-actions {
-  display: flex;
-  gap: 6px;
-  padding-top: 2px;
-}
-
-.task-sticky-note-actions button {
-  min-height: 28px;
-  padding: 0 10px;
-  border: 1px solid var(--aura-border);
-  border-radius: 999px;
-  background: rgba(255, 255, 255, 0.72);
-  color: var(--aura-ink);
-  cursor: pointer;
-  font-size: 11px;
-  font-weight: 700;
-}
-
 .pet-action-button {
   min-width: 50px;
   min-height: 32px;

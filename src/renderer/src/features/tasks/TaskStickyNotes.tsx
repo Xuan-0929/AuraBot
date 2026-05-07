@@ -6,8 +6,8 @@ export function TaskStickyNotes({
   tasks,
   displayLanguage,
   variant,
-  onCancelTask,
-  onDeleteTask
+  onCancelTask: _onCancelTask,
+  onDeleteTask: _onDeleteTask
 }: {
   tasks: Task[];
   displayLanguage: PetSettings["displayLanguage"];
@@ -40,20 +40,6 @@ export function TaskStickyNotes({
         <article key={task.id} className="task-sticky-note">
           <strong>{summarizeTitle(task.title)}</strong>
           <span>{summarizeMeta(task, displayLanguage)}</span>
-          {variant === "console" ? (
-            <div className="task-sticky-note-actions">
-              {isActive(task.status) ? (
-                <button type="button" onClick={() => onCancelTask?.(task.id)}>
-                  {t(displayLanguage, "cancel")}
-                </button>
-              ) : null}
-              {isSettled(task.status) ? (
-                <button type="button" onClick={() => onDeleteTask?.(task.id)}>
-                  {t(displayLanguage, "delete")}
-                </button>
-              ) : null}
-            </div>
-          ) : null}
         </article>
       ))}
     </aside>
@@ -85,8 +71,4 @@ function summarizeMeta(task: Task, displayLanguage: PetSettings["displayLanguage
 
 function isActive(status: Task["status"]): boolean {
   return status === "queued" || status === "running" || status === "waiting";
-}
-
-function isSettled(status: Task["status"]): boolean {
-  return status === "completed" || status === "failed" || status === "interrupted";
 }
