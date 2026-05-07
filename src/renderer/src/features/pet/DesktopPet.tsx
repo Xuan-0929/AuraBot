@@ -435,7 +435,7 @@ export function DesktopPet({
           {t(petSettings.displayLanguage, "drag")}
         </button>
         <button
-          className="pet-action-button"
+          className="pet-action-button pet-action-voice"
           type="button"
           aria-label={
             voiceState === "recording"
@@ -448,7 +448,7 @@ export function DesktopPet({
           {t(petSettings.displayLanguage, "voice")}
         </button>
         <button
-          className="pet-action-button"
+          className="pet-action-button pet-action-console"
           type="button"
           aria-label={t(petSettings.displayLanguage, "openAuraBotConsole")}
           onClick={() => void onOpenConsole()}
@@ -456,7 +456,7 @@ export function DesktopPet({
           {t(petSettings.displayLanguage, "console")}
         </button>
         <button
-          className="pet-action-button"
+          className="pet-action-button pet-action-settings"
           type="button"
           aria-label={t(petSettings.displayLanguage, "openAuraBotSettings")}
           onClick={() => void onOpenSettings()}

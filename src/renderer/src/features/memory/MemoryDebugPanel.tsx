@@ -37,52 +37,62 @@ export function MemoryDebugPanel({ snapshot, expanded, displayLanguage = "en", o
 
       {expanded ? (
         <div className="memory-debug-panel" aria-label={t(displayLanguage, "memoryDebugPanel")}>
-          {snapshot ? (
-            <>
-              <div className="memory-debug-metrics" aria-label={t(displayLanguage, "memoryDebugMetrics")}>
-                <span>{t(displayLanguage, "nodes")} {snapshot.nodes.length}</span>
-                <span>{t(displayLanguage, "edges")} {snapshot.edges.length}</span>
-                <span>{t(displayLanguage, "summaries")} {snapshot.summaries.length}</span>
-                <span>{t(displayLanguage, "events")} {snapshot.recentEvents.length}</span>
-              </div>
-              {snapshot.lastRecallTrace ? <LastRecallTrace snapshot={snapshot} displayLanguage={displayLanguage} /> : null}
-              <div className="memory-debug-grid">
-                <DebugColumn title={t(displayLanguage, "nodes")}>
-                  {snapshot.nodes.slice(0, 8).map((node) => (
-                    <article className="memory-debug-item" key={node.id}>
-                      <span className="memory-debug-kicker">
-                        {node.type} / {node.state} / {node.importance.toFixed(2)}
-                      </span>
-                      <p>{node.content}</p>
-                    </article>
-                  ))}
-                </DebugColumn>
-                <DebugColumn title={t(displayLanguage, "edges")}>
-                  {snapshot.edges.slice(0, 8).map((edge) => (
-                    <article className="memory-debug-item" key={edge.id}>
-                      <span className="memory-debug-kicker">{edge.relationType}</span>
-                      <p>
-                        {shortId(edge.sourceNodeId)} {"->"} {shortId(edge.targetNodeId)} / {edge.weight.toFixed(2)}
-                      </p>
-                    </article>
-                  ))}
-                </DebugColumn>
-                <DebugColumn title={t(displayLanguage, "recentEvents")}>
-                  {snapshot.recentEvents.slice(0, 8).map((event) => (
-                    <article className="memory-debug-item" key={event.id}>
-                      <span className="memory-debug-kicker">{formatTime(event.createdAt)}</span>
-                      <p>{event.eventType}</p>
-                    </article>
-                  ))}
-                </DebugColumn>
-              </div>
-            </>
-          ) : (
-            <p className="memory-debug-empty">{t(displayLanguage, "noMemorySnapshot")}</p>
-          )}
+          <MemoryDebugContent snapshot={snapshot} displayLanguage={displayLanguage} />
         </div>
       ) : null}
     </section>
+  );
+}
+
+export function MemoryDebugContent({
+  snapshot,
+  displayLanguage = "en"
+}: {
+  snapshot?: MemoryDebugSnapshot;
+  displayLanguage?: PetSettings["displayLanguage"];
+}) {
+  return snapshot ? (
+    <>
+      <div className="memory-debug-metrics" aria-label={t(displayLanguage, "memoryDebugMetrics")}>
+        <span>{t(displayLanguage, "nodes")} {snapshot.nodes.length}</span>
+        <span>{t(displayLanguage, "edges")} {snapshot.edges.length}</span>
+        <span>{t(displayLanguage, "summaries")} {snapshot.summaries.length}</span>
+        <span>{t(displayLanguage, "events")} {snapshot.recentEvents.length}</span>
+      </div>
+      {snapshot.lastRecallTrace ? <LastRecallTrace snapshot={snapshot} displayLanguage={displayLanguage} /> : null}
+      <div className="memory-debug-grid">
+        <DebugColumn title={t(displayLanguage, "nodes")}>
+          {snapshot.nodes.slice(0, 8).map((node) => (
+            <article className="memory-debug-item" key={node.id}>
+              <span className="memory-debug-kicker">
+                {node.type} / {node.state} / {node.importance.toFixed(2)}
+              </span>
+              <p>{node.content}</p>
+            </article>
+          ))}
+        </DebugColumn>
+        <DebugColumn title={t(displayLanguage, "edges")}>
+          {snapshot.edges.slice(0, 8).map((edge) => (
+            <article className="memory-debug-item" key={edge.id}>
+              <span className="memory-debug-kicker">{edge.relationType}</span>
+              <p>
+                {shortId(edge.sourceNodeId)} {"->"} {shortId(edge.targetNodeId)} / {edge.weight.toFixed(2)}
+              </p>
+            </article>
+          ))}
+        </DebugColumn>
+        <DebugColumn title={t(displayLanguage, "recentEvents")}>
+          {snapshot.recentEvents.slice(0, 8).map((event) => (
+            <article className="memory-debug-item" key={event.id}>
+              <span className="memory-debug-kicker">{formatTime(event.createdAt)}</span>
+              <p>{event.eventType}</p>
+            </article>
+          ))}
+        </DebugColumn>
+      </div>
+    </>
+  ) : (
+    <p className="memory-debug-empty">{t(displayLanguage, "noMemorySnapshot")}</p>
   );
 }
 

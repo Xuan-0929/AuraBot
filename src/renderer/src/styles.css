@@ -75,13 +75,15 @@ textarea {
   background: transparent;
   cursor: pointer;
   transition:
-    transform 160ms ease,
-    opacity 160ms ease;
+    transform 180ms ease,
+    opacity 180ms ease,
+    filter 180ms ease;
   -webkit-app-region: no-drag;
 }
 
 .desktop-pet-model-button:hover {
-  transform: translateY(-2px);
+  transform: translateY(-4px);
+  filter: saturate(1.02);
 }
 
 .desktop-pet-model-shell {
@@ -89,24 +91,25 @@ textarea {
   display: block;
   width: 100%;
   height: 100%;
-  filter: drop-shadow(0 10px 8px rgba(23, 34, 38, 0.16));
+  filter: drop-shadow(0 20px 22px rgba(116, 88, 72, 0.2));
   opacity: 1;
   transition:
-    opacity 140ms ease,
-    filter 140ms ease;
+    opacity 160ms ease,
+    filter 180ms ease,
+    transform 180ms ease;
 }
 
 .desktop-pet[data-agent-status="thinking"] .desktop-pet-model-shell,
 .desktop-pet[data-agent-status="typing"] .desktop-pet-model-shell {
-  filter: drop-shadow(0 10px 10px rgba(188, 101, 65, 0.26));
+  filter: drop-shadow(0 22px 24px rgba(196, 126, 94, 0.24));
 }
 
 .desktop-pet[data-agent-status="tasking"] .desktop-pet-model-shell {
-  filter: drop-shadow(0 10px 12px rgba(47, 98, 107, 0.3));
+  filter: drop-shadow(0 22px 24px rgba(120, 106, 97, 0.22));
 }
 
 .desktop-pet[data-agent-status="listening"] .desktop-pet-model-shell {
-  filter: drop-shadow(0 10px 10px rgba(76, 132, 96, 0.24));
+  filter: drop-shadow(0 22px 24px rgba(143, 121, 109, 0.2));
 }
 
 .pet-message-bubble {
@@ -114,17 +117,19 @@ textarea {
   left: 50%;
   top: 14px;
   z-index: 3;
-  width: min(248px, calc(100vw - 24px));
-  max-height: 96px;
+  width: min(264px, calc(100vw - 24px));
+  max-height: 116px;
   overflow: hidden;
-  padding: 10px 12px;
-  border: 1px solid rgba(36, 59, 65, 0.16);
-  border-radius: 8px;
-  background: rgba(255, 255, 255, 0.82);
-  box-shadow: 0 16px 34px rgba(32, 45, 48, 0.18);
-  color: #253233;
+  padding: 12px 14px;
+  border: 1px solid rgba(132, 101, 86, 0.16);
+  border-radius: 18px;
+  background:
+    linear-gradient(180deg, rgba(255, 255, 255, 0.94), rgba(255, 248, 242, 0.92)),
+    var(--aura-paper-strong);
+  box-shadow: 0 18px 34px rgba(123, 96, 81, 0.14);
+  color: var(--aura-ink);
   font-size: 13px;
-  line-height: 1.45;
+  line-height: 1.5;
   pointer-events: none;
   transform: translateX(-50%);
 }
@@ -135,76 +140,82 @@ textarea {
   z-index: 4;
   display: grid;
   align-items: stretch;
-  gap: 7px;
-  width: 52px;
-  min-height: 42px;
-  padding: 8px;
-  border: 1px solid rgba(36, 59, 65, 0.16);
-  border-radius: 8px;
-  background: rgba(255, 255, 255, 0.88);
-  box-shadow: 0 16px 34px rgba(32, 45, 48, 0.18);
+  gap: 8px;
+  width: 66px;
+  min-height: 48px;
+  padding: 10px;
+  border: 1px solid rgba(132, 101, 86, 0.16);
+  border-radius: 18px;
+  background:
+    linear-gradient(180deg, rgba(255, 255, 255, 0.94), rgba(255, 248, 242, 0.9)),
+    var(--aura-paper-strong);
+  box-shadow: 0 18px 34px rgba(123, 96, 81, 0.16);
   opacity: 1;
   transform: translateY(-50%);
   -webkit-app-region: no-drag;
+  backdrop-filter: blur(14px);
 }
 
 .pet-hover-chat[data-side="left"] {
-  left: 12px;
+  left: 14px;
 }
 
 .pet-hover-chat[data-side="right"] {
-  right: 12px;
+  right: 14px;
 }
 
 .pet-hover-chat[data-expanded="true"] {
   grid-template-columns: minmax(0, 1fr) auto;
-  width: min(236px, calc(100vw - 24px));
-  min-height: 70px;
-  background: rgba(255, 255, 255, 0.92);
+  width: min(258px, calc(100vw - 24px));
+  min-height: 82px;
 }
 
 .pet-hover-chat-trigger {
-  width: 34px;
-  min-width: 34px;
-  min-height: 26px;
+  width: 44px;
+  min-width: 44px;
+  min-height: 28px;
   padding: 0;
 }
 
 .pet-hover-chat textarea {
   width: 100%;
   min-width: 0;
-  height: 54px;
+  height: 58px;
   resize: none;
-  border: 1px solid rgba(36, 59, 65, 0.14);
-  border-radius: 7px;
-  background: rgba(250, 253, 252, 0.82);
-  color: #243235;
+  border: 1px solid rgba(132, 101, 86, 0.18);
+  border-radius: 14px;
+  background: rgba(255, 255, 255, 0.92);
+  color: var(--aura-ink);
   font-size: 12px;
-  line-height: 1.35;
+  line-height: 1.45;
   outline: none;
-  padding: 8px;
+  padding: 10px 11px;
+  box-shadow: inset 0 1px 0 rgba(255, 255, 255, 0.48);
 }
 
 .pet-hover-chat textarea:focus {
-  border-color: rgba(43, 113, 98, 0.38);
-  box-shadow: 0 0 0 2px rgba(86, 151, 132, 0.14);
+  border-color: rgba(164, 129, 110, 0.32);
+  box-shadow: 0 0 0 3px rgba(241, 222, 208, 0.8);
 }
 
 .pet-hover-chat button {
-  min-width: 42px;
-  min-height: 54px;
-  border: 1px solid rgba(36, 59, 65, 0.16);
-  border-radius: 7px;
-  background: rgba(235, 248, 244, 0.88);
-  color: #243235;
+  min-width: 52px;
+  min-height: 58px;
+  border: 1px solid rgba(132, 101, 86, 0.16);
+  border-radius: 14px;
+  background:
+    linear-gradient(180deg, rgba(255, 255, 255, 0.96), rgba(250, 241, 233, 0.92)),
+    var(--aura-paper-strong);
+  color: var(--aura-ink);
   cursor: pointer;
   font-size: 12px;
   font-weight: 800;
   letter-spacing: 0;
+  box-shadow: 0 10px 18px rgba(123, 96, 81, 0.1);
 }
 
 .pet-hover-chat-trigger {
-  min-height: 26px;
+  min-height: 28px;
   font-size: 11px;
 }
 
@@ -216,24 +227,30 @@ textarea {
 .pet-quick-controls {
   position: absolute;
   left: 50%;
-  bottom: 14px;
+  bottom: 18px;
   z-index: 4;
   display: inline-flex;
   align-items: center;
-  gap: 7px;
-  padding: 6px;
-  border: 1px solid rgba(36, 59, 65, 0.14);
-  border-radius: 8px;
-  background: rgba(255, 255, 255, 0.46);
-  box-shadow: 0 12px 26px rgba(38, 52, 55, 0.16);
+  gap: 8px;
+  padding: 10px;
+  border: 1px solid rgba(132, 101, 86, 0.14);
+  border-radius: 999px;
+  background:
+    linear-gradient(180deg, rgba(255, 255, 255, 0.84), rgba(248, 238, 230, 0.72)),
+    rgba(255, 252, 248, 0.72);
+  box-shadow:
+    0 18px 32px rgba(123, 96, 81, 0.16),
+    inset 0 1px 0 rgba(255, 255, 255, 0.56);
   opacity: 0;
   pointer-events: none;
-  transform: translate(-50%, 8px);
+  transform: translate(-50%, 10px);
   transition:
-    opacity 150ms ease,
-    transform 150ms ease,
-    background 150ms ease;
+    opacity 180ms ease,
+    transform 180ms ease,
+    background 180ms ease,
+    box-shadow 180ms ease;
   -webkit-app-region: no-drag;
+  backdrop-filter: blur(16px);
 }
 
 .pet-quick-controls[data-visible="true"] {
@@ -348,25 +365,57 @@ textarea {
 }
 
 .pet-action-button {
-  min-width: 50px;
-  min-height: 32px;
-  padding: 0 9px;
-  border: 1px solid rgba(36, 59, 65, 0.16);
-  border-radius: 8px;
-  background: rgba(250, 253, 252, 0.64);
-  color: #243235;
+  min-width: 58px;
+  min-height: 36px;
+  padding: 0 13px;
+  border: 1px solid rgba(132, 101, 86, 0.16);
+  border-radius: 999px;
+  background:
+    linear-gradient(180deg, rgba(255, 255, 255, 0.98), rgba(250, 242, 234, 0.92)),
+    rgba(255, 252, 248, 0.88);
+  color: var(--aura-ink);
   cursor: pointer;
   font-size: 12px;
-  font-weight: 800;
-  letter-spacing: 0;
-  box-shadow: 0 8px 18px rgba(38, 52, 55, 0.12);
+  font-weight: 700;
+  letter-spacing: 0.01em;
+  box-shadow:
+    0 10px 18px rgba(123, 96, 81, 0.1),
+    inset 0 1px 0 rgba(255, 255, 255, 0.5);
   -webkit-app-region: no-drag;
+  transition:
+    transform 160ms ease,
+    border-color 160ms ease,
+    box-shadow 160ms ease,
+    background 160ms ease,
+    color 160ms ease;
 }
 
 .pet-action-button:hover,
 .pet-action-button[data-active="true"] {
-  background: rgba(235, 248, 244, 0.9);
-  border-color: rgba(43, 113, 98, 0.3);
+  background:
+    linear-gradient(180deg, rgba(255, 255, 255, 1), rgba(252, 244, 237, 0.94)),
+    rgba(255, 252, 248, 0.96);
+  border-color: rgba(164, 129, 110, 0.24);
+  color: #523c33;
+  box-shadow:
+    0 14px 22px rgba(123, 96, 81, 0.14),
+    inset 0 1px 0 rgba(255, 255, 255, 0.7);
+  transform: translateY(-1px);
+}
+
+.pet-action-voice[data-active="true"] {
+  border-color: rgba(184, 139, 113, 0.3);
+  color: #855746;
+}
+
+.pet-action-console:hover,
+.pet-action-console[data-active="true"] {
+  color: #6c4d3f;
+}
+
+.pet-action-settings:hover,
+.pet-action-settings[data-active="true"] {
+  color: #705346;
 }
 
 .pet-action-drag {
@@ -455,14 +504,14 @@ textarea {
   display: inline-flex;
   align-items: center;
   gap: 8px;
-  min-height: 34px;
-  padding: 7px 10px;
-  border: 1px solid rgba(41, 65, 67, 0.18);
-  border-radius: 8px;
+  min-height: 36px;
+  padding: 8px 12px;
+  border: 1px solid rgba(132, 101, 86, 0.16);
+  border-radius: 999px;
   background: rgba(255, 255, 255, 0.82);
-  color: #344041;
-  font-size: 13px;
-  box-shadow: 0 5px 14px rgba(63, 76, 77, 0.12);
+  color: var(--aura-ink);
+  font-size: 12px;
+  box-shadow: 0 10px 18px rgba(123, 96, 81, 0.1);
 }
 
 .status-dot {
@@ -483,20 +532,20 @@ textarea {
   flex-direction: column;
   height: 100vh;
   min-height: 0;
-  padding: 18px;
+  padding: 20px 22px 18px;
   color: var(--aura-ink);
   background:
-    radial-gradient(circle at 14% 12%, rgba(255, 255, 255, 0.56), transparent 26%),
-    radial-gradient(circle at 86% 10%, rgba(246, 236, 227, 0.72), transparent 30%),
-    linear-gradient(135deg, var(--aura-paper-soft) 0%, var(--aura-warm-bg) 52%, var(--aura-paper) 100%);
+    radial-gradient(circle at 14% 10%, rgba(255, 247, 239, 0.92), rgba(255, 250, 245, 0) 30%),
+    radial-gradient(circle at 88% 8%, rgba(247, 236, 226, 0.72), rgba(255, 250, 245, 0) 28%),
+    linear-gradient(180deg, #fffdfb 0%, var(--aura-warm-bg) 100%);
   overflow: hidden;
 }
 
 .console-body {
   flex: 1 1 auto;
   display: grid;
-  grid-template-columns: minmax(0, 1fr) minmax(220px, 248px);
-  gap: 18px;
+  grid-template-columns: minmax(0, 1fr) minmax(216px, 248px);
+  gap: 20px;
   min-height: 0;
 }
 
@@ -506,7 +555,7 @@ textarea {
   align-items: flex-start;
   justify-content: space-between;
   gap: 18px;
-  margin-bottom: 12px;
+  margin-bottom: 14px;
 }
 
 .console-header-tools {
@@ -518,16 +567,17 @@ textarea {
 }
 
 .console-header h1 {
-  margin: 0 0 4px;
+  margin: 0 0 6px;
   color: var(--aura-ink);
-  font-size: 23px;
+  font-size: 26px;
   letter-spacing: 0;
 }
 
 .console-header p {
   margin: 0;
   color: var(--aura-muted);
-  font-size: 13px;
+  font-size: 14px;
+  line-height: 1.55;
 }
 
 .settings-menu-shell {
@@ -915,6 +965,17 @@ textarea {
   line-height: 1.5;
 }
 
+.settings-page-boundary-note {
+  margin: -2px 0 4px;
+  padding: 12px 14px;
+  border: 1px dashed rgba(132, 101, 86, 0.18);
+  border-radius: 18px;
+  background: rgba(255, 250, 244, 0.6);
+  color: var(--aura-muted);
+  font-size: 12px;
+  line-height: 1.55;
+}
+
 .settings-page-section .settings-page-lead > h2 {
   margin: 0;
   color: var(--aura-ink);
@@ -1145,14 +1206,22 @@ textarea {
   display: grid;
   grid-template-rows: minmax(0, 1fr) auto;
   min-height: 0;
-  gap: 12px;
+  gap: 14px;
   min-width: 0;
+  padding: 18px;
+  border: 1px solid rgba(132, 101, 86, 0.14);
+  border-radius: 28px;
+  background:
+    linear-gradient(180deg, rgba(255, 255, 255, 0.9), rgba(255, 248, 242, 0.88)),
+    rgba(255, 252, 248, 0.86);
+  box-shadow: 0 18px 38px rgba(123, 96, 81, 0.1);
+  backdrop-filter: blur(14px);
 }
 
 .message-list {
   display: flex;
   flex-direction: column;
-  gap: 10px;
+  gap: 12px;
   min-height: 0;
   overflow-x: hidden;
   overflow-y: auto;
@@ -1167,20 +1236,24 @@ textarea {
 }
 
 .message {
-  max-width: min(620px, 88%);
+  max-width: min(640px, 84%);
   margin: 0;
-  padding: 11px 13px;
-  border: 1px solid rgba(41, 65, 67, 0.16);
-  border-radius: 8px;
-  background: rgba(255, 255, 255, 0.78);
-  color: #1f2320;
-  box-shadow: 0 14px 38px rgba(63, 76, 77, 0.13);
+  padding: 13px 15px;
+  border: 1px solid rgba(132, 101, 86, 0.12);
+  border-radius: 20px;
+  background:
+    linear-gradient(180deg, rgba(255, 255, 255, 0.95), rgba(255, 248, 242, 0.92)),
+    rgba(255, 252, 248, 0.88);
+  color: var(--aura-ink);
+  box-shadow: 0 14px 28px rgba(123, 96, 81, 0.08);
 }
 
 .message-user {
   align-self: flex-end;
-  background: rgba(233, 249, 238, 0.82);
-  border-color: rgba(72, 129, 88, 0.22);
+  background:
+    linear-gradient(180deg, rgba(249, 235, 224, 0.96), rgba(243, 223, 208, 0.92)),
+    rgba(249, 240, 233, 0.9);
+  border-color: rgba(167, 126, 104, 0.18);
 }
 
 .message-assistant {
@@ -1189,10 +1262,11 @@ textarea {
 
 .message-role {
   display: block;
-  margin-bottom: 4px;
-  color: #667171;
+  margin-bottom: 6px;
+  color: var(--aura-muted);
   font-size: 11px;
   font-weight: 800;
+  letter-spacing: 0.04em;
   text-transform: uppercase;
 }
 
@@ -1258,12 +1332,14 @@ textarea {
 .empty-state {
   align-self: center;
   max-width: 340px;
-  padding: 14px 16px;
-  border: 1px solid rgba(41, 65, 67, 0.1);
-  border-radius: 16px;
-  background: rgba(255, 255, 255, 0.54);
-  color: #4a5656;
-  box-shadow: 0 14px 38px rgba(63, 76, 77, 0.08);
+  padding: 18px 20px;
+  border: 1px solid rgba(132, 101, 86, 0.12);
+  border-radius: 24px;
+  background:
+    linear-gradient(180deg, rgba(255, 255, 255, 0.9), rgba(255, 247, 240, 0.86)),
+    rgba(255, 252, 248, 0.88);
+  color: var(--aura-ink);
+  box-shadow: 0 16px 30px rgba(123, 96, 81, 0.08);
 }
 
 .empty-state-kicker {
@@ -1285,41 +1361,48 @@ textarea {
 .composer {
   display: grid;
   grid-template-columns: minmax(0, 1fr) auto;
-  gap: 10px;
-  padding: 10px;
-  border: 1px solid rgba(41, 65, 67, 0.16);
-  border-radius: 8px;
-  background: rgba(255, 255, 255, 0.8);
-  box-shadow: 0 18px 44px rgba(63, 76, 77, 0.16);
+  gap: 12px;
+  padding: 12px;
+  border: 1px solid rgba(132, 101, 86, 0.14);
+  border-radius: 22px;
+  background:
+    linear-gradient(180deg, rgba(255, 255, 255, 0.94), rgba(255, 247, 240, 0.9)),
+    rgba(255, 252, 248, 0.9);
+  box-shadow: 0 16px 28px rgba(123, 96, 81, 0.08);
 }
 
 .composer textarea {
   width: 100%;
-  min-height: 46px;
+  min-height: 52px;
   max-height: 120px;
   resize: vertical;
-  border: 1px solid rgba(41, 65, 67, 0.18);
-  border-radius: 8px;
-  padding: 10px 11px;
-  background: rgba(255, 255, 255, 0.88);
-  color: #1f2320;
+  border: 1px solid rgba(132, 101, 86, 0.16);
+  border-radius: 16px;
+  padding: 12px 13px;
+  background: rgba(255, 255, 255, 0.92);
+  color: var(--aura-ink);
   outline: none;
+  line-height: 1.5;
 }
 
 .composer textarea:focus {
-  border-color: #327c90;
+  border-color: rgba(164, 129, 110, 0.3);
+  box-shadow: 0 0 0 3px rgba(244, 227, 214, 0.8);
 }
 
 .composer button {
   align-self: end;
-  height: 42px;
-  min-width: 74px;
-  border: 0;
-  border-radius: 8px;
-  background: #2f626b;
-  color: #ffffff;
+  height: 44px;
+  min-width: 82px;
+  border: 1px solid rgba(132, 101, 86, 0.16);
+  border-radius: 999px;
+  background:
+    linear-gradient(180deg, rgba(255, 255, 255, 0.98), rgba(248, 235, 225, 0.94)),
+    rgba(255, 252, 248, 0.94);
+  color: var(--aura-ink);
   cursor: pointer;
   font-weight: 800;
+  box-shadow: 0 10px 18px rgba(123, 96, 81, 0.08);
 }
 
 .composer button:disabled {
@@ -1354,22 +1437,22 @@ textarea {
 
 .memory-debug-toggle,
 .memory-debug-refresh {
-  min-height: 32px;
-  padding: 0 10px;
-  border: 1px solid rgba(41, 65, 67, 0.16);
-  border-radius: 8px;
-  background: rgba(255, 255, 255, 0.74);
-  color: #344041;
+  min-height: 34px;
+  padding: 0 12px;
+  border: 1px solid rgba(132, 101, 86, 0.16);
+  border-radius: 999px;
+  background: rgba(255, 252, 248, 0.78);
+  color: var(--aura-ink);
   cursor: pointer;
   font-size: 12px;
-  font-weight: 800;
+  font-weight: 700;
   letter-spacing: 0;
-  box-shadow: 0 5px 14px rgba(63, 76, 77, 0.1);
+  box-shadow: 0 10px 18px rgba(123, 96, 81, 0.08);
 }
 
 .memory-debug-toggle[aria-expanded="true"] {
-  border-color: rgba(47, 98, 107, 0.34);
-  background: rgba(232, 246, 242, 0.86);
+  border-color: rgba(132, 101, 86, 0.2);
+  background: rgba(255, 247, 240, 0.94);
 }
 
 .memory-debug-panel {
@@ -1378,11 +1461,18 @@ textarea {
   max-height: min(32vh, 260px);
   margin-top: 8px;
   overflow: auto;
-  padding: 10px;
-  border: 1px solid rgba(41, 65, 67, 0.16);
-  border-radius: 8px;
-  background: rgba(255, 255, 255, 0.76);
-  box-shadow: 0 14px 32px rgba(63, 76, 77, 0.12);
+  padding: 14px;
+  border: 1px solid rgba(132, 101, 86, 0.14);
+  border-radius: 22px;
+  background:
+    linear-gradient(180deg, rgba(255, 255, 255, 0.9), rgba(255, 247, 240, 0.84)),
+    rgba(255, 252, 248, 0.82);
+  box-shadow: 0 14px 28px rgba(123, 96, 81, 0.08);
+}
+
+.memory-debug-panel-page {
+  max-height: none;
+  min-height: 420px;
 }
 
 .memory-debug-metrics {

@@ -127,6 +127,7 @@ const baseProps: SettingsWindowProps = {
   onUpdatePersonaSettings: vi.fn(async () => undefined),
   onSetCurrentLive2DModel: vi.fn(async () => undefined),
   onUpdateNotificationSettings: vi.fn(async () => undefined),
+  onLoadMemoryDebugSnapshot: vi.fn(async () => undefined),
   onOpenConfigFile: vi.fn(async () => undefined),
   onTestModelConnection: vi.fn(async () => undefined)
 };
@@ -149,14 +150,14 @@ describe("SettingsCenterShell", () => {
     vi.restoreAllMocks();
   });
 
-  it("renders a six-tab settings center shell", async () => {
+  it("renders a seven-tab settings center shell", async () => {
     await act(async () => {
       root.render(<SettingsWindow {...baseProps} />);
     });
 
     const tabs = Array.from(container.querySelectorAll('[role="tab"]')).map((tab) => tab.textContent?.trim());
 
-    expect(tabs).toEqual(["General", "Pet Behavior", "Model", "Persona", "Live2D Model", "Notifications"]);
+    expect(tabs).toEqual(["General", "Pet Behavior", "Model", "Persona", "Live2D Model", "Notifications", "Memory Debug"]);
   });
 
   it("switches visible page content from the left navigation without remounting the shell", async () => {
@@ -164,7 +165,7 @@ describe("SettingsCenterShell", () => {
       root.render(<SettingsWindow {...baseProps} />);
     });
 
-    expect(container.textContent).toContain("Product-level configuration for AuraBot.");
+    expect(container.textContent).toContain("Settle this little room until Aura feels right beside you.");
     expect(container.textContent).toContain("Language");
     expect(container.textContent).not.toContain("Click through character");
 

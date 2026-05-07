@@ -35,6 +35,7 @@ import { PetSettingsStore } from "./petSettingsStore";
 import { Live2DModelStore } from "./live2dModelStore";
 import { NotificationSettingsStore } from "./notificationSettingsStore";
 import { PetWindowStateStore } from "./petWindowStateStore";
+import { SystemNotificationService } from "./systemNotificationService";
 import { registerIpc } from "./registerIpc";
 import {
   updateUserModelProviderSettings,
@@ -63,6 +64,7 @@ let proactiveTriggerEngine: ProactiveTriggerEngine | undefined;
 let modelHealthService: ModelHealthService | undefined;
 let modelHealthSnapshot: PublicModelHealthMap | undefined;
 let live2dModelRegistry: Live2DModelRegistry | undefined;
+let systemNotificationService: SystemNotificationService | undefined;
 
 if (process.env.AURABOT_USER_DATA_DIR) {
   app.setPath("userData", process.env.AURABOT_USER_DATA_DIR);
@@ -77,6 +79,14 @@ async function bootstrap(): Promise<void> {
   petSettingsStore = new PetSettingsStore(userDataPath);
   live2dModelStore = new Live2DModelStore(userDataPath);
   notificationSettingsStore = new NotificationSettingsStore(userDataPath);
+  systemNotificationService = new SystemNotificationService({
+    isSupported: () => Notification.isSupported(),
+    createNotification: (payload) => new Notification(payload),
+    openConsoleWindow: () => {
+      openConsoleWindow();
+    },
+    getDisplayLanguage: () => petSettingsStore?.get().displayLanguage ?? "en"
+  });
   live2dModelRegistry = createLive2DModelRegistry({
     modelRootPath: resolveLive2DModelRootPath()
   });
@@ -142,7 +152,22 @@ async function bootstrap(): Promise<void> {
       return services!.voiceAdapter;
     },
     broadcastPetActivity,
-    broadcastTaskChanged
+    broadcastTaskChanged,
+    deliverSystemNotification: ({ kind, message }) => {
+      const settings = getNotificationSettings();
+
+      if (
+        kind === "memory_follow_up" ||
+        kind === "task_reminder" ||
+        kind === "proactive_idle"
+      ) {
+        systemNotificationService?.deliver({
+          kind,
+          message,
+          settings
+        });
+      }
+    }
   }, services.config.proactive);
   proactiveTriggerEngine.start();
 }

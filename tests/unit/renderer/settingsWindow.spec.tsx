@@ -6,10 +6,49 @@ import { act } from "react";
 import { createRoot, type Root } from "react-dom/client";
 import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
 import { SettingsWindow, type SettingsWindowProps } from "../../../src/renderer/src/features/settings/SettingsWindow";
+import type { MemoryDebugSnapshot } from "../../../src/shared/contracts/ipc";
 
 (globalThis as { IS_REACT_ACT_ENVIRONMENT?: boolean }).IS_REACT_ACT_ENVIRONMENT = true;
 
 const stylesheetText = readFileSync(resolve(process.cwd(), "src/renderer/src/styles.css"), "utf8");
+
+const memoryDebugSnapshot: MemoryDebugSnapshot = {
+  generatedAt: "2026-05-07T12:00:00.000Z",
+  nodes: [
+    {
+      id: "memory_preference_hotpot",
+      profileId: "profile-1",
+      type: "preference",
+      state: "active",
+      content: "用户喜欢火锅",
+      importance: 0.82,
+      createdAt: "2026-05-07T11:00:00.000Z",
+      updatedAt: "2026-05-07T11:00:00.000Z"
+    }
+  ],
+  edges: [],
+  summaries: [],
+  recentEvents: [
+    {
+      id: "event-memory-1",
+      eventType: "memory.write_completed",
+      payload: {},
+      createdAt: "2026-05-07T11:00:30.000Z"
+    }
+  ],
+  lastRecallTrace: {
+    query: "火锅那件事我该记着什么？",
+    recallPlan: {
+      queryTerms: ["火锅"],
+      targetTypes: ["preference"],
+      rankedNodeIds: ["memory_preference_hotpot"]
+    },
+    seedNodeIds: ["memory_preference_hotpot"],
+    expandedNodeIds: [],
+    returnedNodeIds: ["memory_preference_hotpot"],
+    traversedEdges: []
+  }
+};
 
 const baseProps: SettingsWindowProps = {
   profile: {
@@ -148,6 +187,7 @@ const baseProps: SettingsWindowProps = {
     timeReminderNotificationsEnabled: true,
     idleNudgeNotificationsEnabled: false
   },
+  memoryDebugSnapshot,
   onUpdatePetSettings: vi.fn(async () => undefined),
   onUpdateTaskRunnerSettings: vi.fn(async () => undefined),
   onUpdateModelProviderSettings: vi.fn(async () => undefined),
@@ -155,6 +195,7 @@ const baseProps: SettingsWindowProps = {
   onUpdatePersonaSettings: vi.fn(async () => undefined),
   onSetCurrentLive2DModel: vi.fn(async () => undefined),
   onUpdateNotificationSettings: vi.fn(async () => undefined),
+  onLoadMemoryDebugSnapshot: vi.fn(async () => undefined),
   onOpenConfigFile: vi.fn(async () => undefined),
   onTestModelConnection: vi.fn(async () => undefined)
 };
@@ -251,6 +292,29 @@ describe("SettingsWindow", () => {
     expect(onUpdateProactiveSettings).toHaveBeenCalledWith({
       idleThresholdMs: 300000
     });
+  });
+
+  it("renders Memory Debug as a dedicated full-settings page", async () => {
+    const onLoadMemoryDebugSnapshot = vi.fn(async () => undefined);
+
+    await act(async () => {
+      root.render(
+        <SettingsWindow
+          {...baseProps}
+          onLoadMemoryDebugSnapshot={onLoadMemoryDebugSnapshot}
+        />
+      );
+    });
+
+    expect(container.textContent).toContain("Memory Debug");
+
+    await act(async () => {
+      container.querySelector<HTMLButtonElement>('[role="tab"][aria-label="Memory Debug"]')!.click();
+    });
+
+    expect(container.textContent).toContain("Last Recall");
+    expect(container.textContent).toContain("火锅那件事我该记着什么？");
+    expect(onLoadMemoryDebugSnapshot).toHaveBeenCalledTimes(1);
   });
 
   it("updates task CLI switches and priority values from the settings page", async () => {

@@ -56,10 +56,8 @@ export function App() {
           tasks={tasks}
           petSettings={petSettings}
           appConfig={appConfig}
-          memoryDebugSnapshot={memoryDebugSnapshot}
           onUpdatePetSettings={updatePetSettings}
           onOpenSettings={openSettingsWindow}
-          onLoadMemoryDebugSnapshot={loadMemoryDebugSnapshot}
           onSend={sendMessage}
           onCancelTask={cancelTask}
           onDeleteTask={deleteTask}
@@ -72,6 +70,7 @@ export function App() {
           modelHealth={modelHealth}
           live2dModelState={live2dModelState}
           notificationSettings={notificationSettings}
+          memoryDebugSnapshot={memoryDebugSnapshot}
           onUpdatePetSettings={updatePetSettings}
           onUpdateTaskRunnerSettings={updateTaskRunnerSettings}
           onUpdateModelProviderSettings={updateModelProviderSettings}
@@ -80,6 +79,7 @@ export function App() {
           onUpdatePersonaSettings={updatePersonaSettings}
           onSetCurrentLive2DModel={setCurrentLive2DModel}
           onUpdateNotificationSettings={updateNotificationSettings}
+          onLoadMemoryDebugSnapshot={loadMemoryDebugSnapshot}
           onOpenConfigFile={openConfigFile}
         />
       ) : (

@@ -8,7 +8,8 @@ export type SettingsPageKey =
   | "model"
   | "persona"
   | "live2dModel"
-  | "notifications";
+  | "notifications"
+  | "memoryDebug";
 
 export interface SettingsNavItem {
   key: SettingsPageKey;

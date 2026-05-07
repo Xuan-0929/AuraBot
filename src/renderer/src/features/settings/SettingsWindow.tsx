@@ -1,4 +1,5 @@
 import { useState } from "react";
+import type { MemoryDebugSnapshot } from "../../../../shared/contracts/ipc";
 import type { Live2DModelState } from "../../../../shared/contracts/live2dModel";
 import type { NotificationSettings } from "../../../../shared/contracts/notificationSettings";
 import type {
@@ -17,6 +18,7 @@ import { SettingsCenterShell, type SettingsNavItem, type SettingsPageKey } from 
 import {
   GeneralSettingsPage,
   Live2DModelSettingsPage,
+  MemoryDebugSettingsPage,
   ModelSettingsPage,
   NotificationSettingsPage,
   PersonaSettingsPage,
@@ -30,6 +32,7 @@ export interface SettingsWindowProps {
   modelHealth?: PublicModelHealthMap;
   live2dModelState?: Live2DModelState;
   notificationSettings?: NotificationSettings;
+  memoryDebugSnapshot?: MemoryDebugSnapshot;
   onUpdatePetSettings(patch: PetSettingsPatch): Promise<void>;
   onUpdateTaskRunnerSettings(runners: TaskRunnerSettingsPatch["runners"]): Promise<void>;
   onUpdateModelProviderSettings(patch: ModelProviderSettingsPatch): Promise<void>;
@@ -39,6 +42,7 @@ export interface SettingsWindowProps {
   onUpdateNotificationSettings(
     patch: Partial<Omit<NotificationSettings, "permissionState">>
   ): Promise<void>;
+  onLoadMemoryDebugSnapshot(): Promise<void>;
   onOpenConfigFile(): Promise<void>;
   onTestModelConnection(role: ModelRoleKey): Promise<void>;
 }
@@ -54,7 +58,8 @@ export function SettingsWindow(props: SettingsWindowProps) {
     { key: "model", label: t(displayLanguage, "model") },
     { key: "persona", label: t(displayLanguage, "persona") },
     { key: "live2dModel", label: t(displayLanguage, "live2dModel") },
-    { key: "notifications", label: t(displayLanguage, "notifications") }
+    { key: "notifications", label: t(displayLanguage, "notifications") },
+    { key: "memoryDebug", label: t(displayLanguage, "memoryDebug") }
   ];
 
   return (
@@ -116,6 +121,13 @@ export function SettingsWindow(props: SettingsWindowProps) {
             notificationSettings={props.notificationSettings}
             onUpdateNotificationSettings={props.onUpdateNotificationSettings}
             onUpdateProactiveSettings={props.onUpdateProactiveSettings}
+          />
+        ) : null}
+        {currentPage === "memoryDebug" ? (
+          <MemoryDebugSettingsPage
+            petSettings={props.petSettings}
+            snapshot={props.memoryDebugSnapshot}
+            onRefresh={props.onLoadMemoryDebugSnapshot}
           />
         ) : null}
       </SettingsCenterShell>

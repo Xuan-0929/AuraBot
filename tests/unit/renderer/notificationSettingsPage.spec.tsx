@@ -82,6 +82,7 @@ describe("NotificationSettingsPage", () => {
 
     expect(container.querySelector<HTMLElement>(".settings-page-lead h2")?.textContent).toBe("Notifications");
     expect(englishHint).toBeTruthy();
+    expect(container.textContent).toContain("only work while AuraBot is already running");
     expect(container.textContent).toContain("System notifications");
     expect(container.textContent).toContain("Permission");
     expect(container.textContent).toContain("Managed by system");

@@ -258,7 +258,7 @@ test("persists a chat message and shows a memory-aware acknowledgement in the co
   }
 });
 
-test("shows a memory debug panel with nodes and recent memory events", async () => {
+test("shows memory debug inside the full settings window instead of the console body", async () => {
   const { electronApp, petWindow, userDataDir } = await launchAuraBot();
 
   try {
@@ -268,12 +268,16 @@ test("shows a memory debug panel with nodes and recent memory events", async () 
     await consoleWindow.getByRole("button", { name: "Send" }).click();
     await expect(consoleWindow.getByText(/我记住了.*火锅/)).toBeVisible();
 
-    await consoleWindow.getByRole("button", { name: "Memory Debug" }).click();
+    await consoleWindow.getByRole("button", { name: "Open settings menu" }).click();
+    const settingsPromise = electronApp.waitForEvent("window");
+    await consoleWindow.getByRole("button", { name: "Open full settings" }).click();
+    const settingsWindow = await settingsPromise;
 
-    await expect(consoleWindow.getByLabel("Memory debug panel")).toBeVisible();
-    await expect(consoleWindow.getByText("Nodes 1")).toBeVisible();
-    await expect(consoleWindow.getByText("用户喜欢火锅")).toBeVisible();
-    await expect(consoleWindow.getByText("memory.write_completed")).toBeVisible();
+    await settingsWindow.getByRole("tab", { name: "Memory Debug" }).click();
+    await expect(settingsWindow.getByLabel("Memory debug panel")).toBeVisible();
+    await expect(settingsWindow.getByText("Nodes 1")).toBeVisible();
+    await expect(settingsWindow.getByText("用户喜欢火锅")).toBeVisible();
+    await expect(settingsWindow.getByText("memory.write_completed")).toBeVisible();
   } finally {
     await cleanupAuraBot(electronApp, userDataDir);
   }

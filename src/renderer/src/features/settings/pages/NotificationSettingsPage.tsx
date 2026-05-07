@@ -29,6 +29,7 @@ export function NotificationSettingsPage({
           hint={t(displayLanguage, "notificationSettingsHint")}
         />
       </div>
+      <p className="settings-page-boundary-note">{t(displayLanguage, "notificationAppRunningOnlyHint")}</p>
       <label className="settings-page-toggle">
         <input
           type="checkbox"

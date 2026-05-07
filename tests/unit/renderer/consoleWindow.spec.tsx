@@ -19,7 +19,6 @@ const baseProps: ConsoleWindowProps = {
   appConfig: undefined,
   onUpdatePetSettings: vi.fn(async () => undefined),
   onOpenSettings: vi.fn(async () => undefined),
-  onLoadMemoryDebugSnapshot: vi.fn(async () => undefined),
   onSend: vi.fn(async () => undefined),
   onCancelTask: vi.fn(async () => undefined),
   onDeleteTask: vi.fn(async () => undefined)
@@ -63,6 +62,7 @@ describe("ConsoleWindow localization", () => {
 
     expect(container.textContent).toContain("想认真聊的时候，我们就在这里慢慢说。");
     expect(container.textContent).toContain("我在，今天想先从哪件事开始？");
+    expect(container.textContent).not.toContain("Memory Debug");
   });
 
   it("replaces the old task overlay with console sticky notes beside the chat stream", async () => {

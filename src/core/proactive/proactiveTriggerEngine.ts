@@ -16,6 +16,7 @@ export interface ProactiveTriggerEngineDependencies {
   voiceAdapter: VoiceAdapter;
   broadcastPetActivity(activity: PetActivity): void;
   broadcastTaskChanged?(task: Task): void;
+  deliverSystemNotification?(input: { kind: PetActivity["kind"]; message: string }): void;
 }
 
 export interface ProactiveTriggerEngineOptions {
@@ -294,6 +295,10 @@ export class ProactiveTriggerEngine {
 
   private emitActivity(activity: PetActivity, payload: Record<string, unknown>): void {
     this.dependencies.broadcastPetActivity(activity);
+    this.dependencies.deliverSystemNotification?.({
+      kind: activity.kind,
+      message: activity.message
+    });
     this.dependencies.eventLogService.record("proactive.message_emitted", {
       ...payload,
       activityId: activity.id,

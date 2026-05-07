@@ -11,6 +11,7 @@ describe("ProactiveTriggerEngine", () => {
     const profile = services.profileService.getOrSeedActiveProfile();
     const mainSession = services.sessionRepository.getOrCreateMainSession(profile.id);
     const activities: PetActivity[] = [];
+    const notifications: Array<{ kind: PetActivity["kind"]; message: string }> = [];
 
     await services.memoryService.enqueueWrite({
       profileId: profile.id,
@@ -31,7 +32,8 @@ describe("ProactiveTriggerEngine", () => {
         taskService: services.taskService,
         eventLogService: services.eventLogService,
         voiceAdapter: services.voiceAdapter,
-        broadcastPetActivity: (activity) => activities.push(activity)
+        broadcastPetActivity: (activity) => activities.push(activity),
+        deliverSystemNotification: (input) => notifications.push(input)
       },
       {
         idleThresholdMs: 60_000
@@ -50,6 +52,12 @@ describe("ProactiveTriggerEngine", () => {
 
     expect(result).toHaveLength(1);
     expect(activities).toHaveLength(1);
+    expect(notifications).toEqual([
+      expect.objectContaining({
+        kind: "memory_follow_up",
+        message: expect.stringContaining("算法面试")
+      })
+    ]);
     expect(activities[0]).toMatchObject({
       kind: "memory_follow_up",
       message: expect.stringContaining("算法面试")
@@ -72,6 +80,7 @@ describe("ProactiveTriggerEngine", () => {
     const profile = services.profileService.getOrSeedActiveProfile();
     const mainSession = services.sessionRepository.getOrCreateMainSession(profile.id);
     const activities: PetActivity[] = [];
+    const notifications: Array<{ kind: PetActivity["kind"]; message: string }> = [];
     const changedTasks: Array<NonNullable<ReturnType<typeof services.taskService.getTaskById>>> = [];
     const reminderTask = services.taskService.createTaskFromChat({
       profileId: profile.id,
@@ -89,7 +98,8 @@ describe("ProactiveTriggerEngine", () => {
         eventLogService: services.eventLogService,
         voiceAdapter: services.voiceAdapter,
         broadcastPetActivity: (activity) => activities.push(activity),
-        broadcastTaskChanged: (task) => changedTasks.push(task)
+        broadcastTaskChanged: (task) => changedTasks.push(task),
+        deliverSystemNotification: (input) => notifications.push(input)
       },
       {
         idleThresholdMs: 60_000
@@ -106,6 +116,12 @@ describe("ProactiveTriggerEngine", () => {
 
     expect(result).toHaveLength(1);
     expect(activities).toHaveLength(1);
+    expect(notifications).toEqual([
+      expect.objectContaining({
+        kind: "task_reminder",
+        message: expect.stringContaining("喝水")
+      })
+    ]);
     expect(activities[0]).toMatchObject({
       kind: "task_reminder",
       message: expect.stringContaining("喝水")
@@ -138,6 +154,7 @@ describe("ProactiveTriggerEngine", () => {
     const profile = services.profileService.getOrSeedActiveProfile();
     const mainSession = services.sessionRepository.getOrCreateMainSession(profile.id);
     const activities: PetActivity[] = [];
+    const notifications: Array<{ kind: PetActivity["kind"]; message: string }> = [];
     const engine = new ProactiveTriggerEngine(
       {
         profileService: services.profileService,
@@ -145,7 +162,8 @@ describe("ProactiveTriggerEngine", () => {
         taskService: services.taskService,
         eventLogService: services.eventLogService,
         voiceAdapter: services.voiceAdapter,
-        broadcastPetActivity: (activity) => activities.push(activity)
+        broadcastPetActivity: (activity) => activities.push(activity),
+        deliverSystemNotification: (input) => notifications.push(input)
       },
       {
         idleThresholdMs: 1_000,
@@ -167,6 +185,12 @@ describe("ProactiveTriggerEngine", () => {
     });
     expect(second).toEqual([]);
     expect(activities).toHaveLength(1);
+    expect(notifications).toEqual([
+      expect.objectContaining({
+        kind: "proactive_idle",
+        message: expect.stringContaining("我在")
+      })
+    ]);
     expect(messages).toEqual([]);
     expect(eventLogs).toContainEqual(
       expect.objectContaining({
