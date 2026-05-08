@@ -140,16 +140,16 @@ textarea {
   z-index: 4;
   display: grid;
   align-items: stretch;
-  gap: 8px;
-  width: 66px;
-  min-height: 48px;
-  padding: 10px;
+  gap: 6px;
+  width: 56px;
+  min-height: 56px;
+  padding: 8px;
   border: 1px solid rgba(132, 101, 86, 0.16);
-  border-radius: 18px;
+  border-radius: 22px;
   background:
-    linear-gradient(180deg, rgba(255, 255, 255, 0.94), rgba(255, 248, 242, 0.9)),
+    linear-gradient(180deg, rgba(255, 255, 255, 0.96), rgba(255, 248, 242, 0.92)),
     var(--aura-paper-strong);
-  box-shadow: 0 18px 34px rgba(123, 96, 81, 0.16);
+  box-shadow: 0 14px 24px rgba(123, 96, 81, 0.14);
   opacity: 1;
   transform: translateY(-50%);
   -webkit-app-region: no-drag;
@@ -166,30 +166,40 @@ textarea {
 
 .pet-hover-chat[data-expanded="true"] {
   grid-template-columns: minmax(0, 1fr) auto;
-  width: min(258px, calc(100vw - 24px));
-  min-height: 82px;
+  width: min(244px, calc(100vw - 24px));
+  min-height: 88px;
+  padding: 10px;
+  border-radius: 24px;
 }
 
 .pet-hover-chat-trigger {
-  width: 44px;
-  min-width: 44px;
-  min-height: 28px;
+  width: 100%;
+  min-width: 0;
+  min-height: 40px;
   padding: 0;
+  border: 1px solid rgba(132, 101, 86, 0.14);
+  border-radius: 18px;
+  background: rgba(255, 255, 255, 0.7);
+  color: var(--aura-ink);
+  font-size: 11px;
+  font-weight: 800;
+  letter-spacing: 0.01em;
+  box-shadow: inset 0 1px 0 rgba(255, 255, 255, 0.42);
 }
 
 .pet-hover-chat textarea {
   width: 100%;
   min-width: 0;
-  height: 58px;
+  height: 56px;
   resize: none;
   border: 1px solid rgba(132, 101, 86, 0.18);
-  border-radius: 14px;
+  border-radius: 16px;
   background: rgba(255, 255, 255, 0.92);
   color: var(--aura-ink);
-  font-size: 12px;
+  font-size: 11px;
   line-height: 1.45;
   outline: none;
-  padding: 10px 11px;
+  padding: 10px 10px;
   box-shadow: inset 0 1px 0 rgba(255, 255, 255, 0.48);
 }
 
@@ -199,24 +209,23 @@ textarea {
 }
 
 .pet-hover-chat button {
-  min-width: 52px;
-  min-height: 58px;
+  min-width: 44px;
+  min-height: 56px;
   border: 1px solid rgba(132, 101, 86, 0.16);
-  border-radius: 14px;
+  border-radius: 16px;
   background:
     linear-gradient(180deg, rgba(255, 255, 255, 0.96), rgba(250, 241, 233, 0.92)),
     var(--aura-paper-strong);
   color: var(--aura-ink);
   cursor: pointer;
-  font-size: 12px;
+  font-size: 11px;
   font-weight: 800;
   letter-spacing: 0;
-  box-shadow: 0 10px 18px rgba(123, 96, 81, 0.1);
+  box-shadow: 0 8px 16px rgba(123, 96, 81, 0.1);
 }
 
 .pet-hover-chat-trigger {
-  min-height: 28px;
-  font-size: 11px;
+  min-height: 40px;
 }
 
 .pet-hover-chat button:disabled {
@@ -231,15 +240,15 @@ textarea {
   z-index: 4;
   display: inline-flex;
   align-items: center;
-  gap: 8px;
-  padding: 10px;
+  gap: 6px;
+  padding: 8px;
   border: 1px solid rgba(132, 101, 86, 0.14);
-  border-radius: 999px;
+  border-radius: 24px;
   background:
-    linear-gradient(180deg, rgba(255, 255, 255, 0.84), rgba(248, 238, 230, 0.72)),
-    rgba(255, 252, 248, 0.72);
+    linear-gradient(180deg, rgba(255, 255, 255, 0.88), rgba(248, 238, 230, 0.78)),
+    rgba(255, 252, 248, 0.76);
   box-shadow:
-    0 18px 32px rgba(123, 96, 81, 0.16),
+    0 14px 24px rgba(123, 96, 81, 0.14),
     inset 0 1px 0 rgba(255, 255, 255, 0.56);
   opacity: 0;
   pointer-events: none;
@@ -273,12 +282,15 @@ textarea {
 }
 
 .task-sticky-notes-console {
-  justify-self: end;
-  align-self: start;
-  width: min(100%, 248px);
-  max-width: 248px;
-  margin-inline-start: auto;
-  padding-top: 4px;
+  display: flex;
+  align-items: center;
+  width: max-content;
+  min-width: max-content;
+  max-width: none;
+  height: 100%;
+  max-height: none;
+  gap: 8px;
+  pointer-events: auto;
 }
 
 .task-sticky-notes-pet {
@@ -364,22 +376,89 @@ textarea {
   color: #9b5a55;
 }
 
-.pet-action-button {
-  min-width: 58px;
-  min-height: 36px;
-  padding: 0 13px;
-  border: 1px solid rgba(132, 101, 86, 0.16);
-  border-radius: 999px;
+.task-sticky-notes-console .task-sticky-notes-header {
+  padding: 0 1px;
+}
+
+.task-sticky-notes-console .task-sticky-notes-header strong {
+  font-size: 10px;
+  font-weight: 800;
+  letter-spacing: 0.04em;
+  text-transform: uppercase;
+}
+
+.task-sticky-notes-console .task-sticky-note {
+  display: flex;
+  flex-direction: row;
+  align-items: center;
+  justify-content: space-between;
+  gap: 8px;
+  flex: 0 0 auto;
+  width: 138px;
+  height: 90%;
+  min-height: 0;
+  padding: 8px 9px;
+  border-radius: 13px;
   background:
-    linear-gradient(180deg, rgba(255, 255, 255, 0.98), rgba(250, 242, 234, 0.92)),
-    rgba(255, 252, 248, 0.88);
+    linear-gradient(180deg, rgba(255, 255, 255, 0.94), rgba(255, 249, 244, 0.9)),
+    rgba(255, 252, 248, 0.92);
+  box-shadow: 0 9px 18px rgba(123, 96, 81, 0.08);
+}
+
+.task-sticky-notes-console .task-sticky-note-copy {
+  min-width: 0;
+  flex: 1 1 auto;
+  gap: 3px;
+}
+
+.task-sticky-notes-console .task-sticky-note strong {
+  font-size: 10px;
+  line-height: 1.26;
+  overflow: hidden;
+  text-overflow: ellipsis;
+  white-space: nowrap;
+}
+
+.task-sticky-notes-console .task-sticky-note span {
+  display: -webkit-box;
+  overflow: hidden;
+  color: rgba(138, 109, 97, 0.92);
+  font-size: 8px;
+  line-height: 1.3;
+  text-overflow: ellipsis;
+  -webkit-box-orient: vertical;
+  -webkit-line-clamp: 2;
+}
+
+.task-sticky-notes-console .task-sticky-note-actions {
+  align-self: center;
+  justify-content: flex-end;
+  margin-top: 0;
+  flex: 0 0 auto;
+}
+
+.task-sticky-notes-console .task-sticky-note-action {
+  min-height: 17px;
+  padding: 0 6px;
+  font-size: 8px;
+}
+
+.pet-action-button {
+  min-width: 48px;
+  min-height: 44px;
+  padding: 0 11px;
+  border: 1px solid rgba(132, 101, 86, 0.16);
+  border-radius: 16px;
+  background:
+    linear-gradient(180deg, rgba(255, 255, 255, 0.98), rgba(252, 245, 238, 0.92)),
+    rgba(255, 252, 248, 0.9);
   color: var(--aura-ink);
   cursor: pointer;
-  font-size: 12px;
-  font-weight: 700;
-  letter-spacing: 0.01em;
+  font-size: 11px;
+  font-weight: 800;
+  letter-spacing: 0;
   box-shadow:
-    0 10px 18px rgba(123, 96, 81, 0.1),
+    0 8px 14px rgba(123, 96, 81, 0.08),
     inset 0 1px 0 rgba(255, 255, 255, 0.5);
   -webkit-app-region: no-drag;
   transition:
@@ -398,7 +477,7 @@ textarea {
   border-color: rgba(164, 129, 110, 0.24);
   color: #523c33;
   box-shadow:
-    0 14px 22px rgba(123, 96, 81, 0.14),
+    0 10px 18px rgba(123, 96, 81, 0.12),
     inset 0 1px 0 rgba(255, 255, 255, 0.7);
   transform: translateY(-1px);
 }
@@ -528,6 +607,7 @@ textarea {
 }
 
 .console-window {
+  position: relative;
   display: flex;
   flex-direction: column;
   height: 100vh;
@@ -543,34 +623,111 @@ textarea {
 
 .console-body {
   flex: 1 1 auto;
-  display: grid;
-  grid-template-columns: minmax(0, 1fr) minmax(216px, 248px);
-  gap: 20px;
+  display: flex;
   min-height: 0;
+}
+
+.console-task-sticky-layer {
+  display: flex;
+  flex-direction: column;
+  justify-content: center;
+  gap: 6px;
+  min-width: 0;
+  min-height: 100%;
+}
+
+.console-task-panel-meta {
+  display: flex;
+  align-items: center;
+  justify-content: space-between;
+  gap: 8px;
+  padding: 0 4px;
+}
+
+.console-task-panel-meta strong {
+  color: var(--aura-ink);
+  font-size: 15px;
+  font-weight: 800;
+}
+
+.console-task-panel-meta span {
+  color: var(--aura-muted);
+  font-size: 13px;
+  font-weight: 700;
+}
+
+.console-task-viewport {
+  display: grid;
+  height: 96px;
+  padding: 10px;
+  width: 100%;
+  min-width: 0;
+  border: 1px solid rgba(132, 101, 86, 0.14);
+  border-radius: 22px;
+  background:
+    linear-gradient(180deg, rgba(255, 255, 255, 0.94), rgba(255, 248, 242, 0.92)),
+    rgba(255, 252, 248, 0.92);
+  box-shadow: 0 14px 24px rgba(123, 96, 81, 0.08);
+  backdrop-filter: blur(12px);
+}
+
+.console-task-viewport-list {
+  min-height: 0;
+  height: 100%;
+  overflow-x: auto;
+  overflow-y: hidden;
+  padding-bottom: 2px;
+}
+
+.console-task-viewport-empty {
+  display: block;
+  height: 100%;
 }
 
 .console-header {
   flex: 0 0 auto;
-  display: flex;
-  align-items: flex-start;
-  justify-content: space-between;
-  gap: 18px;
+  display: grid;
+  grid-template-columns: minmax(260px, 0.82fr) minmax(340px, 1.18fr);
+  align-items: stretch;
+  gap: 6px;
   margin-bottom: 14px;
+  min-height: 144px;
 }
 
-.console-header-tools {
+.console-header-copy {
   display: flex;
+  flex-direction: column;
+  justify-content: center;
+  gap: 0;
+  min-width: 0;
+  min-height: 100%;
+}
+
+.console-header-title-row {
+  display: flex;
+  align-items: center;
+  gap: 10px;
   flex-wrap: wrap;
-  justify-content: flex-end;
-  gap: 8px;
-  max-width: min(100%, 520px);
+  margin-bottom: 8px;
 }
 
 .console-header h1 {
-  margin: 0 0 6px;
+  margin: 0;
   color: var(--aura-ink);
-  font-size: 26px;
+  font-size: 24px;
   letter-spacing: 0;
+}
+
+.console-header-title-row .status-bar {
+  min-height: 28px;
+  padding: 5px 10px;
+  font-size: 11px;
+  box-shadow: 0 8px 14px rgba(123, 96, 81, 0.08);
+}
+
+.console-header-title-row .status-dot {
+  width: 7px;
+  height: 7px;
 }
 
 .console-header p {
@@ -704,12 +861,14 @@ textarea {
   display: grid;
   gap: 8px;
   max-width: 720px;
-  padding: 18px 20px;
+  padding: 20px 22px;
   border: 1px solid rgba(132, 101, 86, 0.18);
-  border-radius: 26px;
-  background: rgba(255, 252, 248, 0.82);
+  border-radius: 30px;
+  background:
+    linear-gradient(180deg, rgba(255, 255, 255, 0.92), rgba(255, 248, 242, 0.84)),
+    rgba(255, 252, 248, 0.84);
   box-shadow: var(--aura-shadow);
-  backdrop-filter: blur(14px);
+  backdrop-filter: blur(16px);
 }
 
 .settings-window-kicker {
@@ -753,11 +912,13 @@ textarea {
   top: 24px;
   align-self: start;
   border: 1px solid var(--aura-border);
-  border-radius: 24px;
-  background: var(--aura-paper-strong);
+  border-radius: 28px;
+  background:
+    linear-gradient(180deg, rgba(255, 255, 255, 0.9), rgba(252, 245, 239, 0.84)),
+    var(--aura-paper-strong);
   box-shadow: var(--aura-shadow);
-  padding: 16px;
-  backdrop-filter: blur(12px);
+  padding: 18px;
+  backdrop-filter: blur(14px);
 }
 
 .settings-center-sidebar-note {
@@ -774,16 +935,16 @@ textarea {
 
 .settings-center-tab {
   width: 100%;
-  min-height: 48px;
-  padding: 12px 14px;
+  min-height: 46px;
+  padding: 11px 14px;
   border: 1px solid rgba(132, 101, 86, 0.14);
-  border-radius: 16px;
+  border-radius: 18px;
   background:
-    linear-gradient(180deg, rgba(255, 255, 255, 0.8), rgba(251, 244, 238, 0.84)),
+    linear-gradient(180deg, rgba(255, 255, 255, 0.84), rgba(251, 244, 238, 0.88)),
     var(--aura-paper-soft);
   color: var(--aura-ink);
   font: inherit;
-  font-size: 13px;
+  font-size: 12px;
   font-weight: 800;
   text-align: left;
   cursor: pointer;
@@ -808,10 +969,12 @@ textarea {
   min-width: 0;
   display: grid;
   gap: 14px;
-  padding: 18px;
+  padding: 20px;
   border: 1px solid rgba(132, 101, 86, 0.16);
-  border-radius: 30px;
-  background: rgba(255, 252, 248, 0.72);
+  border-radius: 32px;
+  background:
+    linear-gradient(180deg, rgba(255, 255, 255, 0.82), rgba(255, 249, 244, 0.74)),
+    rgba(255, 252, 248, 0.72);
   box-shadow: var(--aura-shadow);
   backdrop-filter: blur(14px);
 }
@@ -1160,7 +1323,7 @@ textarea {
 
 .settings-task-cli-card {
   display: grid;
-  grid-template-columns: minmax(140px, 1fr) minmax(128px, auto);
+  grid-template-columns: minmax(140px, 1fr) minmax(128px, auto) minmax(148px, auto);
   gap: 8px 12px;
   align-items: center;
   padding: 14px;
@@ -1182,6 +1345,11 @@ textarea {
   width: 68px;
 }
 
+.settings-task-cli-timeout input {
+  width: 82px;
+  text-align: right;
+}
+
 .settings-proactive-wait input {
   width: 82px;
   text-align: right;
@@ -1197,6 +1365,10 @@ textarea {
   }
 
   .settings-live2d-layout {
+    grid-template-columns: minmax(0, 1fr);
+  }
+
+  .settings-task-cli-card {
     grid-template-columns: minmax(0, 1fr);
   }
 }
@@ -1410,17 +1582,32 @@ textarea {
   opacity: 0.52;
 }
 
-@media (max-width: 920px) {
-  .console-body {
-    grid-template-columns: 1fr;
+@media (max-width: 760px) {
+  .console-header {
+    grid-template-columns: minmax(0, 1fr);
+    gap: 14px;
+    min-height: 0;
   }
 
-  .task-sticky-notes-console {
-    justify-self: end;
-    width: min(100%, 248px);
-    max-width: 248px;
-    margin-inline-start: auto;
-    padding-top: 0;
+  .console-task-sticky-layer {
+    width: 100%;
+  }
+
+  .console-task-viewport {
+    height: 90px;
+    padding: 10px;
+  }
+
+  .console-task-panel-meta strong {
+    font-size: 14px;
+  }
+
+  .console-task-panel-meta span {
+    font-size: 12px;
+  }
+
+  .task-sticky-notes-console .task-sticky-note {
+    width: 126px;
   }
 }
 

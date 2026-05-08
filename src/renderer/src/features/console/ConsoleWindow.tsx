@@ -7,7 +7,6 @@ import { Composer } from "../chat/Composer";
 import { MessageList } from "../chat/MessageList";
 import { pickConsoleStickyTasks, TaskStickyNotes } from "../tasks/TaskStickyNotes";
 import { AgentStatusBar } from "../status/AgentStatusBar";
-import { PetSettingsPanel } from "../settings/PetSettingsPanel";
 import { t } from "../../i18n";
 
 export interface ConsoleWindowProps {
@@ -28,9 +27,6 @@ export function ConsoleWindow({
   messages,
   tasks,
   petSettings,
-  appConfig,
-  onUpdatePetSettings,
-  onOpenSettings,
   onSend,
   onCancelTask,
   onDeleteTask
@@ -40,36 +36,50 @@ export function ConsoleWindow({
   return (
     <main className="console-window" aria-label={t(petSettings.displayLanguage, "consoleTitle")}>
       <header className="console-header">
-        <div>
-          <h1>{t(petSettings.displayLanguage, "consoleTitle")}</h1>
+        <div className="console-header-copy">
+          <div className="console-header-title-row">
+            <h1>{t(petSettings.displayLanguage, "consoleDashboardTitle")}</h1>
+            <AgentStatusBar status={agentStatus} displayLanguage={petSettings.displayLanguage} />
+          </div>
           <p>{t(petSettings.displayLanguage, "consoleSubtitle")}</p>
         </div>
-        <div className="console-header-tools">
-          <AgentStatusBar status={agentStatus} displayLanguage={petSettings.displayLanguage} />
-          <PetSettingsPanel
-            settings={petSettings}
-            appConfig={appConfig}
-            onUpdate={onUpdatePetSettings}
-            onOpenSettings={onOpenSettings}
-          />
-        </div>
+        <aside className="console-task-sticky-layer" aria-label={t(petSettings.displayLanguage, "taskStickyNotes")}>
+          <header className="console-task-panel-meta">
+            <strong>{t(petSettings.displayLanguage, "consoleTaskViewportTitle")}</strong>
+            <span>
+              {consoleTasks.length > 0
+                ? t(petSettings.displayLanguage, "consoleTaskViewportActive")
+                : t(petSettings.displayLanguage, "consoleTaskViewportIdle")}
+            </span>
+          </header>
+          <div className="console-task-viewport">
+            <div className="console-task-viewport-list">
+              {consoleTasks.length > 0 ? (
+                <TaskStickyNotes
+                  tasks={consoleTasks}
+                  variant="console"
+                  showHeader={false}
+                  ariaLabel={false}
+                  displayLanguage={petSettings.displayLanguage}
+                  onCancelTask={(taskId) => {
+                    void onCancelTask(taskId);
+                  }}
+                  onDeleteTask={(taskId) => {
+                    void onDeleteTask(taskId);
+                  }}
+                />
+              ) : (
+                <div className="console-task-viewport-empty" aria-hidden="true" />
+              )}
+            </div>
+          </div>
+        </aside>
       </header>
       <div className="console-body">
         <section className="console-chat" aria-label={t(petSettings.displayLanguage, "mainConversation")}>
           <MessageList messages={messages} displayLanguage={petSettings.displayLanguage} />
           <Composer displayLanguage={petSettings.displayLanguage} onSend={onSend} />
         </section>
-        <TaskStickyNotes
-          tasks={consoleTasks}
-          variant="console"
-          displayLanguage={petSettings.displayLanguage}
-          onCancelTask={(taskId) => {
-            void onCancelTask(taskId);
-          }}
-          onDeleteTask={(taskId) => {
-            void onDeleteTask(taskId);
-          }}
-        />
       </div>
     </main>
   );

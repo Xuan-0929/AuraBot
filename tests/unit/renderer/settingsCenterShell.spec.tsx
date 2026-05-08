@@ -157,7 +157,16 @@ describe("SettingsCenterShell", () => {
 
     const tabs = Array.from(container.querySelectorAll('[role="tab"]')).map((tab) => tab.textContent?.trim());
 
-    expect(tabs).toEqual(["General", "Pet Behavior", "Model", "Persona", "Live2D Model", "Notifications", "Memory Debug"]);
+    expect(tabs).toEqual([
+      "General",
+      "Pet Behavior",
+      "Model",
+      "Task CLI",
+      "Persona",
+      "Live2D Model",
+      "Notifications",
+      "Memory Debug"
+    ]);
   });
 
   it("switches visible page content from the left navigation without remounting the shell", async () => {
@@ -182,5 +191,12 @@ describe("SettingsCenterShell", () => {
 
     expect(container.textContent).toContain("API key saved");
     expect(container.textContent).toContain("Test connection");
+    expect(container.textContent).not.toContain("Task CLI settings");
+
+    await act(async () => {
+      container.querySelector<HTMLButtonElement>('[role="tab"][aria-label="Task CLI"]')!.click();
+    });
+
+    expect(container.querySelector<HTMLElement>('[aria-label="Task CLI settings"]')).not.toBeNull();
   });
 });

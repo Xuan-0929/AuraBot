@@ -1,11 +1,15 @@
 // @vitest-environment jsdom
 
+import { readFileSync } from "node:fs";
+import { resolve } from "node:path";
 import { act } from "react";
 import { createRoot, type Root } from "react-dom/client";
 import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
 import { DesktopPet, type DesktopPetProps } from "../../../src/renderer/src/features/pet/DesktopPet";
 import type { PetCursorPosition } from "../../../src/shared/contracts/ipc";
 import type { Task } from "../../../src/shared/schemas/task";
+
+const stylesheetText = readFileSync(resolve(process.cwd(), "src/renderer/src/styles.css"), "utf8");
 
 const live2DProps: Array<{ cursorPosition?: PetCursorPosition }> = [];
 vi.mock("../../../src/renderer/src/features/live2d/Live2DModelCanvas", () => ({
@@ -184,6 +188,13 @@ describe("DesktopPet hover chat bubble", () => {
     });
 
     expect(onOpenConsole).toHaveBeenCalledTimes(1);
+  });
+
+  it("uses a tighter A1 floating dock for pet quick controls and the hover chat trigger", () => {
+    expect(stylesheetText).toMatch(/\.pet-quick-controls\s*{[^}]*padding:\s*8px;[^}]*border-radius:\s*24px;/s);
+    expect(stylesheetText).toMatch(/\.pet-action-button\s*{[^}]*min-width:\s*48px;[^}]*min-height:\s*44px;/s);
+    expect(stylesheetText).toMatch(/\.pet-hover-chat\s*{[^}]*width:\s*56px;[^}]*min-height:\s*56px;[^}]*border-radius:\s*22px;/s);
+    expect(stylesheetText).toMatch(/\.pet-hover-chat-trigger\s*{[^}]*width:\s*100%;[^}]*min-height:\s*40px;/s);
   });
 
   async function renderPet(overrides: Partial<DesktopPetProps> = {}) {

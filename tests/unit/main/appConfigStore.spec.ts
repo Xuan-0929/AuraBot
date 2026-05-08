@@ -2,7 +2,11 @@ import { mkdtempSync, readFileSync, writeFileSync } from "node:fs";
 import { tmpdir } from "node:os";
 import { join } from "node:path";
 import { describe, expect, it } from "vitest";
-import { updateUserModelProviderSettings, updateUserProactiveSettings } from "../../../src/main/appConfigStore";
+import {
+  updateUserModelProviderSettings,
+  updateUserProactiveSettings,
+  updateUserTaskRunnerSettings
+} from "../../../src/main/appConfigStore";
 import type { AppConfig } from "../../../src/shared/schemas/config";
 
 const baseConfig: AppConfig = {
@@ -29,7 +33,19 @@ const baseConfig: AppConfig = {
   },
   taskRunner: {
     provider: "deterministic",
-    runners: [],
+    runners: [
+      {
+        id: "codex",
+        enabled: true,
+        priority: 1,
+        command: "/usr/local/bin/codex",
+        workingDirectory: "/Users/xuan/project",
+        sandbox: "workspace-write",
+        approvalPolicy: "never",
+        timeoutMs: 300000,
+        extraArgs: []
+      }
+    ],
     sandbox: "workspace-write",
     approvalPolicy: "never",
     timeoutMs: 300000
@@ -144,5 +160,58 @@ describe("updateUserProactiveSettings", () => {
       pollIntervalMs: 10000
     });
     expect(userConfig.chatModel.apiKey).toBe("persisted-chat-key");
+  });
+});
+
+describe("updateUserTaskRunnerSettings", () => {
+  it("persists runner timeout changes without dropping existing task CLI details", () => {
+    const userDataPath = mkdtempSync(join(tmpdir(), "aurabot-task-runner-settings-"));
+    writeFileSync(
+      join(userDataPath, "config.json"),
+      JSON.stringify(
+        {
+          taskRunner: {
+            runners: [
+              {
+                id: "codex",
+                workingDirectory: "/Users/xuan/Documents/AuraBot"
+              }
+            ]
+          }
+        },
+        null,
+        2
+      ),
+      "utf8"
+    );
+
+    const nextConfig = updateUserTaskRunnerSettings(userDataPath, baseConfig, {
+      runners: [
+        {
+          id: "codex",
+          enabled: true,
+          priority: 1,
+          timeoutMs: 600000
+        }
+      ]
+    });
+    const userConfig = JSON.parse(readFileSync(join(userDataPath, "config.json"), "utf8")) as {
+      taskRunner: AppConfig["taskRunner"];
+    };
+
+    expect(nextConfig.taskRunner.runners[0]).toMatchObject({
+      id: "codex",
+      enabled: true,
+      priority: 1,
+      workingDirectory: "/Users/xuan/Documents/AuraBot",
+      timeoutMs: 600000
+    });
+    expect(userConfig.taskRunner.runners[0]).toMatchObject({
+      id: "codex",
+      enabled: true,
+      priority: 1,
+      workingDirectory: "/Users/xuan/Documents/AuraBot",
+      timeoutMs: 600000
+    });
   });
 });

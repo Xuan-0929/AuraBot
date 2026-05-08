@@ -410,7 +410,7 @@ export function DesktopPet({
                 setIsHoverChatExpanded(true);
               }}
             >
-              {t(petSettings.displayLanguage, "chat")}
+              {t(petSettings.displayLanguage, "petChatCompact")}
             </button>
           )}
         </form>
@@ -432,7 +432,7 @@ export function DesktopPet({
           onPointerUp={handleDragPointerEnd}
           onPointerCancel={handleDragPointerEnd}
         >
-          {t(petSettings.displayLanguage, "drag")}
+          {t(petSettings.displayLanguage, "petControlDragLabel")}
         </button>
         <button
           className="pet-action-button pet-action-voice"
@@ -445,7 +445,7 @@ export function DesktopPet({
           data-active={voiceState === "recording" ? "true" : "false"}
           onClick={handleVoiceClick}
         >
-          {t(petSettings.displayLanguage, "voice")}
+          {t(petSettings.displayLanguage, "petControlVoiceLabel")}
         </button>
         <button
           className="pet-action-button pet-action-console"
@@ -453,7 +453,7 @@ export function DesktopPet({
           aria-label={t(petSettings.displayLanguage, "openAuraBotConsole")}
           onClick={() => void onOpenConsole()}
         >
-          {t(petSettings.displayLanguage, "console")}
+          {t(petSettings.displayLanguage, "petControlConsoleLabel")}
         </button>
         <button
           className="pet-action-button pet-action-settings"
@@ -461,7 +461,7 @@ export function DesktopPet({
           aria-label={t(petSettings.displayLanguage, "openAuraBotSettings")}
           onClick={() => void onOpenSettings()}
         >
-          {t(petSettings.displayLanguage, "settings")}
+          {t(petSettings.displayLanguage, "petControlSettingsLabel")}
         </button>
       </div>
     </main>

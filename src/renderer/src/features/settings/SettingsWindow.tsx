@@ -22,6 +22,7 @@ import {
   ModelSettingsPage,
   NotificationSettingsPage,
   PersonaSettingsPage,
+  TaskCliSettingsPage,
   PetBehaviorSettingsPage
 } from "./pages";
 
@@ -56,6 +57,7 @@ export function SettingsWindow(props: SettingsWindowProps) {
     { key: "general", label: t(displayLanguage, "general") },
     { key: "petBehavior", label: t(displayLanguage, "petBehavior") },
     { key: "model", label: t(displayLanguage, "model") },
+    { key: "taskCli", label: t(displayLanguage, "taskCli") },
     { key: "persona", label: t(displayLanguage, "persona") },
     { key: "live2dModel", label: t(displayLanguage, "live2dModel") },
     { key: "notifications", label: t(displayLanguage, "notifications") },
@@ -94,10 +96,16 @@ export function SettingsWindow(props: SettingsWindowProps) {
             petSettings={props.petSettings}
             appConfig={props.appConfig}
             modelHealth={props.modelHealth}
-            onUpdateTaskRunnerSettings={props.onUpdateTaskRunnerSettings}
             onUpdateModelProviderSettings={props.onUpdateModelProviderSettings}
             onOpenConfigFile={props.onOpenConfigFile}
             onTestModelConnection={props.onTestModelConnection}
+          />
+        ) : null}
+        {currentPage === "taskCli" ? (
+          <TaskCliSettingsPage
+            petSettings={props.petSettings}
+            appConfig={props.appConfig}
+            onUpdateTaskRunnerSettings={props.onUpdateTaskRunnerSettings}
           />
         ) : null}
         {currentPage === "persona" ? (

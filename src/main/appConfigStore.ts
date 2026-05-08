@@ -26,7 +26,8 @@ export function updateUserTaskRunnerSettings(
       ? {
           ...runner,
           enabled: updated.enabled,
-          priority: updated.priority
+          priority: updated.priority,
+          timeoutMs: updated.timeoutMs ?? runner.timeoutMs
         }
       : runner;
   });
@@ -131,7 +132,7 @@ function mergePersistedRunnerDetails(
           model: persisted.model ?? runner.model,
           sandbox: persisted.sandbox ?? runner.sandbox,
           approvalPolicy: persisted.approvalPolicy ?? runner.approvalPolicy,
-          timeoutMs: persisted.timeoutMs ?? runner.timeoutMs,
+          timeoutMs: runner.timeoutMs ?? persisted.timeoutMs,
           extraArgs: persisted.extraArgs ?? runner.extraArgs
         }
       : runner;

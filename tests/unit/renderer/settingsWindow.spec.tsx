@@ -109,21 +109,24 @@ const baseProps: SettingsWindowProps = {
           enabled: true,
           priority: 1,
           command: "/usr/local/bin/codex",
-          workingDirectory: "/Users/xuan/project"
+          workingDirectory: "/Users/xuan/project",
+          timeoutMs: 300000
         },
         {
           id: "claude",
           label: "Claude Code",
           enabled: false,
           priority: 2,
-          command: "/opt/homebrew/bin/claude"
+          command: "/opt/homebrew/bin/claude",
+          timeoutMs: 300000
         },
         {
           id: "hermes",
           label: "Hermes",
           enabled: false,
           priority: 3,
-          command: "hermes"
+          command: "hermes",
+          timeoutMs: 300000
         }
       ]
     },
@@ -317,7 +320,7 @@ describe("SettingsWindow", () => {
     expect(onLoadMemoryDebugSnapshot).toHaveBeenCalledTimes(1);
   });
 
-  it("updates task CLI switches and priority values from the settings page", async () => {
+  it("moves task CLI controls into their own settings page and lets users adjust timeout limits", async () => {
     const onUpdateTaskRunnerSettings = vi.fn(async () => undefined);
 
     await act(async () => {
@@ -333,6 +336,15 @@ describe("SettingsWindow", () => {
       container.querySelector<HTMLButtonElement>('[role="tab"][aria-label="Model"]')!.click();
     });
 
+    expect(container.textContent).not.toContain("Task CLI settings");
+
+    await act(async () => {
+      container.querySelector<HTMLButtonElement>('[role="tab"][aria-label="Task CLI"]')!.click();
+    });
+
+    expect(container.querySelector<HTMLElement>('[aria-label="Task CLI settings"]')).not.toBeNull();
+    expect(container.querySelector<HTMLInputElement>('[aria-label="Codex task time limit minutes"]')?.value).toBe("5");
+
     await act(async () => {
       container.querySelector<HTMLInputElement>('[aria-label="Enable Claude Code task runner"]')!.click();
     });
@@ -341,17 +353,20 @@ describe("SettingsWindow", () => {
       expect.objectContaining({
         id: "codex",
         enabled: true,
-        priority: 1
+        priority: 1,
+        timeoutMs: 300000
       }),
       expect.objectContaining({
         id: "claude",
         enabled: true,
-        priority: 2
+        priority: 2,
+        timeoutMs: 300000
       }),
       expect.objectContaining({
         id: "hermes",
         enabled: false,
-        priority: 3
+        priority: 3,
+        timeoutMs: 300000
       })
     ]);
 
@@ -364,15 +379,39 @@ describe("SettingsWindow", () => {
     expect(onUpdateTaskRunnerSettings).toHaveBeenLastCalledWith([
       expect.objectContaining({
         id: "codex",
-        priority: 1
+        priority: 1,
+        timeoutMs: 300000
       }),
       expect.objectContaining({
         id: "claude",
-        priority: 2
+        priority: 2,
+        timeoutMs: 300000
       }),
       expect.objectContaining({
         id: "hermes",
-        priority: 1
+        priority: 1,
+        timeoutMs: 300000
+      })
+    ]);
+
+    await act(async () => {
+      const codexTimeout = container.querySelector<HTMLInputElement>('[aria-label="Codex task time limit minutes"]')!;
+      codexTimeout.value = "12";
+      codexTimeout.dispatchEvent(new Event("input", { bubbles: true }));
+    });
+
+    expect(onUpdateTaskRunnerSettings).toHaveBeenLastCalledWith([
+      expect.objectContaining({
+        id: "codex",
+        timeoutMs: 720000
+      }),
+      expect.objectContaining({
+        id: "claude",
+        timeoutMs: 300000
+      }),
+      expect.objectContaining({
+        id: "hermes",
+        timeoutMs: 300000
       })
     ]);
   });
@@ -490,7 +529,9 @@ describe("SettingsWindow", () => {
     expect(stylesheetText).toMatch(/\.app-shell-settings\s*{[^}]*background:\s*var\(--aura-warm-bg\);/s);
     expect(stylesheetText).toMatch(/\.console-window\s*{[^}]*color:\s*var\(--aura-ink\);[^}]*var\(--aura-warm-bg\)/s);
     expect(stylesheetText).toMatch(/\.settings-window\s*{[^}]*var\(--aura-warm-bg\)/s);
-    expect(stylesheetText).toMatch(/\.settings-center-sidebar\s*{[^}]*border:\s*1px solid var\(--aura-border\);[^}]*background:\s*var\(--aura-paper-strong\);[^}]*box-shadow:\s*var\(--aura-shadow\);/s);
+    expect(stylesheetText).toMatch(/\.settings-center-sidebar\s*{[^}]*border:\s*1px solid var\(--aura-border\);[^}]*border-radius:\s*28px;[^}]*box-shadow:\s*var\(--aura-shadow\);[^}]*backdrop-filter:\s*blur\(14px\);/s);
+    expect(stylesheetText).toMatch(/\.settings-window-copy\s*{[^}]*border-radius:\s*30px;[^}]*backdrop-filter:\s*blur\(16px\);/s);
+    expect(stylesheetText).toMatch(/\.settings-center-content\s*{[^}]*border-radius:\s*32px;/s);
     expect(stylesheetText).toMatch(/\.settings-page-section\s+\.settings-page-lead\s*>\s*h2\s*{/s);
     expect(stylesheetText).toMatch(/\.settings-page-section\s+\.settings-page-lead\s*>\s*p\s*{/s);
     expect(stylesheetText).toMatch(

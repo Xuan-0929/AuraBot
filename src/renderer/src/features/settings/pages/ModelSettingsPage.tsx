@@ -5,9 +5,7 @@ import type {
   ModelRoleKey,
   ModelProviderOption,
   PublicAppConfig,
-  PublicModelRoleConfig,
-  PublicTaskCliRunnerConfig,
-  TaskRunnerSettingsPatch
+  PublicModelRoleConfig
 } from "../../../../../shared/contracts/settings";
 import { MODEL_PROVIDER_OPTIONS as modelProviderOptions } from "../../../../../shared/contracts/settings";
 import type { PetSettings } from "../../../../../shared/schemas/petSettings";
@@ -27,7 +25,6 @@ export function ModelSettingsPage({
   petSettings,
   appConfig,
   modelHealth,
-  onUpdateTaskRunnerSettings,
   onUpdateModelProviderSettings,
   onOpenConfigFile,
   onTestModelConnection
@@ -35,121 +32,46 @@ export function ModelSettingsPage({
   petSettings: PetSettings;
   appConfig?: PublicAppConfig;
   modelHealth?: PublicModelHealthMap;
-  onUpdateTaskRunnerSettings(runners: TaskRunnerSettingsPatch["runners"]): Promise<void>;
   onUpdateModelProviderSettings(patch: ModelProviderSettingsPatch): Promise<void>;
   onOpenConfigFile(): Promise<void>;
   onTestModelConnection(role: ModelRoleKey): Promise<void>;
 }) {
   const displayLanguage = petSettings.displayLanguage;
-  const taskRunners = appConfig?.taskRunner.runners ?? [];
-  const updateTaskRunner = (runnerId: PublicTaskCliRunnerConfig["id"], patch: Partial<Pick<PublicTaskCliRunnerConfig, "enabled" | "priority">>) => {
-    void onUpdateTaskRunnerSettings(
-      taskRunners.map((runner) => ({
-        id: runner.id,
-        enabled: runner.id === runnerId ? patch.enabled ?? runner.enabled : runner.enabled,
-        priority: runner.id === runnerId ? patch.priority ?? runner.priority : runner.priority
-      }))
-    );
-  };
 
   return (
-    <>
-      <section className="settings-page-section" aria-label={t(displayLanguage, "modelSettings")}>
-        <div className="settings-page-section-header">
-          <SettingsPageLead
-            title={t(displayLanguage, "model")}
-            hint={t(displayLanguage, "modelSettingsHint")}
-          />
-          <button type="button" className="settings-config-button" onClick={() => void onOpenConfigFile()}>
-            {t(displayLanguage, "openConfigFile")}
-          </button>
-        </div>
-        <div className="settings-page-model-list">
-          {appConfig ? (
-            MODEL_CONFIG_ROWS.map((row) => (
-              <ModelConfigCard
-                key={row.key}
-                label={t(displayLanguage, row.labelKey)}
-                config={appConfig[row.key]}
-                health={modelHealth?.[row.key]}
-                displayLanguage={displayLanguage}
-                onProviderChange={(provider) =>
-                  void onUpdateModelProviderSettings({
-                    role: row.key,
-                    provider
-                  })
-                }
-                onTestConnection={() => void onTestModelConnection(row.key)}
-              />
-            ))
-          ) : (
-            <p className="settings-empty">{t(displayLanguage, "configNotLoaded")}</p>
-          )}
-        </div>
-      </section>
-      <section className="settings-page-section" aria-label={t(displayLanguage, "taskCliSettings")}>
-        <div className="settings-page-section-header">
-          <div>
-            <h2>{t(displayLanguage, "taskCli")}</h2>
-            <p>{t(displayLanguage, "taskCliHint")}</p>
-          </div>
-        </div>
-        <div className="settings-task-cli-list">
-          {taskRunners.length > 0 ? (
-            taskRunners.map((runner) => (
-              <TaskCliRunnerCard
-                key={runner.id}
-                runner={runner}
-                displayLanguage={displayLanguage}
-                onChange={(patch) => updateTaskRunner(runner.id, patch)}
-              />
-            ))
-          ) : (
-            <p className="settings-empty">{t(displayLanguage, "configNotLoaded")}</p>
-          )}
-        </div>
-      </section>
-    </>
-  );
-}
-
-function TaskCliRunnerCard({
-  runner,
-  displayLanguage,
-  onChange
-}: {
-  runner: PublicTaskCliRunnerConfig;
-  displayLanguage: PetSettings["displayLanguage"];
-  onChange(patch: Partial<Pick<PublicTaskCliRunnerConfig, "enabled" | "priority">>): void;
-}) {
-  return (
-    <article className="settings-task-cli-card">
-      <label className="settings-page-toggle">
-        <input
-          type="checkbox"
-          checked={runner.enabled}
-          aria-label={`${t(displayLanguage, "enable")} ${runner.label} ${t(displayLanguage, "taskRunner")}`}
-          onChange={(event) => onChange({ enabled: event.currentTarget.checked })}
+    <section className="settings-page-section" aria-label={t(displayLanguage, "modelSettings")}>
+      <div className="settings-page-section-header">
+        <SettingsPageLead
+          title={t(displayLanguage, "model")}
+          hint={t(displayLanguage, "modelSettingsHint")}
         />
-        <span>{runner.label}</span>
-      </label>
-      <label className="settings-page-field settings-task-cli-priority">
-        <span>{t(displayLanguage, "priority")}</span>
-        <input
-          type="number"
-          min={1}
-          max={99}
-          value={runner.priority}
-          aria-label={`${runner.label} ${t(displayLanguage, "taskRunnerPriority")}`}
-          onInput={(event) =>
-            onChange({
-              priority: Math.max(1, Number.parseInt(event.currentTarget.value, 10) || runner.priority)
-            })
-          }
-        />
-      </label>
-      <p>{runner.command ? runner.command : t(displayLanguage, "notSet")}</p>
-    </article>
+        <button type="button" className="settings-config-button" onClick={() => void onOpenConfigFile()}>
+          {t(displayLanguage, "openConfigFile")}
+        </button>
+      </div>
+      <div className="settings-page-model-list">
+        {appConfig ? (
+          MODEL_CONFIG_ROWS.map((row) => (
+            <ModelConfigCard
+              key={row.key}
+              label={t(displayLanguage, row.labelKey)}
+              config={appConfig[row.key]}
+              health={modelHealth?.[row.key]}
+              displayLanguage={displayLanguage}
+              onProviderChange={(provider) =>
+                void onUpdateModelProviderSettings({
+                  role: row.key,
+                  provider
+                })
+              }
+              onTestConnection={() => void onTestModelConnection(row.key)}
+            />
+          ))
+        ) : (
+          <p className="settings-empty">{t(displayLanguage, "configNotLoaded")}</p>
+        )}
+      </div>
+    </section>
   );
 }
 

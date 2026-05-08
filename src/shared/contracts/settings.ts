@@ -75,6 +75,7 @@ export interface PublicTaskCliRunnerConfig {
   priority: number;
   command?: string;
   workingDirectory?: string;
+  timeoutMs?: number;
 }
 
 export type PublicProactiveConfig = Pick<
@@ -87,6 +88,7 @@ export interface TaskRunnerSettingsPatch {
     id: TaskCliRunnerId;
     enabled: boolean;
     priority: number;
+    timeoutMs?: number;
   }>;
 }
 
@@ -141,7 +143,8 @@ function createPublicTaskCliRunnerConfig(config: TaskCliRunnerConfig): PublicTas
     enabled: config.enabled,
     priority: config.priority,
     command: config.command,
-    workingDirectory: config.workingDirectory
+    workingDirectory: config.workingDirectory,
+    timeoutMs: config.timeoutMs
   };
 }
 

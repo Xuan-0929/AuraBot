@@ -94,7 +94,7 @@ test("launches as a small desktop pet and opens console from the hover control",
   }
 });
 
-test("reveals pet quick controls and syncs click-through settings from the console", async () => {
+test("reveals pet quick controls and syncs click-through settings while the console is open", async () => {
   const { electronApp, petWindow, userDataDir } = await launchAuraBot();
 
   try {
@@ -115,14 +115,9 @@ test("reveals pet quick controls and syncs click-through settings from the conso
 
     await expect(consoleWindow.getByLabel("Hide character on hover")).toHaveCount(0);
     await expect(consoleWindow.getByLabel("Language")).toHaveCount(0);
-    await consoleWindow.getByRole("button", { name: "Open settings menu" }).click();
-    await expect(consoleWindow.getByRole("menu", { name: "Settings menu" })).toContainText("Quick settings");
-    await expect(consoleWindow.getByRole("menu", { name: "Settings menu" })).not.toContainText("Model config");
+    await expect(consoleWindow.getByRole("button", { name: "Open settings menu" })).toHaveCount(0);
 
-    const settingsPromise = electronApp.waitForEvent("window");
-    await consoleWindow.getByRole("button", { name: "Open full settings" }).click();
-    const settingsWindow = await settingsPromise;
-    await settingsWindow.getByRole("main", { name: "Settings" }).waitFor({ state: "visible" });
+    const settingsWindow = await openSettingsFromPet(electronApp, petWindow);
     const settingsNav = settingsWindow.getByRole("tablist", { name: "Settings navigation" });
     await expect(settingsNav).toContainText("General");
     await expect(settingsNav).toContainText("Pet Behavior");
@@ -151,15 +146,13 @@ test("opens the product settings window directly from pet quick controls", async
 
     await expect(settingsWindow.getByRole("main", { name: "Settings" })).toBeVisible();
     const settingsNav = settingsWindow.getByRole("tablist", { name: "Settings navigation" });
+    await expect(settingsNav).toContainText("Task CLI");
     await expect(settingsNav).toContainText("Persona");
     await expect(settingsNav).toContainText("Live2D Model");
     await expect(settingsNav).toContainText("Notifications");
 
     await settingsWindow.getByRole("tab", { name: "Model", exact: true }).click();
     await expect(settingsWindow.getByLabel("Model settings")).toContainText("Chat");
-    await expect(settingsWindow.getByLabel("Task CLI settings")).toContainText("Codex");
-    await expect(settingsWindow.getByLabel("Task CLI settings")).toContainText("Claude Code");
-    await expect(settingsWindow.getByLabel("Task CLI settings")).toContainText("Hermes");
     await settingsWindow.getByLabel("Gate provider").selectOption("langchain-openai");
     await expect(settingsWindow.getByLabel("Gate provider")).toHaveValue("langchain-openai");
     await expect
@@ -177,8 +170,28 @@ test("opens the product settings window directly from pet quick controls", async
         provider: "langchain-openai",
         enabled: true
       });
+    await settingsWindow.getByRole("tab", { name: "Task CLI", exact: true }).click();
+    await expect(settingsWindow.getByLabel("Task CLI settings")).toContainText("Codex");
+    await expect(settingsWindow.getByLabel("Task CLI settings")).toContainText("Claude Code");
+    await expect(settingsWindow.getByLabel("Task CLI settings")).toContainText("Hermes");
     await settingsWindow.getByLabel("Enable Claude Code task runner").check();
     await expect(settingsWindow.getByLabel("Enable Claude Code task runner")).toBeChecked();
+    await settingsWindow.getByLabel("Codex task time limit minutes").fill("12");
+    await expect(settingsWindow.getByLabel("Codex task time limit minutes")).toHaveValue("12");
+    await expect
+      .poll(() => {
+        const config = JSON.parse(readFileSync(join(userDataDir, "config.json"), "utf8")) as {
+          taskRunner?: {
+            runners?: Array<{
+              id: string;
+              timeoutMs?: number;
+            }>;
+          };
+        };
+
+        return config.taskRunner?.runners?.find((runner) => runner.id === "codex")?.timeoutMs;
+      })
+      .toBe(720000);
 
     await settingsWindow.getByRole("tab", { name: "Persona", exact: true }).click();
     await expect(settingsWindow.getByRole("region", { name: "Persona" })).toContainText("Name");
@@ -268,10 +281,7 @@ test("shows memory debug inside the full settings window instead of the console 
     await consoleWindow.getByRole("button", { name: "Send" }).click();
     await expect(consoleWindow.getByText(/我记住了.*火锅/)).toBeVisible();
 
-    await consoleWindow.getByRole("button", { name: "Open settings menu" }).click();
-    const settingsPromise = electronApp.waitForEvent("window");
-    await consoleWindow.getByRole("button", { name: "Open full settings" }).click();
-    const settingsWindow = await settingsPromise;
+    const settingsWindow = await openSettingsFromPet(electronApp, petWindow);
 
     await settingsWindow.getByRole("tab", { name: "Memory Debug" }).click();
     await expect(settingsWindow.getByLabel("Memory debug panel")).toBeVisible();
@@ -364,6 +374,8 @@ test("creates a visible queued task from a task-like chat request", async () => 
 
   try {
     const consoleWindow = await openConsole(electronApp, petWindow);
+    const conversation = consoleWindow.getByLabel("Main conversation");
+    const beforeBox = await conversation.boundingBox();
 
     await sendConsoleMessage(consoleWindow, "帮我整理一份明天会议的清单。");
 
@@ -373,6 +385,17 @@ test("creates a visible queued task from a task-like chat request", async () => 
     await expect(petWindow.locator(".live2d-canvas-host")).toHaveAttribute("data-motion-group", "TapBody");
     await expect(getConsoleStickyNotes(consoleWindow)).toBeVisible();
     await expect(getConsoleStickyNote(consoleWindow, "明天会议")).toContainText("Not started yet");
+    const noteBox = await getConsoleStickyNotes(consoleWindow).boundingBox();
+    const afterBox = await conversation.boundingBox();
+
+    expect(beforeBox).not.toBeNull();
+    expect(afterBox).not.toBeNull();
+    expect(noteBox).not.toBeNull();
+    expect(afterBox?.x ?? 0).toBeCloseTo(beforeBox?.x ?? 0, 1);
+    expect(afterBox?.y ?? 0).toBeCloseTo(beforeBox?.y ?? 0, 1);
+    expect(afterBox?.width ?? 0).toBeCloseTo(beforeBox?.width ?? 0, 1);
+    expect(afterBox?.height ?? 0).toBeCloseTo(beforeBox?.height ?? 0, 1);
+    expect(noteBox?.y ?? 0).toBeLessThan(afterBox?.y ?? 0);
   } finally {
     await cleanupAuraBot(electronApp, userDataDir);
   }

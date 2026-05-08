@@ -127,7 +127,8 @@ describe("createPublicAppConfig", () => {
         enabled: true,
         priority: 1,
         command: "/usr/local/bin/codex",
-        workingDirectory: "/Users/xuan/project"
+        workingDirectory: "/Users/xuan/project",
+        timeoutMs: 300000
       },
       {
         id: "claude",
@@ -135,7 +136,8 @@ describe("createPublicAppConfig", () => {
         enabled: false,
         priority: 2,
         command: "/opt/homebrew/bin/claude",
-        workingDirectory: undefined
+        workingDirectory: undefined,
+        timeoutMs: 300000
       },
       {
         id: "hermes",
@@ -143,7 +145,8 @@ describe("createPublicAppConfig", () => {
         enabled: true,
         priority: 3,
         command: "hermes",
-        workingDirectory: undefined
+        workingDirectory: undefined,
+        timeoutMs: 300000
       }
     ]);
     expect(JSON.stringify(publicConfig)).not.toContain("secret");

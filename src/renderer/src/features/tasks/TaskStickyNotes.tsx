@@ -6,12 +6,16 @@ export function TaskStickyNotes({
   tasks,
   displayLanguage,
   variant,
+  showHeader = true,
+  ariaLabel,
   onCancelTask,
   onDeleteTask
 }: {
   tasks: Task[];
   displayLanguage: PetSettings["displayLanguage"];
   variant: "pet" | "console";
+  showHeader?: boolean;
+  ariaLabel?: string | false;
   onCancelTask?: (taskId: string) => void;
   onDeleteTask?: (taskId: string) => void;
 }) {
@@ -30,12 +34,14 @@ export function TaskStickyNotes({
       ]
         .filter(Boolean)
         .join(" ")}
-      aria-label={t(displayLanguage, "taskStickyNotes")}
+      aria-label={ariaLabel === false ? undefined : ariaLabel ?? t(displayLanguage, "taskStickyNotes")}
     >
-      <header className="task-sticky-notes-header">
-        <strong>{t(displayLanguage, "taskStickyNotes")}</strong>
-        <span>{t(displayLanguage, "taskStickyNoteHint")}</span>
-      </header>
+      {showHeader ? (
+        <header className="task-sticky-notes-header">
+          <strong>{t(displayLanguage, "taskStickyNotes")}</strong>
+          {variant === "pet" ? <span>{t(displayLanguage, "taskStickyNoteHint")}</span> : null}
+        </header>
+      ) : null}
       {visibleTasks.map((task) => (
         <article key={task.id} className="task-sticky-note">
           <div className="task-sticky-note-copy">
@@ -128,17 +134,11 @@ function TaskStickyNoteActions({
 export function pickConsoleStickyTasks(tasks: Task[]): Task[] {
   const activeTasks = tasks
     .filter((task) => isStickyTaskActive(task.status))
-    .sort(compareStickyTasksByUpdatedAt)
-    .slice(0, 3);
-
-  if (activeTasks.length >= 3) {
-    return activeTasks;
-  }
+    .sort(compareStickyTasksByUpdatedAt);
 
   const settledTasks = tasks
     .filter((task) => isStickyTaskSettled(task.status))
-    .sort(compareStickyTasksByUpdatedAt)
-    .slice(0, 3 - activeTasks.length);
+    .sort(compareStickyTasksByUpdatedAt);
 
   return [...activeTasks, ...settledTasks];
 }

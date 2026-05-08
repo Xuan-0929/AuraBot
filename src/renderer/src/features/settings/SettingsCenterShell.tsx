@@ -6,6 +6,7 @@ export type SettingsPageKey =
   | "general"
   | "petBehavior"
   | "model"
+  | "taskCli"
   | "persona"
   | "live2dModel"
   | "notifications"

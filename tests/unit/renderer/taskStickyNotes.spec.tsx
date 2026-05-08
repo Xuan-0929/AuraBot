@@ -48,7 +48,7 @@ describe("TaskStickyNotes", () => {
     expect(notes?.textContent).not.toContain("整理文档");
   });
 
-  it("keeps the console sticky-note policy in one shared helper with active-first max-three selection", () => {
+  it("keeps the console sticky-note policy in one shared helper with active-first full ordering", () => {
     const tasks = [
       makeTask({ id: "settled-newest", title: "帮我整理回顾。", status: "completed", updatedAt: "2026-05-07T10:30:00.000Z" }),
       makeTask({ id: "active-oldest", title: "帮我写日报。", status: "queued", updatedAt: "2026-05-07T08:00:00.000Z" }),
@@ -66,7 +66,10 @@ describe("TaskStickyNotes", () => {
     expect(pickConsoleStickyTasks(tasks).map((task) => task.id)).toEqual([
       "active-newest",
       "active-middle",
-      "active-oldest"
+      "active-oldest",
+      "settled-newest",
+      "settled-middle",
+      "settled-oldest"
     ]);
   });
 
