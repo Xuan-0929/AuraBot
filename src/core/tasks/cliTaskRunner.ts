@@ -1,6 +1,6 @@
 import { spawn } from "node:child_process";
 import { existsSync, mkdirSync, readFileSync } from "node:fs";
-import { delimiter, join } from "node:path";
+import { delimiter, dirname, join, resolve } from "node:path";
 import type { TaskCliRunnerConfig, TaskCliRunnerId } from "../../shared/schemas/config";
 import type { Task } from "../../shared/schemas/task";
 import { getTaskCliRunnerLabel } from "../../shared/contracts/settings";
@@ -44,6 +44,7 @@ export interface MultiCliTaskRunnerOptions {
   runners: TaskCliRunnerConfig[];
   outputDirectory: string;
   isCommandAvailable?: (command: string) => boolean;
+  isTrustedWorkingDirectory?: (runner: TaskCliRunnerConfig, cwd: string) => boolean;
 }
 
 export class MultiCliTaskRunner implements TaskRunner {
@@ -57,10 +58,15 @@ export class MultiCliTaskRunner implements TaskRunner {
   ) {}
 
   async run(task: Task, observer?: TaskRunnerObserver): Promise<Task | undefined> {
-    const runner = this.selectRunner(task);
+    const selection = this.selectRunner(task);
+    const runner = selection.runner;
 
     if (!runner) {
-      return this.failTask(task, "没有可用的任务 CLI。请在设置里启用 Codex、Claude Code 或 Hermes，并确认命令路径可用。");
+      return this.failTask(
+        task,
+        selection.failureSummary ??
+          "没有可用的任务 CLI。请在设置里启用 Codex、Claude Code 或 Hermes，并确认命令路径可用。"
+      );
     }
 
     const runnerLabel = getTaskCliRunnerLabel(runner.id);
@@ -196,22 +202,47 @@ export class MultiCliTaskRunner implements TaskRunner {
     return true;
   }
 
-  private selectRunner(task: Task): TaskCliRunnerConfig | undefined {
+  private selectRunner(task: Task): {
+    runner?: TaskCliRunnerConfig;
+    failureSummary?: string;
+  } {
     const sortedRunners = this.options.runners
       .filter((runner) => runner.enabled)
       .slice()
       .sort((left, right) => left.priority - right.priority);
+    let lastFailureSummary: string | undefined;
 
     for (const runner of sortedRunners) {
       const command = runner.command ?? runner.id;
+      const cwd = runner.workingDirectory ?? process.cwd();
 
       if (this.isCommandAvailable(command)) {
+        if (!this.isTrustedWorkingDirectory(runner, cwd)) {
+          const reason = buildWorkingDirectoryValidationMessage(runner.id, cwd);
+          lastFailureSummary = reason;
+          this.taskRepository.appendEvent({
+            taskId: task.id,
+            eventType: "task.agent.skipped",
+            summary: reason,
+            payload: {
+              runnerId: runner.id,
+              command,
+              cwd
+            }
+          });
+          continue;
+        }
+
         return {
-          ...runner,
-          command
+          runner: {
+            ...runner,
+            command,
+            workingDirectory: cwd
+          }
         };
       }
 
+      lastFailureSummary = `${getTaskCliRunnerLabel(runner.id)} 命令不可用。请确认命令路径可用，或切到下一个任务 CLI。`;
       this.taskRepository.appendEvent({
         taskId: task.id,
         eventType: "task.agent.skipped",
@@ -223,11 +254,17 @@ export class MultiCliTaskRunner implements TaskRunner {
       });
     }
 
-    return undefined;
+    return {
+      failureSummary: lastFailureSummary
+    };
   }
 
   private isCommandAvailable(command: string): boolean {
     return this.options.isCommandAvailable?.(command) ?? isCommandAvailable(command);
+  }
+
+  private isTrustedWorkingDirectory(runner: TaskCliRunnerConfig, cwd: string): boolean {
+    return this.options.isTrustedWorkingDirectory?.(runner, cwd) ?? isTrustedWorkingDirectory(runner, cwd);
   }
 
   private failTask(task: Task, summary: string, runnerId?: TaskCliRunnerId): Task | undefined {
@@ -580,4 +617,38 @@ function isCommandAvailable(command: string): boolean {
     .split(delimiter)
     .filter(Boolean)
     .some((entry) => existsSync(join(entry, command)));
+}
+
+function isTrustedWorkingDirectory(runner: TaskCliRunnerConfig, cwd: string): boolean {
+  if (runner.id !== "codex") {
+    return true;
+  }
+
+  return findGitRepositoryRoot(cwd) !== undefined;
+}
+
+function findGitRepositoryRoot(value: string): string | undefined {
+  let current = resolve(value);
+
+  while (true) {
+    if (existsSync(join(current, ".git"))) {
+      return current;
+    }
+
+    const parent = dirname(current);
+
+    if (parent === current) {
+      return undefined;
+    }
+
+    current = parent;
+  }
+}
+
+function buildWorkingDirectoryValidationMessage(runnerId: TaskCliRunnerId, cwd: string): string {
+  if (runnerId === "codex") {
+    return `Codex 当前工作目录不可用：${cwd} 不是受信任的 Git 仓库目录。请把任务工作目录改到实际项目仓库后再试。`;
+  }
+
+  return `${getTaskCliRunnerLabel(runnerId)} 当前工作目录不可用：${cwd}。`;
 }

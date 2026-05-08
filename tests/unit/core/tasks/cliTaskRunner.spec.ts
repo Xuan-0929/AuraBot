@@ -117,7 +117,8 @@ describe("MultiCliTaskRunner", () => {
           extraArgs: []
         }
       ],
-      isCommandAvailable: (command) => command !== "missing-hermes"
+      isCommandAvailable: (command) => command !== "missing-hermes",
+      isTrustedWorkingDirectory: () => true
     });
 
     const completed = await runner.run(task);
@@ -126,6 +127,104 @@ describe("MultiCliTaskRunner", () => {
     expect(client.run).toHaveBeenCalledWith(expect.objectContaining({ runnerId: "codex" }));
     expect(completed?.status).toBe("completed");
     expect(events.map((event) => event.eventType)).toContain("task.agent.skipped");
+  });
+
+  it("fails early with a precise message when Codex workingDirectory is not a trusted git repo", async () => {
+    const services = createTestServices("aurabot-cli-runner-");
+    const profile = services.profileService.getOrSeedActiveProfile();
+    const mainSession = services.sessionRepository.getOrCreateMainSession(profile.id);
+    const task = services.taskService.createTaskFromChat({
+      profileId: profile.id,
+      parentSessionId: mainSession.id,
+      title: "写一份 GitHub 周报"
+    });
+    const taskRepository = new TaskRepository(services.database);
+    const client: CliAgentClient = {
+      run: vi.fn(async () => ({
+        finalMessage: "不应该真的跑到这里",
+        stdout: "",
+        stderr: ""
+      }))
+    };
+    const runner = new MultiCliTaskRunner(taskRepository, services.eventLogService, client, {
+      outputDirectory: "/tmp/aurabot-cli-test",
+      runners: [
+        {
+          id: "codex",
+          enabled: true,
+          priority: 1,
+          command: "codex",
+          workingDirectory: "/tmp/not-a-repo",
+          sandbox: "workspace-write",
+          approvalPolicy: "never",
+          timeoutMs: 300000,
+          extraArgs: []
+        }
+      ],
+      isCommandAvailable: () => true,
+      isTrustedWorkingDirectory: () => false
+    });
+
+    const failed = await runner.run(task);
+    const events = taskRepository.listEvents(task.id);
+
+    expect(client.run).not.toHaveBeenCalled();
+    expect(failed?.status).toBe("failed");
+    expect(failed?.latestProgress).toContain("不是受信任的 Git 仓库目录");
+    expect(events.map((event) => event.eventType)).toContain("task.agent.skipped");
+  });
+
+  it("skips an invalid Codex workingDirectory and falls back to the next enabled runner", async () => {
+    const services = createTestServices("aurabot-cli-runner-");
+    const profile = services.profileService.getOrSeedActiveProfile();
+    const mainSession = services.sessionRepository.getOrCreateMainSession(profile.id);
+    const task = services.taskService.createTaskFromChat({
+      profileId: profile.id,
+      parentSessionId: mainSession.id,
+      title: "写一份 GitHub 周报"
+    });
+    const taskRepository = new TaskRepository(services.database);
+    const client: CliAgentClient = {
+      run: vi.fn(async (input: CliAgentRunInput) => ({
+        finalMessage: `${input.runnerLabel} 完成了任务。`,
+        stdout: "stdout",
+        stderr: ""
+      }))
+    };
+    const runner = new MultiCliTaskRunner(taskRepository, services.eventLogService, client, {
+      outputDirectory: "/tmp/aurabot-cli-test",
+      runners: [
+        {
+          id: "codex",
+          enabled: true,
+          priority: 1,
+          command: "codex",
+          workingDirectory: "/tmp/not-a-repo",
+          sandbox: "workspace-write",
+          approvalPolicy: "never",
+          timeoutMs: 300000,
+          extraArgs: []
+        },
+        {
+          id: "claude",
+          enabled: true,
+          priority: 2,
+          command: "claude",
+          workingDirectory: "/Users/xuan/project",
+          sandbox: "workspace-write",
+          approvalPolicy: "never",
+          timeoutMs: 300000,
+          extraArgs: []
+        }
+      ],
+      isCommandAvailable: () => true,
+      isTrustedWorkingDirectory: (configuredRunner) => configuredRunner.id !== "codex"
+    });
+
+    const completed = await runner.run(task);
+
+    expect(client.run).toHaveBeenCalledWith(expect.objectContaining({ runnerId: "claude" }));
+    expect(completed?.status).toBe("completed");
   });
 });
 
