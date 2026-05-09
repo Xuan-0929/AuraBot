@@ -4,6 +4,8 @@
 
 **Goal:** Build the first usable AuraBot desktop MVP that validates four core hypotheses: a Live2D-first desktop companion shell feels less like a tool UI, natural chat timing beats fixed timeout, mixed memory beats flat memory, and a chat-first companion can still control background tasks without losing “alive” feeling.
 
+*Refer to `supermemory` for memory implementation inspiration.*
+
 **Architecture:** Use an Electron desktop shell with a React renderer, a Node/TypeScript orchestration core, and a local SQLite store. Keep one user-facing main chat session per active profile, route background work into task sessions with capped depth, and separate lightweight gate/classification logic from main response generation to reduce cost and context pollution.
 
 **Tech Stack:** Electron, React, TypeScript, Vite, Zustand, better-sqlite3, Zod, p-queue, Vitest, Playwright
@@ -461,6 +463,12 @@ Must show:
 2. Hover controls below the character for drag, voice input, and console opening.
 3. Temporary message bubbles for task completion and pet-voice replies.
 4. No chat input, task buttons, or full dashboard controls on the pet surface.
+
+## Polishing TDOS
+1. 状态刷新
+2. 可以拖到最下面
+3. 模糊
+4. 搬AIRI的UI
 
 ### 10.2 Console Conversation Window
 
