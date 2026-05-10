@@ -2,12 +2,14 @@
   <section class="desktop-pet-stage">
     <Canvas @ready="handleCanvasReady" @resized="handleCanvasResized" />
     <Model
+      v-if="petReady"
       :app="app"
       :model-path="modelPath"
       :focus-at="focusAt"
       :canvas-size="canvasSize"
       :pointer-at="pointerAt"
       @interactive-change="(value) => emit('interactiveAreaChange', value)"
+      @model-ready="() => emit('modelReady')"
     />
     <slot />
   </section>
@@ -20,6 +22,7 @@ import Canvas from "./Canvas.vue";
 import Model from "./Model.vue";
 
 defineProps<{
+  petReady: boolean;
   modelPath: string;
   focusAt: { x: number; y: number };
   pointerAt?: { x: number; y: number };
@@ -28,6 +31,7 @@ defineProps<{
 const emit = defineEmits<{
   canvasReady: [HTMLCanvasElement];
   interactiveAreaChange: [boolean];
+  modelReady: [];
 }>();
 
 const app = ref<Application | null>(null);

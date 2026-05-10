@@ -14,6 +14,9 @@ importers:
       '@vueuse/core':
         specifier: ^14.3.0
         version: 14.3.0(vue@3.5.34(typescript@6.0.3))
+      '@wxperia/liquid-glass-vue':
+        specifier: ^1.0.9
+        version: 1.0.9(typescript@6.0.3)
       better-sqlite3:
         specifier: ^12.9.0
         version: 12.9.0
@@ -1277,6 +1280,9 @@ packages:
     resolution: {integrity: sha512-bZpge9eSXwa4ToSiqJ7j6KRwhAsneMFoSz3LMWKQDkqimm3D/tbFlrklrs/IOqC8tEcYmXQZJ6N0UrjhBirVCg==}
     peerDependencies:
       vue: ^3.5.0
+
+  '@wxperia/liquid-glass-vue@1.0.9':
+    resolution: {integrity: sha512-uCGz2GIxhjMY6OshbYUmu+mNKhwiaLb5tdeeM7fdCXhrSrIqxPAirvZ15BtGfTi0yYKmodU6ssBIdjLg0PUhag==}
 
   abbrev@4.0.0:
     resolution: {integrity: sha512-a1wflyaL0tHtJSmLSOVybYhy22vRih4eduhhrkcjgrWGnRfrZtovJ2FRjxuTtkkj47O/baf0R86QU5OuYpz8fA==}
@@ -3512,6 +3518,12 @@ snapshots:
   '@vueuse/shared@14.3.0(vue@3.5.34(typescript@6.0.3))':
     dependencies:
       vue: 3.5.34(typescript@6.0.3)
+
+  '@wxperia/liquid-glass-vue@1.0.9(typescript@6.0.3)':
+    dependencies:
+      vue: 3.5.34(typescript@6.0.3)
+    transitivePeerDependencies:
+      - typescript
 
   abbrev@4.0.0: {}
 

@@ -5,9 +5,15 @@
 <script setup lang="ts">
 import { onUnmounted, watch } from "vue";
 import type { Application, DisplayObject } from "pixi.js";
+import { Ticker } from "pixi.js";
 import cubismCoreUrl from "live2dcubismcore/live2dcubismcore.min.js?url";
-import type { MotionRequest } from "../stores/motionQueue";
 import { useMotionQueueStore } from "../stores/motionQueue";
+
+/** Scale PIXI ticker delta for Live2D only (motion, physics, blink). Values below 1 slow playback. */
+const LIVE2D_MOTION_TIME_SCALE = 0.62;
+
+/** Ignore sub-pixel focus churn from IPC to avoid parameter fighting with motion. */
+const FOCUS_EPSILON_PX = 1.25;
 
 interface FocusPoint {
   x: number;
@@ -36,6 +42,8 @@ interface Live2DModelRuntime {
   motion(group: string, index?: number): unknown;
   focus(x: number, y: number, instant?: boolean): void;
   hitTest(areaName: string, x: number, y: number): boolean;
+  update(dt: number): void;
+  destroy(options?: { texture?: boolean; baseTexture?: boolean }): void;
 }
 
 const props = defineProps<{
@@ -48,66 +56,111 @@ const props = defineProps<{
 
 const emit = defineEmits<{
   interactiveChange: [boolean];
+  modelReady: [];
 }>();
 
 const motionQueueStore = useMotionQueueStore();
 let model: Live2DModelRuntime | undefined;
 let disposed = false;
 let lastMotionSignature: string | undefined;
+let loadGeneration = 0;
+let live2dTickHandler: (() => void) | undefined;
+let lastCanvasW = 0;
+let lastCanvasH = 0;
+let lastFocusX: number | undefined;
+let lastFocusY: number | undefined;
 let Live2DModelCtor: {
   from(modelPath: string, options?: { autoInteract?: boolean }): Promise<unknown>;
   registerTicker(ticker: unknown): void;
 } | null = null;
 
+function detachLive2dTicker() {
+  if (live2dTickHandler) {
+    Ticker.shared.remove(live2dTickHandler);
+    live2dTickHandler = undefined;
+  }
+}
+
+function attachLive2dTicker(nextModel: Live2DModelRuntime) {
+  detachLive2dTicker();
+  nextModel.autoUpdate = false;
+  live2dTickHandler = () => {
+    nextModel.update(Ticker.shared.deltaMS * LIVE2D_MOTION_TIME_SCALE);
+  };
+  Ticker.shared.add(live2dTickHandler);
+}
+
+function teardownModelFromStage(app: Application | null) {
+  detachLive2dTicker();
+  if (model && app) {
+    app.stage.removeChild(model as unknown as DisplayObject);
+    try {
+      model.destroy({ texture: true, baseTexture: true });
+    } catch {
+      // Best-effort teardown when the GL context is already gone.
+    }
+  }
+  model = undefined;
+  motionQueueStore.clearQueue();
+}
+
 watch(
-  () => props.app,
-  async (app) => {
-    if (!app) {
+  () => [props.app, props.modelPath] as const,
+  async ([app, modelPath]) => {
+    const gen = ++loadGeneration;
+
+    if (!app || !modelPath) {
+      teardownModelFromStage(app);
+      lastMotionSignature = undefined;
       return;
     }
+
+    teardownModelFromStage(app);
+    lastMotionSignature = undefined;
+
     await ensureScript(cubismCoreUrl);
-    const Live2DModel = await ensureLive2DModelCtor();
-    const nextModel = (await Live2DModel.from(props.modelPath, { autoInteract: false })) as Live2DModelRuntime;
-    if (disposed) {
+    if (gen !== loadGeneration || disposed) {
       return;
     }
+
+    const Live2DModel = await ensureLive2DModelCtor();
+    if (gen !== loadGeneration || disposed) {
+      return;
+    }
+
+    const nextModel = (await Live2DModel.from(modelPath, { autoInteract: false })) as Live2DModelRuntime;
+    if (gen !== loadGeneration || disposed) {
+      try {
+        nextModel.destroy({ texture: true, baseTexture: true });
+      } catch {
+        /* ignore */
+      }
+      return;
+    }
+
     model = nextModel;
-    model.autoUpdate = true;
     model.anchor.set(0.5, 0.95);
+    attachLive2dTicker(model);
     app.stage.addChild(model as unknown as DisplayObject);
     motionQueueStore.setMotionDefinitions(model.internalModel?.motionManager?.definitions);
     resizeModel();
+    emit("modelReady");
   },
   { immediate: true }
 );
 
 watch(
-  () => props.modelPath,
-  async () => {
-    if (!props.app) {
+  () => props.canvasSize,
+  (size) => {
+    const w = Math.max(1, Math.round(size.width));
+    const h = Math.max(1, Math.round(size.height));
+    if (w === lastCanvasW && h === lastCanvasH) {
       return;
     }
-    if (model) {
-      props.app.stage.removeChild(model as unknown as DisplayObject);
-      motionQueueStore.clearQueue();
-    }
-    // Reset the signature guard so the freshly-loaded model can replay the
-    // currently-mapped motion instead of being skipped as a duplicate.
-    lastMotionSignature = undefined;
-    const Live2DModel = await ensureLive2DModelCtor();
-    const nextModel = (await Live2DModel.from(props.modelPath, { autoInteract: false })) as Live2DModelRuntime;
-    model = nextModel;
-    model.autoUpdate = true;
-    model.anchor.set(0.5, 0.95);
-    props.app.stage.addChild(model as unknown as DisplayObject);
-    motionQueueStore.setMotionDefinitions(model.internalModel?.motionManager?.definitions);
+    lastCanvasW = w;
+    lastCanvasH = h;
     resizeModel();
-  }
-);
-
-watch(
-  () => props.canvasSize,
-  () => resizeModel(),
+  },
   { deep: true }
 );
 
@@ -117,6 +170,16 @@ watch(
     if (!model) {
       return;
     }
+    if (
+      lastFocusX !== undefined &&
+      lastFocusY !== undefined &&
+      Math.abs(focusAt.x - lastFocusX) < FOCUS_EPSILON_PX &&
+      Math.abs(focusAt.y - lastFocusY) < FOCUS_EPSILON_PX
+    ) {
+      return;
+    }
+    lastFocusX = focusAt.x;
+    lastFocusY = focusAt.y;
     model.focus(focusAt.x, focusAt.y);
   },
   { deep: true }
@@ -214,9 +277,7 @@ async function ensureLive2DModelCtor() {
 
 onUnmounted(() => {
   disposed = true;
-  if (model && props.app) {
-    props.app.stage.removeChild(model as unknown as DisplayObject);
-  }
-  motionQueueStore.clearQueue();
+  loadGeneration += 1;
+  teardownModelFromStage(props.app);
 });
 </script>

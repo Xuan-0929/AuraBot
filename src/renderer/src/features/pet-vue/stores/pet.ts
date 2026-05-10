@@ -22,6 +22,8 @@ interface PetState {
   petActivity?: PetActivity;
   petActivityQueue: PetActivity[];
   focusAt: FocusPoint;
+  /** True after `initialize()` finishes (success or failure) so Live2D mounts once with stable paths. */
+  isInitialized: boolean;
 }
 
 type Unsubscribe = () => void;
@@ -35,7 +37,8 @@ export const usePetStore = defineStore("pet", {
     petCursorPosition: undefined,
     petActivity: undefined,
     petActivityQueue: [],
-    focusAt: { x: 0, y: 0 }
+    focusAt: { x: 0, y: 0 },
+    isInitialized: false
   }),
   getters: {
     modelPath: (state): string => state.live2dModelState?.currentModelPath ?? "assets/live2d/hiyori/Hiyori.model3.json",
@@ -43,11 +46,15 @@ export const usePetStore = defineStore("pet", {
   },
   actions: {
     async initialize() {
-      const initialState: AppInitialState = await window.aurabot.getInitialState();
-      this.tasks = initialState.tasks;
-      this.agentStatus = initialState.agentStatus;
-      this.petSettings = initialState.petSettings;
-      this.live2dModelState = initialState.live2dModelState;
+      try {
+        const initialState: AppInitialState = await window.aurabot.getInitialState();
+        this.tasks = initialState.tasks;
+        this.agentStatus = initialState.agentStatus;
+        this.petSettings = initialState.petSettings;
+        this.live2dModelState = initialState.live2dModelState;
+      } finally {
+        this.isInitialized = true;
+      }
     },
     subscribeToIpc(): Unsubscribe {
       const unsubscribers: Unsubscribe[] = [];

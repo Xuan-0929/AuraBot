@@ -6,7 +6,6 @@
     :aria-label="t(petStore.displayLanguage, 'desktopLive2DPet')"
     @pointermove="handlePointerMove"
     @pointerleave="void clickThrough.handlePointerLeave()"
-    @pointerenter="isModelHovering = true"
   >
     <aside v-if="petStore.petActivity" class="pet-message-bubble" :aria-label="t(petStore.displayLanguage, 'petMessage')">
       {{ petStore.petActivity.message }}
@@ -19,11 +18,13 @@
       @pointerleave="handleModelLeave"
     >
       <Scene
+        :pet-ready="petStore.isInitialized"
         :model-path="petStore.modelPath"
         :focus-at="focusAt"
         :pointer-at="pointerAt"
         @canvas-ready="handleCanvasReady"
         @interactive-area-change="(value) => (isInteractiveAreaHovering = value)"
+        @model-ready="syncAgentMotion"
       >
         <TaskStickyNotes :tasks="petStore.tasks" :display-language="petStore.displayLanguage" />
       </Scene>
@@ -87,6 +88,12 @@ watch(
 );
 
 let lastRequestedMotionSignature: string | undefined;
+
+function syncAgentMotion() {
+  const motion = getLive2DMotionForAgentStatus(petStore.agentStatus);
+  lastRequestedMotionSignature = `${motion.group}:${motion.index ?? "default"}`;
+  void motionQueueStore.requestMotion(motion.group, motion.index);
+}
 
 watch(
   () => petStore.agentStatus,
@@ -164,14 +171,18 @@ function handlePointerMove(event: PointerEvent) {
 }
 
 .pet-vue-model-shell {
-  outline: 2px solid transparent;
+  /* Inset ring avoids clipping from .desktop-pet overflow:hidden (outline showed corners only). */
   border-radius: 22px;
-  transition: opacity 180ms ease, outline-color 180ms ease;
+  box-shadow: inset 0 0 0 2px transparent;
+  transition: opacity 180ms ease, box-shadow 180ms ease;
+}
+
+.pet-vue-root:hover .pet-vue-model-shell {
+  box-shadow: inset 0 0 0 2px #f97316;
 }
 
 .pet-vue-model-hovering {
   opacity: 0.4;
-  outline-color: #f97316;
 }
 
 .pet-vue-model-shell .desktop-pet-stage,
