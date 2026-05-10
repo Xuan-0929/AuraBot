@@ -86,10 +86,20 @@ watch(
   { immediate: true }
 );
 
+let lastRequestedMotionSignature: string | undefined;
+
 watch(
   () => petStore.agentStatus,
   async (status) => {
     const motion = getLive2DMotionForAgentStatus(status);
+    const signature = `${motion.group}:${motion.index ?? "default"}`;
+    // Multiple agent statuses (thinking/typing/tasking) map to the same motion
+    // and the orchestrator can rapidly toggle through them mid-turn. Guarding
+    // by signature here prevents that churn from reaching the motion queue.
+    if (lastRequestedMotionSignature === signature) {
+      return;
+    }
+    lastRequestedMotionSignature = signature;
     await motionQueueStore.requestMotion(motion.group, motion.index);
   },
   { immediate: true }

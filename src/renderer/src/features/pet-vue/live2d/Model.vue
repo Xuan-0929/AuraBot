@@ -91,6 +91,9 @@ watch(
       props.app.stage.removeChild(model as unknown as DisplayObject);
       motionQueueStore.clearQueue();
     }
+    // Reset the signature guard so the freshly-loaded model can replay the
+    // currently-mapped motion instead of being skipped as a duplicate.
+    lastMotionSignature = undefined;
     const Live2DModel = await ensureLive2DModelCtor();
     const nextModel = (await Live2DModel.from(props.modelPath, { autoInteract: false })) as Live2DModelRuntime;
     model = nextModel;

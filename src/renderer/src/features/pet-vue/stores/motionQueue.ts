@@ -36,6 +36,19 @@ export const useMotionQueueStore = defineStore("motionQueue", {
         return false;
       }
 
+      // Skip when the request would re-trigger the motion that is already
+      // playing or already sitting at the tail of the queue. This keeps the
+      // Live2D motion manager's natural idle loop intact instead of restarting
+      // it on every duplicate agent-status emission.
+      if (matchesMotion(this.currentMotion, normalized)) {
+        return false;
+      }
+
+      const lastQueued = this.queued[this.queued.length - 1];
+      if (matchesMotion(lastQueued, normalized)) {
+        return false;
+      }
+
       this.queued.push(normalized);
       this.promoteNextMotion();
       return true;
@@ -56,6 +69,13 @@ export const useMotionQueueStore = defineStore("motionQueue", {
     }
   }
 });
+
+function matchesMotion(target: MotionRequest | undefined, candidate: MotionRequest): boolean {
+  if (!target) {
+    return false;
+  }
+  return target.group === candidate.group && target.index === candidate.index;
+}
 
 function hasMotion(definitions: Map<string, Set<number | undefined>>, group: string, index?: number): boolean {
   const groupDefinitions = definitions.get(group);

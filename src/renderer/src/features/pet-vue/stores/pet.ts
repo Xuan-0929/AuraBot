@@ -69,6 +69,12 @@ export const usePetStore = defineStore("pet", {
       );
       unsubscribers.push(
         window.aurabot.onAgentStatusChanged((agentStatus) => {
+          // The orchestrator can broadcast the same status repeatedly during a
+          // single chat turn; explicitly skipping no-op writes documents intent
+          // and avoids waking downstream watchers (e.g. the motion mapper).
+          if (this.agentStatus === agentStatus) {
+            return;
+          }
           this.agentStatus = agentStatus;
         })
       );
