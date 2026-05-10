@@ -1,0 +1,44 @@
+<template>
+  <section class="desktop-pet-stage">
+    <Canvas @ready="handleCanvasReady" @resized="handleCanvasResized" />
+    <Model
+      :app="app"
+      :model-path="modelPath"
+      :focus-at="focusAt"
+      :canvas-size="canvasSize"
+      :pointer-at="pointerAt"
+      @interactive-change="(value) => emit('interactiveAreaChange', value)"
+    />
+    <slot />
+  </section>
+</template>
+
+<script setup lang="ts">
+import { ref } from "vue";
+import type { Application } from "pixi.js";
+import Canvas from "./Canvas.vue";
+import Model from "./Model.vue";
+
+defineProps<{
+  modelPath: string;
+  focusAt: { x: number; y: number };
+  pointerAt?: { x: number; y: number };
+}>();
+
+const emit = defineEmits<{
+  canvasReady: [HTMLCanvasElement];
+  interactiveAreaChange: [boolean];
+}>();
+
+const app = ref<Application | null>(null);
+const canvasSize = ref({ width: 1, height: 1 });
+
+function handleCanvasReady(payload: { app: Application; canvas: HTMLCanvasElement }) {
+  app.value = payload.app;
+  emit("canvasReady", payload.canvas);
+}
+
+function handleCanvasResized(payload: { width: number; height: number }) {
+  canvasSize.value = payload;
+}
+</script>
