@@ -4,9 +4,8 @@
 
 <script setup lang="ts">
 import { onUnmounted, watch } from "vue";
-import { Ticker, type Application, type DisplayObject } from "pixi.js";
+import type { Application, DisplayObject } from "pixi.js";
 import cubismCoreUrl from "live2dcubismcore/live2dcubismcore.min.js?url";
-import { Live2DModel } from "pixi-live2d-display/cubism4";
 import type { MotionRequest } from "../stores/motionQueue";
 import { useMotionQueueStore } from "../stores/motionQueue";
 
@@ -55,8 +54,10 @@ const motionQueueStore = useMotionQueueStore();
 let model: Live2DModelRuntime | undefined;
 let disposed = false;
 let lastMotionSignature: string | undefined;
-
-Live2DModel.registerTicker(Ticker);
+let Live2DModelCtor: {
+  from(modelPath: string, options?: { autoInteract?: boolean }): Promise<unknown>;
+  registerTicker(ticker: unknown): void;
+} | null = null;
 
 watch(
   () => props.app,
@@ -65,6 +66,7 @@ watch(
       return;
     }
     await ensureScript(cubismCoreUrl);
+    const Live2DModel = await ensureLive2DModelCtor();
     const nextModel = (await Live2DModel.from(props.modelPath, { autoInteract: false })) as Live2DModelRuntime;
     if (disposed) {
       return;
@@ -89,6 +91,7 @@ watch(
       props.app.stage.removeChild(model as unknown as DisplayObject);
       motionQueueStore.clearQueue();
     }
+    const Live2DModel = await ensureLive2DModelCtor();
     const nextModel = (await Live2DModel.from(props.modelPath, { autoInteract: false })) as Live2DModelRuntime;
     model = nextModel;
     model.autoUpdate = true;
@@ -190,6 +193,20 @@ async function ensureScript(src: string): Promise<void> {
     script.onerror = () => reject(new Error(`Failed to load ${src}`));
     document.head.append(script);
   });
+}
+
+async function ensureLive2DModelCtor() {
+  if (Live2DModelCtor) {
+    return Live2DModelCtor;
+  }
+
+  const PIXI = await import("pixi.js");
+  (window as Window & { PIXI?: unknown }).PIXI = PIXI;
+  const { Live2DModel } = await import("pixi-live2d-display/cubism4");
+  Live2DModel.registerTicker(PIXI.Ticker);
+  Live2DModelCtor = Live2DModel;
+
+  return Live2DModelCtor;
 }
 
 onUnmounted(() => {

@@ -29,15 +29,6 @@
       </Scene>
     </div>
 
-    <HoverChat
-      v-if="isHoverUiVisible"
-      :side="hoverChatSide"
-      :display-language="petStore.displayLanguage"
-      @send="handleSendText"
-      @hovering-change="(value) => (isHoverChatHovering = value)"
-      @focus-change="(value) => (isHoverChatFocused = value)"
-    />
-
     <ControlButtons
       :visible="isHoverUiVisible"
       :display-language="petStore.displayLanguage"
@@ -54,14 +45,11 @@ import { getLive2DMotionForAgentStatus } from "../live2d/live2dStatus";
 import { useClickThrough } from "./composables/useClickThrough";
 import { useMouseTracking } from "./composables/useMouseTracking";
 import ControlButtons from "./components/ControlButtons.vue";
-import HoverChat from "./components/HoverChat.vue";
 import TaskStickyNotes from "./components/TaskStickyNotes.vue";
 import Scene from "./live2d/Scene.vue";
 import { useMotionQueueStore } from "./stores/motionQueue";
 import { usePetStore } from "./stores/pet";
 
-const HOVER_CHAT_WIDTH_PX = 224;
-const HOVER_CHAT_GAP_PX = 12;
 const HOVER_EXIT_GRACE_MS = 180;
 
 const petStore = usePetStore();
@@ -70,11 +58,8 @@ const { focusAt } = useMouseTracking();
 
 const isModelHovering = ref(false);
 const isControlsHovering = ref(false);
-const isHoverChatHovering = ref(false);
-const isHoverChatFocused = ref(false);
 const isInteractiveAreaHovering = ref(false);
 const pointerAt = ref<{ x: number; y: number } | undefined>(undefined);
-const hoverChatSide = ref<"left" | "right">("left");
 const canvasRef = ref<HTMLCanvasElement | null>(null);
 let hoverExitTimeout: number | undefined;
 
@@ -82,12 +67,12 @@ const clickThrough = useClickThrough({
   enabled: computed(() => petStore.petSettings.clickThroughPet),
   canvasRef,
   interactiveUiHovering: computed(
-    () => isControlsHovering.value || isHoverChatHovering.value || isHoverChatFocused.value || isInteractiveAreaHovering.value
+    () => isControlsHovering.value || isInteractiveAreaHovering.value
   )
 });
 
 const isHoverUiVisible = computed(
-  () => isModelHovering.value || isControlsHovering.value || isHoverChatHovering.value || isHoverChatFocused.value
+  () => isModelHovering.value || isControlsHovering.value
 );
 
 watch(
@@ -124,12 +109,11 @@ onUnmounted(() => {
 
 let unsubscribeIpc: (() => void) | undefined;
 
-function handleModelEnter(event: PointerEvent) {
+function handleModelEnter() {
   if (hoverExitTimeout) {
     window.clearTimeout(hoverExitTimeout);
     hoverExitTimeout = undefined;
   }
-  updateHoverChatSide(event.currentTarget as HTMLElement | null);
   isModelHovering.value = true;
 }
 
@@ -141,20 +125,6 @@ function handleModelLeave() {
     isModelHovering.value = false;
     hoverExitTimeout = undefined;
   }, HOVER_EXIT_GRACE_MS);
-}
-
-function updateHoverChatSide(host: HTMLElement | null) {
-  const modelRect = host?.getBoundingClientRect();
-  if (!modelRect) {
-    hoverChatSide.value = "left";
-    return;
-  }
-  const requiredLeftWidth = HOVER_CHAT_WIDTH_PX + HOVER_CHAT_GAP_PX;
-  hoverChatSide.value = modelRect.left >= requiredLeftWidth ? "left" : "right";
-}
-
-async function handleSendText(content: string) {
-  await petStore.sendTextInput(content);
 }
 
 function handleVoiceToggle() {
@@ -204,7 +174,6 @@ function handlePointerMove(event: PointerEvent) {
   pointer-events: auto;
 }
 
-.pet-hover-chat,
 .pet-quick-controls {
   pointer-events: auto;
 }

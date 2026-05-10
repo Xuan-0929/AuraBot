@@ -1,5 +1,5 @@
 import { defineStore } from "pinia";
-import type { AgentStatus, AppInitialState, SendChatMessageResult } from "../../../../../shared/contracts/chat";
+import type { AgentStatus, AppInitialState } from "../../../../../shared/contracts/chat";
 import type { Live2DModelState } from "../../../../../shared/contracts/live2dModel";
 import type { PetCursorPosition } from "../../../../../shared/contracts/ipc";
 import type { PetActivity } from "../../../../../shared/contracts/pet";
@@ -131,23 +131,6 @@ export const usePetStore = defineStore("pet", {
     },
     async openConsoleWindow() {
       await window.aurabot.openConsoleWindow();
-    },
-    async sendTextInput(content: string) {
-      const trimmed = content.trim();
-      if (!trimmed) {
-        return;
-      }
-      const result: SendChatMessageResult = await window.aurabot.sendChatMessage({
-        content: trimmed,
-        source: "pet_text"
-      });
-      this.agentStatus = result.agentStatus;
-      if (result.createdTask) {
-        this.tasks = [result.createdTask, ...this.tasks.filter((task) => task.id !== result.createdTask?.id)];
-      }
-      if (result.updatedTask) {
-        this.tasks = this.tasks.map((task) => (task.id === result.updatedTask?.id ? result.updatedTask : task));
-      }
     }
   }
 });
