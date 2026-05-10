@@ -1,16 +1,18 @@
 <template>
-  <section class="desktop-pet-stage">
-    <Canvas @ready="handleCanvasReady" @resized="handleCanvasResized" />
-    <Model
-      v-if="petReady"
-      :app="app"
-      :model-path="modelPath"
-      :focus-at="focusAt"
-      :canvas-size="canvasSize"
-      :pointer-at="pointerAt"
-      @interactive-change="(value) => emit('interactiveAreaChange', value)"
-      @model-ready="() => emit('modelReady')"
-    />
+  <section class="desktop-pet-stage pet-vue-desktop-pet-stage">
+    <div class="desktop-pet-stage-main">
+      <Canvas @ready="handleCanvasReady" @resized="handleCanvasResized" />
+      <Model
+        v-if="petReady"
+        :app="app"
+        :model-path="modelPath"
+        :focus-at="focusAt"
+        :canvas-size="canvasSize"
+        :pointer-at="pointerAt"
+        @interactive-change="(value) => emit('interactiveAreaChange', value)"
+        @model-ready="() => emit('modelReady')"
+      />
+    </div>
     <slot />
   </section>
 </template>

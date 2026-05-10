@@ -13,36 +13,57 @@
 
     <div
       class="desktop-pet-model-shell pet-vue-model-shell"
-      :class="{ 'pet-vue-model-hovering': isHoverUiVisible }"
       @pointerenter="handleModelEnter"
       @pointerleave="handleModelLeave"
     >
-      <Scene
-        :pet-ready="petStore.isInitialized"
-        :model-path="petStore.modelPath"
-        :focus-at="focusAt"
-        :pointer-at="pointerAt"
-        @canvas-ready="handleCanvasReady"
-        @interactive-area-change="(value) => (isInteractiveAreaHovering = value)"
-        @model-ready="syncAgentMotion"
+      <div
+        class="pet-vue-live2d-frame"
+        :class="{ 'pet-vue-model-hovering': isHoverUiVisible }"
       >
-        <TaskStickyNotes :tasks="petStore.tasks" :display-language="petStore.displayLanguage" />
-      </Scene>
+        <Scene
+          :pet-ready="petStore.isInitialized"
+          :model-path="petStore.modelPath"
+          :focus-at="focusAt"
+          :pointer-at="pointerAt"
+          @canvas-ready="handleCanvasReady"
+          @interactive-area-change="(value) => (isInteractiveAreaHovering = value)"
+          @model-ready="syncAgentMotion"
+        >
+          <TaskStickyNotes :tasks="petStore.tasks" :display-language="petStore.displayLanguage" />
+        </Scene>
+      </div>
+      <ControlButtons
+        :visible="isHoverUiVisible"
+        :display-language="petStore.displayLanguage"
+        :voice-input-active="isVoiceInputActive"
+        @hovering-change="(value) => (isControlsHovering = value)"
+        @voice-toggle="handleVoiceToggle"
+      />
     </div>
 
-    <ControlButtons
-      :visible="isHoverUiVisible"
-      :display-language="petStore.displayLanguage"
-      @hovering-change="(value) => (isControlsHovering = value)"
-      @voice-toggle="handleVoiceToggle"
-    />
+    <div
+      class="pet-vue-resize-grips"
+      aria-hidden="true"
+      @pointerenter="isResizeGripHovering = true"
+      @pointerleave="onResizeGripsPointerLeave"
+    >
+      <div
+        v-for="corner in resizeCorners"
+        :key="corner"
+        :class="['pet-vue-resize-grip', `pet-vue-resize-grip--${corner}`]"
+        @pointerdown="(e) => handleResizePointerDown(corner, e)"
+        @pointermove="(e) => handleResizePointerMove(corner, e)"
+        @pointerup="handleResizePointerEnd"
+        @pointercancel="handleResizePointerEnd"
+      />
+    </div>
   </main>
 </template>
 
 <script setup lang="ts">
 import { computed, onMounted, onUnmounted, ref, watch } from "vue";
+import type { PetResizeCorner } from "../../shared/contracts/ipc";
 import { t } from "../../i18n";
-import { getLive2DMotionForAgentStatus } from "../live2d/live2dStatus";
 import { useClickThrough } from "./composables/useClickThrough";
 import { useMouseTracking } from "./composables/useMouseTracking";
 import ControlButtons from "./components/ControlButtons.vue";
@@ -53,13 +74,19 @@ import { usePetStore } from "./stores/pet";
 
 const HOVER_EXIT_GRACE_MS = 180;
 
+const resizeCorners: PetResizeCorner[] = ["nw", "ne", "sw", "se"];
+
 const petStore = usePetStore();
 const motionQueueStore = useMotionQueueStore();
 const { focusAt } = useMouseTracking();
 
 const isModelHovering = ref(false);
 const isControlsHovering = ref(false);
+/** Placeholder “mic open” state until the real voice pipeline toggles recording. */
+const isVoiceInputActive = ref(false);
 const isInteractiveAreaHovering = ref(false);
+const isResizeGripHovering = ref(false);
+const resizeDraggingCorner = ref<PetResizeCorner | null>(null);
 const pointerAt = ref<{ x: number; y: number } | undefined>(undefined);
 const canvasRef = ref<HTMLCanvasElement | null>(null);
 let hoverExitTimeout: number | undefined;
@@ -68,7 +95,11 @@ const clickThrough = useClickThrough({
   enabled: computed(() => petStore.petSettings.clickThroughPet),
   canvasRef,
   interactiveUiHovering: computed(
-    () => isControlsHovering.value || isInteractiveAreaHovering.value
+    () =>
+      isControlsHovering.value ||
+      isInteractiveAreaHovering.value ||
+      isResizeGripHovering.value ||
+      resizeDraggingCorner.value !== null
   )
 });
 
@@ -90,24 +121,36 @@ watch(
 let lastRequestedMotionSignature: string | undefined;
 
 function syncAgentMotion() {
-  const motion = getLive2DMotionForAgentStatus(petStore.agentStatus);
+  const motion = motionQueueStore.defaultIdleMotion;
+  if (!motion) {
+    return;
+  }
   lastRequestedMotionSignature = `${motion.group}:${motion.index ?? "default"}`;
   void motionQueueStore.requestMotion(motion.group, motion.index);
 }
 
 watch(
-  () => petStore.agentStatus,
-  async (status) => {
-    const motion = getLive2DMotionForAgentStatus(status);
-    const signature = `${motion.group}:${motion.index ?? "default"}`;
-    // Multiple agent statuses (thinking/typing/tasking) map to the same motion
-    // and the orchestrator can rapidly toggle through them mid-turn. Guarding
-    // by signature here prevents that churn from reaching the motion queue.
+  () => petStore.modelPath,
+  () => {
+    lastRequestedMotionSignature = undefined;
+  }
+);
+
+watch(
+  () => [petStore.agentStatus, motionQueueStore.defaultIdleMotion] as const,
+  async ([, idleMotion]) => {
+    if (!idleMotion) {
+      return;
+    }
+    const signature = `${idleMotion.group}:${idleMotion.index ?? "default"}`;
+    // Agent status no longer changes the ambient clip (always Idle), but this
+    // still dedupes against syncAgentMotion and avoids queue churn when the
+    // orchestrator repeats the same status.
     if (lastRequestedMotionSignature === signature) {
       return;
     }
     lastRequestedMotionSignature = signature;
-    await motionQueueStore.requestMotion(motion.group, motion.index);
+    await motionQueueStore.requestMotion(idleMotion.group, idleMotion.index);
   },
   { immediate: true }
 );
@@ -145,12 +188,49 @@ function handleModelLeave() {
 }
 
 function handleVoiceToggle() {
+  isVoiceInputActive.value = !isVoiceInputActive.value;
   // Reserved interface: voice pipeline will be implemented in a later phase.
   console.info("[pet-vue] voice toggle reserved");
 }
 
 function handleCanvasReady(canvas: HTMLCanvasElement) {
   canvasRef.value = canvas;
+}
+
+function onResizeGripsPointerLeave() {
+  if (resizeDraggingCorner.value !== null) {
+    return;
+  }
+  isResizeGripHovering.value = false;
+}
+
+function handleResizePointerDown(corner: PetResizeCorner, event: PointerEvent) {
+  event.preventDefault();
+  void clickThrough.setPassthrough(false);
+  const target = event.currentTarget as HTMLElement | null;
+  if (!target) {
+    return;
+  }
+  target.setPointerCapture(event.pointerId);
+  resizeDraggingCorner.value = corner;
+}
+
+function handleResizePointerMove(corner: PetResizeCorner, event: PointerEvent) {
+  if (resizeDraggingCorner.value !== corner) {
+    return;
+  }
+  void window.aurabot.resizePetWindowCorner(corner, {
+    x: event.movementX,
+    y: event.movementY
+  });
+}
+
+function handleResizePointerEnd(event: PointerEvent) {
+  const target = event.currentTarget as HTMLElement | null;
+  if (target?.hasPointerCapture(event.pointerId)) {
+    target.releasePointerCapture(event.pointerId);
+  }
+  resizeDraggingCorner.value = null;
 }
 
 function handlePointerMove(event: PointerEvent) {
@@ -167,14 +247,66 @@ function handlePointerMove(event: PointerEvent) {
 .pet-vue-root {
   min-width: 270px;
   min-height: 380px;
-  resize: both;
+  /* Fill the pet window so the model shell (and anchored controls) track the resizable frame. */
+  place-items: stretch;
+}
+
+/* Large transparent corners — programmatic window resize via IPC (see `resizePetWindowCorner`).
+ * Must stack above `.pet-quick-controls` / `.pet-hover-chat` (z-index: 4 in styles.css). */
+.pet-vue-resize-grips {
+  position: absolute;
+  inset: 0;
+  z-index: 12;
+  pointer-events: none;
+}
+
+.pet-vue-resize-grip {
+  position: absolute;
+  width: 32px;
+  height: 32px;
+  box-sizing: border-box;
+  pointer-events: auto;
+  touch-action: none;
+  background: transparent;
+}
+
+.pet-vue-resize-grip--nw {
+  top: 0;
+  left: 0;
+  cursor: nwse-resize;
+}
+
+.pet-vue-resize-grip--ne {
+  top: 0;
+  right: 0;
+  cursor: nesw-resize;
+}
+
+.pet-vue-resize-grip--sw {
+  bottom: 0;
+  left: 0;
+  cursor: nesw-resize;
+}
+
+.pet-vue-resize-grip--se {
+  right: 0;
+  bottom: 0;
+  cursor: nwse-resize;
 }
 
 .pet-vue-model-shell {
   /* Inset ring avoids clipping from .desktop-pet overflow:hidden (outline showed corners only). */
   border-radius: 22px;
   box-shadow: inset 0 0 0 2px transparent;
-  transition: opacity 180ms ease, box-shadow 180ms ease;
+  transition: box-shadow 180ms ease;
+}
+
+.pet-vue-live2d-frame {
+  position: relative;
+  width: 100%;
+  height: 100%;
+  min-height: 0;
+  transition: opacity 180ms ease;
 }
 
 .pet-vue-root:hover .pet-vue-model-shell {

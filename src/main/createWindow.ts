@@ -1,6 +1,6 @@
 import { join } from "node:path";
 import { BrowserWindow, screen } from "electron";
-import { IPC_CHANNELS } from "../shared/contracts/ipc";
+import { IPC_CHANNELS, type PetResizeCorner } from "../shared/contracts/ipc";
 import type { AgentStatus } from "../shared/contracts/chat";
 import type { Live2DModelState } from "../shared/contracts/live2dModel";
 import type { NotificationSettings } from "../shared/contracts/notificationSettings";
@@ -22,6 +22,10 @@ const PET_WINDOW_SIZE = {
   width: 300,
   height: 430
 };
+
+/** Matches BrowserWindow `minWidth` / `minHeight` for the pet. */
+const PET_WINDOW_MIN_WIDTH = 240;
+const PET_WINDOW_MIN_HEIGHT = 320;
 
 const CONSOLE_WINDOW_SIZE = {
   width: 920,
@@ -162,13 +166,78 @@ export function movePetWindowBy(delta: { x: number; y: number }): void {
   }
 
   const bounds = petWindow.getBounds();
-  const nextBounds = clampPetBoundsToVisibleWorkArea({
+  // For user-driven drags we intentionally clamp to the full display bounds
+  // (not workArea) with no gap, so the pet can be dragged all the way to the
+  // screen edge — including over the macOS dock. Using workArea + DEFAULT_GAP
+  // here feels like an invisible barrier near the bottom/sides of the screen.
+  const nextBounds = clampPetBoundsToDisplay({
     ...bounds,
     x: bounds.x + Math.round(delta.x),
     y: bounds.y + Math.round(delta.y)
   });
 
   petWindow.setPosition(nextBounds.x, nextBounds.y);
+  notifyPetBoundsChanged();
+}
+
+/**
+ * Resize the pet BrowserWindow from a corner drag. Uses pointer movement deltas
+ * (same coordinate space as `movePetWindowBy`) so hit targets can be large CSS overlays.
+ */
+export function resizePetWindowCorner(corner: PetResizeCorner, movement: { x: number; y: number }): void {
+  if (!petWindow || petWindow.isDestroyed()) {
+    return;
+  }
+
+  const mx = Math.round(movement.x);
+  const my = Math.round(movement.y);
+  const b = petWindow.getBounds();
+  let { x, y, width, height } = b;
+
+  const rightEdge = x + width;
+  const bottomEdge = y + height;
+
+  switch (corner) {
+    case "se": {
+      width += mx;
+      height += my;
+      width = Math.max(PET_WINDOW_MIN_WIDTH, width);
+      height = Math.max(PET_WINDOW_MIN_HEIGHT, height);
+      break;
+    }
+    case "sw": {
+      x += mx;
+      width -= mx;
+      height += my;
+      width = Math.max(PET_WINDOW_MIN_WIDTH, width);
+      height = Math.max(PET_WINDOW_MIN_HEIGHT, height);
+      x = rightEdge - width;
+      break;
+    }
+    case "ne": {
+      y += my;
+      width += mx;
+      height -= my;
+      width = Math.max(PET_WINDOW_MIN_WIDTH, width);
+      height = Math.max(PET_WINDOW_MIN_HEIGHT, height);
+      y = bottomEdge - height;
+      break;
+    }
+    case "nw": {
+      x += mx;
+      y += my;
+      width -= mx;
+      height -= my;
+      width = Math.max(PET_WINDOW_MIN_WIDTH, width);
+      height = Math.max(PET_WINDOW_MIN_HEIGHT, height);
+      x = rightEdge - width;
+      y = bottomEdge - height;
+      break;
+    }
+  }
+
+  const nextBounds = clampPetBoundsToVisibleWorkArea({ x, y, width, height });
+  petWindow.setBounds(nextBounds);
   notifyPetBoundsChanged();
 }
 
@@ -249,6 +318,16 @@ function clampPetBoundsToVisibleWorkArea(bounds: WindowRectangle): WindowRectang
   return clampWindowBoundsToWorkArea({
     bounds,
     workArea: display.workArea
+  });
+}
+
+function clampPetBoundsToDisplay(bounds: WindowRectangle): WindowRectangle {
+  const display = screen.getDisplayMatching(bounds);
+
+  return clampWindowBoundsToWorkArea({
+    bounds,
+    workArea: display.bounds,
+    gap: 0
   });
 }
 

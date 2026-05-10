@@ -7,6 +7,7 @@
 <script setup lang="ts">
 import { onMounted, onUnmounted, ref } from "vue";
 import { Application } from "pixi.js";
+import { PET_LIVE2D_FALLBACK_SIZE, resolveLive2DHostSize } from "./live2dPlacement";
 
 const emit = defineEmits<{
   ready: [{ app: Application; canvas: HTMLCanvasElement; host: HTMLDivElement }];
@@ -17,6 +18,7 @@ const hostRef = ref<HTMLDivElement | null>(null);
 const canvasRef = ref<HTMLCanvasElement | null>(null);
 const appRef = ref<Application | null>(null);
 let resizeObserver: ResizeObserver | undefined;
+let detachWindowResize: (() => void) | undefined;
 
 onMounted(() => {
   const host = hostRef.value;
@@ -35,20 +37,34 @@ onMounted(() => {
   appRef.value = app;
 
   const resize = () => {
-    const width = Math.max(1, Math.round(host.clientWidth));
-    const height = Math.max(1, Math.round(host.clientHeight));
-    app.renderer.resize(width, height);
-    emit("resized", { width, height });
+    const hostSize = resolveLive2DHostSize(host, PET_LIVE2D_FALLBACK_SIZE);
+    app.renderer.resize(hostSize.width, hostSize.height);
+    emit("resized", { width: hostSize.width, height: hostSize.height });
+    // Electron/window resize can lag layout one frame; align with React canvas retries.
+    window.requestAnimationFrame(() => {
+      const again = resolveLive2DHostSize(host, PET_LIVE2D_FALLBACK_SIZE);
+      if (again.width !== hostSize.width || again.height !== hostSize.height) {
+        app.renderer.resize(again.width, again.height);
+        emit("resized", { width: again.width, height: again.height });
+      }
+    });
   };
+
+  const onWindowResize = () => resize();
 
   resizeObserver = new ResizeObserver(() => resize());
   resizeObserver.observe(host);
+  window.addEventListener("resize", onWindowResize);
+  detachWindowResize = () => window.removeEventListener("resize", onWindowResize);
   resize();
   emit("ready", { app, canvas, host });
 });
 
 onUnmounted(() => {
+  detachWindowResize?.();
+  detachWindowResize = undefined;
   resizeObserver?.disconnect();
+  resizeObserver = undefined;
   appRef.value?.destroy(true, { children: true, texture: true, baseTexture: true });
   appRef.value = null;
 });

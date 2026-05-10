@@ -10,12 +10,12 @@
       <LiquidGlass
         :padding="'0'"
         :corner-radius="22"
-        :blur-amount="0.11"
+        :blur-amount="0.095"
         :displacement-scale="48"
-        :saturation="172"
+        :saturation="148"
         :aberration-intensity="1.45"
         :elasticity="0.1"
-        :style="{ position: 'relative', zIndex: 1 }"
+        :style="liquidGlassSurfaceStyle"
       >
         <button
           class="pet-action-button pet-vue-circle-btn pet-action-console"
@@ -33,8 +33,9 @@
             stroke-linejoin="round"
             aria-hidden="true"
           >
-            <rect x="3" y="4" width="18" height="14" rx="2" />
-            <path d="M7 8h6M7 12h4" />
+            <path
+              d="M17.5 19H9a7 7 0 1 1 6.71-9h1.79a4.5 4.5 0 1 1 0 9Z"
+            />
           </svg>
         </button>
       </LiquidGlass>
@@ -43,21 +44,22 @@
       <LiquidGlass
         :padding="'0'"
         :corner-radius="22"
-        :blur-amount="0.11"
+        :blur-amount="0.095"
         :displacement-scale="48"
-        :saturation="172"
+        :saturation="148"
         :aberration-intensity="1.45"
         :elasticity="0.1"
-        :style="{ position: 'relative', zIndex: 1 }"
+        :style="liquidGlassSurfaceStyle"
       >
         <button
           class="pet-action-button pet-vue-circle-btn pet-action-voice"
           type="button"
+          :data-active="voiceInputActive ? 'true' : 'false'"
           :aria-label="t(displayLanguage, 'startVoiceInput')"
           @click="emit('voiceToggle')"
         >
           <svg
-            class="pet-vue-control-icon"
+            class="pet-vue-control-icon pet-vue-mic-icon"
             viewBox="0 0 24 24"
             fill="none"
             stroke="currentColor"
@@ -77,12 +79,12 @@
       <LiquidGlass
         :padding="'0'"
         :corner-radius="22"
-        :blur-amount="0.11"
+        :blur-amount="0.095"
         :displacement-scale="48"
-        :saturation="172"
+        :saturation="148"
         :aberration-intensity="1.45"
         :elasticity="0.1"
-        :style="{ position: 'relative', zIndex: 1 }"
+        :style="liquidGlassSurfaceStyle"
       >
         <button
           class="pet-action-button pet-vue-circle-btn pet-action-drag"
@@ -95,7 +97,7 @@
           @pointercancel="handleDragPointerEnd"
         >
           <svg
-            class="pet-vue-control-icon"
+            class="pet-vue-control-icon pet-vue-drag-arrows"
             viewBox="0 0 24 24"
             fill="none"
             stroke="currentColor"
@@ -104,10 +106,11 @@
             stroke-linejoin="round"
             aria-hidden="true"
           >
-            <circle cx="9" cy="9" r="1.35" fill="currentColor" stroke="none" />
-            <circle cx="15" cy="9" r="1.35" fill="currentColor" stroke="none" />
-            <circle cx="9" cy="15" r="1.35" fill="currentColor" stroke="none" />
-            <circle cx="15" cy="15" r="1.35" fill="currentColor" stroke="none" />
+            <!-- Four diagonal arrows from center toward corners (move affordance) -->
+            <path d="M12 12 7.25 7.25M7.25 7.25 9.1 7.25M7.25 7.25 7.25 9.1" />
+            <path d="M12 12 16.75 7.25M16.75 7.25 14.9 7.25M16.75 7.25 16.75 9.1" />
+            <path d="M12 12 7.25 16.75M7.25 16.75 9.1 16.75M7.25 16.75 7.25 14.9" />
+            <path d="M12 12 16.75 16.75M16.75 16.75 14.9 16.75M16.75 16.75 16.75 14.9" />
           </svg>
         </button>
       </LiquidGlass>
@@ -120,15 +123,34 @@ import { ref } from "vue";
 import { LiquidGlass } from "@wxperia/liquid-glass-vue";
 import { t, type DisplayLanguage } from "../../../i18n";
 
-defineProps<{
-  visible: boolean;
-  displayLanguage: DisplayLanguage;
-}>();
+withDefaults(
+  defineProps<{
+    visible: boolean;
+    displayLanguage: DisplayLanguage;
+    /** When true, mic is “open” (listening); dims when false. Placeholder until voice pipeline exists. */
+    voiceInputActive?: boolean;
+  }>(),
+  { voiceInputActive: false }
+);
 
 const emit = defineEmits<{
   voiceToggle: [];
   hoveringChange: [boolean];
 }>();
+
+/**
+ * LiquidGlass: overlay layers use `top: style.top || "50%"` + `translate(-50%, -50%)`. The inner
+ * `GlassContainer` only receives `baseStyle` (merged `style` + transform), not `positionStyles`, so
+ * our `style` must include the same `top`/`left` as those defaults or the button box and frosted
+ * layers use different anchors. Never pass `top`/`left: "auto"` — they are truthy and skip the "50%"
+ * fallback while translate still runs.
+ */
+const liquidGlassSurfaceStyle = {
+  position: "relative" as const,
+  top: "50%",
+  left: "50%",
+  zIndex: 1
+};
 
 const isDragging = ref(false);
 const lastDragPosition = ref<{ x: number; y: number } | undefined>(undefined);
@@ -171,9 +193,11 @@ function handleDragPointerEnd(event: PointerEvent) {
 
 <style scoped>
 .pet-vue-quick-controls.pet-quick-controls {
+  position: absolute;
   left: auto;
   right: 14px;
   bottom: 18px;
+  z-index: 5;
   flex-direction: column;
   align-items: center;
   gap: 10px;
@@ -198,44 +222,37 @@ function handleDragPointerEnd(event: PointerEvent) {
   flex-shrink: 0;
   line-height: 0;
   isolation: isolate;
-}
-
-.pet-vue-liquid-glass::before {
-  content: "";
-  position: absolute;
-  inset: 0;
+  width: 44px;
+  height: 44px;
+  display: block;
   border-radius: 50%;
-  z-index: 0;
-  pointer-events: none;
-  background: radial-gradient(
-    circle at 30% 28%,
-    rgba(255, 255, 255, 0.55) 0%,
-    rgba(250, 246, 242, 0.38) 45%,
-    rgba(42, 36, 32, 0.14) 100%
-  );
-  box-shadow: inset 0 1px 0 rgba(255, 255, 255, 0.42);
+  overflow: hidden;
 }
 
 .pet-vue-liquid-glass :deep(.text-white) {
+  flex: 1;
+  display: flex;
+  align-items: center;
+  justify-content: center;
+  min-width: 0;
+  min-height: 0;
   color: var(--aura-ink);
 }
 
-.pet-vue-liquid-glass :deep(.glass__warp) {
-  background: linear-gradient(
-    155deg,
-    rgba(255, 255, 255, 0.5) 0%,
-    rgba(255, 255, 255, 0.22) 55%,
-    rgba(32, 28, 26, 0.08) 100%
-  );
+.pet-vue-liquid-glass :deep(.glass) {
+  box-sizing: border-box;
+  width: 100%;
+  height: 100%;
+  min-width: 0;
+  min-height: 0;
+  gap: 0;
+  border: 1px solid rgba(255, 255, 255, 0.28);
+  box-shadow: 0 4px 14px rgba(55, 42, 34, 0.08);
 }
 
-.pet-vue-liquid-glass :deep(.glass) {
-  gap: 0;
-  border: 1px solid rgba(255, 255, 255, 0.42);
-  box-shadow:
-    0 8px 26px rgba(55, 42, 34, 0.2),
-    0 2px 10px rgba(0, 0, 0, 0.1),
-    inset 0 1px 0 rgba(255, 255, 255, 0.48);
+.pet-vue-liquid-glass :deep(div.relative) {
+  width: 100%;
+  height: 100%;
 }
 
 .pet-vue-circle-btn {
@@ -275,9 +292,27 @@ function handleDragPointerEnd(event: PointerEvent) {
   outline-offset: 1px;
 }
 
-.pet-vue-circle-btn:hover:not(:disabled),
-.pet-vue-circle-btn[data-active="true"] {
+.pet-vue-circle-btn:hover:not(:disabled):not(.pet-action-voice),
+.pet-vue-circle-btn[data-active="true"]:not(.pet-action-voice) {
   filter: brightness(1.04);
+}
+
+.pet-action-voice .pet-vue-mic-icon {
+  transition:
+    opacity 180ms ease,
+    filter 180ms ease;
+}
+
+/* Voice off: dimmer; voice on: full contrast + slight lift (brightness). */
+.pet-action-voice[data-active="false"] .pet-vue-mic-icon {
+  opacity: 0.52;
+  filter: brightness(0.78);
+}
+
+.pet-action-voice[data-active="true"] .pet-vue-mic-icon {
+  opacity: 1;
+  filter: drop-shadow(0 0.5px 0 rgba(255, 255, 255, 0.55))
+    drop-shadow(0 1px 1.5px rgba(45, 32, 24, 0.35)) brightness(1.14);
 }
 
 .pet-vue-circle-btn:active:not(.pet-action-drag):not(:disabled) {

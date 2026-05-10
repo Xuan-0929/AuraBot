@@ -9,17 +9,21 @@ interface MotionQueueState {
   queued: MotionRequest[];
   currentMotion?: MotionRequest;
   availableMotions: Map<string, Set<number | undefined>>;
+  /** Preferred Idle clip once motion definitions are known (index 0 when present). */
+  defaultIdleMotion?: MotionRequest;
 }
 
 export const useMotionQueueStore = defineStore("motionQueue", {
   state: (): MotionQueueState => ({
     queued: [],
     currentMotion: undefined,
-    availableMotions: new Map()
+    availableMotions: new Map(),
+    defaultIdleMotion: undefined
   }),
   actions: {
     setMotionDefinitions(definitions: unknown) {
       this.availableMotions = parseMotionDefinitions(definitions);
+      this.defaultIdleMotion = resolveDefaultIdleMotion(this.availableMotions);
       this.queued = this.queued.filter((motion) => hasMotion(this.availableMotions, motion.group, motion.index));
       if (this.currentMotion && !hasMotion(this.availableMotions, this.currentMotion.group, this.currentMotion.index)) {
         this.currentMotion = undefined;
@@ -60,6 +64,7 @@ export const useMotionQueueStore = defineStore("motionQueue", {
     clearQueue() {
       this.queued = [];
       this.currentMotion = undefined;
+      this.defaultIdleMotion = undefined;
     },
     promoteNextMotion() {
       if (this.currentMotion || this.queued.length === 0) {
@@ -112,4 +117,21 @@ function parseMotionDefinitions(input: unknown): Map<string, Set<number | undefi
   }
 
   return definitions;
+}
+
+function resolveDefaultIdleMotion(definitions: Map<string, Set<number | undefined>>): MotionRequest | undefined {
+  const idleIndices = definitions.get("Idle");
+  if (!idleIndices || idleIndices.size === 0) {
+    return undefined;
+  }
+  if (idleIndices.has(0)) {
+    return { group: "Idle", index: 0 };
+  }
+  const sorted = [...idleIndices]
+    .filter((i): i is number => typeof i === "number")
+    .sort((a, b) => a - b);
+  if (sorted.length > 0) {
+    return { group: "Idle", index: sorted[0] };
+  }
+  return { group: "Idle", index: undefined };
 }

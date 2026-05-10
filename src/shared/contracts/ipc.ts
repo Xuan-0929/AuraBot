@@ -37,6 +37,7 @@ export const IPC_CHANNELS = {
   updatePetSettings: "pet:update-settings",
   setPetMousePassthrough: "pet:set-mouse-passthrough",
   movePetWindowBy: "pet:move-window-by",
+  resizePetWindowCorner: "pet:resize-window-corner",
   petSettingsChanged: "pet:settings-changed",
   petActivity: "pet:activity",
   live2dModelStateChanged: "live2d:model-state-changed",
@@ -103,6 +104,9 @@ export interface PetCursorPosition {
   localY: number;
 }
 
+/** Corner being dragged to resize the frameless pet window (programmatic resize). */
+export type PetResizeCorner = "nw" | "ne" | "sw" | "se";
+
 export interface TaskResultFileActionResult {
   ok: boolean;
   error?: string;
@@ -140,6 +144,7 @@ export interface AuraBotApi {
   updatePetSettings(patch: PetSettingsPatch): Promise<PetSettings>;
   setPetMousePassthrough(enabled: boolean): Promise<void>;
   movePetWindowBy(delta: { x: number; y: number }): Promise<void>;
+  resizePetWindowCorner(corner: PetResizeCorner, movement: { x: number; y: number }): Promise<void>;
   onPetSettingsChanged(listener: (settings: PetSettings) => void): () => void;
   onPetActivity(listener: (activity: PetActivity) => void): () => void;
   onLive2DModelStateChanged(listener: (state: Live2DModelState) => void): () => void;

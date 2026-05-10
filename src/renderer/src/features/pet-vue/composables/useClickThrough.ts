@@ -18,6 +18,11 @@ export function useClickThrough(options: UseClickThroughOptions) {
       await setPassthrough(false);
       return;
     }
+    /* Corners are often canvas-transparent; without this, passthrough stays on and grips never get events. */
+    if (isPointerOverWindowCornerResizeZone(event.clientX, event.clientY)) {
+      await setPassthrough(false);
+      return;
+    }
     const canvas = options.canvasRef.value;
     if (!canvas) {
       return;
@@ -53,6 +58,20 @@ export function useClickThrough(options: UseClickThroughOptions) {
     handlePointerLeave,
     setPassthrough
   };
+}
+
+/** Margin from each window edge for combined corner zones (matches `.pet-vue-resize-grip` hit targets). */
+const CORNER_RESIZE_MARGIN_PX = 32;
+
+function isPointerOverWindowCornerResizeZone(clientX: number, clientY: number): boolean {
+  const w = window.innerWidth;
+  const h = window.innerHeight;
+  const m = CORNER_RESIZE_MARGIN_PX;
+  const nearLeft = clientX < m;
+  const nearRight = clientX > w - m;
+  const nearTop = clientY < m;
+  const nearBottom = clientY > h - m;
+  return (nearLeft || nearRight) && (nearTop || nearBottom);
 }
 
 function detectCanvasPixelTransparent(canvas: HTMLCanvasElement, clientX: number, clientY: number): boolean {

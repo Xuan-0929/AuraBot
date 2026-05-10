@@ -27,6 +27,7 @@ import {
   broadcastTaskDeleted,
   createPetWindow,
   movePetWindowBy,
+  resizePetWindowCorner,
   openConsoleWindow,
   openSettingsWindow,
   setPetMousePassthrough
@@ -122,6 +123,7 @@ async function bootstrap(): Promise<void> {
     },
     setPetMousePassthrough,
     movePetWindowBy,
+    resizePetWindowCorner,
     broadcastPetActivity,
     broadcastAgentStatus,
     broadcastChatMessage,

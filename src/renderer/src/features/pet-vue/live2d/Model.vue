@@ -1,19 +1,13 @@
 <template>
-  <div />
+  <div class="live2d-vue-model-anchor" aria-hidden="true" />
 </template>
 
 <script setup lang="ts">
 import { onUnmounted, watch } from "vue";
 import type { Application, DisplayObject } from "pixi.js";
-import { Ticker } from "pixi.js";
 import cubismCoreUrl from "live2dcubismcore/live2dcubismcore.min.js?url";
+import { calculateLive2DPlacement } from "./live2dPlacement";
 import { useMotionQueueStore } from "../stores/motionQueue";
-
-/** Scale PIXI ticker delta for Live2D only (motion, physics, blink). Values below 1 slow playback. */
-const LIVE2D_MOTION_TIME_SCALE = 0.62;
-
-/** Ignore sub-pixel focus churn from IPC to avoid parameter fighting with motion. */
-const FOCUS_EPSILON_PX = 1.25;
 
 interface FocusPoint {
   x: number;
@@ -42,7 +36,6 @@ interface Live2DModelRuntime {
   motion(group: string, index?: number): unknown;
   focus(x: number, y: number, instant?: boolean): void;
   hitTest(areaName: string, x: number, y: number): boolean;
-  update(dt: number): void;
   destroy(options?: { texture?: boolean; baseTexture?: boolean }): void;
 }
 
@@ -64,35 +57,22 @@ let model: Live2DModelRuntime | undefined;
 let disposed = false;
 let lastMotionSignature: string | undefined;
 let loadGeneration = 0;
-let live2dTickHandler: (() => void) | undefined;
 let lastCanvasW = 0;
 let lastCanvasH = 0;
-let lastFocusX: number | undefined;
-let lastFocusY: number | undefined;
 let Live2DModelCtor: {
   from(modelPath: string, options?: { autoInteract?: boolean }): Promise<unknown>;
   registerTicker(ticker: unknown): void;
 } | null = null;
 
-function detachLive2dTicker() {
-  if (live2dTickHandler) {
-    Ticker.shared.remove(live2dTickHandler);
-    live2dTickHandler = undefined;
-  }
-}
-
-function attachLive2dTicker(nextModel: Live2DModelRuntime) {
-  detachLive2dTicker();
-  nextModel.autoUpdate = false;
-  live2dTickHandler = () => {
-    nextModel.update(Ticker.shared.deltaMS * LIVE2D_MOTION_TIME_SCALE);
-  };
-  Ticker.shared.add(live2dTickHandler);
-}
-
 function teardownModelFromStage(app: Application | null) {
-  detachLive2dTicker();
   if (model && app) {
+    // Detach from the shared ticker before destroy so pixi-live2d-display does
+    // not keep ticking a freed model on subsequent frames.
+    try {
+      model.autoUpdate = false;
+    } catch {
+      /* ignore */
+    }
     app.stage.removeChild(model as unknown as DisplayObject);
     try {
       model.destroy({ texture: true, baseTexture: true });
@@ -140,10 +120,17 @@ watch(
 
     model = nextModel;
     model.anchor.set(0.5, 0.95);
-    attachLive2dTicker(model);
+    // pixi-live2d-display defaults autoUpdate to true after init; reasserting
+    // here documents the intent and re-arms the shared ticker if a previous
+    // teardown turned it off via this same model instance.
+    model.autoUpdate = true;
     app.stage.addChild(model as unknown as DisplayObject);
     motionQueueStore.setMotionDefinitions(model.internalModel?.motionManager?.definitions);
     resizeModel();
+    // Prime focus so the head/eyes look at the most recent cursor position
+    // even before the next IPC tick (otherwise the model stares straight ahead
+    // until the cursor moves again).
+    model.focus(props.focusAt.x, props.focusAt.y);
     emit("modelReady");
   },
   { immediate: true }
@@ -170,16 +157,10 @@ watch(
     if (!model) {
       return;
     }
-    if (
-      lastFocusX !== undefined &&
-      lastFocusY !== undefined &&
-      Math.abs(focusAt.x - lastFocusX) < FOCUS_EPSILON_PX &&
-      Math.abs(focusAt.y - lastFocusY) < FOCUS_EPSILON_PX
-    ) {
-      return;
-    }
-    lastFocusX = focusAt.x;
-    lastFocusY = focusAt.y;
+    // Forward every IPC sample to the focus controller so it can interpolate
+    // smoothly toward the cursor. The controller already smooths on its own,
+    // so an additional jitter threshold here prevents slow drags from being
+    // tracked at all.
     model.focus(focusAt.x, focusAt.y);
   },
   { deep: true }
@@ -200,7 +181,8 @@ watch(
     lastMotionSignature = signature;
     try {
       const result = model.motion(motion.group, motion.index);
-      if (result && typeof (result as Promise<unknown>).then === "function") {
+      const awaitCompletion = motion.group !== "Idle";
+      if (awaitCompletion && result && typeof (result as Promise<unknown>).then === "function") {
         await result;
       }
     } finally {
@@ -231,14 +213,22 @@ function resizeModel() {
   if (!model) {
     return;
   }
-  const width = Math.max(1, props.canvasSize.width);
-  const height = Math.max(1, props.canvasSize.height);
-  const modelWidth = model.internalModel?.width ?? model.width ?? width;
-  const modelHeight = model.internalModel?.height ?? model.height ?? height;
-  const scale = Math.min(width / modelWidth, height / modelHeight) * 0.92;
-  model.scale.set(scale);
-  model.x = width / 2;
-  model.y = height;
+  const hostSize = {
+    width: Math.max(1, Math.round(props.canvasSize.width)),
+    height: Math.max(1, Math.round(props.canvasSize.height))
+  };
+  const modelSize = {
+    width: model.internalModel?.width ?? model.width ?? hostSize.width,
+    height: model.internalModel?.height ?? model.height ?? hostSize.height
+  };
+  const placement = calculateLive2DPlacement({
+    hostSize,
+    modelSize,
+    compact: false
+  });
+  model.scale.set(placement.scale);
+  model.x = placement.x;
+  model.y = placement.y;
 }
 
 async function ensureScript(src: string): Promise<void> {

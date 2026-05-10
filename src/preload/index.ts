@@ -2,6 +2,7 @@ import { contextBridge, ipcRenderer } from "electron";
 import {
   IPC_CHANNELS,
   type AuraBotApi,
+  type PetResizeCorner,
   type TaskControlActionInput,
   type TaskResultFileActionInput
 } from "../shared/contracts/ipc";
@@ -35,6 +36,8 @@ const api: AuraBotApi = {
     ipcRenderer.invoke(IPC_CHANNELS.setPetMousePassthrough, enabled),
   movePetWindowBy: (delta: { x: number; y: number }) =>
     ipcRenderer.invoke(IPC_CHANNELS.movePetWindowBy, delta),
+  resizePetWindowCorner: (corner: PetResizeCorner, movement: { x: number; y: number }) =>
+    ipcRenderer.invoke(IPC_CHANNELS.resizePetWindowCorner, { corner, movement }),
   onPetSettingsChanged: (listener: (settings: PetSettings) => void) => {
     const handler = (_event: Electron.IpcRendererEvent, settings: PetSettings) => listener(settings);
 
