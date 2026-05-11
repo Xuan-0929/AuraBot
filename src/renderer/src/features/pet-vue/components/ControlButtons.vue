@@ -21,7 +21,7 @@
           class="pet-action-button pet-vue-circle-btn pet-action-console"
           type="button"
           :aria-label="t(displayLanguage, 'openAuraBotConsole')"
-          @click="void window.aurabot.openConsoleWindow()"
+          @click="emit('consoleOpen')"
         >
           <svg
             class="pet-vue-control-icon"
@@ -134,6 +134,7 @@ withDefaults(
 );
 
 const emit = defineEmits<{
+  consoleOpen: [];
   voiceToggle: [];
   hoveringChange: [boolean];
 }>();

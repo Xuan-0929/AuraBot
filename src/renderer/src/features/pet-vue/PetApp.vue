@@ -37,6 +37,7 @@
         :display-language="petStore.displayLanguage"
         :voice-input-active="isVoiceInputActive"
         @hovering-change="(value) => (isControlsHovering = value)"
+        @console-open="() => void petStore.openConsoleWindow()"
         @voice-toggle="handleVoiceToggle"
       />
     </div>
