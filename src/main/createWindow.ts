@@ -4,6 +4,7 @@ import { IPC_CHANNELS, type PetResizeCorner } from "../shared/contracts/ipc";
 import type { AgentStatus } from "../shared/contracts/chat";
 import type { Live2DModelState } from "../shared/contracts/live2dModel";
 import type { NotificationSettings } from "../shared/contracts/notificationSettings";
+import { PET_WINDOW_DEFAULT_SIZE, PET_WINDOW_MIN_SIZE } from "../shared/contracts/petWindow";
 import type { Message } from "../shared/schemas/message";
 import type { PetActivity } from "../shared/contracts/pet";
 import { DEFAULT_PET_SETTINGS, type PetSettings } from "../shared/schemas/petSettings";
@@ -17,15 +18,6 @@ let settingsWindow: BrowserWindow | undefined;
 let currentPetSettings: PetSettings = { ...DEFAULT_PET_SETTINGS };
 let onPetBoundsChanged: ((bounds: WindowRectangle) => void) | undefined;
 let petCursorTrackingInterval: NodeJS.Timeout | undefined;
-
-const PET_WINDOW_SIZE = {
-  width: 300,
-  height: 430
-};
-
-/** Matches BrowserWindow `minWidth` / `minHeight` for the pet. */
-const PET_WINDOW_MIN_WIDTH = 240;
-const PET_WINDOW_MIN_HEIGHT = 320;
 
 const CONSOLE_WINDOW_SIZE = {
   width: 920,
@@ -62,8 +54,8 @@ export function createPetWindow(options: CreatePetWindowOptions = {}): BrowserWi
     y: initialBounds.y,
     width: initialBounds.width,
     height: initialBounds.height,
-    minWidth: 240,
-    minHeight: 320,
+    minWidth: PET_WINDOW_MIN_SIZE.width,
+    minHeight: PET_WINDOW_MIN_SIZE.height,
     frame: false,
     transparent: true,
     resizable: false,
@@ -201,16 +193,16 @@ export function resizePetWindowCorner(corner: PetResizeCorner, movement: { x: nu
     case "se": {
       width += mx;
       height += my;
-      width = Math.max(PET_WINDOW_MIN_WIDTH, width);
-      height = Math.max(PET_WINDOW_MIN_HEIGHT, height);
+      width = Math.max(PET_WINDOW_MIN_SIZE.width, width);
+      height = Math.max(PET_WINDOW_MIN_SIZE.height, height);
       break;
     }
     case "sw": {
       x += mx;
       width -= mx;
       height += my;
-      width = Math.max(PET_WINDOW_MIN_WIDTH, width);
-      height = Math.max(PET_WINDOW_MIN_HEIGHT, height);
+      width = Math.max(PET_WINDOW_MIN_SIZE.width, width);
+      height = Math.max(PET_WINDOW_MIN_SIZE.height, height);
       x = rightEdge - width;
       break;
     }
@@ -218,8 +210,8 @@ export function resizePetWindowCorner(corner: PetResizeCorner, movement: { x: nu
       y += my;
       width += mx;
       height -= my;
-      width = Math.max(PET_WINDOW_MIN_WIDTH, width);
-      height = Math.max(PET_WINDOW_MIN_HEIGHT, height);
+      width = Math.max(PET_WINDOW_MIN_SIZE.width, width);
+      height = Math.max(PET_WINDOW_MIN_SIZE.height, height);
       y = bottomEdge - height;
       break;
     }
@@ -228,8 +220,8 @@ export function resizePetWindowCorner(corner: PetResizeCorner, movement: { x: nu
       y += my;
       width -= mx;
       height -= my;
-      width = Math.max(PET_WINDOW_MIN_WIDTH, width);
-      height = Math.max(PET_WINDOW_MIN_HEIGHT, height);
+      width = Math.max(PET_WINDOW_MIN_SIZE.width, width);
+      height = Math.max(PET_WINDOW_MIN_SIZE.height, height);
       x = rightEdge - width;
       y = bottomEdge - height;
       break;
@@ -297,19 +289,19 @@ function loadRenderer(window: BrowserWindow, route: "pet" | "console" | "setting
 
 function getInitialPetBounds(savedBounds?: WindowRectangle): WindowRectangle {
   const fallbackBounds = {
-    width: PET_WINDOW_SIZE.width,
-    height: PET_WINDOW_SIZE.height,
+    width: PET_WINDOW_DEFAULT_SIZE.width,
+    height: PET_WINDOW_DEFAULT_SIZE.height,
     x: 0,
     y: 0
   };
   const primaryWorkArea = screen.getPrimaryDisplay().workArea;
   const defaultBounds = {
     ...fallbackBounds,
-    x: primaryWorkArea.x + primaryWorkArea.width - PET_WINDOW_SIZE.width - 32,
-    y: primaryWorkArea.y + primaryWorkArea.height - PET_WINDOW_SIZE.height - 32
+    x: primaryWorkArea.x + primaryWorkArea.width - PET_WINDOW_DEFAULT_SIZE.width - 32,
+    y: primaryWorkArea.y + primaryWorkArea.height - PET_WINDOW_DEFAULT_SIZE.height - 32
   };
 
-  return clampPetBoundsToVisibleWorkArea(savedBounds ?? defaultBounds);
+  return clampPetBoundsToVisibleWorkArea(normalizePetBoundsSize(savedBounds ?? defaultBounds));
 }
 
 function clampPetBoundsToVisibleWorkArea(bounds: WindowRectangle): WindowRectangle {
@@ -329,6 +321,14 @@ function clampPetBoundsToDisplay(bounds: WindowRectangle): WindowRectangle {
     workArea: display.bounds,
     gap: 0
   });
+}
+
+function normalizePetBoundsSize(bounds: WindowRectangle): WindowRectangle {
+  return {
+    ...bounds,
+    width: Math.max(PET_WINDOW_MIN_SIZE.width, bounds.width),
+    height: Math.max(PET_WINDOW_MIN_SIZE.height, bounds.height)
+  };
 }
 
 function notifyPetBoundsChanged(): void {

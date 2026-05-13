@@ -33,7 +33,7 @@
         </Scene>
       </div>
       <ControlButtons
-        :visible="isHoverUiVisible"
+        :visible="true"
         :display-language="petStore.displayLanguage"
         :voice-input-active="isVoiceInputActive"
         @hovering-change="(value) => (isControlsHovering = value)"
