@@ -11,15 +11,8 @@
       {{ petStore.petActivity.message }}
     </aside>
 
-    <div
-      class="desktop-pet-model-shell pet-vue-model-shell"
-      @pointerenter="handleModelEnter"
-      @pointerleave="handleModelLeave"
-    >
-      <div
-        class="pet-vue-live2d-frame"
-        :class="{ 'pet-vue-model-hovering': isHoverUiVisible }"
-      >
+    <div class="desktop-pet-model-shell pet-vue-model-shell">
+      <div class="pet-vue-live2d-frame">
         <Scene
           :pet-ready="petStore.isInitialized"
           :model-path="petStore.modelPath"
@@ -73,15 +66,12 @@ import Scene from "./live2d/Scene.vue";
 import { useMotionQueueStore } from "./stores/motionQueue";
 import { usePetStore } from "./stores/pet";
 
-const HOVER_EXIT_GRACE_MS = 180;
-
 const resizeCorners: PetResizeCorner[] = ["nw", "ne", "sw", "se"];
 
 const petStore = usePetStore();
 const motionQueueStore = useMotionQueueStore();
 const { focusAt } = useMouseTracking();
 
-const isModelHovering = ref(false);
 const isControlsHovering = ref(false);
 /** Placeholder “mic open” state until the real voice pipeline toggles recording. */
 const isVoiceInputActive = ref(false);
@@ -90,7 +80,6 @@ const isResizeGripHovering = ref(false);
 const resizeDraggingCorner = ref<PetResizeCorner | null>(null);
 const pointerAt = ref<{ x: number; y: number } | undefined>(undefined);
 const canvasRef = ref<HTMLCanvasElement | null>(null);
-let hoverExitTimeout: number | undefined;
 
 const clickThrough = useClickThrough({
   enabled: computed(() => petStore.petSettings.clickThroughPet),
@@ -103,10 +92,6 @@ const clickThrough = useClickThrough({
       resizeDraggingCorner.value !== null
   )
 });
-
-const isHoverUiVisible = computed(
-  () => isModelHovering.value || isControlsHovering.value
-);
 
 watch(
   () => petStore.petActivity?.id,
@@ -162,31 +147,10 @@ onMounted(async () => {
 });
 
 onUnmounted(() => {
-  if (hoverExitTimeout) {
-    window.clearTimeout(hoverExitTimeout);
-  }
   unsubscribeIpc?.();
 });
 
 let unsubscribeIpc: (() => void) | undefined;
-
-function handleModelEnter() {
-  if (hoverExitTimeout) {
-    window.clearTimeout(hoverExitTimeout);
-    hoverExitTimeout = undefined;
-  }
-  isModelHovering.value = true;
-}
-
-function handleModelLeave() {
-  if (hoverExitTimeout) {
-    window.clearTimeout(hoverExitTimeout);
-  }
-  hoverExitTimeout = window.setTimeout(() => {
-    isModelHovering.value = false;
-    hoverExitTimeout = undefined;
-  }, HOVER_EXIT_GRACE_MS);
-}
 
 function handleVoiceToggle() {
   isVoiceInputActive.value = !isVoiceInputActive.value;
@@ -314,7 +278,7 @@ function handlePointerMove(event: PointerEvent) {
   box-shadow: inset 0 0 0 2px #f97316;
 }
 
-.pet-vue-model-hovering {
+.pet-vue-root:hover .pet-vue-live2d-frame {
   opacity: 0.4;
 }
 
