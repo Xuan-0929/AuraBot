@@ -1,5 +1,4 @@
 import { resolve } from "node:path";
-import react from "@vitejs/plugin-react";
 import vue from "@vitejs/plugin-vue";
 import { defineConfig, externalizeDepsPlugin } from "electron-vite";
 
@@ -26,7 +25,7 @@ export default defineConfig({
   },
   renderer: {
     root: resolve(__dirname, "src/renderer"),
-    plugins: [react(), vue()],
+    plugins: [vue()],
     build: {
       rollupOptions: {
         input: resolve(__dirname, "src/renderer/index.html")

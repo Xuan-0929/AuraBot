@@ -16,7 +16,7 @@
         <Scene
           :pet-ready="petStore.isInitialized"
           :model-path="petStore.modelPath"
-          :focus-at="focusAt"
+          :focus-at="petStore.focusAt"
           :pointer-at="pointerAt"
           @canvas-ready="handleCanvasReady"
           @interactive-area-change="(value) => (isInteractiveAreaHovering = value)"
@@ -55,22 +55,20 @@
 </template>
 
 <script setup lang="ts">
-import { computed, onMounted, onUnmounted, ref, watch } from "vue";
+import { computed, ref, watch } from "vue";
 import type { PetResizeCorner } from "../../shared/contracts/ipc";
+import { useAuraBotStore } from "../../app/store";
 import { t } from "../../i18n";
 import { useClickThrough } from "./composables/useClickThrough";
-import { useMouseTracking } from "./composables/useMouseTracking";
 import ControlButtons from "./components/ControlButtons.vue";
 import TaskStickyNotes from "./components/TaskStickyNotes.vue";
 import Scene from "./live2d/Scene.vue";
 import { useMotionQueueStore } from "./stores/motionQueue";
-import { usePetStore } from "./stores/pet";
 
 const resizeCorners: PetResizeCorner[] = ["nw", "ne", "sw", "se"];
 
-const petStore = usePetStore();
+const petStore = useAuraBotStore();
 const motionQueueStore = useMotionQueueStore();
-const { focusAt } = useMouseTracking();
 
 const isControlsHovering = ref(false);
 /** Placeholder “mic open” state until the real voice pipeline toggles recording. */
@@ -140,17 +138,6 @@ watch(
   },
   { immediate: true }
 );
-
-onMounted(async () => {
-  await petStore.initialize();
-  unsubscribeIpc = petStore.subscribeToIpc();
-});
-
-onUnmounted(() => {
-  unsubscribeIpc?.();
-});
-
-let unsubscribeIpc: (() => void) | undefined;
 
 function handleVoiceToggle() {
   isVoiceInputActive.value = !isVoiceInputActive.value;

@@ -1,12 +1,12 @@
-import { create } from "zustand";
+import { defineStore } from "pinia";
 import type { AgentStatus, AppInitialState, SendChatMessageResult } from "../../../shared/contracts/chat";
 import type { Live2DModelState } from "../../../shared/contracts/live2dModel";
 import type { MemoryDebugSnapshot, PetCursorPosition } from "../../../shared/contracts/ipc";
 import type { NotificationSettings } from "../../../shared/contracts/notificationSettings";
 import type { PetActivity } from "../../../shared/contracts/pet";
 import type {
-  ModelRoleKey,
   ModelProviderSettingsPatch,
+  ModelRoleKey,
   ProactiveSettingsPatch,
   PublicAppConfig,
   PublicModelHealthMap,
@@ -18,7 +18,14 @@ import { DEFAULT_PET_SETTINGS, type PetSettings, type PetSettingsPatch } from ".
 import type { Profile } from "../../../shared/schemas/profile";
 import type { Task } from "../../../shared/schemas/task";
 
-interface AuraBotStore {
+const PET_ACTIVITY_TIMEOUT_MS = 7000;
+
+interface FocusPoint {
+  x: number;
+  y: number;
+}
+
+interface AuraBotState {
   profile?: Profile;
   mainSessionId?: string;
   messages: Message[];
@@ -32,283 +39,264 @@ interface AuraBotStore {
   petActivity?: PetActivity;
   petActivityQueue: PetActivity[];
   petCursorPosition?: PetCursorPosition;
+  focusAt: FocusPoint;
   memoryDebugSnapshot?: MemoryDebugSnapshot;
   debugPetOverlay: boolean;
-  loadInitialState(): Promise<void>;
-  loadMemoryDebugSnapshot(): Promise<void>;
-  subscribeToPetEvents(): () => void;
-  openConsoleWindow(): Promise<void>;
-  openSettingsWindow(): Promise<void>;
-  openConfigFile(): Promise<void>;
-  updateTaskRunnerSettings(runners: TaskRunnerSettingsPatch["runners"]): Promise<void>;
-  updateModelProviderSettings(patch: ModelProviderSettingsPatch): Promise<void>;
-  testModelConnection(role: ModelRoleKey): Promise<void>;
-  updateProactiveSettings(patch: ProactiveSettingsPatch): Promise<void>;
-  updatePersonaSettings(settings: PersonaSettings): Promise<void>;
-  setCurrentLive2DModel(modelId: string): Promise<void>;
-  updateNotificationSettings(
-    patch: Partial<Omit<NotificationSettings, "permissionState">>
-  ): Promise<void>;
-  updatePetSettings(patch: PetSettingsPatch): Promise<void>;
-  setPetMousePassthrough(enabled: boolean): Promise<void>;
-  movePetWindowBy(delta: { x: number; y: number }): Promise<void>;
-  sendMessage(content: string, source?: "console" | "pet_voice" | "pet_text"): Promise<void>;
-  cancelTask(taskId: string): Promise<void>;
-  deleteTask(taskId: string): Promise<void>;
-  showPetNotice(message: string): void;
-  clearPetActivity(id?: string): void;
+  isInitialized: boolean;
 }
 
-export const useAuraBotStore = create<AuraBotStore>((set, get) => ({
-  messages: [],
-  tasks: [],
-  agentStatus: "idle",
-  petSettings: { ...DEFAULT_PET_SETTINGS },
-  petActivityQueue: [],
-  debugPetOverlay: false,
-  async loadInitialState() {
-    const state: AppInitialState = await window.aurabot.getInitialState();
-    set(state);
+type Unsubscribe = () => void;
+
+export const useAuraBotStore = defineStore("auraBot", {
+  state: (): AuraBotState => ({
+    messages: [],
+    tasks: [],
+    agentStatus: "idle",
+    petSettings: { ...DEFAULT_PET_SETTINGS },
+    petActivityQueue: [],
+    focusAt: { x: 0, y: 0 },
+    debugPetOverlay: false,
+    isInitialized: false
+  }),
+  getters: {
+    modelPath: (state): string => state.live2dModelState?.currentModelPath ?? "assets/live2d/hiyori/Hiyori.model3.json",
+    displayLanguage: (state): PetSettings["displayLanguage"] => state.petSettings.displayLanguage
   },
-  async loadMemoryDebugSnapshot() {
-    const memoryDebugSnapshot = await window.aurabot.getMemoryDebugSnapshot();
-    set({ memoryDebugSnapshot });
-  },
-  subscribeToPetEvents() {
-    const unsubscribeSettings = window.aurabot.onPetSettingsChanged((petSettings) => {
-      set({ petSettings });
-    });
-    const unsubscribeActivity = window.aurabot.onPetActivity((petActivity) => {
-      set((current) => enqueuePetActivity(current, petActivity));
-    });
-    const unsubscribeLive2DModelState = window.aurabot.onLive2DModelStateChanged((live2dModelState) => {
-      set({ live2dModelState });
-    });
-    const unsubscribeNotificationSettings = window.aurabot.onNotificationSettingsChanged((notificationSettings) => {
-      set({ notificationSettings });
-    });
-    const unsubscribePetCursorPosition = window.aurabot.onPetCursorPosition((petCursorPosition) => {
-      set({ petCursorPosition });
-    });
-    const unsubscribeAgentStatus = window.aurabot.onAgentStatusChanged((agentStatus) => {
-      set({ agentStatus });
-    });
-    const unsubscribeChatMessage = window.aurabot.onChatMessageCreated((message) => {
-      set((current) => {
-        if (current.messages.some((existingMessage) => existingMessage.id === message.id)) {
-          return {};
+  actions: {
+    async loadInitialState() {
+      try {
+        const state: AppInitialState = await window.aurabot.getInitialState();
+        this.$patch({
+          ...state,
+          focusAt: this.petCursorPosition
+            ? { x: this.petCursorPosition.localX, y: this.petCursorPosition.localY }
+            : this.focusAt
+        });
+      } finally {
+        this.isInitialized = true;
+      }
+    },
+    async initialize() {
+      await this.loadInitialState();
+    },
+    async loadMemoryDebugSnapshot() {
+      this.memoryDebugSnapshot = await window.aurabot.getMemoryDebugSnapshot();
+    },
+    subscribeToPetEvents(): Unsubscribe {
+      const unsubscribers: Unsubscribe[] = [];
+
+      unsubscribers.push(
+        window.aurabot.onPetSettingsChanged((petSettings) => {
+          this.petSettings = petSettings;
+        })
+      );
+      unsubscribers.push(
+        window.aurabot.onPetActivity((petActivity) => {
+          this.enqueuePetActivity(petActivity);
+        })
+      );
+      unsubscribers.push(
+        window.aurabot.onLive2DModelStateChanged((live2dModelState) => {
+          this.live2dModelState = live2dModelState;
+        })
+      );
+      unsubscribers.push(
+        window.aurabot.onNotificationSettingsChanged((notificationSettings) => {
+          this.notificationSettings = notificationSettings;
+        })
+      );
+      unsubscribers.push(
+        window.aurabot.onPetCursorPosition((petCursorPosition) => {
+          this.petCursorPosition = petCursorPosition;
+          this.focusAt = { x: petCursorPosition.localX, y: petCursorPosition.localY };
+        })
+      );
+      unsubscribers.push(
+        window.aurabot.onAgentStatusChanged((agentStatus) => {
+          if (this.agentStatus !== agentStatus) {
+            this.agentStatus = agentStatus;
+          }
+        })
+      );
+      unsubscribers.push(
+        window.aurabot.onChatMessageCreated((message) => {
+          if (this.messages.some((existingMessage) => existingMessage.id === message.id)) {
+            return;
+          }
+          this.messages = [...this.messages, message];
+        })
+      );
+      unsubscribers.push(
+        window.aurabot.onChatMessageUpdated((message) => {
+          this.messages = upsertMessage(this.messages, message);
+        })
+      );
+      unsubscribers.push(
+        window.aurabot.onTaskChanged((task) => {
+          this.tasks = updateTasks(this.tasks, task);
+        })
+      );
+      unsubscribers.push(
+        window.aurabot.onTaskDeleted((taskId) => {
+          this.tasks = removeTask(this.tasks, taskId);
+        })
+      );
+
+      return () => {
+        for (const unsubscribe of unsubscribers) {
+          unsubscribe();
         }
-
-        return { messages: [...current.messages, message] };
-      });
-    });
-    const unsubscribeChatMessageUpdated = window.aurabot.onChatMessageUpdated((message) => {
-      set((current) => ({
-        messages: upsertMessage(current.messages, message)
-      }));
-    });
-    const unsubscribeTaskChanged = window.aurabot.onTaskChanged((task) => {
-      set((current) => ({
-        tasks: updateTasks(current.tasks, task)
-      }));
-    });
-    const unsubscribeTaskDeleted = window.aurabot.onTaskDeleted((taskId) => {
-      set((current) => ({
-        tasks: removeTask(current.tasks, taskId)
-      }));
-    });
-
-    return () => {
-      unsubscribeSettings();
-      unsubscribeActivity();
-      unsubscribeLive2DModelState();
-      unsubscribeNotificationSettings();
-      unsubscribePetCursorPosition();
-      unsubscribeAgentStatus();
-      unsubscribeChatMessage();
-      unsubscribeChatMessageUpdated();
-      unsubscribeTaskChanged();
-      unsubscribeTaskDeleted();
-    };
-  },
-  async openConsoleWindow() {
-    await window.aurabot.openConsoleWindow();
-  },
-  async openSettingsWindow() {
-    await window.aurabot.openSettingsWindow();
-  },
-  async openConfigFile() {
-    await window.aurabot.openConfigFile();
-  },
-  async updateTaskRunnerSettings(runners) {
-    const appConfig = await window.aurabot.updateTaskRunnerSettings({ runners });
-    set({ appConfig });
-  },
-  async updateModelProviderSettings(patch) {
-    const appConfig = await window.aurabot.updateModelProviderSettings(patch);
-    const modelHealth = await window.aurabot.getModelHealth();
-    set({ appConfig, modelHealth });
-  },
-  async testModelConnection(role) {
-    set((current) => ({
-      modelHealth: current.modelHealth
-        ? {
-            ...current.modelHealth,
-            [role]: {
-              ...current.modelHealth[role],
-              state: "testing"
-            }
+      };
+    },
+    async openConsoleWindow() {
+      await window.aurabot.openConsoleWindow();
+    },
+    async openSettingsWindow() {
+      await window.aurabot.openSettingsWindow();
+    },
+    async openConfigFile() {
+      await window.aurabot.openConfigFile();
+    },
+    async updateTaskRunnerSettings(runners: TaskRunnerSettingsPatch["runners"]) {
+      this.appConfig = await window.aurabot.updateTaskRunnerSettings({ runners });
+    },
+    async updateModelProviderSettings(patch: ModelProviderSettingsPatch) {
+      this.appConfig = await window.aurabot.updateModelProviderSettings(patch);
+      this.modelHealth = await window.aurabot.getModelHealth();
+    },
+    async testModelConnection(role: ModelRoleKey) {
+      if (this.modelHealth) {
+        this.modelHealth = {
+          ...this.modelHealth,
+          [role]: {
+            ...this.modelHealth[role],
+            state: "testing"
           }
-        : current.modelHealth
-    }));
-    const health = await window.aurabot.testModelConnection({ role });
-    set((current) => ({
-      modelHealth: current.modelHealth
-        ? {
-            ...current.modelHealth,
-            [role]: health
-          }
-        : current.modelHealth
-    }));
-  },
-  async updateProactiveSettings(patch) {
-    const appConfig = await window.aurabot.updateProactiveSettings(patch);
-    set({ appConfig });
-  },
-  async updatePersonaSettings(settings) {
-    const profile = await window.aurabot.updatePersonaSettings(settings);
-    set({ profile });
-  },
-  async setCurrentLive2DModel(modelId) {
-    const live2dModelState = await window.aurabot.setCurrentLive2DModel(modelId);
-    set({ live2dModelState });
-  },
-  async updateNotificationSettings(patch) {
-    const notificationSettings = await window.aurabot.updateNotificationSettings(patch);
-    set({ notificationSettings });
-  },
-  async updatePetSettings(patch: PetSettingsPatch) {
-    const petSettings = await window.aurabot.updatePetSettings(patch);
-    set({ petSettings });
-  },
-  async setPetMousePassthrough(enabled: boolean) {
-    await window.aurabot.setPetMousePassthrough(enabled);
-  },
-  async movePetWindowBy(delta: { x: number; y: number }) {
-    await window.aurabot.movePetWindowBy(delta);
-  },
-  async sendMessage(content: string, source: "console" | "pet_voice" | "pet_text" = "console") {
-    const trimmed = content.trim();
+        };
+      }
 
-    if (!trimmed) {
-      return;
-    }
+      const health = await window.aurabot.testModelConnection({ role });
+      if (this.modelHealth) {
+        this.modelHealth = {
+          ...this.modelHealth,
+          [role]: health
+        };
+      }
+    },
+    async updateProactiveSettings(patch: ProactiveSettingsPatch) {
+      this.appConfig = await window.aurabot.updateProactiveSettings(patch);
+    },
+    async updatePersonaSettings(settings: PersonaSettings) {
+      this.profile = await window.aurabot.updatePersonaSettings(settings);
+    },
+    async setCurrentLive2DModel(modelId: string) {
+      this.live2dModelState = await window.aurabot.setCurrentLive2DModel(modelId);
+    },
+    async updateNotificationSettings(patch: Partial<Omit<NotificationSettings, "permissionState">>) {
+      this.notificationSettings = await window.aurabot.updateNotificationSettings(patch);
+    },
+    async updatePetSettings(patch: PetSettingsPatch) {
+      this.petSettings = await window.aurabot.updatePetSettings(patch);
+    },
+    async setPetMousePassthrough(enabled: boolean) {
+      await window.aurabot.setPetMousePassthrough(enabled);
+    },
+    async movePetWindowBy(delta: { x: number; y: number }) {
+      await window.aurabot.movePetWindowBy(delta);
+    },
+    async sendMessage(content: string, source: "console" | "pet_voice" | "pet_text" = "console") {
+      const trimmed = content.trim();
 
-    const { mainSessionId, profile } = get();
-    const pendingUserMessage: Message = {
-      id: `local-pending-${Date.now()}-${Math.random().toString(36).slice(2, 8)}`,
-      sessionId: mainSessionId ?? "main-session-pending",
-      profileId: profile?.id ?? "profile-pending",
-      role: "user",
-      content: trimmed,
-      createdAt: new Date().toISOString()
-    };
+      if (!trimmed) {
+        return;
+      }
 
-    set((current) => ({
-      agentStatus: "thinking",
-      messages: [...current.messages, pendingUserMessage]
-    }));
+      const pendingUserMessage: Message = {
+        id: `local-pending-${Date.now()}-${Math.random().toString(36).slice(2, 8)}`,
+        sessionId: this.mainSessionId ?? "main-session-pending",
+        profileId: this.profile?.id ?? "profile-pending",
+        role: "user",
+        content: trimmed,
+        createdAt: new Date().toISOString()
+      };
 
-    try {
-      const result = await window.aurabot.sendChatMessage({ content: trimmed, source });
+      this.agentStatus = "thinking";
+      this.messages = [...this.messages, pendingUserMessage];
 
-      set((current) => ({
-        messages: reconcileMessages(current.messages, pendingUserMessage.id, result),
-        tasks: updateTasks(current.tasks, result.createdTask ?? result.updatedTask),
-        agentStatus: result.agentStatus
-      }));
-    } catch (error) {
-      set((current) => ({
-        messages: current.messages.filter((message) => message.id !== pendingUserMessage.id),
-        agentStatus: "idle"
-      }));
-      throw error;
-    }
-  },
-  async cancelTask(taskId: string) {
-    const result = await window.aurabot.cancelTask({ taskId });
+      try {
+        const result = await window.aurabot.sendChatMessage({ content: trimmed, source });
+        this.messages = reconcileMessages(this.messages, pendingUserMessage.id, result);
+        this.tasks = updateTasks(this.tasks, result.createdTask ?? result.updatedTask);
+        this.agentStatus = result.agentStatus;
+      } catch (error) {
+        this.messages = this.messages.filter((message) => message.id !== pendingUserMessage.id);
+        this.agentStatus = "idle";
+        throw error;
+      }
+    },
+    async cancelTask(taskId: string) {
+      const result = await window.aurabot.cancelTask({ taskId });
 
-    if (!result.ok || !result.task) {
-      throw new Error(result.error ?? "任务取消失败。");
-    }
+      if (!result.ok || !result.task) {
+        throw new Error(result.error ?? "任务取消失败。");
+      }
 
-    set((current) => ({
-      tasks: updateTasks(current.tasks, result.task)
-    }));
-  },
-  async deleteTask(taskId: string) {
-    const result = await window.aurabot.deleteTask({ taskId });
+      this.tasks = updateTasks(this.tasks, result.task);
+    },
+    async deleteTask(taskId: string) {
+      const result = await window.aurabot.deleteTask({ taskId });
 
-    if (!result.ok) {
-      throw new Error(result.error ?? "任务删除失败。");
-    }
+      if (!result.ok) {
+        throw new Error(result.error ?? "任务删除失败。");
+      }
 
-    set((current) => ({
-      tasks: removeTask(current.tasks, result.taskId ?? taskId)
-    }));
-  },
-  showPetNotice(message: string) {
-    set((current) =>
-      enqueuePetActivity(current, {
+      this.tasks = removeTask(this.tasks, result.taskId ?? taskId);
+    },
+    showPetNotice(message: string) {
+      this.enqueuePetActivity({
         id: `local-${Date.now()}`,
         kind: "voice_notice",
         message,
         createdAt: new Date().toISOString()
-      })
-    );
-  },
-  clearPetActivity(id?: string) {
-    set((current) => {
-      if (id && current.petActivity?.id !== id) {
-        return {};
+      });
+    },
+    enqueuePetActivity(petActivity: PetActivity) {
+      if (!this.petActivity) {
+        this.petActivity = petActivity;
+        return;
       }
 
-      const [nextActivity, ...remainingActivities] = current.petActivityQueue;
+      if (
+        this.petActivity.id === petActivity.id ||
+        this.petActivityQueue.some((queuedActivity) => queuedActivity.id === petActivity.id)
+      ) {
+        return;
+      }
 
-      return {
-        petActivity: nextActivity,
-        petActivityQueue: remainingActivities
-      };
-    });
+      if (isPriorityPetActivity(petActivity) && !isPriorityPetActivity(this.petActivity)) {
+        this.petActivity = petActivity;
+        this.petActivityQueue = this.petActivityQueue.filter(isPriorityPetActivity);
+        return;
+      }
+
+      this.petActivityQueue = [...this.petActivityQueue, petActivity];
+    },
+    clearPetActivity(id?: string) {
+      if (id && this.petActivity?.id !== id) {
+        return;
+      }
+
+      const [nextActivity, ...remainingActivities] = this.petActivityQueue;
+      this.petActivity = nextActivity;
+      this.petActivityQueue = remainingActivities;
+    },
+    armPetActivityAutoClear(activityId: string) {
+      window.setTimeout(() => {
+        this.clearPetActivity(activityId);
+      }, PET_ACTIVITY_TIMEOUT_MS);
+    }
   }
-}));
-
-function enqueuePetActivity(
-  current: Pick<AuraBotStore, "petActivity" | "petActivityQueue">,
-  petActivity: PetActivity
-): Partial<AuraBotStore> {
-  if (!current.petActivity) {
-    return { petActivity };
-  }
-
-  if (isPriorityPetActivity(petActivity) && !isPriorityPetActivity(current.petActivity)) {
-    return {
-      petActivity,
-      petActivityQueue: current.petActivityQueue.filter(isPriorityPetActivity)
-    };
-  }
-
-  if (
-    current.petActivity.id === petActivity.id ||
-    current.petActivityQueue.some((queuedActivity) => queuedActivity.id === petActivity.id)
-  ) {
-    return {};
-  }
-
-  return {
-    petActivityQueue: [...current.petActivityQueue, petActivity]
-  };
-}
+});
 
 function isPriorityPetActivity(petActivity: PetActivity): boolean {
   return petActivity.kind !== "chat_reply";
@@ -349,10 +337,8 @@ function reconcileMessages(messages: Message[], pendingMessageId: string, result
     nextMessages.push(result.userMessage);
   }
 
-  const { assistantMessage } = result;
-
-  if (assistantMessage && !nextMessages.some((message) => message.id === assistantMessage.id)) {
-    nextMessages.push(assistantMessage);
+  if (result.assistantMessage && !nextMessages.some((message) => message.id === result.assistantMessage?.id)) {
+    nextMessages.push(result.assistantMessage);
   }
 
   return nextMessages;

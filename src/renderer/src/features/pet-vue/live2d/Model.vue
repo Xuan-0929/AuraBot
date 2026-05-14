@@ -4,10 +4,10 @@
 
 <script setup lang="ts">
 import { onUnmounted, watch } from "vue";
-import type { Application, DisplayObject } from "pixi.js";
-import cubismCoreUrl from "live2dcubismcore/live2dcubismcore.min.js?url";
+import type { Application } from "pixi.js";
 import { calculateLive2DPlacement } from "./live2dPlacement";
 import { useMotionQueueStore } from "../stores/motionQueue";
+import { loadLive2DModel, removeAndDestroyLive2DModel, type Live2DModelRuntime } from "../../live2d/runtime";
 
 interface FocusPoint {
   x: number;
@@ -17,26 +17,6 @@ interface FocusPoint {
 interface PointerPoint {
   x: number;
   y: number;
-}
-
-interface Live2DModelRuntime {
-  autoUpdate: boolean;
-  anchor: { set(x: number, y: number): void };
-  scale: { set(scale: number): void };
-  x: number;
-  y: number;
-  width: number;
-  height: number;
-  internalModel?: {
-    width?: number;
-    height?: number;
-    motionManager?: { definitions?: unknown };
-    hitAreas?: Array<{ name?: string }>;
-  };
-  motion(group: string, index?: number): unknown;
-  focus(x: number, y: number, instant?: boolean): void;
-  hitTest(areaName: string, x: number, y: number): boolean;
-  destroy(options?: { texture?: boolean; baseTexture?: boolean }): void;
 }
 
 const props = defineProps<{
@@ -59,27 +39,9 @@ let lastMotionSignature: string | undefined;
 let loadGeneration = 0;
 let lastCanvasW = 0;
 let lastCanvasH = 0;
-let Live2DModelCtor: {
-  from(modelPath: string, options?: { autoInteract?: boolean }): Promise<unknown>;
-  registerTicker(ticker: unknown): void;
-} | null = null;
 
 function teardownModelFromStage(app: Application | null) {
-  if (model && app) {
-    // Detach from the shared ticker before destroy so pixi-live2d-display does
-    // not keep ticking a freed model on subsequent frames.
-    try {
-      model.autoUpdate = false;
-    } catch {
-      /* ignore */
-    }
-    app.stage.removeChild(model as unknown as DisplayObject);
-    try {
-      model.destroy({ texture: true, baseTexture: true });
-    } catch {
-      // Best-effort teardown when the GL context is already gone.
-    }
-  }
+  removeAndDestroyLive2DModel(app, model);
   model = undefined;
   motionQueueStore.clearQueue();
 }
@@ -98,17 +60,7 @@ watch(
     teardownModelFromStage(app);
     lastMotionSignature = undefined;
 
-    await ensureScript(cubismCoreUrl);
-    if (gen !== loadGeneration || disposed) {
-      return;
-    }
-
-    const Live2DModel = await ensureLive2DModelCtor();
-    if (gen !== loadGeneration || disposed) {
-      return;
-    }
-
-    const nextModel = (await Live2DModel.from(modelPath, { autoInteract: false })) as Live2DModelRuntime;
+    const nextModel = await loadLive2DModel(modelPath);
     if (gen !== loadGeneration || disposed) {
       try {
         nextModel.destroy({ texture: true, baseTexture: true });
@@ -229,40 +181,6 @@ function resizeModel() {
   model.scale.set(placement.scale);
   model.x = placement.x;
   model.y = placement.y;
-}
-
-async function ensureScript(src: string): Promise<void> {
-  if ((window as Window & { Live2DCubismCore?: unknown }).Live2DCubismCore) {
-    return;
-  }
-  await new Promise<void>((resolve, reject) => {
-    const existing = document.querySelector<HTMLScriptElement>(`script[src="${src}"]`);
-    if (existing) {
-      existing.addEventListener("load", () => resolve(), { once: true });
-      existing.addEventListener("error", () => reject(new Error(`Failed to load ${src}`)), { once: true });
-      return;
-    }
-    const script = document.createElement("script");
-    script.src = src;
-    script.async = true;
-    script.onload = () => resolve();
-    script.onerror = () => reject(new Error(`Failed to load ${src}`));
-    document.head.append(script);
-  });
-}
-
-async function ensureLive2DModelCtor() {
-  if (Live2DModelCtor) {
-    return Live2DModelCtor;
-  }
-
-  const PIXI = await import("pixi.js");
-  (window as Window & { PIXI?: unknown }).PIXI = PIXI;
-  const { Live2DModel } = await import("pixi-live2d-display/cubism4");
-  Live2DModel.registerTicker(PIXI.Ticker);
-  Live2DModelCtor = Live2DModel;
-
-  return Live2DModelCtor;
 }
 
 onUnmounted(() => {
