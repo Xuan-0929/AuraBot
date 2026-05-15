@@ -4,7 +4,9 @@
       <div class="console-header-copy">
         <div class="console-header-title-row">
           <h1>{{ t(store.displayLanguage, "consoleDashboardTitle") }}</h1>
-          <AgentStatusBar :status="store.agentStatus" :display-language="store.displayLanguage" />
+          <ConsoleGlass variant="pill" :radius="18" class="console-status-glass">
+            <AgentStatusBar :status="store.agentStatus" :display-language="store.displayLanguage" />
+          </ConsoleGlass>
         </div>
         <p>{{ t(store.displayLanguage, "consoleSubtitle") }}</p>
       </div>
@@ -19,27 +21,31 @@
             }}
           </span>
         </header>
-        <div class="console-task-viewport">
-          <div class="console-task-viewport-list">
-            <TaskStickyNotes
-              v-if="consoleTasks.length > 0"
-              :tasks="consoleTasks"
-              variant="console"
-              :show-header="false"
-              :aria-label="false"
-              :display-language="store.displayLanguage"
-              :on-cancel-task="(taskId) => void store.cancelTask(taskId)"
-              :on-delete-task="(taskId) => void store.deleteTask(taskId)"
-            />
-            <div v-else class="console-task-viewport-empty" aria-hidden="true" />
+        <ConsoleGlass variant="panel" :radius="24" class="console-task-glass">
+          <div class="console-task-viewport">
+            <div class="console-task-viewport-list">
+              <TaskStickyNotes
+                v-if="consoleTasks.length > 0"
+                :tasks="consoleTasks"
+                variant="console"
+                :show-header="false"
+                :aria-label="false"
+                :display-language="store.displayLanguage"
+                :on-cancel-task="(taskId) => void store.cancelTask(taskId)"
+                :on-delete-task="(taskId) => void store.deleteTask(taskId)"
+              />
+              <div v-else class="console-task-viewport-empty" aria-hidden="true" />
+            </div>
           </div>
-        </div>
+        </ConsoleGlass>
       </aside>
     </header>
     <div class="console-body">
       <section class="console-chat" :aria-label="t(store.displayLanguage, 'mainConversation')">
         <MessageList :messages="store.messages" :display-language="store.displayLanguage" />
-        <Composer :display-language="store.displayLanguage" :on-send="(content) => store.sendMessage(content)" />
+        <ConsoleGlass variant="control" :radius="24" class="console-composer-glass">
+          <Composer :display-language="store.displayLanguage" :on-send="(content) => store.sendMessage(content)" />
+        </ConsoleGlass>
       </section>
     </div>
   </main>
@@ -54,6 +60,7 @@ import MessageList from "../chat/MessageList.vue";
 import AgentStatusBar from "../status/AgentStatusBar.vue";
 import TaskStickyNotes from "../tasks/TaskStickyNotes.vue";
 import { pickConsoleStickyTasks } from "../tasks/taskStickyNotes";
+import ConsoleGlass from "./ConsoleGlass.vue";
 
 const store = useAuraBotStore();
 const consoleTasks = computed(() => pickConsoleStickyTasks(store.tasks));
