@@ -4,9 +4,9 @@
       <div class="console-header-copy">
         <div class="console-header-title-row">
           <h1>{{ t(store.displayLanguage, "consoleDashboardTitle") }}</h1>
-          <ConsoleLiquidControl :radius="18" class="console-status-glass">
+          <ConsoleGlassPanel variant="pill" class="console-status-glass">
             <AgentStatusBar :status="store.agentStatus" :display-language="store.displayLanguage" />
-          </ConsoleLiquidControl>
+          </ConsoleGlassPanel>
         </div>
         <p>{{ t(store.displayLanguage, "consoleSubtitle") }}</p>
       </div>
@@ -61,7 +61,6 @@ import AgentStatusBar from "../status/AgentStatusBar.vue";
 import TaskStickyNotes from "../tasks/TaskStickyNotes.vue";
 import { pickConsoleStickyTasks } from "../tasks/taskStickyNotes";
 import ConsoleGlassPanel from "./ConsoleGlassPanel.vue";
-import ConsoleLiquidControl from "./ConsoleLiquidControl.vue";
 
 const store = useAuraBotStore();
 const consoleTasks = computed(() => pickConsoleStickyTasks(store.tasks));

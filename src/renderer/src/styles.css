@@ -1711,7 +1711,6 @@ textarea {
   z-index: 1;
 }
 
-.console-liquid-control,
 .console-glass-panel {
   position: relative;
   display: block;
@@ -1733,33 +1732,14 @@ textarea {
   background: var(--console-glass-strong);
 }
 
-.console-liquid-control .glass {
-  border: 1px solid var(--console-border);
-  background: var(--console-glass);
-  box-shadow: var(--console-shadow-soft);
-}
-
-.console-liquid-control .glass__warp {
-  background: var(--console-glass);
-}
-
-.console-liquid-control .text-white {
-  color: var(--console-text);
-  text-shadow: none;
+.console-glass-panel-pill {
+  border-radius: 18px;
 }
 
 .console-status-glass {
   flex: 0 0 auto;
   width: max-content;
   height: 30px;
-}
-
-.console-status-glass > .relative,
-.console-status-glass .glass,
-.console-status-glass .text-white,
-.console-status-glass .console-liquid-control-content {
-  width: auto;
-  height: 100%;
 }
 
 .console-task-glass {
@@ -2082,8 +2062,6 @@ textarea {
 }
 
 @media (prefers-reduced-motion: reduce) {
-  .console-liquid-control > .relative,
-  .console-liquid-control .glass,
   .console-window .composer button,
   .console-window .task-sticky-note-action {
     transition: none !important;

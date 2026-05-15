@@ -7,7 +7,7 @@
 <script setup lang="ts">
 withDefaults(
   defineProps<{
-    variant?: "panel" | "control";
+    variant?: "panel" | "control" | "pill";
   }>(),
   { variant: "panel" }
 );
