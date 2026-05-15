@@ -49,12 +49,21 @@ type Unsubscribe = () => void;
 
 export const useAuraBotStore = defineStore("auraBot", {
   state: (): AuraBotState => ({
+    profile: undefined,
+    mainSessionId: undefined,
     messages: [],
     tasks: [],
     agentStatus: "idle",
     petSettings: { ...DEFAULT_PET_SETTINGS },
+    appConfig: undefined,
+    modelHealth: undefined,
+    live2dModelState: undefined,
+    notificationSettings: undefined,
+    petActivity: undefined,
     petActivityQueue: [],
+    petCursorPosition: undefined,
     focusAt: { x: 0, y: 0 },
+    memoryDebugSnapshot: undefined,
     debugPetOverlay: false,
     isInitialized: false
   }),

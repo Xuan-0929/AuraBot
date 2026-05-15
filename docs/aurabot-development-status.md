@@ -1,14 +1,41 @@
 # AuraBot 当前开发状态
 
-更新时间：2026-05-07
+更新时间：2026-05-15
 
 这份文档记录当前工作分支与近期已集成分支已经完成的工程事实、最近一次验证结果，以及下一步最应该推进的任务。它是执行状态板，不替代 PRD，也不替代 MVP 计划。
 
-当前工作分支：`codex/aurabot-ui-productization-a1`
+当前工作分支：`main`
 
-当前集成基线：`943dcd9 docs: record A1 UI productization checkpoint`
+当前集成基线：`main` 当前 HEAD（本轮提交推送后与 `origin/main` 同步）
 
 分支边界：这一侧已经集成 Live2D 桌宠体验、主控制台、任务便签快捷操作、流式回复、模型 gate、记忆调试、follow-up 主动提醒，以及 soul 驱动的统一回复/播报机制。后续如果继续并行开发，记忆模型/配置大改、任务执行器大改、桌宠 UI 大改仍建议分支隔离，避免在 `chatOrchestrator`、`createWindow`、`store`、IPC contract 和 renderer 样式上互相抢修改权。
+
+## 2026-05-15 设置界面迁移 checkpoint
+
+本次 checkpoint 迁移了设置界面，并在控制台右上角添加了设置按钮。控制台只保留最小入口调整，不再改动主控制台布局。
+
+已完成：
+
+1. 控制台任务便签区域右上角已移除 `Idle / Active / 空闲中 / 有任务` 状态提示，替换为设置齿轮按钮，点击后打开完整设置窗口。
+2. 设置窗口已从常驻 tab 导航迁移为 AIRI 风格的分层进入逻辑：一级设置入口、二级分组菜单、具体设置页。
+3. 一级入口收束为 `Basics / Companion / Intelligence / Automation`，二级菜单分别承接通用、通知、桌宠行为、人格、Live2D、模型、记忆调试和 Task CLI。
+4. 设置页新增卡片式菜单、淡化图标和背景水印；返回按钮按层级返回，页眉会显示当前分组或页面的上下级关系。
+5. Renderer store 已显式声明 `appConfig / modelHealth / live2dModelState / notificationSettings` 等可选状态，修复设置页初始化后偶发显示 `Config not loaded` 的问题。
+6. e2e 已同步到新的设置入口和分层导航，不再依赖旧的 tablist 或桌宠快捷设置入口。
+
+本轮验证记录：
+
+| 命令/检查 | 结果 |
+| --- | --- |
+| `corepack pnpm typecheck` | 通过 |
+| `corepack pnpm exec electron-vite build` | 通过 |
+| `git diff --check` | 通过 |
+| `corepack pnpm playwright test tests/e2e/app-launch.spec.ts --workers=1` | 14 个 e2e tests 通过 |
+
+补充说明：
+
+1. 本轮没有重新设计控制台，只保留任务便签右上角设置按钮这一个入口变化。
+2. `electron-vite build` 仍有既有的 Pixi 动静态 import chunk warning，不影响本轮构建结果。
 
 ## 2026-05-07 UI polish + notifications checkpoint
 

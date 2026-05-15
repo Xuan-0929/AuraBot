@@ -11,7 +11,7 @@
       {{ petStore.petActivity.message }}
     </aside>
 
-    <div class="desktop-pet-model-shell pet-vue-model-shell">
+    <div class="desktop-pet-model-shell pet-vue-model-shell" data-testid="live2d-model-surface">
       <div class="pet-vue-live2d-frame">
         <Scene
           :pet-ready="petStore.isInitialized"

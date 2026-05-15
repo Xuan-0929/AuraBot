@@ -1,32 +1,31 @@
 <template>
   <div class="settings-center">
-    <aside class="settings-center-sidebar" :aria-label="t(displayLanguage, 'settingsNavigation')">
-      <p class="settings-center-sidebar-note">{{ t(displayLanguage, "settingsSidebarHint") }}</p>
-      <nav class="settings-center-nav" role="tablist" :aria-label="t(displayLanguage, 'settingsNavigation')">
-        <button
-          v-for="item in items"
-          :key="item.key"
-          type="button"
-          role="tab"
-          :aria-label="item.label"
-          :aria-selected="currentPage === item.key"
-          class="settings-center-tab"
-          :data-active="currentPage === item.key"
-          @click="emit('select', item.key)"
-        >
-          {{ item.label }}
-        </button>
-      </nav>
-    </aside>
-    <section class="settings-center-content" :aria-label="t(displayLanguage, 'settingsContent')">
-      <slot />
-    </section>
+    <nav class="settings-center-nav" :aria-label="t(displayLanguage, 'settingsNavigation')">
+      <button
+        v-for="item in items"
+        :key="item.key"
+        type="button"
+        :aria-label="item.label"
+        class="settings-center-tab"
+        @click="emit('select', item.key)"
+      >
+        <span class="settings-center-tab-copy">
+          <span class="settings-center-tab-title">{{ item.label }}</span>
+          <span class="settings-center-tab-description">{{ item.description }}</span>
+        </span>
+        <SettingsNavIcon :name="item.icon" />
+      </button>
+    </nav>
+    <div v-if="watermarkIcon" class="settings-menu-watermark" aria-hidden="true">
+      <SettingsNavIcon :name="watermarkIcon" />
+    </div>
   </div>
 </template>
 
 <script setup lang="ts">
 import type { PetSettings } from "../../../../shared/schemas/petSettings";
 import { t } from "../../i18n";
+import SettingsNavIcon, { type SettingsNavIconName } from "./SettingsNavIcon.vue";
 
 export type SettingsPageKey =
   | "general"
@@ -39,17 +38,19 @@ export type SettingsPageKey =
   | "memoryDebug";
 
 export interface SettingsNavItem {
-  key: SettingsPageKey;
+  key: string;
   label: string;
+  description: string;
+  icon: SettingsNavIconName;
 }
 
 defineProps<{
   displayLanguage: PetSettings["displayLanguage"];
-  currentPage: SettingsPageKey;
   items: SettingsNavItem[];
+  watermarkIcon?: SettingsNavIconName;
 }>();
 
 const emit = defineEmits<{
-  select: [SettingsPageKey];
+  select: [string];
 }>();
 </script>

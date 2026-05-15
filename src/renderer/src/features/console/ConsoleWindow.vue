@@ -13,13 +13,18 @@
       <aside class="console-task-sticky-layer" :aria-label="t(store.displayLanguage, 'taskStickyNotes')">
         <header class="console-task-panel-meta">
           <strong>{{ t(store.displayLanguage, "consoleTaskViewportTitle") }}</strong>
-          <span>
-            {{
-              consoleTasks.length > 0
-                ? t(store.displayLanguage, "consoleTaskViewportActive")
-                : t(store.displayLanguage, "consoleTaskViewportIdle")
-            }}
-          </span>
+          <button
+            type="button"
+            class="console-task-settings-button"
+            :aria-label="t(store.displayLanguage, 'openAuraBotSettings')"
+            :title="t(store.displayLanguage, 'settings')"
+            @click="void store.openSettingsWindow()"
+          >
+            <svg viewBox="0 0 24 24" fill="none" aria-hidden="true">
+              <path d="M12 15.5a3.5 3.5 0 1 0 0-7 3.5 3.5 0 0 0 0 7Z" />
+              <path d="M19.4 13.5a7.8 7.8 0 0 0 .1-1.5 7.8 7.8 0 0 0-.1-1.5l2-1.5-2-3.4-2.4 1a8.1 8.1 0 0 0-2.6-1.5L14 2.5h-4l-.4 2.6A8.1 8.1 0 0 0 7 6.6l-2.4-1-2 3.4 2 1.5a7.8 7.8 0 0 0-.1 1.5 7.8 7.8 0 0 0 .1 1.5l-2 1.5 2 3.4 2.4-1a8.1 8.1 0 0 0 2.6 1.5l.4 2.6h4l.4-2.6a8.1 8.1 0 0 0 2.6-1.5l2.4 1 2-3.4-2-1.5Z" />
+            </svg>
+          </button>
         </header>
         <ConsoleGlassPanel class="console-task-glass">
           <div class="console-task-viewport">
