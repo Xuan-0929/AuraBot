@@ -4,9 +4,9 @@
       <div class="console-header-copy">
         <div class="console-header-title-row">
           <h1>{{ t(store.displayLanguage, "consoleDashboardTitle") }}</h1>
-          <ConsoleGlass variant="pill" :radius="18" class="console-status-glass">
+          <ConsoleLiquidControl :radius="18" class="console-status-glass">
             <AgentStatusBar :status="store.agentStatus" :display-language="store.displayLanguage" />
-          </ConsoleGlass>
+          </ConsoleLiquidControl>
         </div>
         <p>{{ t(store.displayLanguage, "consoleSubtitle") }}</p>
       </div>
@@ -21,7 +21,7 @@
             }}
           </span>
         </header>
-        <ConsoleGlass variant="panel" :radius="24" class="console-task-glass">
+        <ConsoleGlassPanel class="console-task-glass">
           <div class="console-task-viewport">
             <div class="console-task-viewport-list">
               <TaskStickyNotes
@@ -37,15 +37,15 @@
               <div v-else class="console-task-viewport-empty" aria-hidden="true" />
             </div>
           </div>
-        </ConsoleGlass>
+        </ConsoleGlassPanel>
       </aside>
     </header>
     <div class="console-body">
       <section class="console-chat" :aria-label="t(store.displayLanguage, 'mainConversation')">
         <MessageList :messages="store.messages" :display-language="store.displayLanguage" />
-        <ConsoleGlass variant="control" :radius="24" class="console-composer-glass">
+        <ConsoleGlassPanel variant="control" class="console-composer-glass">
           <Composer :display-language="store.displayLanguage" :on-send="(content) => store.sendMessage(content)" />
-        </ConsoleGlass>
+        </ConsoleGlassPanel>
       </section>
     </div>
   </main>
@@ -60,7 +60,8 @@ import MessageList from "../chat/MessageList.vue";
 import AgentStatusBar from "../status/AgentStatusBar.vue";
 import TaskStickyNotes from "../tasks/TaskStickyNotes.vue";
 import { pickConsoleStickyTasks } from "../tasks/taskStickyNotes";
-import ConsoleGlass from "./ConsoleGlass.vue";
+import ConsoleGlassPanel from "./ConsoleGlassPanel.vue";
+import ConsoleLiquidControl from "./ConsoleLiquidControl.vue";
 
 const store = useAuraBotStore();
 const consoleTasks = computed(() => pickConsoleStickyTasks(store.tasks));

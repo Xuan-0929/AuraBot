@@ -1,5 +1,5 @@
 <template>
-  <div :class="['console-glass', `console-glass-${variant}`]">
+  <div class="console-liquid-control">
     <LiquidGlass
       :padding="padding"
       :corner-radius="radius"
@@ -11,7 +11,7 @@
       :mode="'standard'"
       :style="glassStyle"
     >
-      <div class="console-glass-content">
+      <div class="console-liquid-control-content">
         <slot />
       </div>
     </LiquidGlass>
@@ -23,7 +23,6 @@ import { LiquidGlass } from "@wxperia/liquid-glass-vue";
 
 withDefaults(
   defineProps<{
-    variant?: "panel" | "pill" | "control";
     radius?: number;
     padding?: string;
     blurAmount?: number;
@@ -33,14 +32,13 @@ withDefaults(
     elasticity?: number;
   }>(),
   {
-    variant: "panel",
-    radius: 24,
+    radius: 18,
     padding: "0",
-    blurAmount: 0.07,
-    displacementScale: 34,
-    saturation: 126,
-    aberrationIntensity: 0.8,
-    elasticity: 0.06
+    blurAmount: 0.045,
+    displacementScale: 10,
+    saturation: 118,
+    aberrationIntensity: 0,
+    elasticity: 0.04
   }
 );
 

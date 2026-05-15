@@ -1711,7 +1711,8 @@ textarea {
   z-index: 1;
 }
 
-.console-glass {
+.console-liquid-control,
+.console-glass-panel {
   position: relative;
   display: block;
   min-width: 0;
@@ -1720,40 +1721,29 @@ textarea {
   line-height: 0;
 }
 
-.console-glass-panel,
-.console-glass-control {
+.console-glass-panel {
+  border: 1px solid var(--console-border);
   border-radius: 24px;
+  background: var(--console-glass);
+  box-shadow: var(--console-shadow-soft);
+  backdrop-filter: blur(24px) saturate(135%);
 }
 
-.console-glass-pill {
-  border-radius: 18px;
+.console-glass-panel-control {
+  background: var(--console-glass-strong);
 }
 
-.console-glass-panel > .relative,
-.console-glass-control > .relative,
-.console-glass-panel .glass,
-.console-glass-control .glass,
-.console-glass-panel .text-white,
-.console-glass-control .text-white,
-.console-glass-panel .console-glass-content,
-.console-glass-control .console-glass-content {
-  width: 100%;
-  min-width: 0;
-  height: 100%;
-  min-height: 0;
-}
-
-.console-glass .glass {
+.console-liquid-control .glass {
   border: 1px solid var(--console-border);
   background: var(--console-glass);
   box-shadow: var(--console-shadow-soft);
 }
 
-.console-glass .glass__warp {
+.console-liquid-control .glass__warp {
   background: var(--console-glass);
 }
 
-.console-glass .text-white {
+.console-liquid-control .text-white {
   color: var(--console-text);
   text-shadow: none;
 }
@@ -1767,7 +1757,7 @@ textarea {
 .console-status-glass > .relative,
 .console-status-glass .glass,
 .console-status-glass .text-white,
-.console-status-glass .console-glass-content {
+.console-status-glass .console-liquid-control-content {
   width: auto;
   height: 100%;
 }
@@ -2092,8 +2082,8 @@ textarea {
 }
 
 @media (prefers-reduced-motion: reduce) {
-  .console-glass > .relative,
-  .console-glass .glass,
+  .console-liquid-control > .relative,
+  .console-liquid-control .glass,
   .console-window .composer button,
   .console-window .task-sticky-note-action {
     transition: none !important;
