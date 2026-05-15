@@ -43,6 +43,43 @@ async function getPetWindowBounds(electronApp: ElectronApplication) {
   return electronApp.evaluate(({ BrowserWindow }) => BrowserWindow.getAllWindows()[0].getBounds());
 }
 
+interface PetPassthroughCall {
+  enabled: boolean;
+  options?: unknown;
+}
+
+async function recordPetPassthroughCalls(electronApp: ElectronApplication): Promise<void> {
+  await electronApp.evaluate(({ BrowserWindow }) => {
+    const petWindow = BrowserWindow.getAllWindows().find((window) => window.webContents.getURL().includes("#pet"));
+    if (!petWindow) {
+      throw new Error("AuraBot pet window not found");
+    }
+    const globalScope = globalThis as typeof globalThis & {
+      __aurabotPassthroughCalls?: PetPassthroughCall[];
+      __aurabotPassthroughPatched?: boolean;
+    };
+    globalScope.__aurabotPassthroughCalls = [];
+    if (globalScope.__aurabotPassthroughPatched) {
+      return;
+    }
+    const originalSetIgnoreMouseEvents = petWindow.setIgnoreMouseEvents.bind(petWindow);
+    petWindow.setIgnoreMouseEvents = ((enabled: boolean, options?: unknown) => {
+      globalScope.__aurabotPassthroughCalls?.push({ enabled, options });
+      return originalSetIgnoreMouseEvents(enabled, options as Electron.IgnoreMouseEventsOptions | undefined);
+    }) as typeof petWindow.setIgnoreMouseEvents;
+    globalScope.__aurabotPassthroughPatched = true;
+  });
+}
+
+async function getPetPassthroughCalls(electronApp: ElectronApplication): Promise<PetPassthroughCall[]> {
+  return electronApp.evaluate(() => {
+    const globalScope = globalThis as typeof globalThis & {
+      __aurabotPassthroughCalls?: PetPassthroughCall[];
+    };
+    return globalScope.__aurabotPassthroughCalls ?? [];
+  });
+}
+
 async function openConsole(electronApp: ElectronApplication, petWindow: Page): Promise<Page> {
   const consolePromise = electronApp.waitForEvent("window");
   await petWindow.getByTestId("live2d-model-surface").hover();
@@ -146,6 +183,7 @@ test("keeps pet quick controls available and syncs click-through settings while 
     await expect(settingsNav).toContainText("Basics");
     await expect(settingsNav).toContainText("Companion");
     await expect(settingsNav).toContainText("Intelligence");
+    await expect(settingsWindow.locator(".settings-nav-icon.iconify").first()).toBeVisible();
 
     await openSettingsPage(settingsWindow, "Basics", "General");
     await settingsWindow.getByLabel("Language").selectOption("zh");
@@ -253,6 +291,88 @@ test("opens the product settings window from the console settings button", async
     await settingsPage.hover();
     await settingsWindow.mouse.wheel(0, 500);
     await expect.poll(() => settingsPage.evaluate((element) => element.scrollTop)).toBeGreaterThan(0);
+  } finally {
+    await cleanupAuraBot(electronApp, userDataDir);
+  }
+});
+
+test("keeps Chinese language when click-through is enabled and persists both settings", async () => {
+  const userDataDir = mkdtempSync(join(tmpdir(), "aurabot-e2e-click-through-"));
+  let launched = await launchAuraBot(userDataDir);
+
+  try {
+    const consoleWindow = await openConsole(launched.electronApp, launched.petWindow);
+    const settingsWindow = await openSettingsFromConsole(launched.electronApp, consoleWindow);
+
+    await openSettingsPage(settingsWindow, "Basics", "General");
+    await settingsWindow.getByLabel("Language").selectOption("zh");
+    await recordPetPassthroughCalls(launched.electronApp);
+    await openSettingsPage(settingsWindow, "陪伴", "桌宠行为");
+    await settingsWindow.getByLabel("穿透人物点击").check();
+
+    await expect(settingsWindow.getByRole("main", { name: "设置" })).toBeVisible();
+    await expect(settingsWindow.getByRole("region", { name: "桌宠行为" })).toContainText("穿透人物点击");
+    await expect(launched.petWindow.getByLabel("桌面 Live2D 桌宠")).toHaveAttribute("data-click-through", "true");
+    await expect
+      .poll(() => {
+        const settings = JSON.parse(readFileSync(join(userDataDir, "pet-settings.json"), "utf8")) as {
+          clickThroughPet?: boolean;
+          displayLanguage?: string;
+        };
+
+        return settings;
+      })
+      .toMatchObject({
+        clickThroughPet: true,
+        displayLanguage: "zh"
+      });
+
+    const modelSurfaceBox = await launched.petWindow.getByTestId("live2d-model-surface").boundingBox();
+    expect(modelSurfaceBox).not.toBeNull();
+    await launched.petWindow.mouse.move(
+      modelSurfaceBox!.x + modelSurfaceBox!.width / 2,
+      modelSurfaceBox!.y + modelSurfaceBox!.height / 2
+    );
+    await expect
+      .poll(async () => {
+        const calls = await getPetPassthroughCalls(launched.electronApp);
+        return calls.at(-1)?.enabled;
+      })
+      .toBe(true);
+
+    await launched.electronApp.close();
+    launched = await launchAuraBot(userDataDir);
+
+    await expect(launched.petWindow.getByLabel("桌面 Live2D 桌宠")).toHaveAttribute("data-click-through", "true");
+  } finally {
+    await cleanupAuraBot(launched.electronApp, userDataDir);
+  }
+});
+
+test("returns from Live2D model settings without Live2D teardown or hit-area errors", async () => {
+  const { electronApp, petWindow, userDataDir } = await launchAuraBot();
+  const live2dErrors: string[] = [];
+  const collectLive2DError = (error: Error) => {
+    const message = error.message;
+    if (/hitAreas.*map|removeChild|Cannot read properties of null/u.test(message)) {
+      live2dErrors.push(message);
+    }
+  };
+
+  try {
+    petWindow.on("pageerror", collectLive2DError);
+    const settingsWindow = await openSettingsViaConsole(electronApp, petWindow);
+    settingsWindow.on("pageerror", collectLive2DError);
+
+    await openSettingsPage(settingsWindow, "Companion", "Live2D Model");
+    await expect(settingsWindow.getByRole("region", { name: "Live2D Model" })).toContainText("Current model");
+    await settingsWindow.getByRole("button", { name: "Back to settings" }).click();
+    await expect(settingsWindow.getByRole("button", { name: "Persona", exact: true })).toBeVisible();
+    await settingsWindow.getByRole("button", { name: "Persona", exact: true }).click();
+    await expect(settingsWindow.getByRole("region", { name: "Persona" })).toContainText("Name");
+    await settingsWindow.waitForTimeout(200);
+
+    expect(live2dErrors).toEqual([]);
   } finally {
     await cleanupAuraBot(electronApp, userDataDir);
   }

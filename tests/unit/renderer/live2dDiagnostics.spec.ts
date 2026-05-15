@@ -37,7 +37,7 @@ describe("resolveLive2DHostSize", () => {
 });
 
 describe("calculateLive2DPlacement", () => {
-  test("centers and anchors the model at the bottom of the host", () => {
+  test("keeps the visual model center in the host while preserving the lower body anchor", () => {
     expect(
       calculateLive2DPlacement({
         hostSize: { width: 270, height: 380 },
@@ -46,7 +46,7 @@ describe("calculateLive2DPlacement", () => {
       })
     ).toEqual({
       x: 135,
-      y: 380,
+      y: 371.26,
       scale: 0.25175
     });
   });

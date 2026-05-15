@@ -7,7 +7,12 @@ import { onUnmounted, watch } from "vue";
 import type { Application } from "pixi.js";
 import { calculateLive2DPlacement } from "./live2dPlacement";
 import { useMotionQueueStore } from "../stores/motionQueue";
-import { loadLive2DModel, removeAndDestroyLive2DModel, type Live2DModelRuntime } from "../../live2d/runtime";
+import {
+  loadLive2DModel,
+  normalizeLive2DHitAreaNames,
+  removeAndDestroyLive2DModel,
+  type Live2DModelRuntime
+} from "../../live2d/runtime";
 
 interface FocusPoint {
   x: number;
@@ -33,6 +38,8 @@ const emit = defineEmits<{
 }>();
 
 const motionQueueStore = useMotionQueueStore();
+const LIVE2D_MOTION_PRIORITY_IDLE = 1;
+const LIVE2D_MOTION_PRIORITY_NORMAL = 2;
 let model: Live2DModelRuntime | undefined;
 let disposed = false;
 let lastMotionSignature: string | undefined;
@@ -132,7 +139,8 @@ watch(
 
     lastMotionSignature = signature;
     try {
-      const result = model.motion(motion.group, motion.index);
+      const priority = motion.group === "Idle" ? LIVE2D_MOTION_PRIORITY_IDLE : LIVE2D_MOTION_PRIORITY_NORMAL;
+      const result = model.motion(motion.group, motion.index, priority);
       const awaitCompletion = motion.group !== "Idle";
       if (awaitCompletion && result && typeof (result as Promise<unknown>).then === "function") {
         await result;
@@ -150,8 +158,8 @@ watch(
       emit("interactiveChange", false);
       return;
     }
-    const areaNames = model.internalModel?.hitAreas?.map((item) => item.name).filter(Boolean) as string[] | undefined;
-    if (!areaNames || areaNames.length === 0) {
+    const areaNames = normalizeLive2DHitAreaNames(model.internalModel?.hitAreas);
+    if (areaNames.length === 0) {
       emit("interactiveChange", false);
       return;
     }

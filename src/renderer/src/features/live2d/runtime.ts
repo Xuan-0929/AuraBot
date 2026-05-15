@@ -13,9 +13,9 @@ export interface Live2DModelRuntime {
     width?: number;
     height?: number;
     motionManager?: { definitions?: unknown };
-    hitAreas?: Array<{ name?: string }>;
+    hitAreas?: unknown;
   };
-  motion(group: string, index?: number): unknown;
+  motion(group: string, index?: number, priority?: number): unknown;
   focus(x: number, y: number, instant?: boolean): void;
   hitTest(areaName: string, x: number, y: number): boolean;
   destroy(options?: { texture?: boolean; baseTexture?: boolean }): void;
@@ -86,7 +86,7 @@ export async function loadLive2DModel(modelPath: string): Promise<Live2DModelRun
 }
 
 export function removeAndDestroyLive2DModel(app: Application | null, model: Live2DModelRuntime | undefined): void {
-  if (!model || !app) {
+  if (!model) {
     return;
   }
 
@@ -96,11 +96,54 @@ export function removeAndDestroyLive2DModel(app: Application | null, model: Live
     /* ignore */
   }
 
-  app.stage.removeChild(model as unknown as DisplayObject);
+  try {
+    app?.stage?.removeChild?.(model as unknown as DisplayObject);
+  } catch {
+    /* ignore */
+  }
 
   try {
     model.destroy({ texture: true, baseTexture: true });
   } catch {
     /* ignore */
   }
+}
+
+export function normalizeLive2DHitAreaNames(hitAreas: unknown): string[] {
+  const names = new Set<string>();
+  const addName = (value: unknown) => {
+    if (typeof value !== "string") {
+      return;
+    }
+    const trimmed = value.trim();
+    if (trimmed) {
+      names.add(trimmed);
+    }
+  };
+
+  if (Array.isArray(hitAreas)) {
+    for (const item of hitAreas) {
+      if (item && typeof item === "object" && "name" in item) {
+        addName((item as { name?: unknown }).name);
+      }
+    }
+    return [...names];
+  }
+
+  if (!hitAreas || typeof hitAreas !== "object") {
+    return [];
+  }
+
+  for (const [key, value] of Object.entries(hitAreas as Record<string, unknown>)) {
+    if (value && typeof value === "object" && "name" in value) {
+      const rawName = (value as { name?: unknown }).name;
+      addName(rawName);
+      if (typeof rawName === "string" && rawName.trim()) {
+        continue;
+      }
+    }
+    addName(key);
+  }
+
+  return [...names];
 }

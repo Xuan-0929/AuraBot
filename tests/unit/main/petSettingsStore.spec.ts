@@ -3,6 +3,7 @@ import { tmpdir } from "node:os";
 import { join } from "node:path";
 import { describe, expect, test } from "vitest";
 import { PetSettingsStore } from "../../../src/main/petSettingsStore";
+import { parsePetSettingsPatch } from "../../../src/shared/schemas/petSettings";
 
 describe("PetSettingsStore", () => {
   test("loads conservative desktop-pet defaults when no settings file exists", () => {
@@ -74,6 +75,34 @@ describe("PetSettingsStore", () => {
       const reloadedStore = new PetSettingsStore(userDataPath);
 
       expect(reloadedStore.get().displayLanguage).toBe("zh");
+    } finally {
+      rmSync(userDataPath, { force: true, recursive: true });
+    }
+  });
+
+  test("treats incoming pet settings payloads as patches without restoring defaults", () => {
+    const userDataPath = mkdtempSync(join(tmpdir(), "aurabot-pet-settings-"));
+
+    try {
+      const store = new PetSettingsStore(userDataPath);
+
+      store.update(parsePetSettingsPatch({ displayLanguage: "zh" }));
+      expect(store.update(parsePetSettingsPatch({ clickThroughPet: true }))).toEqual({
+        clickThroughPet: true,
+        displayLanguage: "zh"
+      });
+
+      expect(store.update(parsePetSettingsPatch({ displayLanguage: "en" }))).toEqual({
+        clickThroughPet: true,
+        displayLanguage: "en"
+      });
+
+      const reloadedStore = new PetSettingsStore(userDataPath);
+
+      expect(reloadedStore.get()).toEqual({
+        clickThroughPet: true,
+        displayLanguage: "en"
+      });
     } finally {
       rmSync(userDataPath, { force: true, recursive: true });
     }

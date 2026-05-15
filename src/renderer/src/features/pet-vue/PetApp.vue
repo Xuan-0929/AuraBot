@@ -83,11 +83,7 @@ const clickThrough = useClickThrough({
   enabled: computed(() => petStore.petSettings.clickThroughPet),
   canvasRef,
   interactiveUiHovering: computed(
-    () =>
-      isControlsHovering.value ||
-      isInteractiveAreaHovering.value ||
-      isResizeGripHovering.value ||
-      resizeDraggingCorner.value !== null
+    () => isControlsHovering.value || isResizeGripHovering.value || resizeDraggingCorner.value !== null
   )
 });
 

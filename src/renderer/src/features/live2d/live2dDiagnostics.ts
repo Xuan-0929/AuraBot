@@ -15,6 +15,11 @@ export interface Live2DPlacement {
   scale: number;
 }
 
+const DEFAULT_LIVE2D_ANCHOR = {
+  x: 0.5,
+  y: 0.95
+} as const;
+
 export function resolveLive2DHostSize(host: Live2DHostLike, fallbackSize: Live2DSize): Live2DSize {
   const rect = host.getBoundingClientRect?.();
   const width = Math.round(host.clientWidth || rect?.width || fallbackSize.width);
@@ -38,10 +43,16 @@ export function calculateLive2DPlacement({
   const widthScale = hostSize.width / Math.max(modelSize.width, 1);
   const heightScale = hostSize.height / Math.max(modelSize.height, 1);
   const scale = Math.min(widthScale, heightScale) * (compact ? 1.06 : 0.92);
+  const scaledWidth = modelSize.width * scale;
+  const scaledHeight = modelSize.height * scale;
 
   return {
-    x: hostSize.width / 2,
-    y: hostSize.height,
+    x: roundPlacementValue(hostSize.width / 2 + (DEFAULT_LIVE2D_ANCHOR.x - 0.5) * scaledWidth),
+    y: roundPlacementValue(hostSize.height / 2 + (DEFAULT_LIVE2D_ANCHOR.y - 0.5) * scaledHeight),
     scale
   };
+}
+
+function roundPlacementValue(value: number): number {
+  return Number(value.toFixed(4));
 }

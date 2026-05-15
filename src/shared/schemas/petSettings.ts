@@ -5,12 +5,17 @@ export const DEFAULT_PET_SETTINGS = {
   displayLanguage: "en"
 } as const;
 
+const displayLanguageSchema = z.enum(["en", "zh"]);
+
 export const petSettingsSchema = z.object({
   clickThroughPet: z.boolean().default(DEFAULT_PET_SETTINGS.clickThroughPet),
-  displayLanguage: z.enum(["en", "zh"]).default(DEFAULT_PET_SETTINGS.displayLanguage)
+  displayLanguage: displayLanguageSchema.default(DEFAULT_PET_SETTINGS.displayLanguage)
 });
 
-export const petSettingsPatchSchema = petSettingsSchema.partial();
+export const petSettingsPatchSchema = z.object({
+  clickThroughPet: z.boolean().optional(),
+  displayLanguage: displayLanguageSchema.optional()
+});
 
 export type PetSettings = z.infer<typeof petSettingsSchema>;
 export type PetSettingsPatch = z.infer<typeof petSettingsPatchSchema>;

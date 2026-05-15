@@ -22,6 +22,8 @@
     "eval:memory": "corepack pnpm rebuild:node && vitest run tests/unit/core/memory/memoryEvaluation.spec.ts"
   },
   "dependencies": {
+    "@iconify-json/solar": "^1.2.5",
+    "@iconify/vue": "^5.0.1",
     "@langchain/openai": "^1.4.5",
     "@vueuse/core": "^14.3.0",
     "@wxperia/liquid-glass-vue": "^1.0.9",
