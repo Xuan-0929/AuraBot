@@ -1,0 +1,869 @@
+<!doctype html>
+<html lang="zh-CN">
+  <head>
+    <meta charset="utf-8" />
+    <meta name="viewport" content="width=device-width, initial-scale=1" />
+    <title>AuraBot 任务机制总览</title>
+    <style>
+      :root {
+        color-scheme: light;
+        --bg: #f7f4ef;
+        --paper: #fffdf9;
+        --paper-strong: #ffffff;
+        --ink: #25221f;
+        --muted: #746b62;
+        --soft: #9c9187;
+        --line: rgba(76, 63, 52, 0.14);
+        --line-strong: rgba(76, 63, 52, 0.24);
+        --amber: #d89145;
+        --green: #4f8f67;
+        --red: #b75d58;
+        --blue: #4d7fa3;
+        --violet: #7b6faf;
+        --shadow: 0 24px 70px rgba(52, 40, 31, 0.12);
+        --radius: 18px;
+        font-family:
+          -apple-system, BlinkMacSystemFont, "SF Pro Display", "SF Pro Text", "PingFang SC",
+          "Microsoft YaHei", "Noto Sans CJK SC", sans-serif;
+      }
+
+      * {
+        box-sizing: border-box;
+      }
+
+      html {
+        scroll-behavior: smooth;
+      }
+
+      body {
+        margin: 0;
+        background:
+          radial-gradient(circle at 10% 0%, rgba(255, 244, 226, 0.9), transparent 34rem),
+          radial-gradient(circle at 86% 10%, rgba(225, 237, 232, 0.9), transparent 32rem),
+          linear-gradient(180deg, #fbf8f3 0%, var(--bg) 100%);
+        color: var(--ink);
+        line-height: 1.65;
+      }
+
+      a {
+        color: inherit;
+        text-decoration: none;
+      }
+
+      code {
+        border: 1px solid rgba(76, 63, 52, 0.12);
+        border-radius: 6px;
+        background: rgba(255, 255, 255, 0.72);
+        color: #4c433b;
+        font-family: "SFMono-Regular", Consolas, "Liberation Mono", monospace;
+        font-size: 0.9em;
+        padding: 0.08rem 0.32rem;
+      }
+
+      .layout {
+        display: grid;
+        grid-template-columns: 260px minmax(0, 1fr);
+        gap: 28px;
+        width: min(1360px, calc(100% - 44px));
+        margin: 0 auto;
+        padding: 28px 0 48px;
+      }
+
+      .sidebar {
+        position: sticky;
+        top: 24px;
+        align-self: start;
+        display: grid;
+        gap: 14px;
+        padding: 18px;
+        border: 1px solid var(--line);
+        border-radius: var(--radius);
+        background: rgba(255, 253, 249, 0.78);
+        box-shadow: 0 14px 42px rgba(52, 40, 31, 0.08);
+        backdrop-filter: blur(18px);
+      }
+
+      .brand {
+        display: grid;
+        gap: 4px;
+      }
+
+      .brand strong {
+        font-size: 15px;
+      }
+
+      .brand span {
+        color: var(--muted);
+        font-size: 12px;
+      }
+
+      .nav {
+        display: grid;
+        gap: 6px;
+      }
+
+      .nav a {
+        padding: 8px 10px;
+        border-radius: 10px;
+        color: var(--muted);
+        font-size: 13px;
+      }
+
+      .nav a:hover {
+        background: rgba(255, 255, 255, 0.8);
+        color: var(--ink);
+      }
+
+      .main {
+        display: grid;
+        gap: 22px;
+        min-width: 0;
+      }
+
+      .hero {
+        min-height: 390px;
+        display: grid;
+        align-content: end;
+        gap: 22px;
+        padding: 42px;
+        border: 1px solid var(--line);
+        border-radius: 28px;
+        background:
+          linear-gradient(135deg, rgba(37, 34, 31, 0.72), rgba(37, 34, 31, 0.25)),
+          url("data:image/svg+xml,%3Csvg xmlns='http://www.w3.org/2000/svg' width='1200' height='720' viewBox='0 0 1200 720'%3E%3Crect width='1200' height='720' fill='%23d9cfc2'/%3E%3Cg fill='none' stroke='%23fff8ee' stroke-width='2' opacity='.55'%3E%3Cpath d='M140 390h210c40 0 40-66 80-66h240c40 0 40 66 80 66h300'/%3E%3Cpath d='M230 270h170c28 0 28-52 56-52h170c28 0 28 52 56 52h286'/%3E%3Cpath d='M210 500h250c34 0 34 44 68 44h150c34 0 34-44 68-44h250'/%3E%3C/g%3E%3Cg fill='%23fff8ee' opacity='.86'%3E%3Ccircle cx='140' cy='390' r='8'/%3E%3Ccircle cx='350' cy='390' r='8'/%3E%3Ccircle cx='670' cy='324' r='8'/%3E%3Ccircle cx='1050' cy='390' r='8'/%3E%3Ccircle cx='230' cy='270' r='7'/%3E%3Ccircle cx='626' cy='218' r='7'/%3E%3Ccircle cx='968' cy='270' r='7'/%3E%3Ccircle cx='210' cy='500' r='7'/%3E%3Ccircle cx='678' cy='544' r='7'/%3E%3Ccircle cx='996' cy='500' r='7'/%3E%3C/g%3E%3Crect x='420' y='290' width='360' height='150' rx='28' fill='%23fff8ee' opacity='.88'/%3E%3Crect x='455' y='326' width='290' height='16' rx='8' fill='%23766b61' opacity='.65'/%3E%3Crect x='455' y='361' width='210' height='14' rx='7' fill='%23766b61' opacity='.42'/%3E%3Crect x='455' y='391' width='250' height='14' rx='7' fill='%23766b61' opacity='.36'/%3E%3C/svg%3E");
+        background-size: cover;
+        background-position: center;
+        color: #fffdf8;
+        box-shadow: var(--shadow);
+        overflow: hidden;
+      }
+
+      .eyebrow {
+        display: inline-flex;
+        width: fit-content;
+        align-items: center;
+        gap: 8px;
+        border: 1px solid rgba(255, 255, 255, 0.32);
+        border-radius: 999px;
+        padding: 6px 12px;
+        background: rgba(255, 255, 255, 0.14);
+        font-size: 12px;
+        font-weight: 700;
+      }
+
+      h1,
+      h2,
+      h3,
+      p {
+        margin: 0;
+      }
+
+      h1 {
+        max-width: 860px;
+        font-size: clamp(34px, 6vw, 72px);
+        line-height: 0.98;
+        letter-spacing: 0;
+      }
+
+      .hero p {
+        max-width: 760px;
+        color: rgba(255, 253, 248, 0.88);
+        font-size: 17px;
+      }
+
+      .section {
+        display: grid;
+        gap: 16px;
+        padding: 26px;
+        border: 1px solid var(--line);
+        border-radius: 24px;
+        background: rgba(255, 253, 249, 0.86);
+        box-shadow: 0 16px 48px rgba(52, 40, 31, 0.08);
+      }
+
+      .section-head {
+        display: grid;
+        gap: 7px;
+      }
+
+      .section-head h2 {
+        font-size: 25px;
+        line-height: 1.2;
+      }
+
+      .section-head p {
+        color: var(--muted);
+        font-size: 14px;
+      }
+
+      .cards {
+        display: grid;
+        grid-template-columns: repeat(4, minmax(0, 1fr));
+        gap: 12px;
+      }
+
+      .card {
+        display: grid;
+        gap: 8px;
+        padding: 16px;
+        border: 1px solid var(--line);
+        border-radius: 16px;
+        background: var(--paper-strong);
+      }
+
+      .card strong {
+        font-size: 15px;
+      }
+
+      .card p,
+      .card li,
+      .timeline p {
+        color: var(--muted);
+        font-size: 13px;
+      }
+
+      .tag {
+        display: inline-flex;
+        width: fit-content;
+        border-radius: 999px;
+        padding: 3px 9px;
+        background: rgba(216, 145, 69, 0.13);
+        color: #8a5726;
+        font-size: 11px;
+        font-weight: 700;
+      }
+
+      .flow {
+        display: grid;
+        grid-template-columns: repeat(7, minmax(0, 1fr));
+        gap: 10px;
+      }
+
+      .flow-step {
+        position: relative;
+        min-height: 132px;
+        display: grid;
+        align-content: start;
+        gap: 7px;
+        padding: 14px;
+        border: 1px solid var(--line);
+        border-radius: 16px;
+        background: var(--paper-strong);
+      }
+
+      .flow-step::after {
+        content: "→";
+        position: absolute;
+        top: 50%;
+        right: -13px;
+        color: var(--soft);
+        font-weight: 800;
+        transform: translateY(-50%);
+      }
+
+      .flow-step:last-child::after {
+        content: "";
+      }
+
+      .flow-step span {
+        width: 28px;
+        height: 28px;
+        display: inline-grid;
+        place-items: center;
+        border-radius: 9px;
+        background: #2f2b27;
+        color: white;
+        font-size: 12px;
+        font-weight: 800;
+      }
+
+      .flow-step strong {
+        font-size: 14px;
+      }
+
+      .grid-2 {
+        display: grid;
+        grid-template-columns: minmax(0, 1fr) minmax(0, 1fr);
+        gap: 14px;
+      }
+
+      .status-grid {
+        display: grid;
+        grid-template-columns: repeat(6, minmax(0, 1fr));
+        gap: 10px;
+      }
+
+      .status {
+        display: grid;
+        gap: 7px;
+        min-height: 108px;
+        padding: 14px;
+        border-radius: 16px;
+        border: 1px solid var(--line);
+        background: var(--paper-strong);
+      }
+
+      .status b {
+        display: inline-flex;
+        width: fit-content;
+        border-radius: 999px;
+        padding: 4px 9px;
+        color: white;
+        font-family: "SFMono-Regular", Consolas, monospace;
+        font-size: 11px;
+      }
+
+      .s-queued b {
+        background: var(--blue);
+      }
+
+      .s-running b,
+      .s-waiting b {
+        background: var(--amber);
+      }
+
+      .s-completed b {
+        background: var(--green);
+      }
+
+      .s-failed b {
+        background: var(--red);
+      }
+
+      .s-interrupted b {
+        background: var(--violet);
+      }
+
+      .status p {
+        color: var(--muted);
+        font-size: 12px;
+      }
+
+      table {
+        width: 100%;
+        border-collapse: separate;
+        border-spacing: 0;
+        overflow: hidden;
+        border: 1px solid var(--line);
+        border-radius: 16px;
+        background: var(--paper-strong);
+        font-size: 13px;
+      }
+
+      th,
+      td {
+        padding: 12px 14px;
+        border-bottom: 1px solid var(--line);
+        text-align: left;
+        vertical-align: top;
+      }
+
+      th {
+        background: rgba(247, 244, 239, 0.78);
+        font-size: 12px;
+        color: var(--muted);
+      }
+
+      tr:last-child td {
+        border-bottom: 0;
+      }
+
+      .timeline {
+        display: grid;
+        gap: 10px;
+      }
+
+      .timeline-item {
+        display: grid;
+        grid-template-columns: 120px minmax(0, 1fr);
+        gap: 12px;
+        padding: 14px;
+        border: 1px solid var(--line);
+        border-radius: 16px;
+        background: var(--paper-strong);
+      }
+
+      .timeline-item time {
+        color: var(--soft);
+        font-size: 12px;
+        font-weight: 800;
+      }
+
+      .callout {
+        display: grid;
+        gap: 8px;
+        padding: 18px;
+        border: 1px solid rgba(79, 143, 103, 0.28);
+        border-radius: 18px;
+        background: rgba(231, 242, 235, 0.64);
+      }
+
+      .callout strong {
+        color: #2f6e4c;
+      }
+
+      .callout p {
+        color: #496555;
+        font-size: 14px;
+      }
+
+      .list {
+        margin: 0;
+        padding-left: 1.2rem;
+      }
+
+      .list li {
+        margin: 0.35rem 0;
+      }
+
+      .mono-list {
+        display: flex;
+        flex-wrap: wrap;
+        gap: 8px;
+      }
+
+      .mono-list code {
+        background: #fff;
+      }
+
+      @media (max-width: 1100px) {
+        .layout {
+          grid-template-columns: 1fr;
+        }
+
+        .sidebar {
+          position: static;
+        }
+
+        .nav {
+          grid-template-columns: repeat(3, minmax(0, 1fr));
+        }
+
+        .cards,
+        .flow,
+        .status-grid {
+          grid-template-columns: repeat(2, minmax(0, 1fr));
+        }
+
+        .flow-step::after {
+          content: "";
+        }
+      }
+
+      @media (max-width: 720px) {
+        .layout {
+          width: min(100% - 24px, 1360px);
+          padding: 12px 0 36px;
+        }
+
+        .hero,
+        .section {
+          padding: 20px;
+          border-radius: 20px;
+        }
+
+        .hero {
+          min-height: 430px;
+        }
+
+        .cards,
+        .grid-2,
+        .flow,
+        .status-grid,
+        .nav {
+          grid-template-columns: 1fr;
+        }
+
+        .timeline-item {
+          grid-template-columns: 1fr;
+        }
+
+        table {
+          display: block;
+          overflow-x: auto;
+        }
+      }
+    </style>
+  </head>
+  <body>
+    <div class="layout">
+      <aside class="sidebar">
+        <div class="brand">
+          <strong>AuraBot 任务机制</strong>
+          <span>更新时间：2026-05-16</span>
+        </div>
+        <nav class="nav" aria-label="页面目录">
+          <a href="#summary">当前结论</a>
+          <a href="#flow">端到端流程</a>
+          <a href="#state">状态机制</a>
+          <a href="#data">数据模型</a>
+          <a href="#execution">执行与协调</a>
+          <a href="#observability">可观测性</a>
+          <a href="#risks">剩余问题</a>
+          <a href="#roadmap">优化优先级</a>
+        </nav>
+      </aside>
+
+      <main class="main">
+        <header class="hero">
+          <span class="eyebrow">聊天驱动 · 后台执行 · 产物可信 · 可观测</span>
+          <h1>AuraBot 任务系统现在怎么运转</h1>
+          <p>
+            这份 HTML 用更直观的方式说明当前任务机制。重点不是把所有代码细节摊开，而是让团队快速看懂：任务从哪里来、怎么启动、状态如何可信、结果怎么回流，以及下一步应该优化哪里。
+          </p>
+        </header>
+
+        <section id="summary" class="section">
+          <div class="section-head">
+            <h2>当前结论</h2>
+            <p>现在的任务系统已经不是简单的待办列表，而是一套聊天入口、后台执行、事件记录、产物回流和界面展示共同组成的轻量任务协调器。</p>
+          </div>
+          <div class="cards">
+            <article class="card">
+              <span class="tag">入口</span>
+              <strong>主聊天负责识别任务</strong>
+              <p>用户直接在聊天里说“帮我写一份周报”，gate 会判断是普通聊天、任务，还是任务控制。</p>
+            </article>
+            <article class="card">
+              <span class="tag">执行</span>
+              <strong>后台启动，不阻塞聊天</strong>
+              <p>任务启动先抢占 <code>queued -> running</code>，成功后交给后台执行器，聊天立即返回处理中状态。</p>
+            </article>
+            <article class="card">
+              <span class="tag">结果</span>
+              <strong>产物优先来自产物表</strong>
+              <p>文件结果写入 <code>task_artifacts</code>，附件展示和打开文件优先信这个表，事件推断只兜底。</p>
+            </article>
+            <article class="card">
+              <span class="tag">可观测</span>
+              <strong>控制台可以看详情</strong>
+              <p>任务便签新增详情入口，可看状态、执行器、目录、安全模式、时间线、产物和最近错误。</p>
+            </article>
+          </div>
+          <div class="callout">
+            <strong>一句话版</strong>
+            <p>现在的任务系统更像一个“小型后台任务协调器”：聊天负责发起和控制，主进程负责抢占和执行，事件负责记录过程，产物表负责可信结果，控制台负责展示和排障。</p>
+          </div>
+        </section>
+
+        <section id="flow" class="section">
+          <div class="section-head">
+            <h2>端到端流程</h2>
+            <p>从用户一句话，到任务完成回到主聊天，大致经过下面这条路径。</p>
+          </div>
+          <div class="flow" aria-label="任务端到端流程">
+            <article class="flow-step">
+              <span>1</span>
+              <strong>用户输入</strong>
+              <p>主聊天或桌宠输入收到自然语言请求。</p>
+            </article>
+            <article class="flow-step">
+              <span>2</span>
+              <strong>Gate 判断</strong>
+              <p>识别为 <code>chat</code>、<code>task</code> 或 <code>task_control</code>。</p>
+            </article>
+            <article class="flow-step">
+              <span>3</span>
+              <strong>创建任务</strong>
+              <p>写入 <code>tasks</code>，创建任务会话，初始状态为 <code>queued</code>。</p>
+            </article>
+            <article class="flow-step">
+              <span>4</span>
+              <strong>原子抢占</strong>
+              <p>后台启动前先执行 <code>queued -> running</code> 条件更新。</p>
+            </article>
+            <article class="flow-step">
+              <span>5</span>
+              <strong>执行器运行</strong>
+              <p>确定性 runner 或 Codex / Claude Code / Hermes CLI 子进程执行。</p>
+            </article>
+            <article class="flow-step">
+              <span>6</span>
+              <strong>事件与产物</strong>
+              <p>进度写入 <code>task_events</code>，文件结果写入 <code>task_artifacts</code>。</p>
+            </article>
+            <article class="flow-step">
+              <span>7</span>
+              <strong>回流界面</strong>
+              <p>广播任务变化，完成后发聊天消息、附件和桌宠活动。</p>
+            </article>
+          </div>
+        </section>
+
+        <section id="state" class="section">
+          <div class="section-head">
+            <h2>状态机制</h2>
+            <p>任务状态已经从“各处约定”收口到 <code>taskState.ts</code>，后台启动也必须通过仓储层的条件状态转换。</p>
+          </div>
+          <div class="status-grid">
+            <article class="status s-queued">
+              <b>queued</b>
+              <strong>待开始</strong>
+              <p>可以被启动。后台启动会抢占到 <code>running</code>。</p>
+            </article>
+            <article class="status s-running">
+              <b>running</b>
+              <strong>执行中</strong>
+              <p>正在处理，进度会通过 <code>task:changed</code> 广播。</p>
+            </article>
+            <article class="status s-waiting">
+              <b>waiting</b>
+              <strong>等待中</strong>
+              <p>暂时保留为等待外部动作或取消过程的活跃状态。</p>
+            </article>
+            <article class="status s-completed">
+              <b>completed</b>
+              <strong>完成</strong>
+              <p>会触发结果回流，附件优先来自产物表。</p>
+            </article>
+            <article class="status s-failed">
+              <b>failed</b>
+              <strong>失败</strong>
+              <p>详情面板显示最近错误，后续可扩展重试。</p>
+            </article>
+            <article class="status s-interrupted">
+              <b>interrupted</b>
+              <strong>已停下</strong>
+              <p>用户取消或打断后的终态，可删除或后续扩展继续。</p>
+            </article>
+          </div>
+          <table>
+            <thead>
+              <tr>
+                <th>状态判断</th>
+                <th>当前规则</th>
+                <th>作用</th>
+              </tr>
+            </thead>
+            <tbody>
+              <tr>
+                <td><code>isActiveTask</code></td>
+                <td><code>queued</code>、<code>running</code>、<code>waiting</code></td>
+                <td>用于取消、便签展示和活跃任务判断。</td>
+              </tr>
+              <tr>
+                <td><code>isSettledTask</code></td>
+                <td><code>completed</code>、<code>failed</code>、<code>interrupted</code></td>
+                <td>用于删除、终态消息和结果展示。</td>
+              </tr>
+              <tr>
+                <td><code>isRunnableTask</code></td>
+                <td>仅 <code>queued</code></td>
+                <td>确保只有待开始任务能被启动。</td>
+              </tr>
+              <tr>
+                <td><code>transitionStatus</code></td>
+                <td>条件更新并校验合法转移</td>
+                <td>防止重复启动和非法状态跳转。</td>
+              </tr>
+            </tbody>
+          </table>
+        </section>
+
+        <section id="data" class="section">
+          <div class="section-head">
+            <h2>核心数据模型</h2>
+            <p>当前任务系统主要依赖三类数据：任务本体、任务事件、任务产物。</p>
+          </div>
+          <div class="grid-2">
+            <article class="card">
+              <span class="tag">tasks</span>
+              <strong>任务本体</strong>
+              <ul class="list">
+                <li><code>title</code>：用户可见标题，也是执行提示词核心。</li>
+                <li><code>kind</code>：<code>result_output</code> 或 <code>time_reminder</code>。</li>
+                <li><code>status</code>：当前状态。</li>
+                <li><code>latestProgress</code>：界面和状态回复使用的最近进展。</li>
+                <li><code>dueAt</code>：提醒任务的到期时间。</li>
+              </ul>
+            </article>
+            <article class="card">
+              <span class="tag">task_events</span>
+              <strong>过程日志</strong>
+              <ul class="list">
+                <li><code>eventType</code>：例如 <code>task.running</code>、<code>task.completed</code>。</li>
+                <li><code>summary</code>：人类可读摘要。</li>
+                <li><code>payload</code>：执行器、工作目录、stdout/stderr 摘要来源、文件改动。</li>
+                <li>现在开始携带 <code>startedAt</code>、<code>completedAt</code>、<code>durationMs</code>。</li>
+              </ul>
+            </article>
+            <article class="card">
+              <span class="tag">task_artifacts</span>
+              <strong>可信产物</strong>
+              <ul class="list">
+                <li>第一版只记录文件产物。</li>
+                <li>附件展示优先从这里生成。</li>
+                <li>打开文件和“所在文件夹”优先用这里校验。</li>
+                <li>事件载荷推断只作为兼容兜底。</li>
+              </ul>
+            </article>
+            <article class="card">
+              <span class="tag">sessions</span>
+              <strong>任务会话</strong>
+              <ul class="list">
+                <li>每个结果产出任务会创建独立任务会话。</li>
+                <li>通过 <code>parentSessionId</code> 关联回主聊天。</li>
+                <li>方便未来做任务内上下文、回放和子任务拆解。</li>
+              </ul>
+            </article>
+          </div>
+        </section>
+
+        <section id="execution" class="section">
+          <div class="section-head">
+            <h2>执行与协调</h2>
+            <p>第四阶段之前，自动启动、手动启动、进度广播和完成回流比较分散。现在主路径已经收敛到协调器。</p>
+          </div>
+          <div class="grid-2">
+            <article class="card">
+              <span class="tag">TaskService</span>
+              <strong>负责核心任务动作</strong>
+              <p>创建、取消、删除、修改、查询任务，并在后台启动前调用 <code>transitionStatus()</code> 抢占运行权。</p>
+              <div class="mono-list">
+                <code>createTaskFromChat</code>
+                <code>runTaskInBackground</code>
+                <code>cancelTaskFromConsole</code>
+                <code>deleteSettledTaskFromConsole</code>
+              </div>
+            </article>
+            <article class="card">
+              <span class="tag">TaskExecutionCoordinator</span>
+              <strong>负责执行主路径</strong>
+              <p>自动启动和手动启动都从这里走。它统一处理进度广播、终态消息、桌宠活动、产物收集和恢复空闲。</p>
+              <div class="mono-list">
+                <code>startTaskInBackground</code>
+                <code>broadcastTaskChanged</code>
+                <code>collectFileArtifacts</code>
+                <code>broadcastPetActivity</code>
+              </div>
+            </article>
+            <article class="card">
+              <span class="tag">TaskRunner</span>
+              <strong>负责真正执行</strong>
+              <p>开发测试走确定性 runner。真实执行走 <code>MultiCliTaskRunner</code>，按优先级选择 Codex、Claude Code 或 Hermes。</p>
+            </article>
+            <article class="card">
+              <span class="tag">registerIpc</span>
+              <strong>负责主进程通信</strong>
+              <p>处理聊天发送、任务取消/删除、打开结果文件、获取详情等 IPC。它不再直接拼完成回流逻辑。</p>
+            </article>
+          </div>
+        </section>
+
+        <section id="observability" class="section">
+          <div class="section-head">
+            <h2>可观测性</h2>
+            <p>第四阶段新增的重点是让用户和开发者知道任务卡在哪、失败在哪、产出了什么。</p>
+          </div>
+          <div class="timeline">
+            <article class="timeline-item">
+              <time>入口</time>
+              <div>
+                <strong>任务便签增加“详情”按钮</strong>
+                <p>控制台右侧便签可以打开当前任务详情，不必去翻数据库或日志。</p>
+              </div>
+            </article>
+            <article class="timeline-item">
+              <time>数据</time>
+              <div>
+                <strong><code>task:get-detail</code> 返回聚合视图</strong>
+                <p>主进程将任务、事件、产物整理成 <code>TaskDetail</code>，渲染层只负责展示。</p>
+              </div>
+            </article>
+            <article class="timeline-item">
+              <time>内容</time>
+              <div>
+                <strong>详情展示关键字段</strong>
+                <p>包括状态、执行器、工作目录、安全模式、耗时、产物清单、最近错误和事件时间线。</p>
+              </div>
+            </article>
+            <article class="timeline-item">
+              <time>安全</time>
+              <div>
+                <strong>stdout/stderr 只展示摘要</strong>
+                <p>详情面板不会直接塞完整标准输出和错误流，只展示字节数等摘要信息。</p>
+              </div>
+            </article>
+          </div>
+        </section>
+
+        <section id="risks" class="section">
+          <div class="section-head">
+            <h2>剩余问题</h2>
+            <p>当前已经修稳了地基，但还不是完整的后台作业系统。</p>
+          </div>
+          <div class="cards">
+            <article class="card">
+              <span class="tag">队列</span>
+              <strong>还没有完整队列</strong>
+              <p>现在只保证同一个任务不会重复启动，还没有全局并发上限、排队序号和暂停恢复。</p>
+            </article>
+            <article class="card">
+              <span class="tag">控制</span>
+              <strong>自然语言控制仍偏规则化</strong>
+              <p>目前支持查询、启动、打断、修改。继续、重试、重新运行、打开结果还没扩展完。</p>
+            </article>
+            <article class="card">
+              <span class="tag">提醒</span>
+              <strong>提醒仍依赖应用运行</strong>
+              <p>时间提醒可以在 App 运行时触发，但还不是系统级离线调度。</p>
+            </article>
+            <article class="card">
+              <span class="tag">产物</span>
+              <strong>产物类型还少</strong>
+              <p>第一版只处理文件。URL、长文本、日志产物和交付物分级还需要后续补。</p>
+            </article>
+          </div>
+        </section>
+
+        <section id="roadmap" class="section">
+          <div class="section-head">
+            <h2>优化优先级</h2>
+            <p>按照当前计划，前四阶段已经推进到“可观测”这一层，下一步建议继续往任务控制和提醒能力走。</p>
+          </div>
+          <table>
+            <thead>
+              <tr>
+                <th>阶段</th>
+                <th>目标</th>
+                <th>当前状态</th>
+              </tr>
+            </thead>
+            <tbody>
+              <tr>
+                <td>第一阶段</td>
+                <td>状态与启动路径收口</td>
+                <td>已完成：状态机、原子抢占、防重复启动、手动启动后台化。</td>
+              </tr>
+              <tr>
+                <td>第二阶段</td>
+                <td>抽出任务执行协调器</td>
+                <td>已完成：自动启动和手动启动统一走 <code>TaskExecutionCoordinator</code>。</td>
+              </tr>
+              <tr>
+                <td>第三阶段</td>
+                <td>结构化任务产物</td>
+                <td>已完成第一版：文件产物写入 <code>task_artifacts</code>。</td>
+              </tr>
+              <tr>
+                <td>第四阶段</td>
+                <td>任务详情和可观测性</td>
+                <td>已完成第一版：详情入口、详情面板、耗时载荷、stdio 摘要。</td>
+              </tr>
+              <tr>
+                <td>第五阶段</td>
+                <td>任务控制增强</td>
+                <td>待做：继续、重试、重新运行、打开结果、删除已完成任务、候选任务反问。</td>
+              </tr>
+              <tr>
+                <td>第六阶段</td>
+                <td>提醒与日程增强</td>
+                <td>待做：绝对时间、错过提醒补发、稍后提醒、编辑 <code>dueAt</code>。</td>
+              </tr>
+            </tbody>
+          </table>
+        </section>
+      </main>
+    </div>
+  </body>
+</html>
