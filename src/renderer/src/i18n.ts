@@ -181,7 +181,20 @@ const UI_TEXT = {
     cancel: "Cancel",
     delete: "Delete",
     cancelTask: "Cancel task",
-    deleteTask: "Delete task"
+    deleteTask: "Delete task",
+    detail: "Detail",
+    close: "Close",
+    viewTaskDetail: "View task detail",
+    closeTaskDetail: "Close task detail",
+    taskDetail: "Task detail",
+    taskExecutor: "Executor",
+    taskWorkingDirectory: "Working directory",
+    taskSandbox: "Sandbox",
+    taskDuration: "Duration",
+    taskRecentError: "Recent error",
+    taskArtifacts: "Artifacts",
+    taskNoArtifacts: "No artifacts yet.",
+    taskTimeline: "Timeline"
   },
   zh: {
     appTitle: "AuraBot",
@@ -359,7 +372,20 @@ const UI_TEXT = {
     cancel: "取消",
     delete: "删除",
     cancelTask: "取消任务",
-    deleteTask: "删除任务"
+    deleteTask: "删除任务",
+    detail: "详情",
+    close: "关闭",
+    viewTaskDetail: "查看任务详情",
+    closeTaskDetail: "关闭任务详情",
+    taskDetail: "任务详情",
+    taskExecutor: "执行器",
+    taskWorkingDirectory: "工作目录",
+    taskSandbox: "安全模式",
+    taskDuration: "耗时",
+    taskRecentError: "最近错误",
+    taskArtifacts: "产物",
+    taskNoArtifacts: "暂时还没有产物。",
+    taskTimeline: "事件时间线"
   }
 } as const;
 

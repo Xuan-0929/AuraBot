@@ -5,6 +5,7 @@ import {
   type PetResizeCorner,
   type TaskControlActionInput,
   type TaskControlActionResult,
+  type TaskDetailInput,
   type TaskResultFileActionInput,
   type TaskResultFileActionResult
 } from "../shared/contracts/ipc";
@@ -19,6 +20,7 @@ import type { Profile } from "../shared/schemas/profile";
 import type { Task } from "../shared/schemas/task";
 import type { AppServices } from "../core/bootstrap/createServices";
 import { shouldAutoRunTasks } from "../core/bootstrap/createServices";
+import { buildTaskDetail } from "../core/tasks/taskDetails";
 import { isTaskResultPathAllowed } from "../core/tasks/taskPresentation";
 import { TaskExecutionCoordinator } from "./taskExecutionCoordinator";
 import { splitTextIntoSentences } from "../shared/text/sentences";
@@ -311,6 +313,20 @@ export function registerIpc(services: AppServices, windows: WindowController): v
   ipcMain.handle(IPC_CHANNELS.showTaskResultFileInFolder, (_event, input: TaskResultFileActionInput) =>
     showTaskResultFileInFolder(services, input)
   );
+
+  ipcMain.handle(IPC_CHANNELS.getTaskDetail, (_event, input: TaskDetailInput) => {
+    const task = services.taskService.getTaskById(input.taskId);
+
+    if (!task) {
+      return undefined;
+    }
+
+    return buildTaskDetail(
+      task,
+      services.taskService.listTaskEvents(task.id),
+      services.taskArtifactRepository.listByTask(task.id)
+    );
+  });
 
   ipcMain.handle(IPC_CHANNELS.getEventLogs, () => services.eventLogService.list());
 

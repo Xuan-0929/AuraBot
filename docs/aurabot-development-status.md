@@ -1,14 +1,45 @@
 # AuraBot 当前开发状态
 
-更新时间：2026-05-15
+更新时间：2026-05-16
 
 这份文档记录当前工作分支与近期已集成分支已经完成的工程事实、最近一次验证结果，以及下一步最应该推进的任务。它是执行状态板，不替代 PRD，也不替代 MVP 计划。
 
-当前工作分支：`main`
+当前工作分支：`codex/task-system-improvements`
 
-当前集成基线：`main` 当前 HEAD（本轮提交推送后与 `origin/main` 同步）
+当前集成基线：`main` 的 `27d3460`，本轮任务系统改动在隔离分支推进，避免混入主工作区已有未提交改动。
 
 分支边界：这一侧已经集成 Live2D 桌宠体验、主控制台、任务便签快捷操作、流式回复、模型 gate、记忆调试、follow-up 主动提醒，以及 soul 驱动的统一回复/播报机制。后续如果继续并行开发，记忆模型/配置大改、任务执行器大改、桌宠 UI 大改仍建议分支隔离，避免在 `chatOrchestrator`、`createWindow`、`store`、IPC contract 和 renderer 样式上互相抢修改权。
+
+## 2026-05-16 任务系统 v2 checkpoint
+
+本次 checkpoint 按“正确性 -> 执行一致性 -> 产物可信 -> 可观测”的顺序推进。第一轮已经把任务状态、启动路径、执行协调、产物记录和详情视图收口到可继续迭代的地基上。
+
+已完成：
+
+1. 新增 `taskState.ts`，统一任务活跃、终态、可运行、可取消、可删除和合法状态转移判断。
+2. `TaskRepository.transitionStatus()` 已支持条件状态更新，并在仓储层拒绝非法状态跳转；后台启动必须先抢占 `queued -> running`，抢占失败不会启动执行器。
+3. 聊天里的“开始任务”改为后台启动，立即返回处理中状态，不再等待执行器跑完。
+4. 新增 `TaskExecutionCoordinator`，自动启动和手动启动统一走同一处，进度广播、终态聊天消息、桌宠活动和 `idle` 回流都从这里发出。
+5. 启用 `task_artifacts` 表的第一版文件产物路径，完成消息附件和打开文件校验优先使用产物表，事件载荷推断只作为兼容兜底。
+6. 新增任务详情读取接口和控制台详情面板；右侧任务便签增加“详情”入口，详情展示当前状态、执行器、工作目录、安全模式、关键时间线、产物清单和最近错误。
+7. 任务事件开始携带执行时间信息：启动时间、完成时间和耗时毫秒。详情面板只展示 stdout/stderr 摘要，不直接暴露完整标准输出或错误流。
+
+本轮验证记录：
+
+| 命令/检查 | 结果 |
+| --- | --- |
+| `corepack pnpm vitest run tests/unit/core/tasks/taskDetails.spec.ts tests/unit/renderer/taskStickyNotes.spec.ts tests/unit/renderer/store.spec.ts` | 3 个 test files、7 个 tests 通过 |
+| `corepack pnpm typecheck` | 通过 |
+| `corepack pnpm test:unit` | 50 个 test files、177 个 tests 通过 |
+| `corepack pnpm test:integration` | 9 个 test files、43 个 tests 通过 |
+| `corepack pnpm exec electron-vite build` | 通过；仍有既有 Pixi 动静态 import chunk warning |
+| `git diff --check` | 通过 |
+
+补充说明：
+
+1. 本轮仍不引入完整任务队列，也不新增 `cancelling` 状态；`waiting` 语义继续保留给等待外部动作或取消过程。
+2. 任务产物第一版只处理文件路径，不处理 URL、长文本产物或日志产物。
+3. 详情面板是可观测性的第一版，不替代后续更完整的开发者日志面板。
 
 ## 2026-05-15 设置界面迁移 checkpoint
 

@@ -115,6 +115,7 @@ const api: AuraBotApi = {
     ipcRenderer.invoke(IPC_CHANNELS.openTaskResultFile, input),
   showTaskResultFileInFolder: (input: TaskResultFileActionInput) =>
     ipcRenderer.invoke(IPC_CHANNELS.showTaskResultFileInFolder, input),
+  getTaskDetail: (input) => ipcRenderer.invoke(IPC_CHANNELS.getTaskDetail, input),
   getEventLogs: () => ipcRenderer.invoke(IPC_CHANNELS.getEventLogs),
   getMemoryDebugSnapshot: () => ipcRenderer.invoke(IPC_CHANNELS.getMemoryDebugSnapshot)
 };

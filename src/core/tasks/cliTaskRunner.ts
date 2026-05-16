@@ -72,13 +72,15 @@ export class MultiCliTaskRunner implements TaskRunner {
     const runnerLabel = getTaskCliRunnerLabel(runner.id);
     const abortController = new AbortController();
     this.activeRuns.set(task.id, abortController);
+    const startedAt = new Date();
     const runningSummary = `开始调用 ${runnerLabel} 子任务：${task.title}`;
     this.taskRepository.appendEvent({
       taskId: task.id,
       eventType: "task.running",
       summary: runningSummary,
       payload: {
-        runnerId: runner.id
+        runnerId: runner.id,
+        startedAt: startedAt.toISOString()
       }
     });
     const running = this.taskRepository.updateStatus({
@@ -101,7 +103,11 @@ export class MultiCliTaskRunner implements TaskRunner {
         runnerId: runner.id,
         cwd: runner.workingDirectory,
         outputFile,
-        sandbox: runner.sandbox
+        sandbox: runner.sandbox,
+        command: runner.command,
+        model: runner.model,
+        approvalPolicy: runner.approvalPolicy,
+        startedAt: startedAt.toISOString()
       }
     });
 
@@ -140,6 +146,7 @@ export class MultiCliTaskRunner implements TaskRunner {
       });
       const finalMessage = normalizeAgentFinalMessage(result.finalMessage, runnerLabel);
       const completedSummary = `${runnerLabel} 子任务完成：\n${finalMessage}`;
+      const completedAt = new Date();
       this.taskRepository.appendEvent({
         taskId: task.id,
         eventType: "task.completed",
@@ -147,6 +154,9 @@ export class MultiCliTaskRunner implements TaskRunner {
         payload: {
           runnerId: runner.id,
           outputFile,
+          startedAt: startedAt.toISOString(),
+          completedAt: completedAt.toISOString(),
+          durationMs: completedAt.getTime() - startedAt.getTime(),
           stdout: result.stdout,
           stderr: result.stderr
         }
@@ -174,18 +184,22 @@ export class MultiCliTaskRunner implements TaskRunner {
       const currentTask = this.taskRepository.getById(task.id);
 
       if (currentTask?.status === "interrupted") {
+        const completedAt = new Date();
         this.taskRepository.appendEvent({
           taskId: task.id,
           eventType: "task.agent.cancelled",
           summary: `${runnerLabel} 子任务已停止：${message}`,
           payload: {
-            runnerId: runner.id
+            runnerId: runner.id,
+            startedAt: startedAt.toISOString(),
+            completedAt: completedAt.toISOString(),
+            durationMs: completedAt.getTime() - startedAt.getTime()
           }
         });
         return currentTask;
       }
 
-      return this.failTask(task, `${runnerLabel} 子任务失败：${message}`, runner.id);
+      return this.failTask(task, `${runnerLabel} 子任务失败：${message}`, runner.id, startedAt);
     } finally {
       this.activeRuns.delete(task.id);
     }
@@ -267,12 +281,22 @@ export class MultiCliTaskRunner implements TaskRunner {
     return this.options.isTrustedWorkingDirectory?.(runner, cwd) ?? isTrustedWorkingDirectory(runner, cwd);
   }
 
-  private failTask(task: Task, summary: string, runnerId?: TaskCliRunnerId): Task | undefined {
+  private failTask(task: Task, summary: string, runnerId?: TaskCliRunnerId, startedAt?: Date): Task | undefined {
+    const completedAt = new Date();
     this.taskRepository.appendEvent({
       taskId: task.id,
       eventType: "task.failed",
       summary,
-      payload: runnerId ? { runnerId } : undefined
+      payload: {
+        ...(runnerId ? { runnerId } : {}),
+        ...(startedAt
+          ? {
+              startedAt: startedAt.toISOString(),
+              completedAt: completedAt.toISOString(),
+              durationMs: completedAt.getTime() - startedAt.getTime()
+            }
+          : {})
+      }
     });
     const failed = this.taskRepository.updateStatus({
       taskId: task.id,

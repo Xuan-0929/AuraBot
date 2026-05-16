@@ -4,6 +4,7 @@ import type { Live2DModelState } from "../../../shared/contracts/live2dModel";
 import type { MemoryDebugSnapshot, PetCursorPosition } from "../../../shared/contracts/ipc";
 import type { NotificationSettings } from "../../../shared/contracts/notificationSettings";
 import type { PetActivity } from "../../../shared/contracts/pet";
+import type { TaskDetail } from "../../../shared/contracts/taskDetail";
 import type {
   ModelProviderSettingsPatch,
   ModelRoleKey,
@@ -41,6 +42,9 @@ interface AuraBotState {
   petCursorPosition?: PetCursorPosition;
   focusAt: FocusPoint;
   memoryDebugSnapshot?: MemoryDebugSnapshot;
+  selectedTaskDetail?: TaskDetail;
+  selectedTaskDetailTaskId?: string;
+  isTaskDetailLoading: boolean;
   debugPetOverlay: boolean;
   isInitialized: boolean;
 }
@@ -64,6 +68,9 @@ export const useAuraBotStore = defineStore("auraBot", {
     petCursorPosition: undefined,
     focusAt: { x: 0, y: 0 },
     memoryDebugSnapshot: undefined,
+    selectedTaskDetail: undefined,
+    selectedTaskDetailTaskId: undefined,
+    isTaskDetailLoading: false,
     debugPetOverlay: false,
     isInitialized: false
   }),
@@ -143,11 +150,17 @@ export const useAuraBotStore = defineStore("auraBot", {
       unsubscribers.push(
         window.aurabot.onTaskChanged((task) => {
           this.tasks = updateTasks(this.tasks, task);
+          if (this.selectedTaskDetailTaskId === task.id) {
+            void this.openTaskDetail(task.id);
+          }
         })
       );
       unsubscribers.push(
         window.aurabot.onTaskDeleted((taskId) => {
           this.tasks = removeTask(this.tasks, taskId);
+          if (this.selectedTaskDetailTaskId === taskId) {
+            this.closeTaskDetail();
+          }
         })
       );
 
@@ -260,6 +273,30 @@ export const useAuraBotStore = defineStore("auraBot", {
       }
 
       this.tasks = removeTask(this.tasks, result.taskId ?? taskId);
+      if (this.selectedTaskDetailTaskId === taskId) {
+        this.closeTaskDetail();
+      }
+    },
+    async openTaskDetail(taskId: string) {
+      this.selectedTaskDetailTaskId = taskId;
+      this.isTaskDetailLoading = true;
+
+      try {
+        const detail = await window.aurabot.getTaskDetail({ taskId });
+
+        if (this.selectedTaskDetailTaskId === taskId) {
+          this.selectedTaskDetail = detail;
+        }
+      } finally {
+        if (this.selectedTaskDetailTaskId === taskId) {
+          this.isTaskDetailLoading = false;
+        }
+      }
+    },
+    closeTaskDetail() {
+      this.selectedTaskDetail = undefined;
+      this.selectedTaskDetailTaskId = undefined;
+      this.isTaskDetailLoading = false;
     },
     showPetNotice(message: string) {
       this.enqueuePetActivity({

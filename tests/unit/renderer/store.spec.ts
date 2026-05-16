@@ -3,6 +3,7 @@ import { beforeEach, describe, expect, it, vi } from "vitest";
 import { useAuraBotStore } from "../../../src/renderer/src/app/store";
 import type { SendChatMessageResult } from "../../../src/shared/contracts/chat";
 import type { PetActivity } from "../../../src/shared/contracts/pet";
+import type { TaskDetail } from "../../../src/shared/contracts/taskDetail";
 import type { Message } from "../../../src/shared/schemas/message";
 
 function createDeferred<T>() {
@@ -110,6 +111,42 @@ describe("useAuraBotStore", () => {
 
     expect(store.petActivity).toEqual(task);
     expect(store.petActivityQueue).toEqual([]);
+  });
+
+  it("loads and clears selected task details", async () => {
+    const detail: TaskDetail = {
+      task: {
+        id: "task-1",
+        profileId: "profile-1",
+        parentSessionId: "session-1",
+        sessionId: "task-session-1",
+        kind: "result_output",
+        title: "整理任务详情",
+        status: "completed",
+        latestProgress: "已完成",
+        createdAt: "2026-05-16T00:00:00.000Z",
+        updatedAt: "2026-05-16T00:00:01.000Z"
+      },
+      artifacts: [],
+      timeline: []
+    };
+    vi.stubGlobal("window", {
+      aurabot: {
+        getTaskDetail: vi.fn(() => Promise.resolve(detail))
+      }
+    });
+    const store = useAuraBotStore();
+
+    await store.openTaskDetail("task-1");
+
+    expect(window.aurabot.getTaskDetail).toHaveBeenCalledWith({ taskId: "task-1" });
+    expect(store.selectedTaskDetail).toEqual(detail);
+    expect(store.selectedTaskDetailTaskId).toBe("task-1");
+
+    store.closeTaskDetail();
+
+    expect(store.selectedTaskDetail).toBeUndefined();
+    expect(store.selectedTaskDetailTaskId).toBeUndefined();
   });
 });
 
