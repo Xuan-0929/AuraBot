@@ -464,11 +464,12 @@ Must show:
 3. Temporary message bubbles for task completion and pet-voice replies.
 4. No chat input, task buttons, or full dashboard controls on the pet surface.
 
-## Polishing TDOS
+## Polishing TODOs
+
 1. 状态刷新
 2. 可以拖到最下面
 3. 模糊
-4. 搬AIRI的UI
+4. AIRI UI 重构，详见 [Next 5: AIRI UI 重构](#next-5-airi-ui-重构)
 
 ### 10.2 Console Conversation Window
 
@@ -554,6 +555,14 @@ Must show:
 
 ## 14. Recommended Immediate Next Work
 
+### Current Todo List
+
+1. [ ] 研究记忆系统并接入 `supermemory`：先梳理现有 memory write / merge / recall / debug 流程，再明确哪些能力保留本地、哪些能力交给 `supermemory`，最后补接入方案和验证用例。
+2. [ ] 连接 MCP：确认 AuraBot 需要消费或暴露的 MCP tools/resources、权限边界、配置入口和失败提示，并把 MCP 能力接入任务执行链路。
+3. [ ] 研究任务处理流程：从 gate 分类、`TaskRegistry`、runner、进度广播、artifact 回流到主聊天控制链路做一次完整梳理，产出 Task Executor v2 改造点。
+4. [ ] 接入 TTS 和 STT：替换或补强当前浏览器原生 STT MVP，并为桌宠气泡、任务播报、语音输入和语音回复统一 voice adapter。
+5. [ ] AIRI UI 重构：参考 AIRI 的交互和视觉组织，重构控制台、设置、任务状态、记忆调试和桌宠输入体验。
+
 ### Next 1: Live2D 桌宠行为层
 
 先让小人真正像桌面伴侣，而不是静态模型挂载。
@@ -565,8 +574,9 @@ Must show:
 3. 已完成第一版：悬停 Live2D 小人时显示小型 `Chat` 气泡，点击展开成输入框，并以 `pet_text` 来源发送到主对话。
 4. 已完成第一版：主进程轮询系统全局鼠标位置，Live2D 在窗口外也能朝鼠标方向转动眼睛。
 5. 接入稳定 STT adapter，替换当前浏览器原生语音识别 MVP。
-6. 已将到期 `follow_up` 的主动提醒触发接入当前桌宠气泡通道；主动对话仍待设计。
-7. 增加开发期诊断面板，展示 Live2D renderState、motion、窗口 bounds、click-through 状态和全局 cursor 追踪状态。
+6. 接入 TTS adapter，让桌宠气泡、任务播报和语音回复走统一语音输出层。
+7. 已将到期 `follow_up` 的主动提醒触发接入当前桌宠气泡通道；主动对话仍待设计。
+8. 增加开发期诊断面板，展示 Live2D renderState、motion、窗口 bounds、click-through 状态和全局 cursor 追踪状态。
 
 ### Next 2: 真实模型适配层
 
@@ -588,6 +598,15 @@ Must show:
 
 建议交付：
 
+1. 先研究现有 memory 系统的写入、合并、召回、follow-up、debug event 和评估链路，形成可对照的接入边界。
+2. 设计并接入 `supermemory`，明确本地 SQLite / relation graph 与外部 memory 服务之间的数据同步、召回重排、冲突处理和隐私边界。
+3. 为 `supermemory` 接入补最小可验证用例：写入一条事实、跨轮召回、更新/合并旧记忆、follow-up 不误触发。
+4. 下一步：补系统通知、提醒权限和 App 未运行时的边界提示。
+5. 下一步：把模型 planner 原始响应和失败原因纳入 debug event。
+6. 下一步：继续扩展更真实的多轮记忆评估语料。
+
+已完成：
+
 1. 已完成第一步：`memoryModel` 可接管结构化记忆抽取；用户端失败时暴露模型错误，不再静默回退本地规则。
 2. 已完成第一步：写入队列支持 merge planner，重复语义记忆可更新旧节点。
 3. 已完成第一步：候选关系边支持 relation planner，并过滤模型发明的 node id。
@@ -595,10 +614,7 @@ Must show:
 5. 已完成第一步：到期 `follow_up` 会在下一次主聊天回复中提醒，并在触发后标记为 `completed`。
 6. 已完成第一步：App 运行期间，后台 `MemoryFollowUpScheduler` 会扫描到期 `follow_up`，触发桌宠气泡并标记完成。
 7. 已完成第二版：控制台 `Memory Debug` 面板显示 nodes、edges、summaries 计数、当前节点、关系边、最近 memory event，以及最近一次 recall 的 query、planner terms、seed、扩散节点和 traversed edges。
-8. 下一步：补系统通知、提醒权限和 App 未运行时的边界提示。
-9. 已完成第一版：`corepack pnpm eval:memory` 可跑固定 recall fixture，覆盖直接偏好召回、事件到偏好图跳转、follow_up 排除不相关提醒。
-10. 下一步：把模型 planner 原始响应和失败原因纳入 debug event。
-11. 下一步：继续扩展更真实的多轮记忆评估语料。
+8. 已完成第一版：`corepack pnpm eval:memory` 可跑固定 recall fixture，覆盖直接偏好召回、事件到偏好图跳转、follow_up 排除不相关提醒。
 
 ### Next 4: Task Executor v2
 
@@ -606,17 +622,34 @@ Must show:
 
 建议交付：
 
+1. 先完整研究任务处理流程：gate 分类、任务创建、`TaskRegistry`、runner 生命周期、取消/恢复、JSONL 进度、artifact 回流、主聊天查询/修改/打断。
+2. 连接 MCP，把外部工具能力作为任务执行链路的可配置能力源，而不是直接塞进聊天主流程。
+3. 设计真实 `TaskRegistry` 类型、输入输出协议和结构化 artifact registry。
+4. 补真正 resume。
+5. 继续保持控制面在主聊天线程，不新增任务按钮面板。
+
+已完成：
+
 1. 已完成：opt-in Codex 子任务 runner，可在创建任务后后台调用本机 `codex exec`，实时广播 JSONL 进度，查询时暴露最近进展，并把最终结果回流主聊天。
 2. 已完成：任务完成结果可以作为主聊天文件附件回流，并提供“打开文件 / 所在文件夹”，不直接暴露原始路径。
 3. 已完成：任务状态条和主聊天任务回复已改成人话表达，避免暴露 `queued`、`completed`、`Codex 子任务` 等内部词。
 4. 已完成：主聊天打断任务会取消底层 runner / Codex 子进程，避免只改 UI 状态。
 5. 已完成：服务启动时会把上次遗留的 running/waiting 任务标记为失联失败，避免永久卡在运行态。
 6. 已完成：任务 gate 已覆盖直接产出型请求，`做一份读书笔记`、`写一份GitHub周报` 不需要“帮我”前缀也会进入任务流。
-7. 下一步：设计真实 `TaskRegistry` 类型、输入输出协议和结构化 artifact registry。
-8. 下一步：补真正 resume。
-9. 继续保持控制面在主聊天线程，不新增任务按钮面板。
 
-### Next 5: Handoff and Push Prep
+### Next 5: AIRI UI 重构
+
+把现有 AuraBot 控制台和桌宠交互从“功能能用”推进到更完整的产品体验。
+
+建议交付：
+
+1. 研究 AIRI 当前 UI 信息架构、设置页、聊天体验、语音入口和角色呈现方式。
+2. 确定 AuraBot 保留桌宠优先的产品形态，不直接复制 AIRI 页面结构。
+3. 重构控制台布局：聊天、任务状态、记忆调试、模型/语音设置要能长期共存。
+4. 重构桌宠输入体验：文本输入、STT、TTS、气泡反馈和状态表达统一成一套交互语言。
+5. 补核心 viewport 截图和 e2e 验证，避免 UI 重构只停在静态样式。
+
+### Next 6: Handoff and Push Prep
 
 建议在 push 前补齐：
 
