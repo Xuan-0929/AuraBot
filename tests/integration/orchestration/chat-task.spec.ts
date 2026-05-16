@@ -86,26 +86,34 @@ describe("chat task integration", () => {
     expect(tasks[0]?.title).toContain("后天路演");
   });
 
-  it("starts the latest queued task from main chat and reports completed progress", async () => {
-    const { services, orchestrator } = createTestOrchestrator("aurabot-chat-task-");
+  it("starts the latest queued task from main chat without waiting for completion", async () => {
+    const services = createTestServices("aurabot-chat-task-");
+    const taskRepository = new TaskRepository(services.database);
+    const taskService = new TaskService(
+      taskRepository,
+      services.sessionRepository,
+      services.eventLogService,
+      {
+        run: async () => new Promise(() => undefined)
+      }
+    );
+    const orchestrator = new ChatOrchestrator({
+      ...services,
+      taskService
+    });
 
     await orchestrator.sendMessage({ content: "帮我整理一份明天会议的清单。" });
     const start = await orchestrator.sendMessage({ content: "开始做这个任务。" });
     const query = await orchestrator.sendMessage({ content: "这个任务做到哪了？" });
-    const repeatStart = await orchestrator.sendMessage({ content: "开始做这个任务。" });
     const profile = services.profileService.getOrSeedActiveProfile();
     const tasks = services.taskService.listTasksForProfile(profile.id);
 
-    expect(start.updatedTask?.status).toBe("completed");
+    expect(start.updatedTask?.status).toBe("running");
     expect(start.assistantMessage?.content).toContain("明天会议");
-    expect(start.assistantMessage?.content).toContain("整理好了");
-    expect(start.assistantMessage?.content).toContain("调");
-    expect(query.assistantMessage?.content).toContain("整理好了");
+    expect(start.assistantMessage?.content).toContain("已经在弄了");
+    expect(query.assistantMessage?.content).toContain("已经在弄了");
     expect(query.assistantMessage?.content).not.toContain("completed");
-    expect(repeatStart.assistantMessage?.content).toContain("整理好了");
-    expect(repeatStart.assistantMessage?.content).not.toContain("completed");
-    expect(repeatStart.assistantMessage?.content).not.toContain("queued");
-    expect(tasks[0]?.latestProgress).toContain("完成");
+    expect(tasks[0]?.status).toBe("running");
   });
 
   it("describes a running child agent task without exposing execution details", async () => {
@@ -143,34 +151,25 @@ describe("chat task integration", () => {
     expect(query.assistantMessage?.content).not.toContain("sandbox");
   });
 
-  it("reports a child task runner failure back through the main chat", async () => {
+  it("reports an already failed child task back through the main chat", async () => {
     const services = createTestServices("aurabot-chat-task-");
     const taskRepository = new TaskRepository(services.database);
-    const taskService = new TaskService(
-      taskRepository,
-      services.sessionRepository,
-      services.eventLogService,
-      {
-        run: async (task) =>
-          taskRepository.updateStatus({
-            taskId: task.id,
-            status: "failed",
-            latestProgress: "Codex 子任务失败：codex exited 1"
-          })
-      }
-    );
     const orchestrator = new ChatOrchestrator({
       ...services,
-      taskService
+      taskService: services.taskService
     });
 
-    await orchestrator.sendMessage({ content: "帮我做一份 GitHub 周报。" });
-    const start = await orchestrator.sendMessage({ content: "开始做这个任务。" });
+    const created = await orchestrator.sendMessage({ content: "帮我做一份 GitHub 周报。" });
+    taskRepository.updateStatus({
+      taskId: created.createdTask!.id,
+      status: "failed",
+      latestProgress: "Codex 子任务失败：codex exited 1"
+    });
+    const query = await orchestrator.sendMessage({ content: "这个任务做到哪了？" });
 
-    expect(start.updatedTask?.status).toBe("failed");
-    expect(start.assistantMessage?.content).toContain("这次我先卡在");
-    expect(start.assistantMessage?.content).toContain("codex exited 1");
-    expect(start.assistantMessage?.content).toContain("接着一起改");
+    expect(query.assistantMessage?.content).toContain("这次我先卡在");
+    expect(query.assistantMessage?.content).toContain("codex exited 1");
+    expect(query.assistantMessage?.content).toContain("接着一起改");
   });
 
   it("uses task hints in the main chat to query, revise, and interrupt a specific task", async () => {

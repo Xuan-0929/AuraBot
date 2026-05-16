@@ -108,6 +108,44 @@ describe("task lifecycle", () => {
     expect(started?.latestProgress).not.toBe("Task queued from main chat.");
   });
 
+  it("does not start the same queued background task more than once", async () => {
+    const services = createTestServices("aurabot-task-");
+    const taskRepository = new TaskRepository(services.database);
+    let runCount = 0;
+    const taskService = new TaskService(
+      taskRepository,
+      services.sessionRepository,
+      services.eventLogService,
+      {
+        run: async () => {
+          runCount += 1;
+
+          return new Promise(() => undefined);
+        }
+      }
+    );
+    const profile = services.profileService.getOrSeedActiveProfile();
+    const mainSession = services.sessionRepository.getOrCreateMainSession(profile.id);
+    const task = taskService.createTaskFromChat({
+      profileId: profile.id,
+      parentSessionId: mainSession.id,
+      title: "帮我写一份 GitHub 周报。"
+    });
+
+    const firstStart = taskService.runTaskInBackground({
+      profileId: profile.id,
+      taskId: task.id
+    });
+    const secondStart = taskService.runTaskInBackground({
+      profileId: profile.id,
+      taskId: task.id
+    });
+
+    expect(firstStart?.status).toBe("running");
+    expect(secondStart?.status).toBe("running");
+    expect(runCount).toBe(1);
+  });
+
   it("notifies callers when a background task reports progress", async () => {
     const services = createTestServices("aurabot-task-");
     const taskRepository = new TaskRepository(services.database);

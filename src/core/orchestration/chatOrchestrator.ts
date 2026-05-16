@@ -7,6 +7,7 @@ import type { MemoryService } from "../memory/memoryService";
 import type { MessageRepository } from "../storage/repositories/messageRepository";
 import type { SessionRepository } from "../storage/repositories/sessionRepository";
 import type { TaskService } from "../tasks/taskService";
+import type { RunTaskInBackgroundInput } from "../tasks/taskService";
 import type { ProfileService } from "../profiles/profileService";
 import type { EventLogService } from "../telemetry/eventLogService";
 import { parseTaskControlRequest } from "../tasks/taskControlRouter";
@@ -38,6 +39,7 @@ export interface ChatOrchestratorDependencies {
   gateModel: GateModel;
   chatModel: ChatModel;
   voiceAdapter: VoiceAdapter;
+  startTaskInBackground?: (input: RunTaskInBackgroundInput) => ReturnType<TaskService["runTaskInBackground"]>;
 }
 
 export interface SendChatMessageOptions {
@@ -57,6 +59,12 @@ export class ChatOrchestrator {
     >
   ): void {
     Object.assign(this.dependencies, dependencies);
+  }
+
+  setTaskBackgroundStarter(
+    startTaskInBackground: (input: RunTaskInBackgroundInput) => ReturnType<TaskService["runTaskInBackground"]>
+  ): void {
+    this.dependencies.startTaskInBackground = startTaskInBackground;
   }
 
   async sendMessage(input: SendChatMessageInput, options: SendChatMessageOptions = {}): Promise<SendChatMessageResult> {
@@ -468,7 +476,7 @@ export class ChatOrchestrator {
           }
         );
       } else {
-        updatedTask = await this.dependencies.taskService.runTaskFromChat({
+        updatedTask = (this.dependencies.startTaskInBackground ?? this.dependencies.taskService.runTaskInBackground.bind(this.dependencies.taskService))({
           profileId: input.profileId,
           taskId: selectedTask.id
         });

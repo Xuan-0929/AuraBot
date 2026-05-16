@@ -1,4 +1,5 @@
 import { randomUUID } from "node:crypto";
+import { canTransitionTaskStatus } from "../../tasks/taskState";
 import type { Task, TaskEvent, TaskKind, TaskStatus } from "../../../shared/schemas/task";
 import type { AppDatabase } from "../db";
 
@@ -158,6 +159,44 @@ export class TaskRepository {
         latestProgress: input.latestProgress,
         updatedAt: now
       });
+
+    return this.getById(input.taskId);
+  }
+
+  transitionStatus(input: {
+    taskId: string;
+    from: TaskStatus | TaskStatus[];
+    to: TaskStatus;
+    latestProgress: string;
+  }): Task | undefined {
+    const now = new Date().toISOString();
+    const fromStatuses = Array.isArray(input.from) ? input.from : [input.from];
+
+    if (fromStatuses.length === 0) {
+      return undefined;
+    }
+
+    if (!fromStatuses.some((status) => canTransitionTaskStatus(status, input.to))) {
+      return undefined;
+    }
+
+    const placeholders = fromStatuses.map(() => "?").join(", ");
+    const result = this.database
+      .prepare(
+        `
+        update tasks
+        set status = ?,
+            latest_progress = ?,
+            updated_at = ?
+        where id = ?
+          and status in (${placeholders})
+      `
+      )
+      .run(input.to, input.latestProgress, now, input.taskId, ...fromStatuses);
+
+    if (result.changes === 0) {
+      return undefined;
+    }
 
     return this.getById(input.taskId);
   }

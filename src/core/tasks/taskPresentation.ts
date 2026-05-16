@@ -2,6 +2,7 @@ import { basename, isAbsolute, resolve } from "node:path";
 import type { MessageAttachment } from "../../shared/schemas/message";
 import type { Soul } from "../../shared/schemas/profile";
 import type { Task, TaskEvent } from "../../shared/schemas/task";
+import type { TaskArtifact } from "../storage/repositories/taskArtifactRepository";
 import type { ResponseScene, VoiceAdapter } from "../voice/voiceAdapter";
 
 export interface TaskMessageDraft {
@@ -14,9 +15,13 @@ export interface TaskVoiceOptions {
   voiceAdapter: VoiceAdapter;
 }
 
-export function buildTaskSettledMessageDraft(task: Task, events: TaskEvent[] = []): TaskMessageDraft {
+export function buildTaskSettledMessageDraft(
+  task: Task,
+  events: TaskEvent[] = [],
+  artifacts: TaskArtifact[] = []
+): TaskMessageDraft {
   if (task.status === "completed") {
-    const attachments = buildTaskResultAttachments(task.id, events);
+    const attachments = buildTaskResultAttachments(task.id, events, artifacts);
 
     if (attachments.length > 0) {
       return {
@@ -58,14 +63,20 @@ export function buildTaskSettledMessageDraft(task: Task, events: TaskEvent[] = [
 export async function buildTaskSettledMessageDraftWithVoice(
   task: Task,
   events: TaskEvent[] = [],
-  options: TaskVoiceOptions
+  artifactsOrOptions: TaskArtifact[] | TaskVoiceOptions,
+  options?: TaskVoiceOptions
 ): Promise<TaskMessageDraft> {
-  const draft = buildTaskSettledMessageDraft(task, events);
+  const artifacts = Array.isArray(artifactsOrOptions) ? artifactsOrOptions : [];
+  const voiceOptions = Array.isArray(artifactsOrOptions) ? options : artifactsOrOptions;
+  if (!voiceOptions) {
+    throw new Error("Task voice options are required.");
+  }
+  const draft = buildTaskSettledMessageDraft(task, events, artifacts);
   const scene = getSettledTaskScene(task);
-  const content = await options.voiceAdapter.render({
+  const content = await voiceOptions.voiceAdapter.render({
     scene,
     channel: "chat",
-    soul: options.soul,
+    soul: voiceOptions.soul,
     facts: buildTaskVoiceFacts(task, events, draft.attachments)
   });
 
@@ -91,7 +102,8 @@ export function buildTaskStatusResponse(task: Task, events: TaskEvent[] = []): s
 export async function buildTaskStatusResponseWithVoice(
   task: Task,
   events: TaskEvent[] = [],
-  options: TaskVoiceOptions
+  options: TaskVoiceOptions,
+  artifacts: TaskArtifact[] = []
 ): Promise<string> {
   return options.voiceAdapter.render({
     scene: task.status === "completed" || task.status === "failed" || task.status === "interrupted"
@@ -99,12 +111,16 @@ export async function buildTaskStatusResponseWithVoice(
       : "task.status",
     channel: "chat",
     soul: options.soul,
-    facts: buildTaskVoiceFacts(task, events, buildTaskResultAttachments(task.id, events))
+    facts: buildTaskVoiceFacts(task, events, buildTaskResultAttachments(task.id, events, artifacts))
   });
 }
 
-export function buildTaskResultAttachments(taskId: string, events: TaskEvent[]): MessageAttachment[] {
-  return listTaskResultPaths(events).map((path, index) => ({
+export function buildTaskResultAttachments(
+  taskId: string,
+  events: TaskEvent[],
+  artifacts: TaskArtifact[] = []
+): MessageAttachment[] {
+  return listTaskResultPaths(events, artifacts).map((path, index) => ({
     id: `${taskId}-file-${index}`,
     kind: "file",
     taskId,
@@ -113,15 +129,29 @@ export function buildTaskResultAttachments(taskId: string, events: TaskEvent[]):
   }));
 }
 
-export function isTaskResultPathAllowed(events: TaskEvent[], path: string): boolean {
+export function isTaskResultPathAllowed(
+  events: TaskEvent[],
+  path: string,
+  artifacts: TaskArtifact[] = []
+): boolean {
   const normalizedPath = normalizeComparablePath(path);
 
-  return listTaskResultPaths(events).some((resultPath) => normalizeComparablePath(resultPath) === normalizedPath);
+  return listTaskResultPaths(events, artifacts).some((resultPath) => normalizeComparablePath(resultPath) === normalizedPath);
 }
 
-function listTaskResultPaths(events: TaskEvent[]): string[] {
+function listTaskResultPaths(events: TaskEvent[], artifacts: TaskArtifact[] = []): string[] {
   const paths = new Set<string>();
   const cwd = findTaskWorkingDirectory(events);
+
+  for (const artifact of artifacts) {
+    if (artifact.artifactType === "file") {
+      paths.add(resolveTaskPath(artifact.uri, cwd));
+    }
+  }
+
+  if (paths.size > 0) {
+    return [...paths];
+  }
 
   for (const event of events) {
     for (const path of getEventFileChangePaths(event)) {

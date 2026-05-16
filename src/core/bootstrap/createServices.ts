@@ -7,6 +7,7 @@ import { MessageRepository } from "../storage/repositories/messageRepository";
 import { ProfileRepository } from "../storage/repositories/profileRepository";
 import { SessionRepository } from "../storage/repositories/sessionRepository";
 import { TaskRepository } from "../storage/repositories/taskRepository";
+import { TaskArtifactRepository } from "../storage/repositories/taskArtifactRepository";
 import { TaskService } from "../tasks/taskService";
 import { DeterministicTaskRunner } from "../tasks/taskRunner";
 import { CliAgentClientImpl, MultiCliTaskRunner } from "../tasks/cliTaskRunner";
@@ -36,6 +37,7 @@ export interface AppServices {
   sessionRepository: SessionRepository;
   messageRepository: MessageRepository;
   taskRepository: TaskRepository;
+  taskArtifactRepository: TaskArtifactRepository;
   memoryExtractor: MemoryExtractor;
   memoryService: MemoryService;
   taskService: TaskService;
@@ -56,6 +58,7 @@ export function createServices(userDataPath: string): AppServices {
   const sessionRepository = new SessionRepository(database);
   const eventLogService = new EventLogService(database);
   const taskRepository = new TaskRepository(database);
+  const taskArtifactRepository = new TaskArtifactRepository(database);
   const taskRunner = createTaskRunner(config.taskRunner, {
     userDataPath,
     taskRepository,
@@ -76,6 +79,7 @@ export function createServices(userDataPath: string): AppServices {
     personaSettingsService,
     sessionRepository,
     taskRepository,
+    taskArtifactRepository,
     messageRepository: new MessageRepository(database),
     memoryExtractor,
     memoryService: new MemoryService(memoryRepository, {
