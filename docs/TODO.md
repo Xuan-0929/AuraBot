@@ -4,7 +4,7 @@
 
 **Goal:** Build the first usable AuraBot desktop MVP that validates four core hypotheses: a Live2D-first desktop companion shell feels less like a tool UI, natural chat timing beats fixed timeout, mixed memory beats flat memory, and a chat-first companion can still control background tasks without losing “alive” feeling.
 
-*Refer to `supermemory` for memory implementation inspiration.*
+*Refer to open-source graph memory projects such as Graphiti, Cognee, Mem0, and Letta for memory implementation inspiration.*
 
 **Architecture:** Use an Electron desktop shell with a React renderer, a Node/TypeScript orchestration core, and a local SQLite store. Keep one user-facing main chat session per active profile, route background work into task sessions with capped depth, and separate lightweight gate/classification logic from main response generation to reduce cost and context pollution.
 
@@ -557,7 +557,7 @@ Must show:
 
 ### Current Todo List
 
-1. [ ] 研究记忆系统并接入 `supermemory`：先梳理现有 memory write / merge / recall / debug 流程，再明确哪些能力保留本地、哪些能力交给 `supermemory`，最后补接入方案和验证用例。
+1. [ ] 研究本地图结构记忆系统：先梳理现有 memory write / merge / recall / debug 流程，再明确节点、边、episode provenance、混合召回和遗忘工作流的下一步边界，最后补路线文档和验证用例。
 2. [ ] 连接 MCP：确认 AuraBot 需要消费或暴露的 MCP tools/resources、权限边界、配置入口和失败提示，并把 MCP 能力接入任务执行链路。
 3. [ ] 研究任务处理流程：从 gate 分类、`TaskRegistry`、runner、进度广播、artifact 回流到主聊天控制链路做一次完整梳理，产出 Task Executor v2 改造点。
 4. [ ] 接入 TTS 和 STT：替换或补强当前浏览器原生 STT MVP，并为桌宠气泡、任务播报、语音输入和语音回复统一 voice adapter。
@@ -598,11 +598,11 @@ Must show:
 
 建议交付：
 
-1. 先研究现有 memory 系统的写入、合并、召回、follow-up、debug event 和评估链路，形成可对照的接入边界。
-2. 设计并接入 `supermemory`，明确本地 SQLite / relation graph 与外部 memory 服务之间的数据同步、召回重排、冲突处理和隐私边界。
-3. 为 `supermemory` 接入补最小可验证用例：写入一条事实、跨轮召回、更新/合并旧记忆、follow-up 不误触发。
+1. 先研究现有 memory 系统的写入、合并、召回、follow-up、debug event 和评估链路，形成可对照的图结构改造边界。
+2. 设计本地 `memory_episodes`、增强版 `memory_edges` 和可重建摘要层，明确节点/边/episode 的来源追溯、召回重排、冲突处理和隐私边界。
+3. 为本地图结构记忆补最小可验证用例：写入一条事实、跨轮召回、更新/合并旧记忆、沿边多跳召回、follow-up 不误触发。
 4. 下一步：补系统通知、提醒权限和 App 未运行时的边界提示。
-5. 下一步：把模型 planner 原始响应和失败原因纳入 debug event。
+5. 下一步：把模型 planner 原始响应、失败原因、边创建理由和 episode 来源纳入 debug event。
 6. 下一步：继续扩展更真实的多轮记忆评估语料。
 
 已完成：

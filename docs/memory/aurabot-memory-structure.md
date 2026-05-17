@@ -1,8 +1,10 @@
 # AuraBot 当前记忆结构
 
-更新时间：2026-05-06
+更新时间：2026-05-17
 
-这版记忆系统是一个受控的“分层摘要 + 图状联想 + memoryModel 语义增强”结构。它还不是向量库，也不是开放式知识图谱；当前目标是先让 AuraBot 在本地、可测试、可解释的范围内做到：写入稳定事实，识别时间事件，合并重复事实，在相关记忆之间自动连边，后续对话可以沿边联想召回，并能在主聊天或后台轮询中触发到期 `follow_up`。
+这版记忆系统是一个受控的“分层摘要 + 图状联想 + memoryModel 语义增强”结构。项目不再规划接入闭源 Supermemory；后续记忆主线会继续沿本地优先的 graph memory 演进：节点存储信息，边存储关联、权重、时序和来源。
+
+它还不是完整开放式知识图谱，也还没有向量库、BM25 或实体层；当前目标是先让 AuraBot 在本地、可测试、可解释的范围内做到：写入稳定事实，识别时间事件，合并重复事实，在相关记忆之间自动连边，后续对话可以沿边联想召回，并能在主聊天或后台轮询中触发到期 `follow_up`。
 
 ## 结构图
 
@@ -221,10 +223,25 @@ follow_up --preference_for(0.90)--> preference
 6. 控制台 `Memory Debug` 面板可以查看当前节点、关系边、摘要计数、最近 memory event，以及最近一次召回的 query、planner terms、seed、图扩散节点和 traversed edges。
 7. 当前已有 App 运行期间的后台 scheduler 和桌宠气泡提醒，但还没有系统级通知、开机自启或离线调度。
 8. SQLite 表结构继续沿用；模型输出必须落到现有 `memory_nodes` 和 `memory_edges` 约束内。
+9. 当前没有 episode provenance：节点和边可以关联 source session，但还不能完整追溯到“哪条原始消息、任务结果或导入材料产生了这条记忆”。
+10. 当前 `memory_edges` 还比较轻量，只包含关系类型、权重和创建时间；下一步需要让边具备状态、置信度、有效期和来源。
+
+## 开源图记忆项目带来的设计启发
+
+调研见 `docs/memory/open-source-graph-memory-roadmap.md`。简要结论如下：
+
+| 项目 | 关键启发 | 对 AuraBot 的落点 |
+| --- | --- | --- |
+| Graphiti / Zep OSS core | temporal context graph、episode provenance、事实有效期 | 增加 `memory_episodes`，让节点和边可追溯；给边加 `valid_from / valid_to / state` |
+| Cognee | `remember / recall / forget / improve`，session memory 后台同步到永久图谱 | 把即时聊天体验和后台图谱整理拆开，避免写入路径过重 |
+| Mem0 | `add / search`、filters、hybrid search、graph memory 对多跳问题有帮助 | 引入 embedding/BM25/entity boosting 作为 seed node 选择器，而不是替代图结构 |
+| Letta / MemGPT | core memory + archival memory 的分层和自编辑工具 | 保留短期上下文、长期图记忆、摘要/画像三层，但写库仍通过受控 schema |
 
 ## 下一步应做
 
-1. **扩展评估语料**：继续增加更真实的多轮对话 fixture，比较关键词召回、概念召回、图扩散召回的回复差异，避免凭感觉调参。
-2. **增强主动提醒交付面**：补系统通知、提醒权限和 App 未运行时的边界提示。
-3. **增强记忆调试视图第二版**：把模型 planner 原始响应和失败原因纳入 debug event，便于区分模型输出和配置/调用问题。
-4. **后续可选 embedding**：如果固定评估集显示结构化 query analyzer 仍不够，再引入 embedding 和向量索引。
+1. **扩展评估语料**：继续增加更真实的多轮对话 fixture，覆盖偏好变化、反事实、多人关系、长期 follow-up、同名实体和跨轮事件联想。
+2. **增强边模型**：给 `memory_edges` 增加状态、置信度、更新时间、可选有效期和来源字段，让边从“联想提示”升级为可维护事实。
+3. **补 episode provenance**：新增 `memory_episodes` 或先以轻量 source reference 过渡，确保节点和边能追溯到原始消息、任务结果或导入内容。
+4. **增强记忆调试视图第二版**：把模型 planner 原始响应、失败原因、边创建理由和 episode 来源纳入 debug event。
+5. **引入混合召回**：如果固定评估集显示结构化 query analyzer 不够，再引入 embedding/BM25/entity boosting，用于选择 seed nodes；图扩散仍负责最终关联解释。
+6. **完善遗忘工作流**：用户删除或归档记忆时，同步处理节点、边、摘要和未来索引，避免只删表面节点。
