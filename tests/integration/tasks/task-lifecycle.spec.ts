@@ -108,6 +108,44 @@ describe("task lifecycle", () => {
     expect(started?.latestProgress).not.toBe("Task queued from main chat.");
   });
 
+  it("does not start the same queued background task more than once", async () => {
+    const services = createTestServices("aurabot-task-");
+    const taskRepository = new TaskRepository(services.database);
+    let runCount = 0;
+    const taskService = new TaskService(
+      taskRepository,
+      services.sessionRepository,
+      services.eventLogService,
+      {
+        run: async () => {
+          runCount += 1;
+
+          return new Promise(() => undefined);
+        }
+      }
+    );
+    const profile = services.profileService.getOrSeedActiveProfile();
+    const mainSession = services.sessionRepository.getOrCreateMainSession(profile.id);
+    const task = taskService.createTaskFromChat({
+      profileId: profile.id,
+      parentSessionId: mainSession.id,
+      title: "帮我写一份 GitHub 周报。"
+    });
+
+    const firstStart = taskService.runTaskInBackground({
+      profileId: profile.id,
+      taskId: task.id
+    });
+    const secondStart = taskService.runTaskInBackground({
+      profileId: profile.id,
+      taskId: task.id
+    });
+
+    expect(firstStart?.status).toBe("running");
+    expect(secondStart?.status).toBe("running");
+    expect(runCount).toBe(1);
+  });
+
   it("notifies callers when a background task reports progress", async () => {
     const services = createTestServices("aurabot-task-");
     const taskRepository = new TaskRepository(services.database);
@@ -357,5 +395,34 @@ describe("task lifecycle", () => {
     expect(failed?.status).toBe("failed");
     expect(failed?.latestProgress).toContain("runner crashed");
     expect(settledTaskId).toBe(task.id);
+  });
+
+  it("reschedules a queued reminder task without changing its title", () => {
+    const services = createTestServices("aurabot-task-reminder-reschedule-");
+    const profile = services.profileService.getOrSeedActiveProfile();
+    const mainSession = services.sessionRepository.getOrCreateMainSession(profile.id);
+    const reminder = services.taskService.createTaskFromChat({
+      profileId: profile.id,
+      parentSessionId: mainSession.id,
+      title: "喝水",
+      kind: "time_reminder",
+      dueAt: "2026-05-16T12:10:00.000Z"
+    });
+
+    const updated = services.taskService.rescheduleReminderFromChat({
+      profileId: profile.id,
+      taskId: reminder.id,
+      dueAt: "2026-05-17T01:00:00.000Z",
+      reason: "用户在主聊天线程调整提醒时间"
+    });
+
+    expect(updated).toMatchObject({
+      id: reminder.id,
+      title: "喝水",
+      kind: "time_reminder",
+      status: "queued",
+      dueAt: "2026-05-17T01:00:00.000Z"
+    });
+    expect(services.taskService.listTaskEvents(reminder.id).at(-1)?.eventType).toBe("task.reminder_rescheduled");
   });
 });

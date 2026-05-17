@@ -38,6 +38,7 @@
                 :display-language="store.displayLanguage"
                 :on-cancel-task="(taskId) => void store.cancelTask(taskId)"
                 :on-delete-task="(taskId) => void store.deleteTask(taskId)"
+                :on-view-task-detail="(taskId) => void store.openTaskDetail(taskId)"
               />
               <div v-else class="console-task-viewport-empty" aria-hidden="true" />
             </div>
@@ -49,9 +50,18 @@
       <section class="console-chat" :aria-label="t(store.displayLanguage, 'mainConversation')">
         <MessageList :messages="store.messages" :display-language="store.displayLanguage" />
         <ConsoleGlassPanel variant="control" class="console-composer-glass">
-          <Composer :display-language="store.displayLanguage" :on-send="(content) => store.sendMessage(content)" />
+          <Composer
+            :display-language="store.displayLanguage"
+            :on-send="(content, attachments) => store.sendMessage(content, 'console', attachments)"
+          />
         </ConsoleGlassPanel>
       </section>
+      <TaskDetailPanel
+        v-if="store.selectedTaskDetail"
+        :detail="store.selectedTaskDetail"
+        :display-language="store.displayLanguage"
+        :on-close="() => store.closeTaskDetail()"
+      />
     </div>
   </main>
 </template>
@@ -63,6 +73,7 @@ import { t } from "../../i18n";
 import Composer from "../chat/Composer.vue";
 import MessageList from "../chat/MessageList.vue";
 import AgentStatusBar from "../status/AgentStatusBar.vue";
+import TaskDetailPanel from "../tasks/TaskDetailPanel.vue";
 import TaskStickyNotes from "../tasks/TaskStickyNotes.vue";
 import { pickConsoleStickyTasks } from "../tasks/taskStickyNotes";
 import ConsoleGlassPanel from "./ConsoleGlassPanel.vue";

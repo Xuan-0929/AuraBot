@@ -1,3 +1,5 @@
+import { mkdirSync, writeFileSync } from "node:fs";
+import { join } from "node:path";
 import { afterEach, describe, expect, it } from "vitest";
 import { ChatOrchestrator } from "../../../src/core/orchestration/chatOrchestrator";
 import { TaskRepository } from "../../../src/core/storage/repositories/taskRepository";
@@ -24,6 +26,45 @@ describe("chat task integration", () => {
     expect(tasks).toHaveLength(1);
     expect(tasks[0]?.status).toBe("queued");
     expect(memoryContext.nodes).toHaveLength(0);
+  });
+
+  it("stages uploaded input attachments when creating a result task", async () => {
+    const { services, orchestrator } = createTestOrchestrator("aurabot-chat-task-input-");
+    const sourceDir = join(services.config.storagePath, "..", "source-files");
+    mkdirSync(sourceDir, { recursive: true });
+    const sourcePath = join(sourceDir, "brief.png");
+    writeFileSync(sourcePath, "fake image data", "utf8");
+
+    const result = await orchestrator.sendMessage({
+      content: "帮我分析这张图",
+      attachments: [
+        {
+          kind: "image",
+          name: "brief.png",
+          path: sourcePath,
+          mimeType: "image/png",
+          sizeBytes: 15
+        }
+      ]
+    });
+    const inputArtifacts = services.taskInputArtifactRepository.listByTask(result.createdTask!.id);
+
+    expect(result.createdTask?.title).toContain("分析");
+    expect(result.userMessage.attachments?.[0]).toMatchObject({
+      kind: "image",
+      name: "brief.png",
+      purpose: "input"
+    });
+    expect(inputArtifacts).toHaveLength(1);
+    expect(inputArtifacts[0]).toMatchObject({
+      taskId: result.createdTask?.id,
+      artifactType: "image",
+      originalName: "brief.png",
+      mimeType: "image/png",
+      sizeBytes: 15
+    });
+    expect(inputArtifacts[0]?.uri).toContain(result.createdTask!.id);
+    expect(inputArtifacts[0]?.uri).not.toBe(sourcePath);
   });
 
   it("treats writing a reading note as a task instead of waiting for more chat", async () => {
@@ -86,26 +127,34 @@ describe("chat task integration", () => {
     expect(tasks[0]?.title).toContain("后天路演");
   });
 
-  it("starts the latest queued task from main chat and reports completed progress", async () => {
-    const { services, orchestrator } = createTestOrchestrator("aurabot-chat-task-");
+  it("starts the latest queued task from main chat without waiting for completion", async () => {
+    const services = createTestServices("aurabot-chat-task-");
+    const taskRepository = new TaskRepository(services.database);
+    const taskService = new TaskService(
+      taskRepository,
+      services.sessionRepository,
+      services.eventLogService,
+      {
+        run: async () => new Promise(() => undefined)
+      }
+    );
+    const orchestrator = new ChatOrchestrator({
+      ...services,
+      taskService
+    });
 
     await orchestrator.sendMessage({ content: "帮我整理一份明天会议的清单。" });
     const start = await orchestrator.sendMessage({ content: "开始做这个任务。" });
     const query = await orchestrator.sendMessage({ content: "这个任务做到哪了？" });
-    const repeatStart = await orchestrator.sendMessage({ content: "开始做这个任务。" });
     const profile = services.profileService.getOrSeedActiveProfile();
     const tasks = services.taskService.listTasksForProfile(profile.id);
 
-    expect(start.updatedTask?.status).toBe("completed");
+    expect(start.updatedTask?.status).toBe("running");
     expect(start.assistantMessage?.content).toContain("明天会议");
-    expect(start.assistantMessage?.content).toContain("整理好了");
-    expect(start.assistantMessage?.content).toContain("调");
-    expect(query.assistantMessage?.content).toContain("整理好了");
+    expect(start.assistantMessage?.content).toContain("已经在弄了");
+    expect(query.assistantMessage?.content).toContain("已经在弄了");
     expect(query.assistantMessage?.content).not.toContain("completed");
-    expect(repeatStart.assistantMessage?.content).toContain("整理好了");
-    expect(repeatStart.assistantMessage?.content).not.toContain("completed");
-    expect(repeatStart.assistantMessage?.content).not.toContain("queued");
-    expect(tasks[0]?.latestProgress).toContain("完成");
+    expect(tasks[0]?.status).toBe("running");
   });
 
   it("describes a running child agent task without exposing execution details", async () => {
@@ -143,34 +192,88 @@ describe("chat task integration", () => {
     expect(query.assistantMessage?.content).not.toContain("sandbox");
   });
 
-  it("reports a child task runner failure back through the main chat", async () => {
+  it("reports an already failed child task back through the main chat", async () => {
     const services = createTestServices("aurabot-chat-task-");
+    const taskRepository = new TaskRepository(services.database);
+    const orchestrator = new ChatOrchestrator({
+      ...services,
+      taskService: services.taskService
+    });
+
+    const created = await orchestrator.sendMessage({ content: "帮我做一份 GitHub 周报。" });
+    taskRepository.updateStatus({
+      taskId: created.createdTask!.id,
+      status: "failed",
+      latestProgress: "Codex 子任务失败：codex exited 1"
+    });
+    const query = await orchestrator.sendMessage({ content: "这个任务做到哪了？" });
+
+    expect(query.assistantMessage?.content).toContain("这次我先卡在");
+    expect(query.assistantMessage?.content).toContain("codex exited 1");
+    expect(query.assistantMessage?.content).toContain("接着一起改");
+  });
+
+  it("retries a failed task from the main chat and starts it in the background", async () => {
+    const services = createTestServices("aurabot-chat-task-retry-");
     const taskRepository = new TaskRepository(services.database);
     const taskService = new TaskService(
       taskRepository,
       services.sessionRepository,
       services.eventLogService,
       {
-        run: async (task) =>
-          taskRepository.updateStatus({
-            taskId: task.id,
-            status: "failed",
-            latestProgress: "Codex 子任务失败：codex exited 1"
-          })
+        run: async () => new Promise(() => undefined)
       }
     );
     const orchestrator = new ChatOrchestrator({
       ...services,
       taskService
     });
+    const created = await orchestrator.sendMessage({ content: "帮我做一份 GitHub 周报。" });
+    taskRepository.updateStatus({
+      taskId: created.createdTask!.id,
+      status: "failed",
+      latestProgress: "Codex 子任务失败：codex exited 1"
+    });
 
-    await orchestrator.sendMessage({ content: "帮我做一份 GitHub 周报。" });
-    const start = await orchestrator.sendMessage({ content: "开始做这个任务。" });
+    const retry = await orchestrator.sendMessage({ content: "重试周报任务" });
 
-    expect(start.updatedTask?.status).toBe("failed");
-    expect(start.assistantMessage?.content).toContain("这次我先卡在");
-    expect(start.assistantMessage?.content).toContain("codex exited 1");
-    expect(start.assistantMessage?.content).toContain("接着一起改");
+    expect(retry.updatedTask?.id).toBe(created.createdTask?.id);
+    expect(retry.updatedTask?.status).toBe("running");
+    expect(retry.assistantMessage?.content).toContain("已经在弄了");
+  });
+
+  it("opens result attachments and deletes completed tasks from chat control", async () => {
+    const { services, orchestrator } = createTestOrchestrator("aurabot-chat-task-open-delete-");
+    const taskRepository = new TaskRepository(services.database);
+    const created = await orchestrator.sendMessage({ content: "帮我做一份 GitHub 周报。" });
+    taskRepository.appendEvent({
+      taskId: created.createdTask!.id,
+      eventType: "task.agent.progress",
+      summary: "写入周报文件",
+      payload: {
+        fileChange: {
+          path: "/tmp/aura-weekly.md"
+        }
+      }
+    });
+    taskRepository.updateStatus({
+      taskId: created.createdTask!.id,
+      status: "completed",
+      latestProgress: "已完成：GitHub 周报"
+    });
+
+    const open = await orchestrator.sendMessage({ content: "打开周报结果" });
+    const remove = await orchestrator.sendMessage({ content: "删除已完成的周报任务" });
+    const profile = services.profileService.getOrSeedActiveProfile();
+    const tasks = services.taskService.listTasksForProfile(profile.id);
+
+    expect(open.assistantMessage?.attachments?.[0]).toMatchObject({
+      kind: "file",
+      path: "/tmp/aura-weekly.md"
+    });
+    expect(remove.deletedTaskId).toBe(created.createdTask?.id);
+    expect(remove.assistantMessage?.content).toContain("移除了");
+    expect(tasks.find((task) => task.id === created.createdTask?.id)).toBeUndefined();
   });
 
   it("uses task hints in the main chat to query, revise, and interrupt a specific task", async () => {

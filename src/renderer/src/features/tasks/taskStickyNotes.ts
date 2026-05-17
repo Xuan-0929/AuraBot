@@ -45,6 +45,30 @@ export function isStickyTaskSettled(status: Task["status"]): boolean {
   return status === "completed" || status === "failed" || status === "interrupted";
 }
 
+export function formatTaskDuration(durationMs: number | undefined): string {
+  if (typeof durationMs !== "number" || !Number.isFinite(durationMs)) {
+    return "—";
+  }
+
+  if (durationMs < 1000) {
+    return `${Math.max(0, Math.round(durationMs))}ms`;
+  }
+
+  const totalSeconds = Math.round(durationMs / 1000);
+  const minutes = Math.floor(totalSeconds / 60);
+  const seconds = totalSeconds % 60;
+
+  if (minutes === 0) {
+    return `${seconds}秒`;
+  }
+
+  if (seconds === 0) {
+    return `${minutes}分`;
+  }
+
+  return `${minutes}分${seconds}秒`;
+}
+
 function compareStickyTasksByUpdatedAt(left: Task, right: Task): number {
   return Date.parse(right.updatedAt) - Date.parse(left.updatedAt);
 }

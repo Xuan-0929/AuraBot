@@ -17,8 +17,18 @@
         <strong>{{ summarizeTaskTitle(task.title) }}</strong>
         <span>{{ summarizeTaskMeta(task, displayLanguage) }}</span>
       </div>
-      <div v-if="variant === 'console' && isStickyTaskActive(task.status) && onCancelTask" class="task-sticky-note-actions">
+      <div v-if="variant === 'console'" class="task-sticky-note-actions">
         <button
+          v-if="onViewTaskDetail"
+          class="task-sticky-note-action"
+          type="button"
+          :aria-label="`${t(displayLanguage, 'viewTaskDetail')}: ${summarizeTaskTitle(task.title)}`"
+          @click="onViewTaskDetail(task.id)"
+        >
+          {{ t(displayLanguage, "detail") }}
+        </button>
+        <button
+          v-if="isStickyTaskActive(task.status) && onCancelTask"
           class="task-sticky-note-action task-sticky-note-action-cancel"
           type="button"
           :aria-label="`${t(displayLanguage, 'cancelTask')}: ${summarizeTaskTitle(task.title)}`"
@@ -26,9 +36,8 @@
         >
           {{ t(displayLanguage, "cancel") }}
         </button>
-      </div>
-      <div v-else-if="variant === 'console' && isStickyTaskSettled(task.status) && onDeleteTask" class="task-sticky-note-actions">
         <button
+          v-else-if="isStickyTaskSettled(task.status) && onDeleteTask"
           class="task-sticky-note-action task-sticky-note-action-delete"
           type="button"
           :aria-label="`${t(displayLanguage, 'deleteTask')}: ${summarizeTaskTitle(task.title)}`"
@@ -63,6 +72,7 @@ const props = withDefaults(
     ariaLabel?: string | false;
     onCancelTask?: (taskId: string) => void;
     onDeleteTask?: (taskId: string) => void;
+    onViewTaskDetail?: (taskId: string) => void;
   }>(),
   { showHeader: true, ariaLabel: undefined }
 );

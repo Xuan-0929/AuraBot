@@ -5,10 +5,11 @@ export const messageRoleSchema = z.enum(["user", "assistant", "system", "tool"])
 
 export const messageAttachmentSchema = z.object({
   id: z.string().min(1),
-  kind: z.literal("file"),
-  taskId: z.string().min(1),
+  kind: z.enum(["file", "image"]),
+  purpose: z.enum(["input", "output"]).optional(),
+  taskId: z.string().min(1).optional(),
   name: z.string().min(1),
-  path: z.string().min(1)
+  path: z.string().min(1).optional()
 });
 
 export const messageSchema = z.object({

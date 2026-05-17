@@ -152,6 +152,17 @@ export const MIGRATIONS: Migration[] = [
         created_at text not null
       );
 
+      create table if not exists task_input_artifacts (
+        id text primary key,
+        task_id text not null references tasks(id) on delete cascade,
+        artifact_type text not null,
+        original_name text not null,
+        mime_type text not null,
+        size_bytes integer not null,
+        uri text not null,
+        created_at text not null
+      );
+
       create table if not exists event_logs (
         id text primary key,
         event_type text not null,
@@ -286,5 +297,21 @@ export const MIGRATIONS: Migration[] = [
         database.exec("alter table souls add column reply_preference text not null default ''");
       }
     }
+  },
+  {
+    id: 7,
+    name: "add_task_input_artifacts",
+    up: `
+      create table if not exists task_input_artifacts (
+        id text primary key,
+        task_id text not null references tasks(id) on delete cascade,
+        artifact_type text not null,
+        original_name text not null,
+        mime_type text not null,
+        size_bytes integer not null,
+        uri text not null,
+        created_at text not null
+      );
+    `
   }
 ];

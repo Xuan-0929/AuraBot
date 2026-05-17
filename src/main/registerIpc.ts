@@ -5,6 +5,7 @@ import {
   type PetResizeCorner,
   type TaskControlActionInput,
   type TaskControlActionResult,
+  type TaskDetailInput,
   type TaskResultFileActionInput,
   type TaskResultFileActionResult
 } from "../shared/contracts/ipc";
@@ -19,7 +20,9 @@ import type { Profile } from "../shared/schemas/profile";
 import type { Task } from "../shared/schemas/task";
 import type { AppServices } from "../core/bootstrap/createServices";
 import { shouldAutoRunTasks } from "../core/bootstrap/createServices";
-import { buildTaskSettledMessageDraftWithVoice, isTaskResultPathAllowed } from "../core/tasks/taskPresentation";
+import { buildTaskDetail } from "../core/tasks/taskDetails";
+import { isTaskResultPathAllowed } from "../core/tasks/taskPresentation";
+import { TaskExecutionCoordinator } from "./taskExecutionCoordinator";
 import { splitTextIntoSentences } from "../shared/text/sentences";
 import {
   createPublicAppConfig,
@@ -64,6 +67,7 @@ export interface WindowController {
 }
 
 export function registerIpc(services: AppServices, windows: WindowController): void {
+  const taskExecutionCoordinator = new TaskExecutionCoordinator(services, windows);
   const assistantPetActivityCursors = new Map<string, number>();
   const broadcastAssistantMessagePetActivities = (message: Message, flushRemainder = false) => {
     const result = buildAssistantMessagePetActivities(message, {
@@ -77,6 +81,23 @@ export function registerIpc(services: AppServices, windows: WindowController): v
       windows.broadcastPetActivity(activity);
     }
   };
+
+  services.chatOrchestrator.setTaskBackgroundStarter((input) => {
+    const taskId =
+      input.taskId ??
+      services.taskService.findTaskForChatControl({
+        profileId: input.profileId,
+        targetHint: input.targetHint,
+        activeOnly: true
+      })?.id;
+
+    return taskId
+      ? taskExecutionCoordinator.startTaskInBackground({
+          profileId: input.profileId,
+          taskId
+        })
+      : undefined;
+  });
 
   ipcMain.handle(IPC_CHANNELS.getInitialState, () => {
     const profile = services.profileService.getOrSeedActiveProfile();
@@ -215,23 +236,9 @@ export function registerIpc(services: AppServices, windows: WindowController): v
       result.createdTask.kind === "result_output" &&
       shouldAutoRunTasks(services.config.taskRunner)
     ) {
-      const startedTask = services.taskService.runTaskInBackground({
+      const startedTask = taskExecutionCoordinator.startTaskInBackground({
         profileId: result.createdTask.profileId,
-        taskId: result.createdTask.id,
-        onProgress: (progressTask) => {
-          windows.broadcastTaskChanged(progressTask);
-        },
-        onSettled: async (settledTask) => {
-          windows.broadcastTaskChanged(settledTask);
-          windows.broadcastAgentStatus("idle");
-          const assistantMessage = await createTaskSettledMessage(services, settledTask);
-          windows.broadcastChatMessage(assistantMessage);
-          const activity = await buildPetActivityFromTask(services, settledTask);
-
-          if (activity) {
-            windows.broadcastPetActivity(activity);
-          }
-        }
+        taskId: result.createdTask.id
       });
 
       if (startedTask) {
@@ -307,6 +314,21 @@ export function registerIpc(services: AppServices, windows: WindowController): v
     showTaskResultFileInFolder(services, input)
   );
 
+  ipcMain.handle(IPC_CHANNELS.getTaskDetail, (_event, input: TaskDetailInput) => {
+    const task = services.taskService.getTaskById(input.taskId);
+
+    if (!task) {
+      return undefined;
+    }
+
+    return buildTaskDetail(
+      task,
+      services.taskService.listTaskEvents(task.id),
+      services.taskArtifactRepository.listByTask(task.id),
+      services.taskInputArtifactRepository.listByTask(task.id)
+    );
+  });
+
   ipcMain.handle(IPC_CHANNELS.getEventLogs, () => services.eventLogService.list());
 
   ipcMain.handle(IPC_CHANNELS.getMemoryDebugSnapshot, () => {
@@ -324,24 +346,6 @@ export function registerIpc(services: AppServices, windows: WindowController): v
       recentEvents,
       lastRecallTrace: services.memoryService.getLastRecallTrace()
     };
-  });
-}
-
-async function createTaskSettledMessage(services: AppServices, task: Task): Promise<Message> {
-  const profile = services.profileService.getOrSeedActiveProfile();
-  const mainSession = services.sessionRepository.getOrCreateMainSession(profile.id);
-  const events = services.taskService.listTaskEvents(task.id);
-  const draft = await buildTaskSettledMessageDraftWithVoice(task, events, {
-    soul: profile.soul,
-    voiceAdapter: services.voiceAdapter
-  });
-
-  return services.messageRepository.create({
-    sessionId: mainSession.id,
-    profileId: profile.id,
-    role: "assistant",
-    content: draft.content,
-    attachments: draft.attachments
   });
 }
 
@@ -389,32 +393,9 @@ function resolveTaskResultPath(services: AppServices, input: TaskResultFileActio
   }
 
   const events = services.taskService.listTaskEvents(task.id);
+  const artifacts = services.taskArtifactRepository.listByTask(task.id);
 
-  return isTaskResultPathAllowed(events, input.path) ? input.path : undefined;
-}
-
-async function buildPetActivityFromTask(services: AppServices, task: Task): Promise<PetActivity | undefined> {
-  if (task.status !== "completed" && task.status !== "failed") {
-    return undefined;
-  }
-
-  const profile = services.profileService.getOrSeedActiveProfile();
-
-  return {
-    id: randomUUID(),
-    kind: "task_completed",
-    message: await services.voiceAdapter.render({
-      scene: "pet.task_activity",
-      channel: "pet_notice",
-      soul: profile.soul,
-      facts: {
-        taskTitle: task.title,
-        status: task.status,
-        resultSubject: task.title
-      }
-    }),
-    createdAt: new Date().toISOString()
-  };
+  return isTaskResultPathAllowed(events, input.path, artifacts) ? input.path : undefined;
 }
 
 export interface BuildAssistantMessagePetActivitiesOptions {

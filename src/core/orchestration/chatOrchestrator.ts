@@ -1,3 +1,4 @@
+import { randomUUID } from "node:crypto";
 import type { SendChatMessageInput, SendChatMessageResult } from "../../shared/contracts/chat";
 import type { Message } from "../../shared/schemas/message";
 import type { MemoryNode } from "../../shared/schemas/memory";
@@ -7,6 +8,8 @@ import type { MemoryService } from "../memory/memoryService";
 import type { MessageRepository } from "../storage/repositories/messageRepository";
 import type { SessionRepository } from "../storage/repositories/sessionRepository";
 import type { TaskService } from "../tasks/taskService";
+import type { RunTaskInBackgroundInput } from "../tasks/taskService";
+import type { TaskInputAttachmentService } from "../tasks/taskInputAttachments";
 import type { ProfileService } from "../profiles/profileService";
 import type { EventLogService } from "../telemetry/eventLogService";
 import { parseTaskControlRequest } from "../tasks/taskControlRouter";
@@ -21,6 +24,8 @@ import {
   type ModelRoleName
 } from "../llm/modelErrors";
 import {
+  buildTaskResultAttachments,
+  buildTaskSettledMessageDraft,
   buildTaskSettledMessageDraftWithVoice,
   buildTaskStatusResponseWithVoice
 } from "../tasks/taskPresentation";
@@ -34,10 +39,12 @@ export interface ChatOrchestratorDependencies {
   memoryExtractor: MemoryExtractor;
   memoryService: MemoryService;
   taskService: TaskService;
+  taskInputAttachmentService: TaskInputAttachmentService;
   eventLogService: EventLogService;
   gateModel: GateModel;
   chatModel: ChatModel;
   voiceAdapter: VoiceAdapter;
+  startTaskInBackground?: (input: RunTaskInBackgroundInput) => ReturnType<TaskService["runTaskInBackground"]>;
 }
 
 export interface SendChatMessageOptions {
@@ -59,6 +66,12 @@ export class ChatOrchestrator {
     Object.assign(this.dependencies, dependencies);
   }
 
+  setTaskBackgroundStarter(
+    startTaskInBackground: (input: RunTaskInBackgroundInput) => ReturnType<TaskService["runTaskInBackground"]>
+  ): void {
+    this.dependencies.startTaskInBackground = startTaskInBackground;
+  }
+
   async sendMessage(input: SendChatMessageInput, options: SendChatMessageOptions = {}): Promise<SendChatMessageResult> {
     const profile = this.dependencies.profileService.getOrSeedActiveProfile();
     const mainSession = this.dependencies.sessionRepository.getOrCreateMainSession(profile.id);
@@ -67,7 +80,13 @@ export class ChatOrchestrator {
       sessionId: mainSession.id,
       profileId: profile.id,
       role: "user",
-      content: input.content
+      content: input.content,
+      attachments: (input.attachments ?? []).map((attachment) => ({
+        id: `message_attachment_${randomUUID()}`,
+        kind: attachment.kind,
+        purpose: "input",
+        name: attachment.name
+      }))
     });
     const recentMessages = this.dependencies.messageRepository
       .listRecentBySession(mainSession.id, GATE_CONTEXT_MESSAGE_LIMIT + 1)
@@ -205,6 +224,7 @@ export class ChatOrchestrator {
           title: semanticSegment,
           kind: "result_output"
         });
+        this.dependencies.taskInputAttachmentService.stageForTask(createdTask.id, input.attachments);
         assistantMessage = this.dependencies.messageRepository.create({
           sessionId: mainSession.id,
           profileId: profile.id,
@@ -252,7 +272,8 @@ export class ChatOrchestrator {
           assistantMessage: taskControlResult.assistantMessage,
           agentStatus: taskControlResult.updatedTask ? "tasking" : "idle",
           gateDecision,
-          updatedTask: taskControlResult.updatedTask
+          updatedTask: taskControlResult.updatedTask,
+          deletedTaskId: taskControlResult.deletedTaskId
         };
       }
 
@@ -429,6 +450,8 @@ export class ChatOrchestrator {
       activeOnly: request.action === "interrupt"
     });
     let updatedTask;
+    let deletedTaskId: string | undefined;
+    let attachments: Message["attachments"] = [];
     let responseContent: string;
 
     if (!selectedTask) {
@@ -468,7 +491,7 @@ export class ChatOrchestrator {
           }
         );
       } else {
-        updatedTask = await this.dependencies.taskService.runTaskFromChat({
+        updatedTask = (this.dependencies.startTaskInBackground ?? this.dependencies.taskService.runTaskInBackground.bind(this.dependencies.taskService))({
           profileId: input.profileId,
           taskId: selectedTask.id
         });
@@ -529,20 +552,94 @@ export class ChatOrchestrator {
             soul: input.soul,
             facts: {}
           });
-    } else {
-      const revisedTitle = request.revisedTitle ?? input.content;
-      updatedTask = this.dependencies.taskService.reviseTaskFromChat({
+    } else if (request.action === "continue" || request.action === "retry" || request.action === "rerun") {
+      const queuedTask = this.dependencies.taskService.requeueTaskFromChat({
         profileId: input.profileId,
         taskId: selectedTask.id,
-        title: revisedTitle
+        reason: "用户在主聊天线程要求继续处理"
+      }) ?? selectedTask;
+      if (queuedTask.status === "queued") {
+        updatedTask = (this.dependencies.startTaskInBackground ?? this.dependencies.taskService.runTaskInBackground.bind(this.dependencies.taskService))({
+          profileId: input.profileId,
+          taskId: queuedTask.id
+        });
+      } else {
+        updatedTask = queuedTask;
+      }
+      responseContent = updatedTask
+        ? await buildTaskStatusResponseWithVoice(
+            updatedTask,
+            this.dependencies.taskService.listTaskEvents(updatedTask.id),
+            {
+              soul: input.soul,
+              voiceAdapter: this.dependencies.voiceAdapter
+            }
+          )
+        : await this.dependencies.voiceAdapter.render({
+            scene: "task.control_not_found",
+            channel: "chat",
+            soul: input.soul,
+            facts: {}
+          });
+    } else if (request.action === "open_result") {
+      updatedTask = selectedTask;
+      const events = this.dependencies.taskService.listTaskEvents(selectedTask.id);
+      const draft = buildTaskSettledMessageDraft(selectedTask, events);
+      attachments = buildTaskResultAttachments(selectedTask.id, events);
+      responseContent = attachments.length > 0
+        ? draft.content
+        : await buildTaskStatusResponseWithVoice(selectedTask, events, {
+            soul: input.soul,
+            voiceAdapter: this.dependencies.voiceAdapter
+          });
+    } else if (request.action === "delete") {
+      updatedTask = selectedTask;
+      const deleted = this.dependencies.taskService.deleteSettledTaskFromConsole({
+        profileId: input.profileId,
+        taskId: selectedTask.id
       });
+      if (deleted) {
+        deletedTaskId = selectedTask.id;
+        updatedTask = undefined;
+      }
+      responseContent = deleted
+        ? `我把“${selectedTask.title}”从任务便签里移除了。`
+        : await this.dependencies.voiceAdapter.render({
+            scene: "task.control_not_found",
+            channel: "chat",
+            soul: input.soul,
+            facts: {}
+          });
+    } else {
+      const revisedTitle = request.revisedTitle ?? input.content;
+      if (selectedTask.kind === "time_reminder") {
+        const reminder = parseReminderRequest({
+          message: `${revisedTitle}提醒我${selectedTask.title}`,
+          nowIso: new Date().toISOString()
+        });
+        updatedTask = reminder
+          ? this.dependencies.taskService.rescheduleReminderFromChat({
+              profileId: input.profileId,
+              taskId: selectedTask.id,
+              dueAt: reminder.dueAt,
+              reason: "用户在主聊天线程调整提醒时间"
+            })
+          : undefined;
+      } else {
+        updatedTask = this.dependencies.taskService.reviseTaskFromChat({
+          profileId: input.profileId,
+          taskId: selectedTask.id,
+          title: revisedTitle
+        });
+      }
       responseContent = updatedTask
         ? await this.dependencies.voiceAdapter.render({
-            scene: "task.accepted",
+            scene: selectedTask.kind === "time_reminder" ? "task.reminder_scheduled" : "task.accepted",
             channel: "chat",
             soul: input.soul,
             facts: {
-              taskTitle: updatedTask.title
+              taskTitle: updatedTask.title,
+              dueAt: updatedTask.dueAt
             }
           })
         : await this.dependencies.voiceAdapter.render({
@@ -557,7 +654,8 @@ export class ChatOrchestrator {
       sessionId: input.sessionId,
       profileId: input.profileId,
       role: "assistant",
-      content: responseContent
+      content: responseContent,
+      attachments
     });
 
     this.dependencies.eventLogService.record("chat.message_persisted", {
@@ -567,6 +665,7 @@ export class ChatOrchestrator {
       assistantMessageId: assistantMessage.id,
       writtenMemoryIds: [],
       updatedTaskId: updatedTask?.id ?? null,
+      deletedTaskId: deletedTaskId ?? null,
       taskControlAction: request.action,
       taskControlTargetHint: request.targetHint ?? null,
       gateDecision: "reply"
@@ -574,7 +673,8 @@ export class ChatOrchestrator {
 
     return {
       assistantMessage,
-      updatedTask
+      updatedTask,
+      deletedTaskId
     };
   }
 

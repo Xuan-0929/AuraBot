@@ -2,6 +2,7 @@ import type { AppInitialState, SendChatMessageInput, SendChatMessageResult } fro
 import type { Live2DModelState } from "./live2dModel";
 import type { NotificationSettings } from "./notificationSettings";
 import type { PetActivity } from "./pet";
+import type { TaskDetail } from "./taskDetail";
 import type { Message } from "../schemas/message";
 import type { MemoryEdge, MemoryNode, MemorySummary } from "../schemas/memory";
 import type { PetSettings, PetSettingsPatch } from "../schemas/petSettings";
@@ -53,6 +54,7 @@ export const IPC_CHANNELS = {
   deleteTask: "task:delete",
   openTaskResultFile: "task:open-result-file",
   showTaskResultFileInFolder: "task:show-result-file-in-folder",
+  getTaskDetail: "task:get-detail",
   getEventLogs: "debug:get-event-logs",
   getMemoryDebugSnapshot: "debug:get-memory-snapshot"
 } as const;
@@ -95,6 +97,10 @@ export interface MemoryDebugSnapshot {
 export interface TaskResultFileActionInput {
   taskId: string;
   path: string;
+}
+
+export interface TaskDetailInput {
+  taskId: string;
 }
 
 export interface PetCursorPosition {
@@ -156,10 +162,12 @@ export interface AuraBotApi {
   onTaskChanged(listener: (task: Task) => void): () => void;
   onTaskDeleted(listener: (taskId: string) => void): () => void;
   sendChatMessage(input: SendChatMessageInput): Promise<SendChatMessageResult>;
+  getPathForFile(file: File): string;
   cancelTask(input: TaskControlActionInput): Promise<TaskControlActionResult>;
   deleteTask(input: TaskControlActionInput): Promise<TaskControlActionResult>;
   openTaskResultFile(input: TaskResultFileActionInput): Promise<TaskResultFileActionResult>;
   showTaskResultFileInFolder(input: TaskResultFileActionInput): Promise<TaskResultFileActionResult>;
+  getTaskDetail(input: TaskDetailInput): Promise<TaskDetail | undefined>;
   getEventLogs(): Promise<EventLogRecord[]>;
   getMemoryDebugSnapshot(): Promise<MemoryDebugSnapshot>;
 }

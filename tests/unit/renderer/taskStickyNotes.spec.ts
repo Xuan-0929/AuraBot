@@ -1,5 +1,10 @@
 import { describe, expect, it } from "vitest";
-import { pickConsoleStickyTasks, pickVisiblePetTasks, summarizeTaskTitle } from "../../../src/renderer/src/features/tasks/taskStickyNotes";
+import {
+  formatTaskDuration,
+  pickConsoleStickyTasks,
+  pickVisiblePetTasks,
+  summarizeTaskTitle
+} from "../../../src/renderer/src/features/tasks/taskStickyNotes";
 import type { Task } from "../../../src/shared/schemas/task";
 
 describe("task sticky helpers", () => {
@@ -13,6 +18,12 @@ describe("task sticky helpers", () => {
     expect(pickVisiblePetTasks(tasks).map((task) => task.id)).toEqual(["running", "queued"]);
     expect(pickConsoleStickyTasks(tasks).map((task) => task.id)).toEqual(["queued", "running", "completed"]);
     expect(summarizeTaskTitle(tasks[2].title)).toBe("海报");
+  });
+
+  it("formats task duration for the details panel", () => {
+    expect(formatTaskDuration(undefined)).toBe("—");
+    expect(formatTaskDuration(950)).toBe("950ms");
+    expect(formatTaskDuration(61_000)).toBe("1分1秒");
   });
 });
 
