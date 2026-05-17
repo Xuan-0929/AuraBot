@@ -380,7 +380,10 @@ docs/
   TODO.md
   TS.md
   aurabot-development-status.md
-  aurabot-memory-structure.md
+  memory/
+    aurabot-memory-structure.md
+    open-source-graph-memory-roadmap.md
+    memory-system-and-roadmap.html
 ```
 
 ## Live2D Model Loading

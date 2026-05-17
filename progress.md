@@ -1,39 +1,39 @@
 # 进度记录
 
-## 会话：2026-05-16
+## 会话：2026-05-17
 
-### 阶段 1：需求、调研与文档撰写
+### 阶段 1：外部调研与现状确认
 - **状态：** 已完成
-- **开始时间：** 2026-05-16 12:18 中国标准时间
 - 已完成事项：
-  - 加载相关技能说明。
-  - 列出仓库文件，定位任务相关模块。
-  - 创建本次文档任务的计划记录文件。
-  - 阅读任务数据结构、服务层、仓储层、确定性执行器、命令行执行器、任务控制路由、打断控制、提醒解析、任务注册和任务展示辅助逻辑。
-  - 阅读聊天编排、主进程自动执行和广播逻辑、渲染进程状态管理和任务便签、配置默认值、数据库迁移、主动提醒引擎，以及关键任务测试。
-  - 写入 `docs/task-mechanism-analysis.md`。
-  - 按用户反馈，将本次新增文档和过程记录统一改为中文表达。
-  - 运行 `git diff --check`，未发现空白格式问题。
-- 创建或修改的文件：
-  - `task_plan.md`
-  - `findings.md`
-  - `progress.md`
-  - `docs/task-mechanism-analysis.md`
+  - 使用 `planning-with-files` 组织本次迁移任务。
+  - 搜索并阅读 Graphiti/Zep、Cognee、Mem0、Letta 相关公开资料。
+  - 扫描仓库中 `supermemory`、`memory`、`记忆`、`graph` 相关文档与实现。
+  - 阅读 `docs/supermemory-integration-guide.md`、`docs/aurabot-memory-structure.md`、`src/shared/schemas/memory.ts`、`memoryRepository`、`memoryService`、`memoryRetriever`、`graphTraversal`、`shared/constants/memory.ts`。
+  - 将调研结论和文档决策写入 `findings.md`。
+
+### 阶段 2：仓库文档改写
+- **状态：** 已完成
+- 已完成事项：
+  - 将 `docs/supermemory-integration-guide.md` 重命名并迁移为 `docs/memory/open-source-graph-memory-roadmap.md`。
+  - 改写文档内容：明确不接入闭源 Supermemory，改为本地节点/边图结构路线。
+  - 更新 `docs/memory/aurabot-memory-structure.md`，补充开源图记忆启发、当前边界和下一步。
+  - 更新 README 中英文文档索引。
+
+### 阶段 3：HTML 汇报页
+- **状态：** 已完成
+- 已完成事项：
+  - 新增 `docs/memory/memory-system-and-roadmap.html`。
+  - 页面说明当前记忆节点/边/召回/调试链路，以及 Graphiti、Cognee、Mem0、Letta 带来的路线启发。
 
 ## 校验结果
 | 检查项 | 输入 | 预期 | 实际 | 状态 |
 | --- | --- | --- | --- | --- |
-| 文档空白检查 | `git diff --check` | 无空白错误 | 无输出，退出码 0 | 通过 |
+| Supermemory 旧口径搜索 | `rg -n "supermemory|Supermemory" docs README.md README.zh-CN.md task_plan.md findings.md progress.md` | 不再出现继续接入 Supermemory 的 TODO 或方案 | 仅剩“已放弃/旧文件改名/调研过程”说明 | 通过 |
+| 空白格式检查 | `git diff --check` | 无空白错误 | 无输出，退出码 0 | 通过 |
+| HTML DOM 校验 | `corepack pnpm exec node -e ...jsdom...` | title、H1、5 个 section、4 行对比、4 个阶段、SVG 和 footer refs 均存在 | 全部符合，退出码 0 | 通过 |
+| HTML Playwright 渲染尝试 | `corepack pnpm exec node -e ...@playwright/test...` | 可启动 Chromium 检查桌面/移动 overflow | 本机缺少 Playwright browser 二进制，未下载新依赖 | 已记录 |
 
 ## 错误记录
 | 时间 | 错误 | 尝试 | 处理结果 |
 | --- | --- | --- | --- |
-
-## 恢复上下文检查
-| 问题 | 答案 |
-| --- | --- |
-| 当前做到哪一步？ | 已完成文档撰写、中文化和格式校验。 |
-| 接下来去哪？ | 向用户说明已完成的交付物。 |
-| 目标是什么？ | 写一份基于当前仓库实现的中文任务机制说明和优化策略文档。 |
-| 学到了什么？ | 见 `findings.md`。 |
-| 做了什么？ | 阅读任务机制相关源码和测试，撰写文档，并完成中文化与格式检查。 |
+| 2026-05-17 | `@playwright/test` 无法启动 Chromium，提示缺少 browser executable | 尝试用项目 Playwright 包打开本地 HTML | 为避免下载新依赖，改用 `jsdom` 静态 DOM 校验；文档和 HTML 结构验证通过。 |
