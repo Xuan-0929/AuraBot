@@ -60,10 +60,10 @@ SQLite 表由 `src/core/storage/migrations.ts` 创建。当前已启用 `task_ar
 1. `gateModel` 返回 `inputKind`。
 2. `inputKind=task` 时进入任务创建路径。
 3. `taskKind=result_output` 时创建结果产出型任务。
-4. `taskKind=time_reminder` 时先由 `src/core/tasks/reminderParser.ts` 解析相对时间，再创建提醒任务。
-5. `inputKind=task_control` 时进入任务控制路径，支持查询、启动、打断和修改。
+4. `taskKind=time_reminder` 时先由 `src/core/tasks/reminderParser.ts` 解析相对时间、绝对时间或“稍后”表达，再创建提醒任务。
+5. `inputKind=task_control` 时进入任务控制路径，支持查询、启动、打断、修改、继续、重试、打开结果和删除已完成任务。
 
-本地规则兜底主要在 `src/core/orchestration/gateEvaluator.ts` 与 `src/core/tasks/taskControlRouter.ts`。任务控制依赖中文关键词正则和标题匹配，例如“开始做”“进度”“停掉”“改成”。
+本地规则兜底主要在 `src/core/orchestration/gateEvaluator.ts` 与 `src/core/tasks/taskControlRouter.ts`。任务控制依赖中文关键词正则和标题匹配，例如“开始做”“进度”“停掉”“改成”“重试”“打开结果”。
 
 ### 3.2 创建与持久化
 
@@ -123,6 +123,9 @@ SQLite 表由 `src/core/storage/migrations.ts` 创建。当前已启用 `task_ar
 | 启动 | `task_control` + `start` | 如果任务是 `queued`，触发后台启动并立即返回处理中状态 |
 | 打断 | `task_control` + `interrupt` | 更新为 `interrupted`，并调用执行器取消方法 |
 | 修改 | `task_control` + `revise` | 更新标题，状态重置为 `queued` |
+| 继续/重试/重新运行 | `task_control` + `continue` / `retry` / `rerun` | 将失败或已停下任务重新排到 `queued`，再走后台启动 |
+| 打开结果 | `task_control` + `open_result` | 把任务结果附件挂回主聊天消息 |
+| 删除 | `task_control` + `delete` | 删除已完成/失败/已停下任务，并同步 renderer store |
 
 控制台快捷控制：
 
@@ -138,13 +141,14 @@ SQLite 表由 `src/core/storage/migrations.ts` 创建。当前已启用 `task_ar
 
 提醒任务复用 `tasks` 表：
 
-1. 用户说“两分钟后提醒我喝水”。
+1. 用户说“两分钟后提醒我喝水”“明天早上九点提醒我喝水”或“稍后提醒我喝水”。
 2. 门控判断识别为 `taskKind=time_reminder`。
-3. `parseReminderRequest()` 解析相对时间，写入 `dueAt`。
+3. `parseReminderRequest()` 解析相对时间、绝对时间或“稍后”表达，写入 `dueAt`。
 4. 任务保持 `queued`，不会进入命令行执行器。
 5. `ProactiveTriggerEngine` 每轮调用 `listDueReminderTasks()`。
-6. 到期后生成桌宠活动和系统通知，调用 `completeReminderTask()` 标记 `completed`。
+6. 到期后生成桌宠活动和系统通知，调用 `completeReminderTask()` 标记 `completed`；明显错过的提醒会带“刚才错过了这个提醒”的文案。
 7. 提醒不会主动写入聊天历史。
+8. 已排队提醒可以通过服务层更新 `dueAt`，并记录 `task.reminder_rescheduled` 事件。
 
 这条路径和 `memory.follow_up`、`idle_nudge` 一起属于主动触发系统。
 
@@ -242,15 +246,17 @@ Codex、Claude Code、Hermes 通过统一 `TaskRunner` 接口接入；优先级�
 
 这对调试和未来界面不利。例如控制台无法轻易展示“关键步骤时间线”“错误原因分类”“产物清单”。
 
-### 5.6 任务控制理解偏规则化
+### 5.6 任务控制仍需从规则增强到结构化理解
 
-任务控制目前依赖固定中文正则和简单字符重叠打分。它已经足够覆盖常见表达，但复杂多任务场景容易误选。
+任务控制目前已覆盖查询、启动、打断、修改、继续、重试、重新运行、打开结果和删除已完成任务。匹配层也已经能识别候选任务分数接近的歧义情况。
+
+剩余问题是：主聊天还没有把 `ambiguous` 候选结果转成自然的反问，也还没有让 `gateModel` 直接输出结构化任务控制字段。
 
 典型问题：
 
 1. 多个标题相似任务时，字符重叠可能不够。
 2. 用户说“把刚才那个改一下”时，缺少上下文指代解析。
-3. 控制动作只覆盖查询、启动、打断、修改，缺少继续、重试、复制、归档、查看产物等动作。
+3. 规则解析仍是主路径，复杂表达需要后续交给结构化 gate 输出。
 
 ### 5.7 提醒任务仍是应用运行中机制
 
@@ -259,8 +265,8 @@ Codex、Claude Code、Hermes 通过统一 `TaskRunner` 接口接入；优先级�
 边界：
 
 1. 应用未运行时没有原生系统闹钟。
-2. 没有开机后“补发错过提醒”的特殊体验。
-3. `reminderParser` 当前主要支持相对时间，不支持完整自然日期、重复提醒和时区确认。
+2. 已有应用运行时的错过提醒文案，但还没有系统级离线补发。
+3. `reminderParser` 已支持相对时间、绝对时间和“稍后”，但还不支持完整自然日期、重复提醒和时区确认。
 
 ### 5.8 子任务可观测性已有第一版，还可以更强
 

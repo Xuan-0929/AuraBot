@@ -249,6 +249,9 @@ export const useAuraBotStore = defineStore("auraBot", {
         const result = await window.aurabot.sendChatMessage({ content: trimmed, source });
         this.messages = reconcileMessages(this.messages, pendingUserMessage.id, result);
         this.tasks = updateTasks(this.tasks, result.createdTask ?? result.updatedTask);
+        if (result.deletedTaskId) {
+          this.tasks = removeTask(this.tasks, result.deletedTaskId);
+        }
         this.agentStatus = result.agentStatus;
       } catch (error) {
         this.messages = this.messages.filter((message) => message.id !== pendingUserMessage.id);

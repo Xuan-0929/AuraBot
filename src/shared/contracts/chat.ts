@@ -35,6 +35,7 @@ export interface SendChatMessageResult {
   gateDecision?: GateDecision;
   createdTask?: Task;
   updatedTask?: Task;
+  deletedTaskId?: string;
 }
 
 export interface AppInitialState {

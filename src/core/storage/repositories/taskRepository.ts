@@ -268,6 +268,28 @@ export class TaskRepository {
     return this.getById(input.taskId);
   }
 
+  updateDueAt(input: { taskId: string; dueAt: string; latestProgress: string }): Task | undefined {
+    const now = new Date().toISOString();
+    this.database
+      .prepare(
+        `
+        update tasks
+        set due_at = @dueAt,
+            latest_progress = @latestProgress,
+            updated_at = @updatedAt
+        where id = @taskId
+      `
+      )
+      .run({
+        taskId: input.taskId,
+        dueAt: input.dueAt,
+        latestProgress: input.latestProgress,
+        updatedAt: now
+      });
+
+    return this.getById(input.taskId);
+  }
+
   getById(taskId: string): Task | undefined {
     const row = this.database.prepare("select * from tasks where id = ?").get(taskId) as TaskRow | undefined;
 

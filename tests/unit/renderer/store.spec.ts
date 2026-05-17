@@ -61,6 +61,49 @@ describe("useAuraBotStore", () => {
     expect(store.agentStatus).toBe("idle");
   });
 
+  it("removes a task when chat control returns a deleted task id", async () => {
+    vi.stubGlobal("window", {
+      aurabot: {
+        sendChatMessage: vi.fn(() =>
+          Promise.resolve({
+            userMessage: message("server-user", "user", "删除周报任务"),
+            assistantMessage: message("server-assistant", "assistant", "移除了。"),
+            agentStatus: "idle",
+            deletedTaskId: "task-delete"
+          } satisfies SendChatMessageResult)
+        )
+      }
+    });
+    const store = useAuraBotStore();
+    store.profile = {
+      id: "profile-1",
+      displayName: "Aura",
+      active: true,
+      createdAt: "2026-05-04T00:00:00.000Z",
+      updatedAt: "2026-05-04T00:00:00.000Z"
+    };
+    store.mainSessionId = "session-1";
+    store.tasks = [
+      {
+        id: "task-delete",
+        profileId: "profile-1",
+        parentSessionId: "session-1",
+        sessionId: "task-session-1",
+        kind: "result_output",
+        title: "周报",
+        status: "completed",
+        latestProgress: "已完成",
+        createdAt: "2026-05-04T00:00:00.000Z",
+        updatedAt: "2026-05-04T00:00:01.000Z"
+      }
+    ];
+
+    await store.sendMessage("删除周报任务");
+
+    expect(store.tasks).toEqual([]);
+  });
+
+
   it("uses one cursor subscription and updates focus from IPC", () => {
     let cursorListener: ((position: { localX: number; localY: number; screenX: number; screenY: number }) => void) | undefined;
     vi.stubGlobal("window", {

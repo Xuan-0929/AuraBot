@@ -22,6 +22,8 @@ import {
   type ModelRoleName
 } from "../llm/modelErrors";
 import {
+  buildTaskResultAttachments,
+  buildTaskSettledMessageDraft,
   buildTaskSettledMessageDraftWithVoice,
   buildTaskStatusResponseWithVoice
 } from "../tasks/taskPresentation";
@@ -260,7 +262,8 @@ export class ChatOrchestrator {
           assistantMessage: taskControlResult.assistantMessage,
           agentStatus: taskControlResult.updatedTask ? "tasking" : "idle",
           gateDecision,
-          updatedTask: taskControlResult.updatedTask
+          updatedTask: taskControlResult.updatedTask,
+          deletedTaskId: taskControlResult.deletedTaskId
         };
       }
 
@@ -437,6 +440,8 @@ export class ChatOrchestrator {
       activeOnly: request.action === "interrupt"
     });
     let updatedTask;
+    let deletedTaskId: string | undefined;
+    let attachments: Message["attachments"] = [];
     let responseContent: string;
 
     if (!selectedTask) {
@@ -537,20 +542,94 @@ export class ChatOrchestrator {
             soul: input.soul,
             facts: {}
           });
-    } else {
-      const revisedTitle = request.revisedTitle ?? input.content;
-      updatedTask = this.dependencies.taskService.reviseTaskFromChat({
+    } else if (request.action === "continue" || request.action === "retry" || request.action === "rerun") {
+      const queuedTask = this.dependencies.taskService.requeueTaskFromChat({
         profileId: input.profileId,
         taskId: selectedTask.id,
-        title: revisedTitle
+        reason: "用户在主聊天线程要求继续处理"
+      }) ?? selectedTask;
+      if (queuedTask.status === "queued") {
+        updatedTask = (this.dependencies.startTaskInBackground ?? this.dependencies.taskService.runTaskInBackground.bind(this.dependencies.taskService))({
+          profileId: input.profileId,
+          taskId: queuedTask.id
+        });
+      } else {
+        updatedTask = queuedTask;
+      }
+      responseContent = updatedTask
+        ? await buildTaskStatusResponseWithVoice(
+            updatedTask,
+            this.dependencies.taskService.listTaskEvents(updatedTask.id),
+            {
+              soul: input.soul,
+              voiceAdapter: this.dependencies.voiceAdapter
+            }
+          )
+        : await this.dependencies.voiceAdapter.render({
+            scene: "task.control_not_found",
+            channel: "chat",
+            soul: input.soul,
+            facts: {}
+          });
+    } else if (request.action === "open_result") {
+      updatedTask = selectedTask;
+      const events = this.dependencies.taskService.listTaskEvents(selectedTask.id);
+      const draft = buildTaskSettledMessageDraft(selectedTask, events);
+      attachments = buildTaskResultAttachments(selectedTask.id, events);
+      responseContent = attachments.length > 0
+        ? draft.content
+        : await buildTaskStatusResponseWithVoice(selectedTask, events, {
+            soul: input.soul,
+            voiceAdapter: this.dependencies.voiceAdapter
+          });
+    } else if (request.action === "delete") {
+      updatedTask = selectedTask;
+      const deleted = this.dependencies.taskService.deleteSettledTaskFromConsole({
+        profileId: input.profileId,
+        taskId: selectedTask.id
       });
+      if (deleted) {
+        deletedTaskId = selectedTask.id;
+        updatedTask = undefined;
+      }
+      responseContent = deleted
+        ? `我把“${selectedTask.title}”从任务便签里移除了。`
+        : await this.dependencies.voiceAdapter.render({
+            scene: "task.control_not_found",
+            channel: "chat",
+            soul: input.soul,
+            facts: {}
+          });
+    } else {
+      const revisedTitle = request.revisedTitle ?? input.content;
+      if (selectedTask.kind === "time_reminder") {
+        const reminder = parseReminderRequest({
+          message: `${revisedTitle}提醒我${selectedTask.title}`,
+          nowIso: new Date().toISOString()
+        });
+        updatedTask = reminder
+          ? this.dependencies.taskService.rescheduleReminderFromChat({
+              profileId: input.profileId,
+              taskId: selectedTask.id,
+              dueAt: reminder.dueAt,
+              reason: "用户在主聊天线程调整提醒时间"
+            })
+          : undefined;
+      } else {
+        updatedTask = this.dependencies.taskService.reviseTaskFromChat({
+          profileId: input.profileId,
+          taskId: selectedTask.id,
+          title: revisedTitle
+        });
+      }
       responseContent = updatedTask
         ? await this.dependencies.voiceAdapter.render({
-            scene: "task.accepted",
+            scene: selectedTask.kind === "time_reminder" ? "task.reminder_scheduled" : "task.accepted",
             channel: "chat",
             soul: input.soul,
             facts: {
-              taskTitle: updatedTask.title
+              taskTitle: updatedTask.title,
+              dueAt: updatedTask.dueAt
             }
           })
         : await this.dependencies.voiceAdapter.render({
@@ -565,7 +644,8 @@ export class ChatOrchestrator {
       sessionId: input.sessionId,
       profileId: input.profileId,
       role: "assistant",
-      content: responseContent
+      content: responseContent,
+      attachments
     });
 
     this.dependencies.eventLogService.record("chat.message_persisted", {
@@ -575,6 +655,7 @@ export class ChatOrchestrator {
       assistantMessageId: assistantMessage.id,
       writtenMemoryIds: [],
       updatedTaskId: updatedTask?.id ?? null,
+      deletedTaskId: deletedTaskId ?? null,
       taskControlAction: request.action,
       taskControlTargetHint: request.targetHint ?? null,
       gateDecision: "reply"
@@ -582,7 +663,8 @@ export class ChatOrchestrator {
 
     return {
       assistantMessage,
-      updatedTask
+      updatedTask,
+      deletedTaskId
     };
   }
 

@@ -105,6 +105,20 @@ describe("evaluateGate", () => {
     expect(decision.inputKind).toBe("task_control");
   });
 
+  it.each(["重试周报任务", "打开周报结果", "删除已完成的周报任务", "把喝水提醒改到明天早上九点"])(
+    "classifies enhanced task control command %s as task control",
+    (content) => {
+      const decision = evaluateGate({
+        currentMessage: content,
+        recentUserMessages: []
+      });
+
+      expect(decision.replyDecision).toBe("reply");
+      expect(decision.memoryDecision).toBe("skip");
+      expect(decision.inputKind).toBe("task_control");
+    }
+  );
+
   it("replies to a follow-up when recent fragments form enough context", () => {
     const decision = evaluateGate({
       currentMessage: "我喜欢吃火锅。",

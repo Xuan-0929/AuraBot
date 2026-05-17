@@ -197,10 +197,13 @@ export class ProactiveTriggerEngine {
           dueAt: task.dueAt
         }
       });
+      const reminderMessage = this.isMissedReminder(task, input.nowIso)
+        ? `刚才错过了这个提醒：${message}`
+        : message;
       const activity: PetActivity = {
         id: randomUUID(),
         kind: "task_reminder",
-        message,
+        message: reminderMessage,
         createdAt: input.nowIso
       };
 
@@ -213,7 +216,7 @@ export class ProactiveTriggerEngine {
       const completedTask = this.dependencies.taskService.completeReminderTask({
         profileId: input.profileId,
         taskId: task.id,
-        summary: message
+        summary: reminderMessage
       });
       if (completedTask) {
         this.dependencies.broadcastTaskChanged?.(completedTask);
@@ -222,6 +225,13 @@ export class ProactiveTriggerEngine {
     }
 
     return activities;
+  }
+
+  private isMissedReminder(task: Task, nowIso: string): boolean {
+    const dueMs = task.dueAt ? parseIsoToMs(task.dueAt) : undefined;
+    const nowMs = parseIsoToMs(nowIso);
+
+    return dueMs !== undefined && nowMs !== undefined && nowMs - dueMs > this.pollIntervalMs;
   }
 
   private async checkIdleNudge(input: {

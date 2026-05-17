@@ -396,4 +396,33 @@ describe("task lifecycle", () => {
     expect(failed?.latestProgress).toContain("runner crashed");
     expect(settledTaskId).toBe(task.id);
   });
+
+  it("reschedules a queued reminder task without changing its title", () => {
+    const services = createTestServices("aurabot-task-reminder-reschedule-");
+    const profile = services.profileService.getOrSeedActiveProfile();
+    const mainSession = services.sessionRepository.getOrCreateMainSession(profile.id);
+    const reminder = services.taskService.createTaskFromChat({
+      profileId: profile.id,
+      parentSessionId: mainSession.id,
+      title: "喝水",
+      kind: "time_reminder",
+      dueAt: "2026-05-16T12:10:00.000Z"
+    });
+
+    const updated = services.taskService.rescheduleReminderFromChat({
+      profileId: profile.id,
+      taskId: reminder.id,
+      dueAt: "2026-05-17T01:00:00.000Z",
+      reason: "用户在主聊天线程调整提醒时间"
+    });
+
+    expect(updated).toMatchObject({
+      id: reminder.id,
+      title: "喝水",
+      kind: "time_reminder",
+      status: "queued",
+      dueAt: "2026-05-17T01:00:00.000Z"
+    });
+    expect(services.taskService.listTaskEvents(reminder.id).at(-1)?.eventType).toBe("task.reminder_rescheduled");
+  });
 });

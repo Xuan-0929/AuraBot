@@ -172,6 +172,69 @@ describe("chat task integration", () => {
     expect(query.assistantMessage?.content).toContain("接着一起改");
   });
 
+  it("retries a failed task from the main chat and starts it in the background", async () => {
+    const services = createTestServices("aurabot-chat-task-retry-");
+    const taskRepository = new TaskRepository(services.database);
+    const taskService = new TaskService(
+      taskRepository,
+      services.sessionRepository,
+      services.eventLogService,
+      {
+        run: async () => new Promise(() => undefined)
+      }
+    );
+    const orchestrator = new ChatOrchestrator({
+      ...services,
+      taskService
+    });
+    const created = await orchestrator.sendMessage({ content: "帮我做一份 GitHub 周报。" });
+    taskRepository.updateStatus({
+      taskId: created.createdTask!.id,
+      status: "failed",
+      latestProgress: "Codex 子任务失败：codex exited 1"
+    });
+
+    const retry = await orchestrator.sendMessage({ content: "重试周报任务" });
+
+    expect(retry.updatedTask?.id).toBe(created.createdTask?.id);
+    expect(retry.updatedTask?.status).toBe("running");
+    expect(retry.assistantMessage?.content).toContain("已经在弄了");
+  });
+
+  it("opens result attachments and deletes completed tasks from chat control", async () => {
+    const { services, orchestrator } = createTestOrchestrator("aurabot-chat-task-open-delete-");
+    const taskRepository = new TaskRepository(services.database);
+    const created = await orchestrator.sendMessage({ content: "帮我做一份 GitHub 周报。" });
+    taskRepository.appendEvent({
+      taskId: created.createdTask!.id,
+      eventType: "task.agent.progress",
+      summary: "写入周报文件",
+      payload: {
+        fileChange: {
+          path: "/tmp/aura-weekly.md"
+        }
+      }
+    });
+    taskRepository.updateStatus({
+      taskId: created.createdTask!.id,
+      status: "completed",
+      latestProgress: "已完成：GitHub 周报"
+    });
+
+    const open = await orchestrator.sendMessage({ content: "打开周报结果" });
+    const remove = await orchestrator.sendMessage({ content: "删除已完成的周报任务" });
+    const profile = services.profileService.getOrSeedActiveProfile();
+    const tasks = services.taskService.listTasksForProfile(profile.id);
+
+    expect(open.assistantMessage?.attachments?.[0]).toMatchObject({
+      kind: "file",
+      path: "/tmp/aura-weekly.md"
+    });
+    expect(remove.deletedTaskId).toBe(created.createdTask?.id);
+    expect(remove.assistantMessage?.content).toContain("移除了");
+    expect(tasks.find((task) => task.id === created.createdTask?.id)).toBeUndefined();
+  });
+
   it("uses task hints in the main chat to query, revise, and interrupt a specific task", async () => {
     const { services, orchestrator } = createTestOrchestrator("aurabot-chat-task-");
 
