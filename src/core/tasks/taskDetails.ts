@@ -2,11 +2,17 @@ import { basename } from "node:path";
 import type { TaskDetail, TaskDetailExecutor, TaskDetailTimelineItem } from "../../shared/contracts/taskDetail";
 import type { Task, TaskEvent } from "../../shared/schemas/task";
 import type { TaskArtifact } from "../storage/repositories/taskArtifactRepository";
+import type { TaskInputArtifact } from "../storage/repositories/taskInputArtifactRepository";
 
 const STDIO_KEYS = new Set(["stdout", "stderr"]);
 const ERROR_EVENT_TYPES = new Set(["task.failed", "task.agent.cancelled"]);
 
-export function buildTaskDetail(task: Task, events: TaskEvent[], artifacts: TaskArtifact[] = []): TaskDetail {
+export function buildTaskDetail(
+  task: Task,
+  events: TaskEvent[],
+  artifacts: TaskArtifact[] = [],
+  inputArtifacts: TaskInputArtifact[] = []
+): TaskDetail {
   const timeline = events.map(toTimelineItem);
   const startedAt = firstStringFromTimeline(timeline, "startedAt");
   const completedAt = lastStringFromTimeline(timeline, "completedAt");
@@ -15,6 +21,10 @@ export function buildTaskDetail(task: Task, events: TaskEvent[], artifacts: Task
   return {
     task,
     executor: findExecutor(events),
+    inputArtifacts: inputArtifacts.map((artifact) => ({
+      ...artifact,
+      name: artifact.originalName
+    })),
     artifacts: artifacts.map((artifact) => ({
       ...artifact,
       name: basename(artifact.uri)

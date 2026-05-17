@@ -9,6 +9,18 @@ export interface TaskDetailArtifact {
   createdAt: string;
 }
 
+export interface TaskDetailInputArtifact {
+  id: string;
+  taskId: string;
+  artifactType: string;
+  originalName: string;
+  mimeType: string;
+  sizeBytes: number;
+  uri: string;
+  name: string;
+  createdAt: string;
+}
+
 export interface TaskDetailExecutor {
   runnerId?: string;
   cwd?: string;
@@ -32,6 +44,7 @@ export interface TaskDetailTimelineItem {
 export interface TaskDetail {
   task: Task;
   executor?: TaskDetailExecutor;
+  inputArtifacts: TaskDetailInputArtifact[];
   artifacts: TaskDetailArtifact[];
   timeline: TaskDetailTimelineItem[];
   recentError?: string;

@@ -50,7 +50,10 @@
       <section class="console-chat" :aria-label="t(store.displayLanguage, 'mainConversation')">
         <MessageList :messages="store.messages" :display-language="store.displayLanguage" />
         <ConsoleGlassPanel variant="control" class="console-composer-glass">
-          <Composer :display-language="store.displayLanguage" :on-send="(content) => store.sendMessage(content)" />
+          <Composer
+            :display-language="store.displayLanguage"
+            :on-send="(content, attachments) => store.sendMessage(content, 'console', attachments)"
+          />
         </ConsoleGlassPanel>
       </section>
       <TaskDetailPanel

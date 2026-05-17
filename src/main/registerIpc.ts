@@ -324,7 +324,8 @@ export function registerIpc(services: AppServices, windows: WindowController): v
     return buildTaskDetail(
       task,
       services.taskService.listTaskEvents(task.id),
-      services.taskArtifactRepository.listByTask(task.id)
+      services.taskArtifactRepository.listByTask(task.id),
+      services.taskInputArtifactRepository.listByTask(task.id)
     );
   });
 

@@ -162,6 +162,7 @@ export interface AuraBotApi {
   onTaskChanged(listener: (task: Task) => void): () => void;
   onTaskDeleted(listener: (taskId: string) => void): () => void;
   sendChatMessage(input: SendChatMessageInput): Promise<SendChatMessageResult>;
+  getPathForFile(file: File): string;
   cancelTask(input: TaskControlActionInput): Promise<TaskControlActionResult>;
   deleteTask(input: TaskControlActionInput): Promise<TaskControlActionResult>;
   openTaskResultFile(input: TaskResultFileActionInput): Promise<TaskResultFileActionResult>;

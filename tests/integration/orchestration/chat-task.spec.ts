@@ -1,3 +1,5 @@
+import { mkdirSync, writeFileSync } from "node:fs";
+import { join } from "node:path";
 import { afterEach, describe, expect, it } from "vitest";
 import { ChatOrchestrator } from "../../../src/core/orchestration/chatOrchestrator";
 import { TaskRepository } from "../../../src/core/storage/repositories/taskRepository";
@@ -24,6 +26,45 @@ describe("chat task integration", () => {
     expect(tasks).toHaveLength(1);
     expect(tasks[0]?.status).toBe("queued");
     expect(memoryContext.nodes).toHaveLength(0);
+  });
+
+  it("stages uploaded input attachments when creating a result task", async () => {
+    const { services, orchestrator } = createTestOrchestrator("aurabot-chat-task-input-");
+    const sourceDir = join(services.config.storagePath, "..", "source-files");
+    mkdirSync(sourceDir, { recursive: true });
+    const sourcePath = join(sourceDir, "brief.png");
+    writeFileSync(sourcePath, "fake image data", "utf8");
+
+    const result = await orchestrator.sendMessage({
+      content: "帮我分析这张图",
+      attachments: [
+        {
+          kind: "image",
+          name: "brief.png",
+          path: sourcePath,
+          mimeType: "image/png",
+          sizeBytes: 15
+        }
+      ]
+    });
+    const inputArtifacts = services.taskInputArtifactRepository.listByTask(result.createdTask!.id);
+
+    expect(result.createdTask?.title).toContain("分析");
+    expect(result.userMessage.attachments?.[0]).toMatchObject({
+      kind: "image",
+      name: "brief.png",
+      purpose: "input"
+    });
+    expect(inputArtifacts).toHaveLength(1);
+    expect(inputArtifacts[0]).toMatchObject({
+      taskId: result.createdTask?.id,
+      artifactType: "image",
+      originalName: "brief.png",
+      mimeType: "image/png",
+      sizeBytes: 15
+    });
+    expect(inputArtifacts[0]?.uri).toContain(result.createdTask!.id);
+    expect(inputArtifacts[0]?.uri).not.toBe(sourcePath);
   });
 
   it("treats writing a reading note as a task instead of waiting for more chat", async () => {

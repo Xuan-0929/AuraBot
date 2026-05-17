@@ -46,6 +46,17 @@
     </div>
 
     <section class="task-detail-section">
+      <h2>{{ t(displayLanguage, "taskInputArtifacts") }}</h2>
+      <ul v-if="detail.inputArtifacts.length > 0" class="task-detail-artifacts">
+        <li v-for="artifact in detail.inputArtifacts" :key="artifact.id">
+          <span>{{ artifact.name }}</span>
+          <small>{{ artifact.artifactType }} · {{ formatBytes(artifact.sizeBytes) }}</small>
+        </li>
+      </ul>
+      <p v-else class="task-detail-empty">{{ t(displayLanguage, "taskNoInputArtifacts") }}</p>
+    </section>
+
+    <section class="task-detail-section">
       <h2>{{ t(displayLanguage, "taskArtifacts") }}</h2>
       <ul v-if="detail.artifacts.length > 0" class="task-detail-artifacts">
         <li v-for="artifact in detail.artifacts" :key="artifact.id">
@@ -104,5 +115,21 @@ function formatPayloadSummary(payload: Record<string, string | number | boolean>
   return Object.entries(payload)
     .filter(([key]) => key !== "stdout" && key !== "stderr")
     .map(([key, value]) => `${key}: ${value}`);
+}
+
+function formatBytes(value: number): string {
+  if (!Number.isFinite(value) || value < 0) {
+    return "0 B";
+  }
+
+  if (value < 1024) {
+    return `${value} B`;
+  }
+
+  if (value < 1024 * 1024) {
+    return `${(value / 1024).toFixed(1)} KB`;
+  }
+
+  return `${(value / 1024 / 1024).toFixed(1)} MB`;
 }
 </script>

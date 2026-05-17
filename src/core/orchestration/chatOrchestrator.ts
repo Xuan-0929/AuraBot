@@ -1,3 +1,4 @@
+import { randomUUID } from "node:crypto";
 import type { SendChatMessageInput, SendChatMessageResult } from "../../shared/contracts/chat";
 import type { Message } from "../../shared/schemas/message";
 import type { MemoryNode } from "../../shared/schemas/memory";
@@ -8,6 +9,7 @@ import type { MessageRepository } from "../storage/repositories/messageRepositor
 import type { SessionRepository } from "../storage/repositories/sessionRepository";
 import type { TaskService } from "../tasks/taskService";
 import type { RunTaskInBackgroundInput } from "../tasks/taskService";
+import type { TaskInputAttachmentService } from "../tasks/taskInputAttachments";
 import type { ProfileService } from "../profiles/profileService";
 import type { EventLogService } from "../telemetry/eventLogService";
 import { parseTaskControlRequest } from "../tasks/taskControlRouter";
@@ -37,6 +39,7 @@ export interface ChatOrchestratorDependencies {
   memoryExtractor: MemoryExtractor;
   memoryService: MemoryService;
   taskService: TaskService;
+  taskInputAttachmentService: TaskInputAttachmentService;
   eventLogService: EventLogService;
   gateModel: GateModel;
   chatModel: ChatModel;
@@ -77,7 +80,13 @@ export class ChatOrchestrator {
       sessionId: mainSession.id,
       profileId: profile.id,
       role: "user",
-      content: input.content
+      content: input.content,
+      attachments: (input.attachments ?? []).map((attachment) => ({
+        id: `message_attachment_${randomUUID()}`,
+        kind: attachment.kind,
+        purpose: "input",
+        name: attachment.name
+      }))
     });
     const recentMessages = this.dependencies.messageRepository
       .listRecentBySession(mainSession.id, GATE_CONTEXT_MESSAGE_LIMIT + 1)
@@ -215,6 +224,7 @@ export class ChatOrchestrator {
           title: semanticSegment,
           kind: "result_output"
         });
+        this.dependencies.taskInputAttachmentService.stageForTask(createdTask.id, input.attachments);
         assistantMessage = this.dependencies.messageRepository.create({
           sessionId: mainSession.id,
           profileId: profile.id,

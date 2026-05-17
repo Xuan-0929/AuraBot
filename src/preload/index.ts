@@ -1,4 +1,4 @@
-import { contextBridge, ipcRenderer } from "electron";
+import { contextBridge, ipcRenderer, webUtils } from "electron";
 import {
   IPC_CHANNELS,
   type AuraBotApi,
@@ -109,6 +109,7 @@ const api: AuraBotApi = {
     return () => ipcRenderer.removeListener(IPC_CHANNELS.taskDeleted, handler);
   },
   sendChatMessage: (input: SendChatMessageInput) => ipcRenderer.invoke(IPC_CHANNELS.sendChatMessage, input),
+  getPathForFile: (file: File) => webUtils.getPathForFile(file),
   cancelTask: (input: TaskControlActionInput) => ipcRenderer.invoke(IPC_CHANNELS.cancelTask, input),
   deleteTask: (input: TaskControlActionInput) => ipcRenderer.invoke(IPC_CHANNELS.deleteTask, input),
   openTaskResultFile: (input: TaskResultFileActionInput) =>

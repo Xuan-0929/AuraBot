@@ -1,5 +1,10 @@
 import { defineStore } from "pinia";
-import type { AgentStatus, AppInitialState, SendChatMessageResult } from "../../../shared/contracts/chat";
+import type {
+  AgentStatus,
+  AppInitialState,
+  ChatInputAttachment,
+  SendChatMessageResult
+} from "../../../shared/contracts/chat";
 import type { Live2DModelState } from "../../../shared/contracts/live2dModel";
 import type { MemoryDebugSnapshot, PetCursorPosition } from "../../../shared/contracts/ipc";
 import type { NotificationSettings } from "../../../shared/contracts/notificationSettings";
@@ -226,7 +231,11 @@ export const useAuraBotStore = defineStore("auraBot", {
     async movePetWindowBy(delta: { x: number; y: number }) {
       await window.aurabot.movePetWindowBy(delta);
     },
-    async sendMessage(content: string, source: "console" | "pet_voice" | "pet_text" = "console") {
+    async sendMessage(
+      content: string,
+      source: "console" | "pet_voice" | "pet_text" = "console",
+      attachments: ChatInputAttachment[] = []
+    ) {
       const trimmed = content.trim();
 
       if (!trimmed) {
@@ -239,6 +248,12 @@ export const useAuraBotStore = defineStore("auraBot", {
         profileId: this.profile?.id ?? "profile-pending",
         role: "user",
         content: trimmed,
+        attachments: attachments.map((attachment, index) => ({
+          id: `local-input-attachment-${Date.now()}-${index}`,
+          kind: attachment.kind,
+          purpose: "input",
+          name: attachment.name
+        })),
         createdAt: new Date().toISOString()
       };
 
@@ -246,7 +261,7 @@ export const useAuraBotStore = defineStore("auraBot", {
       this.messages = [...this.messages, pendingUserMessage];
 
       try {
-        const result = await window.aurabot.sendChatMessage({ content: trimmed, source });
+        const result = await window.aurabot.sendChatMessage({ content: trimmed, source, attachments });
         this.messages = reconcileMessages(this.messages, pendingUserMessage.id, result);
         this.tasks = updateTasks(this.tasks, result.createdTask ?? result.updatedTask);
         if (result.deletedTaskId) {

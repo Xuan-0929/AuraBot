@@ -7,6 +7,10 @@ import { getTaskCliRunnerLabel } from "../../shared/contracts/settings";
 import type { TaskRepository } from "../storage/repositories/taskRepository";
 import type { EventLogService } from "../telemetry/eventLogService";
 import type { TaskRunner, TaskRunnerObserver } from "./taskRunner";
+import type {
+  TaskInputArtifact,
+  TaskInputArtifactRepository
+} from "../storage/repositories/taskInputArtifactRepository";
 
 export interface CliAgentRunInput {
   taskId: string;
@@ -43,6 +47,7 @@ export interface CliAgentClient {
 export interface MultiCliTaskRunnerOptions {
   runners: TaskCliRunnerConfig[];
   outputDirectory: string;
+  inputArtifactRepository?: TaskInputArtifactRepository;
   isCommandAvailable?: (command: string) => boolean;
   isTrustedWorkingDirectory?: (runner: TaskCliRunnerConfig, cwd: string) => boolean;
 }
@@ -116,7 +121,7 @@ export class MultiCliTaskRunner implements TaskRunner {
         taskId: task.id,
         runnerId: runner.id,
         runnerLabel,
-        prompt: buildCliTaskPrompt(task, runnerLabel),
+        prompt: buildCliTaskPrompt(task, runnerLabel, this.options.inputArtifactRepository?.listByTask(task.id) ?? []),
         cwd: runner.workingDirectory ?? process.cwd(),
         outputFile,
         command: runner.command ?? runner.id,
@@ -443,8 +448,8 @@ export function buildCliAgentArgs(input: CliAgentRunInput): string[] {
   return args;
 }
 
-function buildCliTaskPrompt(task: Task, runnerLabel: string): string {
-  return [
+function buildCliTaskPrompt(task: Task, runnerLabel: string, inputArtifacts: TaskInputArtifact[] = []): string {
+  const lines = [
     `你是 AuraBot 派出的子任务 ${runnerLabel} agent。`,
     "你运行在独立任务线程中，主聊天线程会等待你的最终结果并回流给用户。",
     "请只处理下面这个任务，不要修改与任务无关的文件。",
@@ -453,7 +458,25 @@ function buildCliTaskPrompt(task: Task, runnerLabel: string): string {
     "",
     `任务标题：${task.title}`,
     `任务 ID：${task.id}`
-  ].join("\n");
+  ];
+
+  if (inputArtifacts.length > 0) {
+    lines.push("", "任务输入附件：");
+
+    inputArtifacts.forEach((artifact, index) => {
+      lines.push(
+        `${index + 1}. ${artifact.originalName}`,
+        `   类型：${artifact.artifactType}`,
+        `   MIME：${artifact.mimeType}`,
+        `   大小：${artifact.sizeBytes} bytes`,
+        `   路径：${artifact.uri}`
+      );
+    });
+
+    lines.push("请优先基于这些附件完成任务。读取文件时只使用上面列出的受控路径。");
+  }
+
+  return lines.join("\n");
 }
 
 function readFinalMessage(input: CliAgentRunInput, stdout: string): string {

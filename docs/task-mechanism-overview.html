@@ -500,6 +500,7 @@
           <a href="#execution">执行与协调</a>
           <a href="#observability">可观测性</a>
           <a href="#risks">剩余问题</a>
+          <a href="#input-attachments">输入附件</a>
           <a href="#roadmap">优化优先级</a>
         </nav>
       </aside>
@@ -813,13 +814,47 @@
               <strong>产物类型还少</strong>
               <p>第一版只处理文件。URL、长文本、日志产物和交付物分级还需要后续补。</p>
             </article>
+            <article class="card">
+              <span class="tag">输入</span>
+              <strong>输入附件已完成第一版</strong>
+              <p>用户发起任务时可以上传本地文件或图片，系统会暂存、校验、关联任务，并传给智能体。</p>
+            </article>
+          </div>
+        </section>
+
+        <section id="input-attachments" class="section">
+          <div class="section-head">
+            <h2>任务输入附件</h2>
+            <p>任务已经从“只靠一句话发起”扩展为“可以带材料发起工作”。</p>
+          </div>
+          <div class="cards">
+            <article class="card">
+              <span class="tag">边界</span>
+              <strong>输入和输出分开</strong>
+              <p><code>task_artifacts</code> 继续表示任务产出；用户上传的文件和图片单独写入 <code>task_input_artifacts</code>。</p>
+            </article>
+            <article class="card">
+              <span class="tag">链路</span>
+              <strong>受控文件路径</strong>
+              <p>聊天输入收附件，主进程复制到受控目录，校验大小、类型和路径，再关联到任务。</p>
+            </article>
+            <article class="card">
+              <span class="tag">执行</span>
+              <strong>启动时传 manifest</strong>
+              <p>执行器 prompt 需要拿到附件清单：文件名、MIME、大小和可读路径，让智能体知道该处理哪些材料。</p>
+            </article>
+            <article class="card">
+              <span class="tag">界面</span>
+              <strong>详情页分开展示</strong>
+              <p>任务详情展示输入附件和输出产物两块；聊天输入框支持选择、拖拽、预览和移除。</p>
+            </article>
           </div>
         </section>
 
         <section id="roadmap" class="section">
           <div class="section-head">
             <h2>优化优先级</h2>
-            <p>按照当前计划，前六阶段已经完成第一版。下一步应补队列、候选反问、重复提醒和系统级离线调度。</p>
+              <p>按照当前计划，前七阶段已经完成第一版。下一步继续队列、候选反问、重复提醒、系统级离线调度和多模态预处理。</p>
           </div>
           <table>
             <thead>
@@ -859,6 +894,11 @@
                 <td>第六阶段</td>
                 <td>提醒与日程增强</td>
                 <td>已完成第一版：绝对时间、错过提醒文案、稍后提醒、编辑 <code>dueAt</code>；重复提醒和系统级离线调度仍待做。</td>
+              </tr>
+              <tr>
+                <td>第七阶段</td>
+                <td>任务输入附件</td>
+                <td>已完成第一版：文件/图片上传、受控暂存、任务关联、执行器 manifest、详情页输入附件展示。</td>
               </tr>
             </tbody>
           </table>
