@@ -4,11 +4,31 @@
 
 这份文档记录当前工作分支与近期已集成分支已经完成的工程事实、最近一次验证结果，以及下一步最应该推进的任务。它是执行状态板，不替代 PRD，也不替代 MVP 计划。
 
-当前工作分支：`codex/task-system-improvements`
+当前工作分支：`main`
 
-当前集成基线：`main` 的 `27d3460`，本轮任务系统改动在隔离分支推进，避免混入主工作区已有未提交改动。
+当前集成基线：远端 `main` 已包含任务系统第一至第七阶段改动；本地工作区保留了同步合并提交，并继续在 `main` 上推进小步迭代。
 
 分支边界：这一侧已经集成 Live2D 桌宠体验、主控制台、任务便签快捷操作、流式回复、模型 gate、记忆调试、follow-up 主动提醒，以及 soul 驱动的统一回复/播报机制。后续如果继续并行开发，记忆模型/配置大改、任务执行器大改、桌宠 UI 大改仍建议分支隔离，避免在 `chatOrchestrator`、`createWindow`、`store`、IPC contract 和 renderer 样式上互相抢修改权。
+
+## 2026-05-18 任务控制歧义选择 checkpoint
+
+本次 checkpoint 收口第五阶段里“多个候选任务分数接近时反问用户选择”的交互闭环，并升级任务匹配排序，避免自然语言控制误操作不合适的任务。
+
+已完成：
+
+1. `TaskService` 新增 `findTaskForChatControlWithReason()`，把 `selected / not_found / ambiguous` 选择原因暴露给编排层。
+2. 主聊天控制任务时，如果目标提示同时命中多个任务，会回复候选列表并要求用户选择，不再把歧义当成“没找到”，也不会默认操作最新任务。
+3. `ChatOrchestrator` 会暂存本轮歧义控制请求；用户回复“第一个 / 第二个 / 选 1 / 选 2”后，会复用原来的控制动作并操作对应任务。
+4. 歧义选择原因和候选任务 ID 已写入 `chat.message_persisted` 事件，方便后续排查误选问题。
+5. 任务匹配排序新增动作对应状态优先级：删除/打开结果优先终态任务，重试/继续优先失败或中断任务，启动优先排队任务，打断优先活跃任务。
+6. 同等匹配下会优先选择最近更新的任务；只有状态和更新时间都接近时才进入反问选择。
+
+本轮验证记录：
+
+| 命令/检查 | 结果 |
+| --- | --- |
+| `corepack pnpm vitest run tests/integration/orchestration/chat-task.spec.ts tests/unit/core/tasks/taskControlRouter.spec.ts` | 2 个 test files、21 个 tests 通过 |
+| `corepack pnpm typecheck` | 通过 |
 
 ## 2026-05-17 任务控制与提醒增强 checkpoint
 

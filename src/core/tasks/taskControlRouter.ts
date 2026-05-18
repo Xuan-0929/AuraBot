@@ -120,13 +120,15 @@ export function isTaskActive(task: Task): boolean {
 export function selectTaskForControl({
   tasks,
   targetHint,
-  activeOnly = false
+  activeOnly = false,
+  action
 }: {
   tasks: Task[];
   targetHint?: string;
   activeOnly?: boolean;
+  action?: TaskControlAction;
 }): Task | undefined {
-  return selectTaskForControlWithReason({ tasks, targetHint, activeOnly }).task;
+  return selectTaskForControlWithReason({ tasks, targetHint, activeOnly, action }).task;
 }
 
 export type TaskSelectionReason = "selected" | "not_found" | "ambiguous";
@@ -140,20 +142,23 @@ export interface TaskSelectionResult {
 export function selectTaskForControlWithReason({
   tasks,
   targetHint,
-  activeOnly = false
+  activeOnly = false,
+  action
 }: {
   tasks: Task[];
   targetHint?: string;
   activeOnly?: boolean;
+  action?: TaskControlAction;
 }): TaskSelectionResult {
   const candidates = activeOnly ? tasks.filter(isTaskActive) : tasks;
+  const sortedCandidates = rankTaskCandidates(candidates, action);
 
   if (!targetHint) {
-    return candidates[0]
+    return sortedCandidates[0]
       ? {
           reason: "selected",
-          task: candidates[0],
-          candidates: [candidates[0]]
+          task: sortedCandidates[0],
+          candidates: [sortedCandidates[0]]
         }
       : {
           reason: "not_found",
@@ -161,10 +166,11 @@ export function selectTaskForControlWithReason({
         };
   }
 
-  const scored = candidates
+  const updatedAtScores = buildUpdatedAtScores(sortedCandidates);
+  const scored = sortedCandidates
     .map((task, index) => ({
       task,
-      score: scoreTaskMatch(task, targetHint) - index * 0.01
+      score: scoreTaskMatch(task, targetHint) + scoreTaskStatusForAction(task, action) + updatedAtScores.get(task.id)! - index * 0.001
     }))
     .filter((candidate) => candidate.score > 0)
     .sort((left, right) => right.score - left.score);
@@ -192,6 +198,18 @@ export function selectTaskForControlWithReason({
   };
 }
 
+function rankTaskCandidates(tasks: Task[], action?: TaskControlAction): Task[] {
+  return [...tasks].sort((left, right) => {
+    const statusDelta = scoreTaskStatusForAction(right, action) - scoreTaskStatusForAction(left, action);
+
+    if (statusDelta !== 0) {
+      return statusDelta;
+    }
+
+    return getTaskUpdatedTime(right) - getTaskUpdatedTime(left);
+  });
+}
+
 function scoreTaskMatch(task: Task, targetHint: string): number {
   const title = normalizeForMatch(task.title);
   const hint = normalizeForMatch(targetHint);
@@ -214,6 +232,62 @@ function scoreTaskMatch(task: Task, targetHint: string): number {
   }
 
   return overlap >= Math.min(2, hintChars.size) ? overlap : 0;
+}
+
+function scoreTaskStatusForAction(task: Task, action?: TaskControlAction): number {
+  if (!action) {
+    return 0;
+  }
+
+  const preferred = getPreferredStatusesForAction(action);
+  const index = preferred.indexOf(task.status);
+
+  return index >= 0 ? 8 - index : 0;
+}
+
+function getPreferredStatusesForAction(action: TaskControlAction): TaskStatus[] {
+  switch (action) {
+    case "interrupt":
+      return ["running", "waiting", "queued"];
+    case "start":
+      return ["queued"];
+    case "continue":
+    case "retry":
+    case "rerun":
+      return ["failed", "interrupted", "queued"];
+    case "open_result":
+    case "delete":
+      return ["completed", "failed", "interrupted"];
+    case "query":
+    case "revise":
+      return ["running", "waiting", "queued", "failed", "interrupted", "completed"];
+  }
+}
+
+function buildUpdatedAtScores(tasks: Task[]): Map<string, number> {
+  const times = tasks.map(getTaskUpdatedTime);
+  const min = Math.min(...times);
+  const max = Math.max(...times);
+  const scores = new Map<string, number>();
+
+  if (!Number.isFinite(min) || !Number.isFinite(max) || min === max) {
+    for (const task of tasks) {
+      scores.set(task.id, 0);
+    }
+    return scores;
+  }
+
+  for (const task of tasks) {
+    scores.set(task.id, ((getTaskUpdatedTime(task) - min) / (max - min)) * 1.2);
+  }
+
+  return scores;
+}
+
+function getTaskUpdatedTime(task: Task): number {
+  const value = new Date(task.updatedAt).getTime();
+
+  return Number.isFinite(value) ? value : 0;
 }
 
 function normalizeTaskTargetHint(value: string): string | undefined {

@@ -3,7 +3,12 @@ import type { TaskRunner } from "./taskRunner";
 import type { SessionRepository } from "../storage/repositories/sessionRepository";
 import type { TaskRepository } from "../storage/repositories/taskRepository";
 import type { EventLogService } from "../telemetry/eventLogService";
-import { selectTaskForControl } from "./taskControlRouter";
+import {
+  selectTaskForControl,
+  selectTaskForControlWithReason,
+  type TaskControlAction,
+  type TaskSelectionResult
+} from "./taskControlRouter";
 import { isCancelableTask, isDeletableTask, isRunnableTask } from "./taskState";
 
 export interface CreateTaskFromChatInput {
@@ -192,11 +197,27 @@ export class TaskService {
     profileId: string;
     targetHint?: string;
     activeOnly?: boolean;
+    action?: TaskControlAction;
   }): Task | undefined {
     return selectTaskForControl({
       tasks: this.taskRepository.listByProfile(input.profileId),
       targetHint: input.targetHint,
-      activeOnly: input.activeOnly
+      activeOnly: input.activeOnly,
+      action: input.action
+    });
+  }
+
+  findTaskForChatControlWithReason(input: {
+    profileId: string;
+    targetHint?: string;
+    activeOnly?: boolean;
+    action?: TaskControlAction;
+  }): TaskSelectionResult {
+    return selectTaskForControlWithReason({
+      tasks: this.taskRepository.listByProfile(input.profileId),
+      targetHint: input.targetHint,
+      activeOnly: input.activeOnly,
+      action: input.action
     });
   }
 
@@ -216,7 +237,8 @@ export class TaskService {
       : this.findTaskForChatControl({
           profileId: input.profileId,
           targetHint: input.targetHint,
-          activeOnly: true
+          activeOnly: true,
+          action: "interrupt"
         });
 
     return this.interruptResolvedTask({
@@ -329,7 +351,8 @@ export class TaskService {
       ? this.taskRepository.getById(input.taskId)
       : this.findTaskForChatControl({
           profileId: input.profileId,
-          targetHint: input.targetHint
+          targetHint: input.targetHint,
+          action: "revise"
         });
 
     if (!task) {
@@ -359,7 +382,8 @@ export class TaskService {
       ? this.taskRepository.getById(input.taskId)
       : this.findTaskForChatControl({
           profileId: input.profileId,
-          targetHint: input.targetHint
+          targetHint: input.targetHint,
+          action: "retry"
         });
 
     if (!task || task.profileId !== input.profileId || task.kind === "time_reminder") {
@@ -403,7 +427,8 @@ export class TaskService {
       ? this.taskRepository.getById(input.taskId)
       : this.findTaskForChatControl({
           profileId: input.profileId,
-          targetHint: input.targetHint
+          targetHint: input.targetHint,
+          action: "revise"
         });
 
     if (!task || task.profileId !== input.profileId || task.kind !== "time_reminder" || task.status !== "queued") {
@@ -454,7 +479,8 @@ export class TaskService {
       : this.findTaskForChatControl({
           profileId: input.profileId,
           targetHint: input.targetHint,
-          activeOnly: true
+          activeOnly: true,
+          action: "start"
         });
 
     if (!task || !isRunnableTask(task.status) || task.kind === "time_reminder") {
@@ -470,7 +496,8 @@ export class TaskService {
       : this.findTaskForChatControl({
           profileId: input.profileId,
           targetHint: input.targetHint,
-          activeOnly: true
+          activeOnly: true,
+          action: "start"
         });
 
     if (!task || task.kind === "time_reminder") {

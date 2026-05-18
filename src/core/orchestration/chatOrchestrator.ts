@@ -3,6 +3,7 @@ import type { SendChatMessageInput, SendChatMessageResult } from "../../shared/c
 import type { Message } from "../../shared/schemas/message";
 import type { MemoryNode } from "../../shared/schemas/memory";
 import type { Soul } from "../../shared/schemas/profile";
+import type { Task } from "../../shared/schemas/task";
 import { shouldAskMemoryRecall, type MemoryExtractor } from "../memory/memoryExtractor";
 import type { MemoryService } from "../memory/memoryService";
 import type { MessageRepository } from "../storage/repositories/messageRepository";
@@ -12,7 +13,7 @@ import type { RunTaskInBackgroundInput } from "../tasks/taskService";
 import type { TaskInputAttachmentService } from "../tasks/taskInputAttachments";
 import type { ProfileService } from "../profiles/profileService";
 import type { EventLogService } from "../telemetry/eventLogService";
-import { parseTaskControlRequest } from "../tasks/taskControlRouter";
+import { parseTaskControlRequest, type TaskControlRequest, type TaskSelectionResult } from "../tasks/taskControlRouter";
 import { parseReminderRequest } from "../tasks/reminderParser";
 import type { GateModel } from "../llm/gateModel";
 import type { ChatModel } from "../llm/chatModel";
@@ -52,7 +53,15 @@ export interface SendChatMessageOptions {
   onAssistantMessageUpdated?(message: Message): void;
 }
 
+interface PendingTaskControl {
+  profileId: string;
+  request: TaskControlRequest;
+  candidateIds: string[];
+}
+
 export class ChatOrchestrator {
+  private readonly pendingTaskControls = new Map<string, PendingTaskControl>();
+
   constructor(private readonly dependencies: ChatOrchestratorDependencies) {}
 
   updateModelDependencies(
@@ -88,6 +97,24 @@ export class ChatOrchestrator {
         name: attachment.name
       }))
     });
+    const pendingTaskControlResult = await this.consumePendingTaskControlChoice({
+      profileId: profile.id,
+      sessionId: mainSession.id,
+      userMessageId: userMessage.id,
+      content: input.content,
+      soul: profile.soul
+    });
+
+    if (pendingTaskControlResult) {
+      return {
+        userMessage,
+        assistantMessage: pendingTaskControlResult.assistantMessage,
+        agentStatus: pendingTaskControlResult.updatedTask ? "tasking" : "idle",
+        updatedTask: pendingTaskControlResult.updatedTask,
+        deletedTaskId: pendingTaskControlResult.deletedTaskId
+      };
+    }
+
     const recentMessages = this.dependencies.messageRepository
       .listRecentBySession(mainSession.id, GATE_CONTEXT_MESSAGE_LIMIT + 1)
       .filter((message) => message.id !== userMessage.id)
@@ -442,19 +469,37 @@ export class ChatOrchestrator {
     userMessageId: string;
     content: string;
     soul?: Soul;
+    request?: TaskControlRequest;
+    forcedTaskId?: string;
   }) {
-    const request = parseTaskControlRequest(input.content);
-    const selectedTask = this.dependencies.taskService.findTaskForChatControl({
-      profileId: input.profileId,
-      targetHint: request.targetHint,
-      activeOnly: request.action === "interrupt"
-    });
+    const request = input.request ?? parseTaskControlRequest(input.content);
+    const selection = input.forcedTaskId
+      ? this.buildForcedTaskSelection(input.profileId, input.forcedTaskId)
+      : this.dependencies.taskService.findTaskForChatControlWithReason({
+          profileId: input.profileId,
+          targetHint: request.targetHint,
+          activeOnly: request.action === "interrupt",
+          action: request.action
+        });
+    const selectedTask = selection.task;
     let updatedTask;
     let deletedTaskId: string | undefined;
     let attachments: Message["attachments"] = [];
     let responseContent: string;
 
-    if (!selectedTask) {
+    if (selection.reason === "ambiguous") {
+      this.pendingTaskControls.set(input.sessionId, {
+        profileId: input.profileId,
+        request,
+        candidateIds: selection.candidates.map((task) => task.id)
+      });
+    } else {
+      this.pendingTaskControls.delete(input.sessionId);
+    }
+
+    if (selection.reason === "ambiguous") {
+      responseContent = buildAmbiguousTaskControlResponse(selection.candidates);
+    } else if (!selectedTask) {
       responseContent = request.targetHint
         ? await this.dependencies.voiceAdapter.render({
             scene: "task.control_not_found",
@@ -668,6 +713,8 @@ export class ChatOrchestrator {
       deletedTaskId: deletedTaskId ?? null,
       taskControlAction: request.action,
       taskControlTargetHint: request.targetHint ?? null,
+      taskControlSelectionReason: selection.reason,
+      taskControlCandidateIds: selection.candidates.map((task) => task.id),
       gateDecision: "reply"
     });
 
@@ -675,6 +722,63 @@ export class ChatOrchestrator {
       assistantMessage,
       updatedTask,
       deletedTaskId
+    };
+  }
+
+  private async consumePendingTaskControlChoice(input: {
+    profileId: string;
+    sessionId: string;
+    userMessageId: string;
+    content: string;
+    soul?: Soul;
+  }): Promise<
+    | {
+        assistantMessage: Message;
+        updatedTask?: Task;
+        deletedTaskId?: string;
+      }
+    | undefined
+  > {
+    const pending = this.pendingTaskControls.get(input.sessionId);
+
+    if (!pending || pending.profileId !== input.profileId) {
+      return undefined;
+    }
+
+    const selectedIndex = parseTaskControlChoice(input.content, pending.candidateIds.length);
+
+    if (selectedIndex === undefined) {
+      return undefined;
+    }
+
+    const forcedTaskId = pending.candidateIds[selectedIndex];
+    this.pendingTaskControls.delete(input.sessionId);
+
+    return this.handleTaskControl({
+      profileId: input.profileId,
+      sessionId: input.sessionId,
+      userMessageId: input.userMessageId,
+      content: input.content,
+      soul: input.soul,
+      request: pending.request,
+      forcedTaskId
+    });
+  }
+
+  private buildForcedTaskSelection(profileId: string, taskId: string): TaskSelectionResult {
+    const task = this.dependencies.taskService.getTaskById(taskId);
+
+    if (!task || task.profileId !== profileId) {
+      return {
+        reason: "not_found",
+        candidates: []
+      };
+    }
+
+    return {
+      reason: "selected",
+      task,
+      candidates: [task]
     };
   }
 
@@ -727,6 +831,37 @@ export class ChatOrchestrator {
     };
   }
 
+}
+
+function buildAmbiguousTaskControlResponse(tasks: MessageTaskCandidate[]): string {
+  const candidates = tasks
+    .slice(0, 3)
+    .map((task, index) => `${index + 1}. ${cleanTaskControlTitle(task.title)}`)
+    .join("\n");
+
+  return `我找到几个都像你说的任务。你想操作哪一个？\n${candidates}`;
+}
+
+interface MessageTaskCandidate {
+  title: string;
+}
+
+function cleanTaskControlTitle(title: string): string {
+  return title.replace(/\s+/g, " ").trim();
+}
+
+function parseTaskControlChoice(content: string, candidateCount: number): number | undefined {
+  const normalized = content.replace(/[，。！？!?、\s]/g, "");
+  const match = /^(?:选|选择)?第?([一二三123])(?:个|项|条)?$/.exec(normalized);
+
+  if (!match?.[1]) {
+    return undefined;
+  }
+
+  const value = match[1];
+  const index = value === "一" || value === "1" ? 0 : value === "二" || value === "2" ? 1 : 2;
+
+  return index < candidateCount ? index : undefined;
 }
 
 function dedupeMemoryNodes(memories: MemoryNode[]): MemoryNode[] {

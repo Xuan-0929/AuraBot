@@ -97,4 +97,64 @@ describe("selectTaskForControl", () => {
     expect(result.reason).toBe("ambiguous");
     expect(result.candidates.map((task) => task.id)).toEqual(["weekly-a", "weekly-b"]);
   });
+
+  it("uses the control action to prefer tasks in a compatible status", () => {
+    const queuedWeekly: Task = {
+      ...baseTask,
+      id: "queued-weekly",
+      title: "帮我整理一份周报。",
+      status: "queued"
+    };
+    const completedWeekly: Task = {
+      ...baseTask,
+      id: "completed-weekly",
+      title: "帮我整理一份周报。",
+      status: "completed"
+    };
+    const failedWeekly: Task = {
+      ...baseTask,
+      id: "failed-weekly",
+      title: "帮我整理一份周报。",
+      status: "failed"
+    };
+
+    expect(
+      selectTaskForControlWithReason({
+        tasks: [queuedWeekly, completedWeekly],
+        targetHint: "周报",
+        action: "delete"
+      }).task?.id
+    ).toBe("completed-weekly");
+    expect(
+      selectTaskForControlWithReason({
+        tasks: [queuedWeekly, failedWeekly],
+        targetHint: "周报",
+        action: "retry"
+      }).task?.id
+    ).toBe("failed-weekly");
+  });
+
+  it("uses updatedAt as a tie breaker for equally compatible task matches", () => {
+    const olderWeekly: Task = {
+      ...baseTask,
+      id: "older-weekly",
+      title: "帮我整理一份周报。",
+      updatedAt: "2026-05-04T00:00:00.000Z"
+    };
+    const newerWeekly: Task = {
+      ...baseTask,
+      id: "newer-weekly",
+      title: "帮我整理一份周报。",
+      updatedAt: "2026-05-05T00:00:00.000Z"
+    };
+
+    const result = selectTaskForControlWithReason({
+      tasks: [olderWeekly, newerWeekly],
+      targetHint: "周报",
+      action: "query"
+    });
+
+    expect(result.reason).toBe("selected");
+    expect(result.task?.id).toBe("newer-weekly");
+  });
 });

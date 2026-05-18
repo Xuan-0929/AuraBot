@@ -301,4 +301,48 @@ describe("chat task integration", () => {
     expect(meetingTask?.status).toBe("queued");
     expect(weeklyTask?.status).toBe("interrupted");
   });
+
+  it("asks the user to choose when a task control hint matches multiple tasks", async () => {
+    const { services, orchestrator } = createTestOrchestrator("aurabot-chat-task-");
+
+    const productWeekly = await orchestrator.sendMessage({ content: "帮我生成一份产品周报初稿。" });
+    const devWeekly = await orchestrator.sendMessage({ content: "帮我生成一份研发周报初稿。" });
+
+    expect(productWeekly.createdTask).toBeDefined();
+    expect(devWeekly.createdTask).toBeDefined();
+    services.database
+      .prepare("update tasks set updated_at = ? where id in (?, ?)")
+      .run("2026-05-18T00:00:00.000Z", productWeekly.createdTask!.id, devWeekly.createdTask!.id);
+
+    const ambiguous = await orchestrator.sendMessage({ content: "停掉周报任务。" });
+    const profile = services.profileService.getOrSeedActiveProfile();
+    const tasks = services.taskService.listTasksForProfile(profile.id);
+
+    expect(ambiguous.updatedTask).toBeUndefined();
+    expect(ambiguous.assistantMessage?.content).toContain("你想操作哪一个");
+    expect(ambiguous.assistantMessage?.content).toContain("产品周报");
+    expect(ambiguous.assistantMessage?.content).toContain("研发周报");
+    expect(tasks.find((task) => task.id === productWeekly.createdTask?.id)?.status).toBe("queued");
+    expect(tasks.find((task) => task.id === devWeekly.createdTask?.id)?.status).toBe("queued");
+  });
+
+  it("applies the pending task control when the user chooses one ambiguous candidate", async () => {
+    const { services, orchestrator } = createTestOrchestrator("aurabot-chat-task-");
+
+    const productWeekly = await orchestrator.sendMessage({ content: "帮我生成一份产品周报初稿。" });
+    const devWeekly = await orchestrator.sendMessage({ content: "帮我生成一份研发周报初稿。" });
+    services.database
+      .prepare("update tasks set updated_at = ? where id in (?, ?)")
+      .run("2026-05-18T00:00:00.000Z", productWeekly.createdTask!.id, devWeekly.createdTask!.id);
+    await orchestrator.sendMessage({ content: "停掉周报任务。" });
+
+    const selected = await orchestrator.sendMessage({ content: "第一个" });
+    const profile = services.profileService.getOrSeedActiveProfile();
+    const tasks = services.taskService.listTasksForProfile(profile.id);
+
+    expect(selected.updatedTask?.id).toBe(devWeekly.createdTask?.id);
+    expect(selected.updatedTask?.status).toBe("interrupted");
+    expect(tasks.find((task) => task.id === productWeekly.createdTask?.id)?.status).toBe("queued");
+    expect(tasks.find((task) => task.id === devWeekly.createdTask?.id)?.status).toBe("interrupted");
+  });
 });
