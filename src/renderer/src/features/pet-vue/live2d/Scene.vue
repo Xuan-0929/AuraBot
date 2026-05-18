@@ -9,6 +9,7 @@
         :focus-at="focusAt"
         :canvas-size="canvasSize"
         :pointer-at="pointerAt"
+        :view-scale="viewScale"
         @interactive-change="(value) => emit('interactiveAreaChange', value)"
         @model-ready="() => emit('modelReady')"
       />
@@ -28,6 +29,7 @@ defineProps<{
   modelPath: string;
   focusAt: { x: number; y: number };
   pointerAt?: { x: number; y: number };
+  viewScale?: number;
 }>();
 
 const emit = defineEmits<{

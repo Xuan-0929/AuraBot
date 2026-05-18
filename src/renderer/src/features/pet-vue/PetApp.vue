@@ -6,6 +6,7 @@
     :aria-label="t(petStore.displayLanguage, 'desktopLive2DPet')"
     @pointermove="handlePointerMove"
     @pointerleave="void clickThrough.handlePointerLeave()"
+    @wheel="handleWheel"
   >
     <aside v-if="petStore.petActivity" class="pet-message-bubble" :aria-label="t(petStore.displayLanguage, 'petMessage')">
       {{ petStore.petActivity.message }}
@@ -18,6 +19,7 @@
           :model-path="petStore.modelPath"
           :focus-at="petStore.focusAt"
           :pointer-at="pointerAt"
+          :view-scale="live2dViewScale"
           @canvas-ready="handleCanvasReady"
           @interactive-area-change="(value) => (isInteractiveAreaHovering = value)"
           @model-ready="syncAgentMotion"
@@ -59,6 +61,11 @@ import { computed, ref, watch } from "vue";
 import type { PetResizeCorner } from "../../shared/contracts/ipc";
 import { useAuraBotStore } from "../../app/store";
 import { t } from "../../i18n";
+import {
+  calculateNextLive2DViewScale,
+  readStoredLive2DViewScale,
+  writeStoredLive2DViewScale
+} from "../live2d/live2dViewScale";
 import { useClickThrough } from "./composables/useClickThrough";
 import ControlButtons from "./components/ControlButtons.vue";
 import TaskStickyNotes from "./components/TaskStickyNotes.vue";
@@ -78,6 +85,7 @@ const isResizeGripHovering = ref(false);
 const resizeDraggingCorner = ref<PetResizeCorner | null>(null);
 const pointerAt = ref<{ x: number; y: number } | undefined>(undefined);
 const canvasRef = ref<HTMLCanvasElement | null>(null);
+const live2dViewScale = ref(readStoredLive2DViewScale(window.localStorage));
 
 const clickThrough = useClickThrough({
   enabled: computed(() => petStore.petSettings.clickThroughPet),
@@ -188,6 +196,21 @@ function handlePointerMove(event: PointerEvent) {
     pointerAt.value = { x: event.clientX - rect.left, y: event.clientY - rect.top };
   }
   void clickThrough.handlePointerMove(event);
+}
+
+function handleWheel(event: WheelEvent) {
+  if (!event.ctrlKey && !event.metaKey) {
+    return;
+  }
+
+  event.preventDefault();
+  const nextScale = calculateNextLive2DViewScale(live2dViewScale.value, event.deltaY);
+  if (nextScale === live2dViewScale.value) {
+    return;
+  }
+
+  live2dViewScale.value = nextScale;
+  writeStoredLive2DViewScale(window.localStorage, nextScale);
 }
 </script>
 

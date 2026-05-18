@@ -50,4 +50,19 @@ describe("calculateLive2DPlacement", () => {
       scale: 0.25175
     });
   });
+
+  test("applies a view scale multiplier so zooming changes the visible crop", () => {
+    expect(
+      calculateLive2DPlacement({
+        hostSize: { width: 270, height: 380 },
+        modelSize: { width: 900, height: 1600 },
+        compact: true,
+        viewScale: 0.5
+      })
+    ).toEqual({
+      x: 135,
+      y: 280.63,
+      scale: 0.125875
+    });
+  });
 });

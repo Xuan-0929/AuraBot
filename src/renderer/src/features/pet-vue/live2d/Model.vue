@@ -30,6 +30,7 @@ const props = defineProps<{
   focusAt: FocusPoint;
   canvasSize: { width: number; height: number };
   pointerAt?: PointerPoint;
+  viewScale?: number;
 }>();
 
 const emit = defineEmits<{
@@ -111,6 +112,11 @@ watch(
 );
 
 watch(
+  () => props.viewScale,
+  () => resizeModel()
+);
+
+watch(
   () => props.focusAt,
   (focusAt) => {
     if (!model) {
@@ -184,7 +190,8 @@ function resizeModel() {
   const placement = calculateLive2DPlacement({
     hostSize,
     modelSize,
-    compact: false
+    compact: false,
+    viewScale: props.viewScale ?? 1
   });
   model.scale.set(placement.scale);
   model.x = placement.x;
