@@ -149,6 +149,40 @@ describe("ProactiveTriggerEngine", () => {
     );
   });
 
+  it("marks heavily overdue reminder tasks as missed in the reminder copy", async () => {
+    const services = createTestServices("aurabot-proactive-missed-reminder-task-");
+    const profile = services.profileService.getOrSeedActiveProfile();
+    const mainSession = services.sessionRepository.getOrCreateMainSession(profile.id);
+    const activities: PetActivity[] = [];
+    services.taskService.createTaskFromChat({
+      profileId: profile.id,
+      parentSessionId: mainSession.id,
+      title: "喝水",
+      kind: "time_reminder",
+      dueAt: "2026-05-05T09:00:00.000+08:00"
+    });
+
+    const engine = new ProactiveTriggerEngine(
+      {
+        profileService: services.profileService,
+        memoryService: services.memoryService,
+        taskService: services.taskService,
+        eventLogService: services.eventLogService,
+        voiceAdapter: services.voiceAdapter,
+        broadcastPetActivity: (activity) => activities.push(activity)
+      },
+      {
+        pollIntervalMs: 10_000,
+        idleThresholdMs: 60_000
+      }
+    );
+
+    const result = await engine.checkTriggers("2026-05-05T10:00:00.000+08:00");
+
+    expect(result[0]?.message).toContain("刚才错过了这个提醒");
+    expect(activities[0]?.message).toContain("刚才错过了这个提醒");
+  });
+
   it("emits an idle nudge only to the pet bubble and respects cooldown", async () => {
     const services = createTestServices("aurabot-proactive-idle-");
     const profile = services.profileService.getOrSeedActiveProfile();

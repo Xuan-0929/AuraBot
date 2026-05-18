@@ -17,8 +17,9 @@
 3. 如果命令行任务执行器已启用，主进程会在后台启动 Codex、Claude Code 或 Hermes 子任务；否则使用确定性执行器作为开发和测试路径。
 4. 子任务进度通过 `task_events` 追加记录，并通过主进程通信推送到渲染进程。
 5. 控制台和桌宠以任务便签展示当前任务；控制台还提供取消、删除等快捷操作。
-6. 完成、失败或被打断后，系统会把结果用 Aura 的口吻回流到主聊天，并在有文件结果时生成附件。
+6. 完成、失败或被打断后，系统会把结果用 Aura 的口吻回流到主聊天，并在有文件产物时优先从 `task_artifacts` 生成附件。
 7. `time_reminder` 任务复用任务表，记录 `dueAt`，由主动触发引擎轮询到期后提醒并标记完成。
+8. 控制台任务便签已支持查看详情，可以看到状态、执行器、工作目录、安全模式、关键事件时间线、产物和最近错误。
 
 整体定位更接近“聊天驱动的轻量任务协调器”，还不是完整的后台作业调度器、任务规划器或多代理编排系统。
 
@@ -48,7 +49,7 @@
 | `summary` | 人类可读摘要 |
 | `payload` | 结构化补充信息，例如执行器、工作目录、输出文件、标准输出、标准错误、文件改动 |
 
-SQLite 表由 `src/core/storage/migrations.ts` 创建。当前还存在 `task_artifacts` 表，但主流程尚未使用；结果文件主要从 `task_events.payload` 里反推。
+SQLite 表由 `src/core/storage/migrations.ts` 创建。当前已启用 `task_artifacts` 表的第一版文件产物记录；结果附件和打开文件校验优先使用产物表，`task_events.payload` 推断只作为兼容兜底。
 
 ## 3. 端到端机制
 
@@ -59,10 +60,10 @@ SQLite 表由 `src/core/storage/migrations.ts` 创建。当前还存在 `task_ar
 1. `gateModel` 返回 `inputKind`。
 2. `inputKind=task` 时进入任务创建路径。
 3. `taskKind=result_output` 时创建结果产出型任务。
-4. `taskKind=time_reminder` 时先由 `src/core/tasks/reminderParser.ts` 解析相对时间，再创建提醒任务。
-5. `inputKind=task_control` 时进入任务控制路径，支持查询、启动、打断和修改。
+4. `taskKind=time_reminder` 时先由 `src/core/tasks/reminderParser.ts` 解析相对时间、绝对时间或“稍后”表达，再创建提醒任务。
+5. `inputKind=task_control` 时进入任务控制路径，支持查询、启动、打断、修改、继续、重试、打开结果和删除已完成任务。
 
-本地规则兜底主要在 `src/core/orchestration/gateEvaluator.ts` 与 `src/core/tasks/taskControlRouter.ts`。任务控制依赖中文关键词正则和标题匹配，例如“开始做”“进度”“停掉”“改成”。
+本地规则兜底主要在 `src/core/orchestration/gateEvaluator.ts` 与 `src/core/tasks/taskControlRouter.ts`。任务控制依赖中文关键词正则和标题匹配，例如“开始做”“进度”“停掉”“改成”“重试”“打开结果”。
 
 ### 3.2 创建与持久化
 
@@ -82,8 +83,10 @@ SQLite 表由 `src/core/storage/migrations.ts` 创建。当前还存在 `task_ar
 1. 渲染进程调用 `chat:send-message`。
 2. `registerIpc()` 等待 `chatOrchestrator.sendMessage()` 返回。
 3. 如果返回 `createdTask.kind=result_output`，并且 `shouldAutoRunTasks(config.taskRunner)` 为真，就调用 `TaskService.runTaskInBackground()`。
-4. 进度通过 `onProgress` 广播 `task:changed`。
-5. 任务进入终态后，广播最终任务、创建聊天消息、推送桌宠活动，并将全局代理状态置回 `idle`。
+4. 后台启动先通过 `TaskRepository.transitionStatus()` 原子抢占 `queued -> running`，抢占失败不会启动执行器。
+5. 自动启动和手动启动都进入 `TaskExecutionCoordinator`。
+6. 进度通过 `onProgress` 广播 `task:changed`。
+7. 任务进入终态后，协调器收集文件产物、广播最终任务、创建聊天消息、推送桌宠活动，并将全局代理状态置回 `idle`。
 
 `shouldAutoRunTasks()` 的条件是：任一命令行执行器启用，或历史配置 `taskRunner.provider === "codex"`。
 
@@ -117,9 +120,12 @@ SQLite 表由 `src/core/storage/migrations.ts` 创建。当前还存在 `task_ar
 | 动作 | 入口 | 当前行为 |
 | --- | --- | --- |
 | 查询 | `task_control` + `query` | 调用 `buildTaskStatusResponseWithVoice()` |
-| 启动 | `task_control` + `start` | 如果任务是 `queued`，调用 `runTaskFromChat()` |
+| 启动 | `task_control` + `start` | 如果任务是 `queued`，触发后台启动并立即返回处理中状态 |
 | 打断 | `task_control` + `interrupt` | 更新为 `interrupted`，并调用执行器取消方法 |
 | 修改 | `task_control` + `revise` | 更新标题，状态重置为 `queued` |
+| 继续/重试/重新运行 | `task_control` + `continue` / `retry` / `rerun` | 将失败或已停下任务重新排到 `queued`，再走后台启动 |
+| 打开结果 | `task_control` + `open_result` | 把任务结果附件挂回主聊天消息 |
+| 删除 | `task_control` + `delete` | 删除已完成/失败/已停下任务，并同步 renderer store |
 
 控制台快捷控制：
 
@@ -129,18 +135,20 @@ SQLite 表由 `src/core/storage/migrations.ts` 创建。当前还存在 `task_ar
 | 删除 | `task:delete` | 仅允许终态任务，从任务列表删除 |
 | 打开结果文件 | `task:open-result-file` | 仅允许打开任务事件中记录过的文件路径 |
 | 在文件夹中显示 | `task:show-result-file-in-folder` | 同样做事件路径校验 |
+| 查看详情 | `task:get-detail` | 返回状态、执行器、安全模式、时间线、产物和最近错误 |
 
 ### 3.6 提醒任务
 
 提醒任务复用 `tasks` 表：
 
-1. 用户说“两分钟后提醒我喝水”。
+1. 用户说“两分钟后提醒我喝水”“明天早上九点提醒我喝水”或“稍后提醒我喝水”。
 2. 门控判断识别为 `taskKind=time_reminder`。
-3. `parseReminderRequest()` 解析相对时间，写入 `dueAt`。
+3. `parseReminderRequest()` 解析相对时间、绝对时间或“稍后”表达，写入 `dueAt`。
 4. 任务保持 `queued`，不会进入命令行执行器。
 5. `ProactiveTriggerEngine` 每轮调用 `listDueReminderTasks()`。
-6. 到期后生成桌宠活动和系统通知，调用 `completeReminderTask()` 标记 `completed`。
+6. 到期后生成桌宠活动和系统通知，调用 `completeReminderTask()` 标记 `completed`；明显错过的提醒会带“刚才错过了这个提醒”的文案。
 7. 提醒不会主动写入聊天历史。
+8. 已排队提醒可以通过服务层更新 `dueAt`，并记录 `task.reminder_rescheduled` 事件。
 
 这条路径和 `memory.follow_up`、`idle_nudge` 一起属于主动触发系统。
 
@@ -157,7 +165,8 @@ SQLite 表由 `src/core/storage/migrations.ts` 创建。当前还存在 `task_ar
 2. 控制台展示活跃任务和终态任务。
 3. 活跃任务在控制台可取消。
 4. 终态任务在控制台可删除。
-5. 任务完成后，`taskPresentation` 会基于事件推断附件并生成聊天消息。
+5. 任务完成后，`taskPresentation` 会优先基于产物表生成附件，事件推断只作为兼容兜底。
+6. 控制台任务便签提供“详情”入口，详情面板展示任务状态、执行上下文、耗时、产物、最近错误和事件时间线。
 
 任务文案已接入 `VoiceAdapter`，目标是让状态、完成、失败、提醒都保持 Aura 的统一语气，而不是暴露执行器术语。
 
@@ -185,28 +194,30 @@ Codex、Claude Code、Hermes 通过统一 `TaskRunner` 接口接入；优先级�
 
 ## 5. 可改进点
 
-### 5.1 状态机仍是隐式约定
+### 5.1 状态机已显式化，但迁移还没完全收尾
 
-虽然数据结构定义了六种状态，但状态转移分散在 `TaskService`、执行器、主动触发引擎和控制台通信逻辑中。当前没有集中式状态机校验。
+当前已经新增 `src/core/tasks/taskState.ts`，集中定义活跃、终态、可运行、可取消、可删除和合法状态转移。`TaskRepository.transitionStatus()` 也会拒绝非法转移，后台启动已经用它抢占 `queued -> running`。
+
+但迁移期仍有一些边界需要继续收尾：
 
 具体表现：
 
 1. `waiting` 是活跃状态，但核心执行器路径尚未产生它。
-2. `reviseTaskFromChat()` 会把选中的任务重置为 `queued`，但没有明确限制哪些状态允许被修改。
-3. `updateStatus()` 是通用写入，没有防止非法转移。
-4. 任务状态含义更多靠调用方自觉维护。
+2. `reviseTaskFromChat()` 会把选中的任务重置为 `queued`，后续应明确区分“修改未开始任务”和“重试/重新运行终态任务”。
+3. `updateStatus()` 仍保留给迁移期和非抢占路径，后续应逐步收窄调用范围。
+4. 提醒任务和结果产出任务复用同一状态枚举，文档和 UI 需要继续避免语义混淆。
 
 风险是：随着执行器、规划器、重试和多任务并发增加，状态会变得难以推理。
 
-### 5.2 执行触发位置偏分散
+### 5.2 执行协调器已收口，完整队列还没引入
 
-普通任务创建在 `ChatOrchestrator`，自动执行在 `registerIpc`。这让服务层调用和主进程通信调用行为不完全一致。
+当前已经新增 `TaskExecutionCoordinator`，自动启动和聊天手动启动都走同一个后台入口；进度广播、完成回流消息、桌宠活动和 `idle` 恢复也已经集中到协调器。
 
-例如：
+仍未解决的是完整后台队列能力：
 
-1. 从测试或其他服务调用 `createTaskFromChat()` 只会创建 `queued`，不会自动执行。
-2. 聊天控制里的“开始任务”走 `runTaskFromChat()`，当前会等待执行器完成，而不是统一后台化。
-3. 未来如果新增其他入口，容易漏掉自动执行、广播、完成回流消息这些后处理。
+1. 从测试或其他服务调用 `createTaskFromChat()` 仍只会创建 `queued`，是否自动执行依然由更上层决定。
+2. 当前只保证同一个任务不会重复启动，没有全局并发上限。
+3. 多任务同时运行时，全局代理状态仍只有 `tasking` 和 `idle`，无法表达“还有几个任务在跑”。
 
 ### 5.3 缺少任务并发与队列策略
 
@@ -214,20 +225,20 @@ Codex、Claude Code、Hermes 通过统一 `TaskRunner` 接口接入；优先级�
 
 潜在问题：
 
-1. 高频触发下，同一个 `queued` 任务可能被重复启动。
-2. 多个长任务同时运行时，全局代理状态只有 `tasking` 和 `idle`，无法准确表达多个任务状态。
-3. 执行器优先级只决定选哪个命令行工具，不负责排队、限流或负载。
+1. 多个长任务同时运行时，全局代理状态只有 `tasking` 和 `idle`，无法准确表达多个任务状态。
+2. 执行器优先级只决定选哪个命令行工具，不负责排队、限流或负载。
+3. 如果未来允许用户批量创建任务，还需要显式排队、暂停和重试策略。
 
 ### 5.4 任务结果与产物管理不够结构化
 
-当前完成事件会把标准输出、标准错误、输出文件放进事件载荷；文件附件则从进度或完成事件中的文件改动字段、输出文件字段反推。
+当前已经启用 `TaskArtifactRepository`，第一版会把文件产物写入 `task_artifacts`；完成消息附件和打开文件校验优先读取产物表。
 
-问题：
+剩余问题：
 
-1. `task_artifacts` 表存在但没有用于主流程。
-2. 附件发现依赖执行器事件格式，容易漏掉未通过 Codex 文件改动事件暴露的文件。
-3. 标准输出和标准错误可能很大，长期塞进事件载荷会增加数据库体积。
-4. 没有区分“最终可交付文件”“中间日志”“调试输出”。
+1. 产物第一版只处理文件，还不处理 URL、长文本结果和日志产物。
+2. 产物收集主要来自文件改动事件，最终回复中的明确路径提取还可以继续增强。
+3. 标准输出和标准错误仍保存在事件载荷里，详情 UI 只展示摘要，但数据库体积治理还没做。
+4. 还没有区分“最终可交付文件”“中间日志”“调试输出”。
 
 ### 5.5 任务事件查询能力有限
 
@@ -235,15 +246,17 @@ Codex、Claude Code、Hermes 通过统一 `TaskRunner` 接口接入；优先级�
 
 这对调试和未来界面不利。例如控制台无法轻易展示“关键步骤时间线”“错误原因分类”“产物清单”。
 
-### 5.6 任务控制理解偏规则化
+### 5.6 任务控制仍需从规则增强到结构化理解
 
-任务控制目前依赖固定中文正则和简单字符重叠打分。它已经足够覆盖常见表达，但复杂多任务场景容易误选。
+任务控制目前已覆盖查询、启动、打断、修改、继续、重试、重新运行、打开结果和删除已完成任务。匹配层也已经能识别候选任务分数接近的歧义情况。
+
+剩余问题是：主聊天还没有把 `ambiguous` 候选结果转成自然的反问，也还没有让 `gateModel` 直接输出结构化任务控制字段。
 
 典型问题：
 
 1. 多个标题相似任务时，字符重叠可能不够。
 2. 用户说“把刚才那个改一下”时，缺少上下文指代解析。
-3. 控制动作只覆盖查询、启动、打断、修改，缺少继续、重试、复制、归档、查看产物等动作。
+3. 规则解析仍是主路径，复杂表达需要后续交给结构化 gate 输出。
 
 ### 5.7 提醒任务仍是应用运行中机制
 
@@ -252,18 +265,20 @@ Codex、Claude Code、Hermes 通过统一 `TaskRunner` 接口接入；优先级�
 边界：
 
 1. 应用未运行时没有原生系统闹钟。
-2. 没有开机后“补发错过提醒”的特殊体验。
-3. `reminderParser` 当前主要支持相对时间，不支持完整自然日期、重复提醒和时区确认。
+2. 已有应用运行时的错过提醒文案，但还没有系统级离线补发。
+3. `reminderParser` 已支持相对时间、绝对时间和“稍后”，但还不支持完整自然日期、重复提醒和时区确认。
 
-### 5.8 子任务可观测性还可以更强
+### 5.8 子任务可观测性已有第一版，还可以更强
 
-当前已记录事件日志和任务事件，但还缺少：
+当前已新增任务详情面板，能展示状态、执行器、工作目录、安全模式、关键事件时间线、产物清单和最近错误。任务事件也开始携带 `startedAt`、`completedAt` 和 `durationMs`。
 
-1. 子进程启动参数的安全摘要。
-2. 执行器选择的最终决策视图。
-3. 每个阶段耗时。
-4. 取消后子进程是否真正退出、是否超时强杀。
-5. 模型或命令行错误的分类与用户可读解释。
+后续还缺少：
+
+1. 更完整的执行器选择决策视图。
+2. 每个阶段的分段耗时统计。
+3. 取消后子进程是否真正退出、是否超时强杀。
+4. 模型或命令行错误的分类与用户可读解释。
+5. 完整 stdout/stderr 的开发者调试入口和保留策略。
 
 ### 5.9 安全边界需要继续产品化
 
@@ -276,6 +291,20 @@ Codex、Claude Code、Hermes 通过统一 `TaskRunner` 接口接入；优先级�
 3. 是否允许请求权限。
 4. 结果文件为什么可以打开。
 5. 哪些路径被拒绝。
+
+### 5.10 任务输入附件已有第一版，但多模态能力还没展开
+
+当前附件能力已经分成两条链路：
+
+1. 输出产物：执行器产出文件，系统写入 `task_artifacts`，主聊天再展示可打开的文件附件。
+2. 输入附件：用户发起任务时上传本地文件或图片，系统复制到 `task-inputs/<taskId>/`，写入 `task_input_artifacts`，任务执行器启动时把附件 manifest 写进 prompt。
+
+第一版已经解决“帮我分析这张图”“根据这个 PDF 写摘要”“基于这份 CSV 生成报告”这类任务的基础输入传递问题，但它还不是完整多模态处理层：
+
+1. 图片只是作为受控文件路径交给执行器，还没有 OCR、缩略图或视觉模型直传。
+2. PDF、CSV、docx、xlsx 还没有预解析摘要。
+3. 运行中的任务还不能追加附件。
+4. 远程链接下载和内容安全扫描还没做。
 
 ## 6. 优化策略
 
@@ -428,6 +457,29 @@ interface TaskArtifact {
 5. “测试运行一个空任务”的试运行。
 6. 对 Codex 非 Git 仓库目录的即时提示。
 
+### 6.11 扩展任务输入附件能力
+
+当前已经把“输入附件”和“输出产物”分开建模：输出产物继续使用 `task_artifacts`；输入附件使用 `task_input_artifacts` 和 `TaskInputArtifactRepository`。
+
+已完成：
+
+1. `SendChatMessageInput` 增加 `attachments`，字段包含原始文件名、MIME、大小、临时路径或文件句柄标识。
+2. Renderer 的聊天输入框支持文件/图片选择、拖拽、预览和移除。
+3. 主进程把附件复制到应用控制的 task input 目录，保存为受控路径，拒绝超大文件、不可读路径和不允许的 MIME。
+4. 创建任务时记录 `taskId -> input attachment` 关系。
+5. `TaskExecutionCoordinator` 启动执行器前读取输入附件，生成 attachment manifest。
+6. `buildCliTaskPrompt()` 把 manifest 写进任务 prompt，让智能体明确知道文件名、类型、路径和用户意图。
+7. 任务详情面板增加“输入附件”区域，与“产物清单”分开。
+8. 文件打开和路径展示继续走白名单校验，不把用户原始路径暴露给不需要知道的界面。
+
+后续增强：
+
+1. 图片缩略图和基础 OCR 摘要。
+2. PDF、CSV、docx 等常见文档的预解析。
+3. 如果执行模型支持视觉，再把图片以模型可接受的方式直传或作为受控文件路径传入。
+4. 支持用户在任务运行中继续追加附件。
+5. 支持远程链接下载、杀毒或内容安全扫描。
+
 ## 7. 建议推进顺序
 
 ### 第一阶段：低风险收口
@@ -461,14 +513,24 @@ interface TaskArtifact {
 3. 增强错过提醒体验。
 4. 评估系统级调度或登录启动补偿。
 
+### 第五阶段：任务输入附件
+
+1. 已完成：聊天输入支持附件，主进程接收后复制到受控目录，并记录到任务输入附件仓储。
+2. 已完成：任务启动时生成附件 manifest，并传给命令行执行器 prompt。
+3. 已完成：聊天输入框支持文件/图片选择、预览和移除；任务详情展示输入附件。
+4. 已完成：测试覆盖附件校验、任务创建关联、执行器 prompt 和详情展示。
+
+这个阶段已经把任务系统从“只靠一句话”扩展到“可以带材料发起工作”。后续优先继续补候选反问、队列并发、重复提醒和系统级离线调度。
+
 ## 8. 推荐的近期最小改动包
 
 如果只做一轮小而有价值的优化，建议选择以下组合：
 
-1. 新增 `taskState.ts`：统一 `isActiveTask`、`isSettledTask`、`isRunnableTask`、`isCancelableTask`、`isDeletableTask`。
-2. 修改 `TaskService.runTaskInBackground()`：用条件状态更新从 `queued` 抢占到 `running`，失败则不启动执行器。
-3. 修改 `ChatOrchestrator.handleTaskControl(start)`：改为后台启动，不等待子任务完成。
-4. 新增 `TaskArtifactRepository` 第一版，只记录文件产物，不改复杂界面。
-5. 增加测试覆盖：重复启动、手动启动后立即返回、产物附件路径、已完成任务不能被普通修改隐式重开。
+前七阶段已经完成第一版。下一轮建议选择以下组合：
 
-这组改动能同时降低竞态风险、统一用户体验，并为后续任务详情和产物管理铺路。
+1. 把候选任务分数接近时的 `ambiguous` 结果接成主聊天反问和用户选择回填。
+2. 引入基础队列和并发上限，避免多个长任务同时挤占全局状态。
+3. 增强任务输入附件：OCR、PDF/CSV 预解析、图片缩略图和远程链接抓取。
+4. 继续提醒日程增强：重复提醒、系统级离线调度或登录启动补偿。
+
+这组改动能继续提升多任务场景的可靠性，并把“带材料发起工作”的能力往多模态处理推进。

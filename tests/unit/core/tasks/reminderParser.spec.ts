@@ -16,4 +16,28 @@ describe("parseReminderRequest", () => {
       });
     }
   );
+
+  it("parses absolute reminder time like tomorrow morning at nine", () => {
+    const reminder = parseReminderRequest({
+      message: "明天早上九点提醒我喝水",
+      nowIso: "2026-05-16T20:00:00.000+08:00"
+    });
+
+    expect(reminder).toEqual({
+      content: "喝水",
+      dueAt: "2026-05-17T01:00:00.000Z"
+    });
+  });
+
+  it("treats a vague later reminder as ten minutes later", () => {
+    const reminder = parseReminderRequest({
+      message: "稍后提醒我喝水",
+      nowIso: "2026-05-16T20:00:00.000+08:00"
+    });
+
+    expect(reminder).toEqual({
+      content: "喝水",
+      dueAt: "2026-05-16T12:10:00.000Z"
+    });
+  });
 });

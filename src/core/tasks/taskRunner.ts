@@ -18,11 +18,15 @@ export class DeterministicTaskRunner implements TaskRunner {
   ) {}
 
   async run(task: Task, observer?: TaskRunnerObserver): Promise<Task | undefined> {
+    const startedAt = new Date();
     const runningSummary = `开始处理：${task.title}`;
     this.taskRepository.appendEvent({
       taskId: task.id,
       eventType: "task.running",
-      summary: runningSummary
+      summary: runningSummary,
+      payload: {
+        startedAt: startedAt.toISOString()
+      }
     });
     const running = this.taskRepository.updateStatus({
       taskId: task.id,
@@ -55,10 +59,16 @@ export class DeterministicTaskRunner implements TaskRunner {
     }
 
     const completedSummary = `已完成：${task.title}`;
+    const completedAt = new Date();
     this.taskRepository.appendEvent({
       taskId: task.id,
       eventType: "task.completed",
-      summary: completedSummary
+      summary: completedSummary,
+      payload: {
+        startedAt: startedAt.toISOString(),
+        completedAt: completedAt.toISOString(),
+        durationMs: completedAt.getTime() - startedAt.getTime()
+      }
     });
     const completed = this.taskRepository.updateStatus({
       taskId: task.id,

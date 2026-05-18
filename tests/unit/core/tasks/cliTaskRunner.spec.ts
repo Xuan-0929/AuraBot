@@ -10,6 +10,7 @@ import {
   type CliAgentRunInput
 } from "../../../../src/core/tasks/cliTaskRunner";
 import { TaskRepository } from "../../../../src/core/storage/repositories/taskRepository";
+import { TaskInputArtifactRepository } from "../../../../src/core/storage/repositories/taskInputArtifactRepository";
 import { cleanupTestServices, createTestServices } from "../../../helpers/testServices";
 
 afterEach(cleanupTestServices);
@@ -72,6 +73,65 @@ describe("MultiCliTaskRunner", () => {
     );
     expect(completed?.status).toBe("completed");
     expect(completed?.latestProgress).toContain("Claude Code 已经写好了。");
+  });
+
+  it("includes task input attachments in the child agent prompt", async () => {
+    const services = createTestServices("aurabot-cli-runner-input-");
+    const profile = services.profileService.getOrSeedActiveProfile();
+    const mainSession = services.sessionRepository.getOrCreateMainSession(profile.id);
+    const task = services.taskService.createTaskFromChat({
+      profileId: profile.id,
+      parentSessionId: mainSession.id,
+      title: "根据上传图片写说明"
+    });
+    const taskInputArtifactRepository = new TaskInputArtifactRepository(services.database);
+    taskInputArtifactRepository.create({
+      taskId: task.id,
+      artifactType: "image",
+      originalName: "diagram.png",
+      mimeType: "image/png",
+      sizeBytes: 128,
+      uri: "/tmp/aurabot-inputs/task/diagram.png"
+    });
+    const taskRepository = new TaskRepository(services.database);
+    const client: CliAgentClient = {
+      run: vi.fn(async () => ({
+        finalMessage: "已经完成。",
+        stdout: "",
+        stderr: ""
+      }))
+    };
+    const runner = new MultiCliTaskRunner(taskRepository, services.eventLogService, client, {
+      outputDirectory: "/tmp/aurabot-cli-test",
+      inputArtifactRepository: taskInputArtifactRepository,
+      runners: [
+        {
+          id: "codex",
+          enabled: true,
+          priority: 1,
+          command: "codex",
+          workingDirectory: "/Users/xuan/project",
+          sandbox: "workspace-write",
+          approvalPolicy: "never",
+          timeoutMs: 300000,
+          extraArgs: []
+        }
+      ],
+      isCommandAvailable: () => true,
+      isTrustedWorkingDirectory: () => true
+    });
+
+    await runner.run(task);
+
+    expect(client.run).toHaveBeenCalledWith(
+      expect.objectContaining({
+        prompt: expect.stringContaining("任务输入附件")
+      })
+    );
+    expect((client.run as ReturnType<typeof vi.fn>).mock.calls[0]?.[0].prompt).toContain("diagram.png");
+    expect((client.run as ReturnType<typeof vi.fn>).mock.calls[0]?.[0].prompt).toContain(
+      "/tmp/aurabot-inputs/task/diagram.png"
+    );
   });
 
   it("skips unavailable higher-priority CLIs and uses the next enabled runner", async () => {

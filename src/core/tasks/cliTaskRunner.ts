@@ -7,6 +7,10 @@ import { getTaskCliRunnerLabel } from "../../shared/contracts/settings";
 import type { TaskRepository } from "../storage/repositories/taskRepository";
 import type { EventLogService } from "../telemetry/eventLogService";
 import type { TaskRunner, TaskRunnerObserver } from "./taskRunner";
+import type {
+  TaskInputArtifact,
+  TaskInputArtifactRepository
+} from "../storage/repositories/taskInputArtifactRepository";
 
 export interface CliAgentRunInput {
   taskId: string;
@@ -43,6 +47,7 @@ export interface CliAgentClient {
 export interface MultiCliTaskRunnerOptions {
   runners: TaskCliRunnerConfig[];
   outputDirectory: string;
+  inputArtifactRepository?: TaskInputArtifactRepository;
   isCommandAvailable?: (command: string) => boolean;
   isTrustedWorkingDirectory?: (runner: TaskCliRunnerConfig, cwd: string) => boolean;
 }
@@ -72,13 +77,15 @@ export class MultiCliTaskRunner implements TaskRunner {
     const runnerLabel = getTaskCliRunnerLabel(runner.id);
     const abortController = new AbortController();
     this.activeRuns.set(task.id, abortController);
+    const startedAt = new Date();
     const runningSummary = `开始调用 ${runnerLabel} 子任务：${task.title}`;
     this.taskRepository.appendEvent({
       taskId: task.id,
       eventType: "task.running",
       summary: runningSummary,
       payload: {
-        runnerId: runner.id
+        runnerId: runner.id,
+        startedAt: startedAt.toISOString()
       }
     });
     const running = this.taskRepository.updateStatus({
@@ -101,7 +108,11 @@ export class MultiCliTaskRunner implements TaskRunner {
         runnerId: runner.id,
         cwd: runner.workingDirectory,
         outputFile,
-        sandbox: runner.sandbox
+        sandbox: runner.sandbox,
+        command: runner.command,
+        model: runner.model,
+        approvalPolicy: runner.approvalPolicy,
+        startedAt: startedAt.toISOString()
       }
     });
 
@@ -110,7 +121,7 @@ export class MultiCliTaskRunner implements TaskRunner {
         taskId: task.id,
         runnerId: runner.id,
         runnerLabel,
-        prompt: buildCliTaskPrompt(task, runnerLabel),
+        prompt: buildCliTaskPrompt(task, runnerLabel, this.options.inputArtifactRepository?.listByTask(task.id) ?? []),
         cwd: runner.workingDirectory ?? process.cwd(),
         outputFile,
         command: runner.command ?? runner.id,
@@ -140,6 +151,7 @@ export class MultiCliTaskRunner implements TaskRunner {
       });
       const finalMessage = normalizeAgentFinalMessage(result.finalMessage, runnerLabel);
       const completedSummary = `${runnerLabel} 子任务完成：\n${finalMessage}`;
+      const completedAt = new Date();
       this.taskRepository.appendEvent({
         taskId: task.id,
         eventType: "task.completed",
@@ -147,6 +159,9 @@ export class MultiCliTaskRunner implements TaskRunner {
         payload: {
           runnerId: runner.id,
           outputFile,
+          startedAt: startedAt.toISOString(),
+          completedAt: completedAt.toISOString(),
+          durationMs: completedAt.getTime() - startedAt.getTime(),
           stdout: result.stdout,
           stderr: result.stderr
         }
@@ -174,18 +189,22 @@ export class MultiCliTaskRunner implements TaskRunner {
       const currentTask = this.taskRepository.getById(task.id);
 
       if (currentTask?.status === "interrupted") {
+        const completedAt = new Date();
         this.taskRepository.appendEvent({
           taskId: task.id,
           eventType: "task.agent.cancelled",
           summary: `${runnerLabel} 子任务已停止：${message}`,
           payload: {
-            runnerId: runner.id
+            runnerId: runner.id,
+            startedAt: startedAt.toISOString(),
+            completedAt: completedAt.toISOString(),
+            durationMs: completedAt.getTime() - startedAt.getTime()
           }
         });
         return currentTask;
       }
 
-      return this.failTask(task, `${runnerLabel} 子任务失败：${message}`, runner.id);
+      return this.failTask(task, `${runnerLabel} 子任务失败：${message}`, runner.id, startedAt);
     } finally {
       this.activeRuns.delete(task.id);
     }
@@ -267,12 +286,22 @@ export class MultiCliTaskRunner implements TaskRunner {
     return this.options.isTrustedWorkingDirectory?.(runner, cwd) ?? isTrustedWorkingDirectory(runner, cwd);
   }
 
-  private failTask(task: Task, summary: string, runnerId?: TaskCliRunnerId): Task | undefined {
+  private failTask(task: Task, summary: string, runnerId?: TaskCliRunnerId, startedAt?: Date): Task | undefined {
+    const completedAt = new Date();
     this.taskRepository.appendEvent({
       taskId: task.id,
       eventType: "task.failed",
       summary,
-      payload: runnerId ? { runnerId } : undefined
+      payload: {
+        ...(runnerId ? { runnerId } : {}),
+        ...(startedAt
+          ? {
+              startedAt: startedAt.toISOString(),
+              completedAt: completedAt.toISOString(),
+              durationMs: completedAt.getTime() - startedAt.getTime()
+            }
+          : {})
+      }
     });
     const failed = this.taskRepository.updateStatus({
       taskId: task.id,
@@ -419,8 +448,8 @@ export function buildCliAgentArgs(input: CliAgentRunInput): string[] {
   return args;
 }
 
-function buildCliTaskPrompt(task: Task, runnerLabel: string): string {
-  return [
+function buildCliTaskPrompt(task: Task, runnerLabel: string, inputArtifacts: TaskInputArtifact[] = []): string {
+  const lines = [
     `你是 AuraBot 派出的子任务 ${runnerLabel} agent。`,
     "你运行在独立任务线程中，主聊天线程会等待你的最终结果并回流给用户。",
     "请只处理下面这个任务，不要修改与任务无关的文件。",
@@ -429,7 +458,25 @@ function buildCliTaskPrompt(task: Task, runnerLabel: string): string {
     "",
     `任务标题：${task.title}`,
     `任务 ID：${task.id}`
-  ].join("\n");
+  ];
+
+  if (inputArtifacts.length > 0) {
+    lines.push("", "任务输入附件：");
+
+    inputArtifacts.forEach((artifact, index) => {
+      lines.push(
+        `${index + 1}. ${artifact.originalName}`,
+        `   类型：${artifact.artifactType}`,
+        `   MIME：${artifact.mimeType}`,
+        `   大小：${artifact.sizeBytes} bytes`,
+        `   路径：${artifact.uri}`
+      );
+    });
+
+    lines.push("请优先基于这些附件完成任务。读取文件时只使用上面列出的受控路径。");
+  }
+
+  return lines.join("\n");
 }
 
 function readFinalMessage(input: CliAgentRunInput, stdout: string): string {

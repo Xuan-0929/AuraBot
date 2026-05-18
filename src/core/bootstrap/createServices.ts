@@ -7,7 +7,10 @@ import { MessageRepository } from "../storage/repositories/messageRepository";
 import { ProfileRepository } from "../storage/repositories/profileRepository";
 import { SessionRepository } from "../storage/repositories/sessionRepository";
 import { TaskRepository } from "../storage/repositories/taskRepository";
+import { TaskArtifactRepository } from "../storage/repositories/taskArtifactRepository";
+import { TaskInputArtifactRepository } from "../storage/repositories/taskInputArtifactRepository";
 import { TaskService } from "../tasks/taskService";
+import { TaskInputAttachmentService } from "../tasks/taskInputAttachments";
 import { DeterministicTaskRunner } from "../tasks/taskRunner";
 import { CliAgentClientImpl, MultiCliTaskRunner } from "../tasks/cliTaskRunner";
 import { EventLogService } from "../telemetry/eventLogService";
@@ -36,6 +39,9 @@ export interface AppServices {
   sessionRepository: SessionRepository;
   messageRepository: MessageRepository;
   taskRepository: TaskRepository;
+  taskArtifactRepository: TaskArtifactRepository;
+  taskInputArtifactRepository: TaskInputArtifactRepository;
+  taskInputAttachmentService: TaskInputAttachmentService;
   memoryExtractor: MemoryExtractor;
   memoryService: MemoryService;
   taskService: TaskService;
@@ -56,9 +62,17 @@ export function createServices(userDataPath: string): AppServices {
   const sessionRepository = new SessionRepository(database);
   const eventLogService = new EventLogService(database);
   const taskRepository = new TaskRepository(database);
+  const taskArtifactRepository = new TaskArtifactRepository(database);
+  const taskInputArtifactRepository = new TaskInputArtifactRepository(database);
+  const taskInputAttachmentService = new TaskInputAttachmentService(
+    taskInputArtifactRepository,
+    taskRepository,
+    join(userDataPath, "task-inputs")
+  );
   const taskRunner = createTaskRunner(config.taskRunner, {
     userDataPath,
     taskRepository,
+    taskInputArtifactRepository,
     eventLogService
   });
   const gateModel = createGateModel(config.gateModel);
@@ -76,6 +90,9 @@ export function createServices(userDataPath: string): AppServices {
     personaSettingsService,
     sessionRepository,
     taskRepository,
+    taskArtifactRepository,
+    taskInputArtifactRepository,
+    taskInputAttachmentService,
     messageRepository: new MessageRepository(database),
     memoryExtractor,
     memoryService: new MemoryService(memoryRepository, {
@@ -102,6 +119,7 @@ export function createTaskRunner(
   dependencies: {
     userDataPath: string;
     taskRepository: TaskRepository;
+    taskInputArtifactRepository: TaskInputArtifactRepository;
     eventLogService: EventLogService;
   }
 ): TaskRunner {
@@ -115,7 +133,8 @@ export function createTaskRunner(
       command: runner.command ?? getDefaultTaskCliCommand(runner.id),
       workingDirectory: runner.workingDirectory ?? config.workingDirectory ?? process.cwd()
     })),
-    outputDirectory: join(dependencies.userDataPath, "task-agent-output")
+    outputDirectory: join(dependencies.userDataPath, "task-agent-output"),
+    inputArtifactRepository: dependencies.taskInputArtifactRepository
   });
 }
 

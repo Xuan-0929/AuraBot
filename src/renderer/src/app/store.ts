@@ -1,9 +1,15 @@
 import { defineStore } from "pinia";
-import type { AgentStatus, AppInitialState, SendChatMessageResult } from "../../../shared/contracts/chat";
+import type {
+  AgentStatus,
+  AppInitialState,
+  ChatInputAttachment,
+  SendChatMessageResult
+} from "../../../shared/contracts/chat";
 import type { Live2DModelState } from "../../../shared/contracts/live2dModel";
 import type { MemoryDebugSnapshot, PetCursorPosition } from "../../../shared/contracts/ipc";
 import type { NotificationSettings } from "../../../shared/contracts/notificationSettings";
 import type { PetActivity } from "../../../shared/contracts/pet";
+import type { TaskDetail } from "../../../shared/contracts/taskDetail";
 import type {
   ModelProviderSettingsPatch,
   ModelRoleKey,
@@ -41,6 +47,9 @@ interface AuraBotState {
   petCursorPosition?: PetCursorPosition;
   focusAt: FocusPoint;
   memoryDebugSnapshot?: MemoryDebugSnapshot;
+  selectedTaskDetail?: TaskDetail;
+  selectedTaskDetailTaskId?: string;
+  isTaskDetailLoading: boolean;
   debugPetOverlay: boolean;
   isInitialized: boolean;
 }
@@ -64,6 +73,9 @@ export const useAuraBotStore = defineStore("auraBot", {
     petCursorPosition: undefined,
     focusAt: { x: 0, y: 0 },
     memoryDebugSnapshot: undefined,
+    selectedTaskDetail: undefined,
+    selectedTaskDetailTaskId: undefined,
+    isTaskDetailLoading: false,
     debugPetOverlay: false,
     isInitialized: false
   }),
@@ -143,11 +155,17 @@ export const useAuraBotStore = defineStore("auraBot", {
       unsubscribers.push(
         window.aurabot.onTaskChanged((task) => {
           this.tasks = updateTasks(this.tasks, task);
+          if (this.selectedTaskDetailTaskId === task.id) {
+            void this.openTaskDetail(task.id);
+          }
         })
       );
       unsubscribers.push(
         window.aurabot.onTaskDeleted((taskId) => {
           this.tasks = removeTask(this.tasks, taskId);
+          if (this.selectedTaskDetailTaskId === taskId) {
+            this.closeTaskDetail();
+          }
         })
       );
 
@@ -213,7 +231,11 @@ export const useAuraBotStore = defineStore("auraBot", {
     async movePetWindowBy(delta: { x: number; y: number }) {
       await window.aurabot.movePetWindowBy(delta);
     },
-    async sendMessage(content: string, source: "console" | "pet_voice" | "pet_text" = "console") {
+    async sendMessage(
+      content: string,
+      source: "console" | "pet_voice" | "pet_text" = "console",
+      attachments: ChatInputAttachment[] = []
+    ) {
       const trimmed = content.trim();
 
       if (!trimmed) {
@@ -226,6 +248,12 @@ export const useAuraBotStore = defineStore("auraBot", {
         profileId: this.profile?.id ?? "profile-pending",
         role: "user",
         content: trimmed,
+        attachments: attachments.map((attachment, index) => ({
+          id: `local-input-attachment-${Date.now()}-${index}`,
+          kind: attachment.kind,
+          purpose: "input",
+          name: attachment.name
+        })),
         createdAt: new Date().toISOString()
       };
 
@@ -233,9 +261,12 @@ export const useAuraBotStore = defineStore("auraBot", {
       this.messages = [...this.messages, pendingUserMessage];
 
       try {
-        const result = await window.aurabot.sendChatMessage({ content: trimmed, source });
+        const result = await window.aurabot.sendChatMessage({ content: trimmed, source, attachments });
         this.messages = reconcileMessages(this.messages, pendingUserMessage.id, result);
         this.tasks = updateTasks(this.tasks, result.createdTask ?? result.updatedTask);
+        if (result.deletedTaskId) {
+          this.tasks = removeTask(this.tasks, result.deletedTaskId);
+        }
         this.agentStatus = result.agentStatus;
       } catch (error) {
         this.messages = this.messages.filter((message) => message.id !== pendingUserMessage.id);
@@ -260,6 +291,30 @@ export const useAuraBotStore = defineStore("auraBot", {
       }
 
       this.tasks = removeTask(this.tasks, result.taskId ?? taskId);
+      if (this.selectedTaskDetailTaskId === taskId) {
+        this.closeTaskDetail();
+      }
+    },
+    async openTaskDetail(taskId: string) {
+      this.selectedTaskDetailTaskId = taskId;
+      this.isTaskDetailLoading = true;
+
+      try {
+        const detail = await window.aurabot.getTaskDetail({ taskId });
+
+        if (this.selectedTaskDetailTaskId === taskId) {
+          this.selectedTaskDetail = detail;
+        }
+      } finally {
+        if (this.selectedTaskDetailTaskId === taskId) {
+          this.isTaskDetailLoading = false;
+        }
+      }
+    },
+    closeTaskDetail() {
+      this.selectedTaskDetail = undefined;
+      this.selectedTaskDetailTaskId = undefined;
+      this.isTaskDetailLoading = false;
     },
     showPetNotice(message: string) {
       this.enqueuePetActivity({

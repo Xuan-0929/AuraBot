@@ -25,12 +25,14 @@
           <span class="message-attachment-name">{{ attachment.name }}</span>
           <span class="message-attachment-actions">
             <button
+              v-if="attachment.taskId && attachment.path"
               type="button"
               @click="void window.aurabot.openTaskResultFile({ taskId: attachment.taskId, path: attachment.path })"
             >
               {{ t(displayLanguage, "openFile") }}
             </button>
             <button
+              v-if="attachment.taskId && attachment.path"
               type="button"
               @click="void window.aurabot.showTaskResultFileInFolder({ taskId: attachment.taskId, path: attachment.path })"
             >

@@ -4,9 +4,7 @@ import type { SessionRepository } from "../storage/repositories/sessionRepositor
 import type { TaskRepository } from "../storage/repositories/taskRepository";
 import type { EventLogService } from "../telemetry/eventLogService";
 import { selectTaskForControl } from "./taskControlRouter";
-
-const ACTIVE_STATUSES = new Set<Task["status"]>(["queued", "running", "waiting"]);
-const SETTLED_STATUSES = new Set<Task["status"]>(["completed", "failed", "interrupted"]);
+import { isCancelableTask, isDeletableTask, isRunnableTask } from "./taskState";
 
 export interface CreateTaskFromChatInput {
   profileId: string;
@@ -44,6 +42,21 @@ export interface RunTaskFromChatInput {
 export interface RunTaskInBackgroundInput extends RunTaskFromChatInput {
   onProgress?: (task: Task) => void;
   onSettled?: (task: Task) => void;
+}
+
+export interface RequeueTaskFromChatInput {
+  profileId: string;
+  taskId?: string;
+  targetHint?: string;
+  reason: string;
+}
+
+export interface RescheduleReminderFromChatInput {
+  profileId: string;
+  taskId?: string;
+  targetHint?: string;
+  dueAt: string;
+  reason: string;
 }
 
 export class TaskService {
@@ -216,7 +229,7 @@ export class TaskService {
   cancelTaskFromConsole(input: { profileId: string; taskId: string }): Task | undefined {
     const task = this.taskRepository.getById(input.taskId);
 
-    if (!task || task.profileId !== input.profileId || !ACTIVE_STATUSES.has(task.status)) {
+    if (!task || task.profileId !== input.profileId || !isCancelableTask(task.status)) {
       return undefined;
     }
 
@@ -254,7 +267,7 @@ export class TaskService {
   deleteSettledTaskFromConsole(input: { profileId: string; taskId: string }): boolean {
     const task = this.taskRepository.getById(input.taskId);
 
-    if (!task || task.profileId !== input.profileId || !SETTLED_STATUSES.has(task.status)) {
+    if (!task || task.profileId !== input.profileId || !isDeletableTask(task.status)) {
       return false;
     }
 
@@ -341,10 +354,94 @@ export class TaskService {
     return revised;
   }
 
+  requeueTaskFromChat(input: RequeueTaskFromChatInput): Task | undefined {
+    const task = input.taskId
+      ? this.taskRepository.getById(input.taskId)
+      : this.findTaskForChatControl({
+          profileId: input.profileId,
+          targetHint: input.targetHint
+        });
+
+    if (!task || task.profileId !== input.profileId || task.kind === "time_reminder") {
+      return undefined;
+    }
+
+    if (task.status === "queued") {
+      return task;
+    }
+
+    const requeued = this.taskRepository.transitionStatus({
+      taskId: task.id,
+      from: ["failed", "interrupted"],
+      to: "queued",
+      latestProgress: input.reason
+    });
+
+    if (requeued) {
+      this.taskRepository.appendEvent({
+        taskId: requeued.id,
+        eventType: "task.requeued_from_chat",
+        summary: input.reason,
+        payload: {
+          previousStatus: task.status
+        }
+      });
+      this.eventLogService.record("task.requeued_from_chat", {
+        profileId: input.profileId,
+        taskId: requeued.id,
+        title: requeued.title,
+        previousStatus: task.status,
+        status: requeued.status
+      });
+    }
+
+    return requeued;
+  }
+
+  rescheduleReminderFromChat(input: RescheduleReminderFromChatInput): Task | undefined {
+    const task = input.taskId
+      ? this.taskRepository.getById(input.taskId)
+      : this.findTaskForChatControl({
+          profileId: input.profileId,
+          targetHint: input.targetHint
+        });
+
+    if (!task || task.profileId !== input.profileId || task.kind !== "time_reminder" || task.status !== "queued") {
+      return undefined;
+    }
+
+    const updated = this.taskRepository.updateDueAt({
+      taskId: task.id,
+      dueAt: input.dueAt,
+      latestProgress: input.reason
+    });
+
+    if (updated) {
+      this.taskRepository.appendEvent({
+        taskId: updated.id,
+        eventType: "task.reminder_rescheduled",
+        summary: input.reason,
+        payload: {
+          previousDueAt: task.dueAt ?? null,
+          dueAt: updated.dueAt ?? null
+        }
+      });
+      this.eventLogService.record("task.reminder_rescheduled", {
+        profileId: input.profileId,
+        taskId: updated.id,
+        title: updated.title,
+        previousDueAt: task.dueAt ?? null,
+        dueAt: updated.dueAt ?? null
+      });
+    }
+
+    return updated;
+  }
+
   async runLatestQueuedTask(profileId: string): Promise<Task | undefined> {
     const task = this.taskRepository.getLatestActiveByProfile(profileId);
 
-    if (!task || task.status !== "queued" || task.kind === "time_reminder") {
+    if (!task || !isRunnableTask(task.status) || task.kind === "time_reminder") {
       return task;
     }
 
@@ -360,7 +457,7 @@ export class TaskService {
           activeOnly: true
         });
 
-    if (!task || task.status !== "queued" || task.kind === "time_reminder") {
+    if (!task || !isRunnableTask(task.status) || task.kind === "time_reminder") {
       return task;
     }
 
@@ -376,14 +473,29 @@ export class TaskService {
           activeOnly: true
         });
 
-    if (!task || task.status !== "queued" || task.kind === "time_reminder") {
+    if (!task || task.kind === "time_reminder") {
       return task;
     }
 
-    const runPromise = this.taskRunner.run(task, {
+    if (!isRunnableTask(task.status)) {
+      return task;
+    }
+
+    const runningSummary = `开始处理：${task.title}`;
+    const startedTask = this.taskRepository.transitionStatus({
+      taskId: task.id,
+      from: "queued",
+      to: "running",
+      latestProgress: runningSummary
+    });
+
+    if (!startedTask) {
+      return this.taskRepository.getById(task.id);
+    }
+
+    const runPromise = this.taskRunner.run(startedTask, {
       onProgress: input.onProgress
     });
-    const startedTask = this.taskRepository.getById(task.id);
     void runPromise.then((settledTask) => {
       if (settledTask) {
         input.onSettled?.(settledTask);

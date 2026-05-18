@@ -93,6 +93,43 @@ describe("task presentation", () => {
     expect(draft.attachments).toEqual([]);
   });
 
+  it("prefers structured task artifacts over event payload paths", () => {
+    const draft = buildTaskSettledMessageDraft(
+      baseTask,
+      [
+        taskEvent({
+          eventType: "task.agent.progress",
+          summary: "Codex 子任务新增文件：/Users/xuan/project/docs/event-report.md",
+          payload: {
+            fileChange: {
+              kind: "add",
+              path: "/Users/xuan/project/docs/event-report.md"
+            }
+          }
+        })
+      ],
+      [
+        {
+          id: "artifact-1",
+          taskId: baseTask.id,
+          artifactType: "file",
+          uri: "/Users/xuan/project/docs/artifact-report.md",
+          createdAt: "2026-05-05T00:00:06.000Z"
+        }
+      ]
+    );
+
+    expect(draft.attachments).toEqual([
+      {
+        id: "task-weekly-file-0",
+        kind: "file",
+        taskId: "task-weekly",
+        name: "artifact-report.md",
+        path: "/Users/xuan/project/docs/artifact-report.md"
+      }
+    ]);
+  });
+
   it("uses a companion-first queued reply instead of a runner-style status", () => {
     const response = buildTaskStatusResponse({
       ...baseTask,

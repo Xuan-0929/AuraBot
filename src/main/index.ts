@@ -200,6 +200,7 @@ async function updateTaskRunnerSettings(userDataPath: string, patch: TaskRunnerS
     createTaskRunner(nextConfig.taskRunner, {
       userDataPath,
       taskRepository: services.taskRepository,
+      taskInputArtifactRepository: services.taskInputArtifactRepository,
       eventLogService: services.eventLogService
     })
   );
