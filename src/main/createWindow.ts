@@ -66,7 +66,7 @@ export function createPetWindow(options: CreatePetWindowOptions = {}): BrowserWi
     backgroundColor: "#00000000",
     webPreferences: sharedWebPreferences()
   });
-  petWindow.setVisibleOnAllWorkspaces(true, { visibleOnFullScreen: true });
+  setPetVisibleOnAllWorkspaces(petWindow);
   petWindow.on("closed", () => {
     petWindow = undefined;
     stopPetCursorTracking();
@@ -381,6 +381,16 @@ function sendToRenderer(channel: string, payload: unknown): void {
   for (const window of [petWindow, consoleWindow, settingsWindow]) {
     if (window && !window.isDestroyed()) {
       window.webContents.send(channel, payload);
+    }
+  }
+}
+
+function setPetVisibleOnAllWorkspaces(window: BrowserWindow): void {
+  try {
+    window.setVisibleOnAllWorkspaces(true, { visibleOnFullScreen: true });
+  } catch (error) {
+    if (process.platform === "darwin") {
+      throw error;
     }
   }
 }

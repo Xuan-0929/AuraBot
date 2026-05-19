@@ -47,7 +47,14 @@ Console window:
 Requirements:
 
 1. Node.js with Corepack available.
-2. macOS is the current development target.
+2. macOS is the primary development platform; Windows 10/11 x64 is supported for development and installable builds.
+
+Platform status:
+
+| Platform | Status | Packaging |
+| --- | --- | --- |
+| macOS | Primary and regression-protected | `corepack pnpm package:mac` |
+| Windows 10/11 x64 | Supported installable build target | `corepack pnpm package:win` |
 
 Install dependencies:
 
@@ -80,7 +87,7 @@ Run with clean temporary user data and a small Live2D debug badge:
 corepack pnpm dev:clean
 ```
 
-Clean launches create a temporary user data directory, set `AURABOT_DEBUG_PET=1`, and skip the macOS system-level AuraBot config file. Use this mode when checking whether the desktop pet and Live2D model can render without your local API config influencing the run; chat/model features need config before they can answer.
+Clean launches create a temporary user data directory, set `AURABOT_DEBUG_PET=1`, and skip macOS system-level AuraBot config when applicable. Use this mode when checking whether the desktop pet and Live2D model can render without your local API config influencing the run; chat/model features need config before they can answer.
 
 Run the production build with clean temporary user data:
 
@@ -124,6 +131,14 @@ Create or edit it with your preferred editor, for example:
 sudo mkdir -p "/Library/Application Support/AuraBot"
 sudo nano "/Library/Application Support/AuraBot/config.json"
 ```
+
+On Windows, use the Electron user data directory. Normal installs use:
+
+```text
+%APPDATA%\AuraBot\config.json
+```
+
+The Settings window's config-file action creates or opens that user data config file on both macOS and Windows.
 
 Example:
 
@@ -297,6 +312,8 @@ Default task CLI execution settings are intentionally conservative:
 
 The runner records `task.agent.started`, `task.agent.progress`, `task.agent.completed`, and `task.agent.failed` events. Failed child runs are reported as failed in the main chat instead of being treated as completed work.
 
+On Windows, AuraBot auto-discovers CLI commands from `PATH` using Windows command names such as `codex.cmd`, `codex.exe`, `claude.cmd`, and `hermes.cmd`. Explicit `taskRunner.runners[].command` values always take priority over auto-discovery.
+
 ## Verification Commands
 
 Run all unit and integration tests:
@@ -315,6 +332,18 @@ Build the Electron app:
 
 ```bash
 corepack pnpm build
+```
+
+Package the macOS app:
+
+```bash
+corepack pnpm package:mac
+```
+
+Package the Windows installer on Windows:
+
+```bash
+corepack pnpm package:win
 ```
 
 Run end-to-end tests:

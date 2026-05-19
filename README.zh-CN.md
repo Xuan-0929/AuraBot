@@ -47,7 +47,14 @@ AuraBot 是一个桌面优先的陪伴型 AI MVP。它不是传统意义上常�
 要求：
 
 1. Node.js 可用，并带 Corepack。
-2. 当前开发目标是 macOS。
+2. macOS 是主要开发平台；Windows 10/11 x64 支持开发启动和可安装包。
+
+平台状态：
+
+| 平台 | 状态 | 打包命令 |
+| --- | --- | --- |
+| macOS | 主要平台，并作为回归保护对象 | `corepack pnpm package:mac` |
+| Windows 10/11 x64 | 支持可安装版构建 | `corepack pnpm package:win` |
 
 安装依赖：
 
@@ -80,7 +87,7 @@ src/renderer/public/assets/live2d/hiyori/Hiyori.model3.json
 corepack pnpm dev:clean
 ```
 
-`dev:clean` 会创建临时 user data 目录，设置 `AURABOT_DEBUG_PET=1`，并跳过 macOS 系统级 AuraBot 配置文件。排查 Live2D 是否可见、模型是否 ready、是否被本机 API 配置影响时，优先用这个模式。
+`dev:clean` 会创建临时 user data 目录，设置 `AURABOT_DEBUG_PET=1`，并在适用时跳过 macOS 系统级 AuraBot 配置文件。排查 Live2D 是否可见、模型是否 ready、是否被本机 API 配置影响时，优先用这个模式。
 
 使用生产构建并配合干净临时数据目录启动：
 
@@ -124,6 +131,14 @@ macOS 正常启动时也会读取系统级配置：
 sudo mkdir -p "/Library/Application Support/AuraBot"
 sudo nano "/Library/Application Support/AuraBot/config.json"
 ```
+
+Windows 使用 Electron user data 目录。正常安装后的配置路径是：
+
+```text
+%APPDATA%\AuraBot\config.json
+```
+
+设置窗口里的打开配置文件动作会在 macOS 和 Windows 上创建或打开对应的 user data 配置文件。
 
 示例配置：
 
@@ -297,6 +312,8 @@ API key 只放本地，不要提交进 git。`corepack pnpm dev` 会读取正常
 
 runner 会记录 `task.agent.started`、`task.agent.progress`、`task.agent.completed` 和 `task.agent.failed` 事件。子任务失败时，主聊天会明确回复任务失败，不会假装已经完成。
 
+Windows 上 AuraBot 会按 Windows 命令习惯从 `PATH` 自动发现 `codex.cmd`、`codex.exe`、`claude.cmd`、`hermes.cmd` 等命令。显式配置的 `taskRunner.runners[].command` 始终优先于自动发现。
+
 ## 验证命令
 
 运行 unit 和 integration 测试：
@@ -315,6 +332,18 @@ corepack pnpm typecheck
 
 ```bash
 corepack pnpm build
+```
+
+打包 macOS 应用：
+
+```bash
+corepack pnpm package:mac
+```
+
+在 Windows 上打包 Windows 安装器：
+
+```bash
+corepack pnpm package:win
 ```
 
 运行端到端测试：

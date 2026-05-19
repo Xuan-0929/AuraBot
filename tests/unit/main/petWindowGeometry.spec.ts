@@ -14,6 +14,7 @@ type BrowserWindowOptions = Bounds & {
 
 const electronMock = vi.hoisted(() => {
   const instances: FakeBrowserWindow[] = [];
+  const setVisibleOnAllWorkspaces = vi.fn();
   const display = {
     bounds: { x: 0, y: 0, width: 1440, height: 900 },
     workArea: { x: 0, y: 0, width: 1440, height: 900 }
@@ -53,7 +54,7 @@ const electronMock = vi.hoisted(() => {
       return false;
     }
 
-    setVisibleOnAllWorkspaces = vi.fn();
+    setVisibleOnAllWorkspaces = setVisibleOnAllWorkspaces;
     on = vi.fn();
     loadURL = vi.fn();
     loadFile = vi.fn();
@@ -65,6 +66,7 @@ const electronMock = vi.hoisted(() => {
   return {
     FakeBrowserWindow,
     instances,
+    setVisibleOnAllWorkspaces,
     screen: {
       getPrimaryDisplay: vi.fn(() => display),
       getDisplayMatching: vi.fn(() => display),
@@ -85,9 +87,22 @@ async function loadWindowModule() {
   return import("../../../src/main/createWindow");
 }
 
+const originalPlatform = Object.getOwnPropertyDescriptor(process, "platform");
+
+function setPlatform(platform: NodeJS.Platform): void {
+  Object.defineProperty(process, "platform", {
+    configurable: true,
+    value: platform
+  });
+}
+
 describe("pet window geometry", () => {
   beforeEach(() => {
     vi.clearAllMocks();
+    electronMock.setVisibleOnAllWorkspaces.mockReset();
+    if (originalPlatform) {
+      Object.defineProperty(process, "platform", originalPlatform);
+    }
   });
 
   test("creates the pet window with a renderer-safe minimum size", async () => {
@@ -134,5 +149,25 @@ describe("pet window geometry", () => {
       minWidth: 270,
       minHeight: 380
     });
+  });
+
+  test("does not fail pet creation on Windows if visible-on-all-workspaces is unavailable", async () => {
+    setPlatform("win32");
+    const { createPetWindow } = await loadWindowModule();
+    electronMock.setVisibleOnAllWorkspaces.mockImplementation(() => {
+      throw new Error("unsupported");
+    });
+
+    expect(() => createPetWindow()).not.toThrow();
+  });
+
+  test("keeps macOS visible-on-all-workspaces failures visible", async () => {
+    setPlatform("darwin");
+    const { createPetWindow } = await loadWindowModule();
+    electronMock.setVisibleOnAllWorkspaces.mockImplementation(() => {
+      throw new Error("unsupported");
+    });
+
+    expect(() => createPetWindow()).toThrow("unsupported");
   });
 });

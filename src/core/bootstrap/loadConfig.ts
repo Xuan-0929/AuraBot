@@ -7,6 +7,7 @@ import {
   type TaskCliRunnerId,
   type TaskRunnerConfig
 } from "../../shared/schemas/config";
+import { detectTaskCliCommand } from "../tasks/taskCliCommandDiscovery";
 
 type AppConfigInput = Partial<
   Omit<AppConfig, "gateModel" | "chatModel" | "memoryModel" | "taskRunner" | "proactive">
@@ -69,7 +70,7 @@ function loadConfigFile(userDataPath: string): AppConfigInput {
   return JSON.parse(readFileSync(configPath, "utf8")) as AppConfigInput;
 }
 
-function getConfigCandidatePaths(userDataPath: string): string[] {
+export function getConfigCandidatePaths(userDataPath: string): string[] {
   return [
     join(userDataPath, "aurabot.config.json"),
     join(userDataPath, "config.json"),
@@ -371,46 +372,6 @@ export function createDefaultTaskCliRunners(): TaskCliRunnerConfig[] {
       extraArgs: []
     }
   ];
-}
-
-function detectTaskCliCommand(id: TaskCliRunnerId): string | undefined {
-  const candidates =
-    id === "codex"
-      ? ["/Applications/Codex.app/Contents/Resources/codex", "codex"]
-      : id === "claude"
-        ? ["/opt/homebrew/bin/claude", "claude"]
-        : ["/opt/homebrew/bin/hermes", "hermes"];
-
-  for (const candidate of candidates) {
-    const resolved = resolveCommandCandidate(candidate);
-
-    if (resolved) {
-      return resolved;
-    }
-  }
-
-  return undefined;
-}
-
-function resolveCommandCandidate(candidate: string): string | undefined {
-  if (candidate.includes("/")) {
-    return existsSync(candidate) ? candidate : undefined;
-  }
-
-  const pathEntries = (process.env.PATH ?? "")
-    .split(":")
-    .map((entry) => entry.trim())
-    .filter(Boolean);
-
-  for (const entry of pathEntries) {
-    const resolved = join(entry, candidate);
-
-    if (existsSync(resolved)) {
-      return resolved;
-    }
-  }
-
-  return undefined;
 }
 
 function removeUndefinedValues<T extends Record<string, unknown>>(value: T): Partial<T> {

@@ -28,8 +28,8 @@ import {
 } from "../memory/modelBackedMemoryModel";
 import type { AppConfig, TaskRunnerConfig } from "../../shared/schemas/config";
 import type { TaskRunner } from "../tasks/taskRunner";
-import { existsSync } from "node:fs";
 import { join } from "node:path";
+import { detectTaskCliCommand } from "../tasks/taskCliCommandDiscovery";
 
 export interface AppServices {
   config: AppConfig;
@@ -143,19 +143,5 @@ export function shouldAutoRunTasks(config: TaskRunnerConfig): boolean {
 }
 
 function getDefaultTaskCliCommand(id: "codex" | "claude" | "hermes"): string {
-  if (id === "codex") {
-    return getDefaultCodexCommand();
-  }
-
-  if (id === "claude") {
-    return existsSync("/opt/homebrew/bin/claude") ? "/opt/homebrew/bin/claude" : "claude";
-  }
-
-  return "hermes";
-}
-
-function getDefaultCodexCommand(): string {
-  const appBundledCodex = "/Applications/Codex.app/Contents/Resources/codex";
-
-  return existsSync(appBundledCodex) ? appBundledCodex : "codex";
+  return detectTaskCliCommand(id) ?? id;
 }

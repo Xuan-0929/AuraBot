@@ -2,13 +2,17 @@ import { mkdtempSync, rmSync, writeFileSync } from "node:fs";
 import { tmpdir } from "node:os";
 import { join } from "node:path";
 import { afterEach, describe, expect, it } from "vitest";
-import { loadConfig } from "../../../../src/core/bootstrap/loadConfig";
+import { getConfigCandidatePaths, loadConfig } from "../../../../src/core/bootstrap/loadConfig";
 
 const tempDirs: string[] = [];
 const originalEnvironment = { ...process.env };
+const originalPlatform = Object.getOwnPropertyDescriptor(process, "platform");
 
 afterEach(() => {
   process.env = { ...originalEnvironment };
+  if (originalPlatform) {
+    Object.defineProperty(process, "platform", originalPlatform);
+  }
 
   for (const dir of tempDirs.splice(0)) {
     rmSync(dir, { force: true, recursive: true });
@@ -20,6 +24,13 @@ function createUserDataDir(): string {
   tempDirs.push(dir);
 
   return dir;
+}
+
+function setPlatform(platform: NodeJS.Platform): void {
+  Object.defineProperty(process, "platform", {
+    configurable: true,
+    value: platform
+  });
 }
 
 describe("loadConfig", () => {
@@ -166,6 +177,30 @@ describe("loadConfig", () => {
       model: "fast-gate-model",
       enabled: true
     });
+  });
+
+  it("keeps macOS system-level config candidates outside tests", () => {
+    const userDataPath = createUserDataDir();
+    process.env.NODE_ENV = "development";
+    setPlatform("darwin");
+
+    expect(getConfigCandidatePaths(userDataPath)).toEqual([
+      join(userDataPath, "aurabot.config.json"),
+      join(userDataPath, "config.json"),
+      "/Library/Application Support/AuraBot/aurabot.config.json",
+      "/Library/Application Support/AuraBot/config.json"
+    ]);
+  });
+
+  it("does not add macOS system-level config candidates on Windows", () => {
+    const userDataPath = createUserDataDir();
+    process.env.NODE_ENV = "development";
+    setPlatform("win32");
+
+    expect(getConfigCandidatePaths(userDataPath)).toEqual([
+      join(userDataPath, "aurabot.config.json"),
+      join(userDataPath, "config.json")
+    ]);
   });
 
   it("allows environment variables to override model roles for clean dev launches", () => {
@@ -339,6 +374,31 @@ describe("loadConfig", () => {
     expect(codexRunner?.command).toMatch(/codex$/u);
     expect(claudeRunner?.command).toMatch(/claude$/u);
     expect(hermesRunner?.command).toBe(join(fakeBinDir, "hermes"));
+  });
+
+  it("auto-discovers Windows task CLI commands without enabling them", () => {
+    const userDataPath = createUserDataDir();
+    const fakeBinDir = mkdtempSync(join(tmpdir(), "aurabot-cli-bin-win-"));
+    tempDirs.push(fakeBinDir);
+
+    writeFileSync(join(fakeBinDir, "codex.cmd"), "", "utf8");
+    writeFileSync(join(fakeBinDir, "claude.exe"), "", "utf8");
+    writeFileSync(join(fakeBinDir, "hermes.cmd"), "", "utf8");
+    process.env.PATH = `${fakeBinDir};C:\\Windows\\System32`;
+    setPlatform("win32");
+
+    const config = loadConfig(userDataPath);
+    const codexRunner = config.taskRunner.runners.find((runner) => runner.id === "codex");
+    const claudeRunner = config.taskRunner.runners.find((runner) => runner.id === "claude");
+    const hermesRunner = config.taskRunner.runners.find((runner) => runner.id === "hermes");
+
+    expect(config.taskRunner.provider).toBe("deterministic");
+    expect(codexRunner?.enabled).toBe(false);
+    expect(claudeRunner?.enabled).toBe(false);
+    expect(hermesRunner?.enabled).toBe(false);
+    expect(codexRunner?.command).toBe(join(fakeBinDir, "codex.cmd"));
+    expect(claudeRunner?.command).toBe(join(fakeBinDir, "claude.exe"));
+    expect(hermesRunner?.command).toBe(join(fakeBinDir, "hermes.cmd"));
   });
 
   it("keeps explicit configured task runner commands over auto-discovered local paths", () => {

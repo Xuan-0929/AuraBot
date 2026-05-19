@@ -5,6 +5,7 @@
   "type": "module",
   "description": "Desktop-first companion AI MVP with chat, timing, memory, and task foundations.",
   "main": "out/main/index.js",
+  "productName": "AuraBot",
   "packageManager": "pnpm@10.33.2",
   "scripts": {
     "dev": "electron-rebuild -f -w better-sqlite3 && electron-vite dev",
@@ -12,6 +13,7 @@
     "start:clean": "corepack pnpm build && node scripts/run-clean.mjs start",
     "build": "tsc --noEmit && electron-vite build",
     "package:mac": "node scripts/package-macos.mjs",
+    "package:win": "corepack pnpm build && electron-builder --win nsis --x64",
     "rebuild:node": "corepack pnpm rebuild better-sqlite3",
     "rebuild:native": "electron-rebuild -f -w better-sqlite3",
     "typecheck": "tsc --noEmit",
@@ -44,10 +46,41 @@
     "@types/node": "^20.19.25",
     "@vitejs/plugin-vue": "^6.0.6",
     "electron": "^41.5.0",
+    "electron-builder": "^26.0.12",
     "electron-vite": "^5.0.0",
     "jsdom": "^28.0.1",
     "typescript": "^6.0.3",
     "vite": "^7.3.2",
     "vitest": "^4.1.5"
+  },
+  "build": {
+    "appId": "com.xuan.aurabot",
+    "productName": "AuraBot",
+    "directories": {
+      "output": "dist"
+    },
+    "files": [
+      "out/**/*",
+      "package.json"
+    ],
+    "asarUnpack": [
+      "node_modules/better-sqlite3/**/*"
+    ],
+    "npmRebuild": true,
+    "win": {
+      "target": [
+        {
+          "target": "nsis",
+          "arch": [
+            "x64"
+          ]
+        }
+      ]
+    },
+    "nsis": {
+      "oneClick": false,
+      "perMachine": false,
+      "allowToChangeInstallationDirectory": true
+    }
   }
 }
