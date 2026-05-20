@@ -45,7 +45,7 @@ const emit = defineEmits<{
 
 const motionQueueStore = useMotionQueueStore();
 const LIVE2D_MOTION_PRIORITY_IDLE = 1;
-const LIVE2D_MOTION_PRIORITY_NORMAL = 2;
+const LIVE2D_MOTION_PRIORITY_FORCE = 3;
 let model: Live2DModelRuntime | undefined;
 let disposed = false;
 let lastMotionSignature: string | undefined;
@@ -171,20 +171,24 @@ watch(
     }
     const signature = `${motion.group}:${motion.index ?? "default"}`;
     if (lastMotionSignature === signature) {
-      motionQueueStore.completeCurrentMotion();
+      if (motion.group !== "Idle") {
+        motionQueueStore.completeCurrentMotion();
+      }
       return;
     }
 
     lastMotionSignature = signature;
     try {
-      const priority = motion.group === "Idle" ? LIVE2D_MOTION_PRIORITY_IDLE : LIVE2D_MOTION_PRIORITY_NORMAL;
+      const priority = motion.group === "Idle" ? LIVE2D_MOTION_PRIORITY_IDLE : LIVE2D_MOTION_PRIORITY_FORCE;
       const result = model.motion(motion.group, motion.index, priority);
       const awaitCompletion = motion.group !== "Idle";
       if (awaitCompletion && result && typeof (result as Promise<unknown>).then === "function") {
         await result;
       }
     } finally {
-      motionQueueStore.completeCurrentMotion();
+      if (motion.group !== "Idle") {
+        motionQueueStore.completeCurrentMotion();
+      }
     }
   }
 );

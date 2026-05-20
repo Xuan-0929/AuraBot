@@ -29,6 +29,7 @@ export const useMotionQueueStore = defineStore("motionQueue", {
         this.currentMotion = undefined;
       }
       this.promoteNextMotion();
+      this.ensureIdleMotion();
     },
     async requestMotion(group: string, index?: number): Promise<boolean> {
       const normalized: MotionRequest = {
@@ -53,13 +54,18 @@ export const useMotionQueueStore = defineStore("motionQueue", {
         return false;
       }
 
+      if (!this.currentMotion || isIdleMotion(this.currentMotion)) {
+        this.currentMotion = normalized;
+        return true;
+      }
+
       this.queued.push(normalized);
-      this.promoteNextMotion();
       return true;
     },
     completeCurrentMotion() {
       this.currentMotion = undefined;
       this.promoteNextMotion();
+      this.ensureIdleMotion();
     },
     clearQueue() {
       this.queued = [];
@@ -71,6 +77,11 @@ export const useMotionQueueStore = defineStore("motionQueue", {
         return;
       }
       this.currentMotion = this.queued.shift();
+    },
+    ensureIdleMotion() {
+      if (!this.currentMotion && this.defaultIdleMotion) {
+        this.currentMotion = this.defaultIdleMotion;
+      }
     }
   }
 });
@@ -80,6 +91,10 @@ function matchesMotion(target: MotionRequest | undefined, candidate: MotionReque
     return false;
   }
   return target.group === candidate.group && target.index === candidate.index;
+}
+
+function isIdleMotion(motion: MotionRequest): boolean {
+  return motion.group === "Idle";
 }
 
 function hasMotion(definitions: Map<string, Set<number | undefined>>, group: string, index?: number): boolean {
