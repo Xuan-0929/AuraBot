@@ -6,6 +6,7 @@ export interface MotionRequest {
 }
 
 interface MotionQueueState {
+  /** Deprecated compatibility field; AIRI-style playback is current-motion driven and does not backlog gestures. */
   queued: MotionRequest[];
   currentMotion?: MotionRequest;
   availableMotions: Map<string, Set<number | undefined>>;
@@ -49,18 +50,12 @@ export const useMotionQueueStore = defineStore("motionQueue", {
         return false;
       }
 
-      const lastQueued = this.queued[this.queued.length - 1];
-      if (matchesMotion(lastQueued, normalized)) {
-        return false;
-      }
-
       if (!this.currentMotion || isIdleMotion(this.currentMotion)) {
         this.currentMotion = normalized;
         return true;
       }
 
-      this.queued.push(normalized);
-      return true;
+      return false;
     },
     completeCurrentMotion() {
       this.currentMotion = undefined;

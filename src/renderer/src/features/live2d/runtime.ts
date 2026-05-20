@@ -20,6 +20,8 @@ export interface Live2DModelRuntime {
     motionManager?: {
       definitions?: unknown;
       update?: (model: unknown, now: number) => boolean;
+      on?(event: "motionFinish", listener: () => void): void;
+      off?(event: "motionFinish", listener: () => void): void;
     };
     hitAreas?: unknown;
   };

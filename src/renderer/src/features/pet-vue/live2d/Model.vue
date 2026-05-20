@@ -55,8 +55,11 @@ let lastCanvasW = 0;
 let lastCanvasH = 0;
 let naturalModelSize: Live2DSize | undefined;
 let lastMotionUpdateTime = 0;
+let disposeMotionFinishListener: (() => void) | undefined;
 
 function teardownModelFromStage(app: Application | null) {
+  disposeMotionFinishListener?.();
+  disposeMotionFinishListener = undefined;
   removeAndDestroyLive2DModel(app, model);
   model = undefined;
   naturalModelSize = undefined;
@@ -100,6 +103,7 @@ watch(
     app.stage.addChild(model as unknown as DisplayObject);
     motionQueueStore.setMotionDefinitions(model.internalModel?.motionManager?.definitions);
     installMotionManagerUpdateHook(model);
+    installMotionFinishListener(model);
     resizeModel();
     // Prime focus so the head/eyes look at the most recent cursor position
     // even before the next IPC tick (otherwise the model stares straight ahead
@@ -184,11 +188,13 @@ watch(
     try {
       const priority = motion.group === "Idle" ? LIVE2D_MOTION_PRIORITY_IDLE : LIVE2D_MOTION_PRIORITY_FORCE;
       const result = model.motion(motion.group, motion.index, priority);
-      const awaitCompletion = motion.group !== "Idle";
-      if (awaitCompletion && result && typeof (result as Promise<unknown>).then === "function") {
-        await result;
+      if (motion.group !== "Idle" && result && typeof (result as Promise<unknown>).then === "function") {
+        const started = await result;
+        if (started === false) {
+          motionQueueStore.completeCurrentMotion();
+        }
       }
-    } finally {
+    } catch {
       if (motion.group !== "Idle") {
         motionQueueStore.completeCurrentMotion();
       }
@@ -268,6 +274,23 @@ function installMotionManagerUpdateHook(model: Live2DModelRuntime) {
       now
     );
   };
+}
+
+function installMotionFinishListener(model: Live2DModelRuntime) {
+  const motionManager = model.internalModel?.motionManager;
+  if (!motionManager?.on) {
+    return;
+  }
+
+  const handleMotionFinish = () => {
+    const current = motionQueueStore.currentMotion;
+    if (current && current.group !== "Idle") {
+      motionQueueStore.completeCurrentMotion();
+    }
+  };
+
+  motionManager.on("motionFinish", handleMotionFinish);
+  disposeMotionFinishListener = () => motionManager.off?.("motionFinish", handleMotionFinish);
 }
 
 onUnmounted(() => {
