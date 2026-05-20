@@ -8,6 +8,7 @@
 import { onMounted, onUnmounted, ref } from "vue";
 import { Application } from "pixi.js";
 import { PET_LIVE2D_FALLBACK_SIZE } from "./live2dPlacement";
+import { renderLive2DFrame } from "../../live2d/runtime";
 import { createLive2DResizeController, type Live2DResizeController } from "../../live2d/resizeController";
 
 const emit = defineEmits<{
@@ -38,6 +39,7 @@ onMounted(() => {
 
   resizeController = createLive2DResizeController(host, PET_LIVE2D_FALLBACK_SIZE, (hostSize) => {
     app.renderer.resize(hostSize.width, hostSize.height);
+    renderLive2DFrame(app);
     emit("resized", { width: hostSize.width, height: hostSize.height });
   });
   resizeController.resizeNow();

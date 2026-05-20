@@ -13,6 +13,7 @@ import {
   loadLive2DModel,
   normalizeLive2DHitAreaNames,
   removeAndDestroyLive2DModel,
+  renderLive2DFrame,
   type Live2DModelRuntime
 } from "../../live2d/runtime";
 
@@ -221,6 +222,7 @@ function resizeModel() {
   model.scale.set(placement.scale);
   model.x = placement.x;
   model.y = placement.y;
+  renderLive2DFrame(props.app);
 }
 
 function resolveHostSize(): Live2DSize {

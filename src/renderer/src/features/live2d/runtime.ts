@@ -109,6 +109,14 @@ export function removeAndDestroyLive2DModel(app: Application | null, model: Live
   }
 }
 
+export function renderLive2DFrame(app: Pick<Application, "render"> | null | undefined): void {
+  try {
+    app?.render();
+  } catch (error) {
+    console.warn("[Live2D] Pixi render failed.", error);
+  }
+}
+
 export function normalizeLive2DHitAreaNames(hitAreas: unknown): string[] {
   const names = new Set<string>();
   const addName = (value: unknown) => {

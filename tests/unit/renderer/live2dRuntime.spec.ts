@@ -2,6 +2,7 @@ import { describe, expect, test, vi } from "vitest";
 import {
   normalizeLive2DHitAreaNames,
   removeAndDestroyLive2DModel,
+  renderLive2DFrame,
   type Live2DModelRuntime
 } from "../../../src/renderer/src/features/live2d/runtime";
 
@@ -46,6 +47,29 @@ describe("removeAndDestroyLive2DModel", () => {
     expect(() => removeAndDestroyLive2DModel({ stage } as never, model)).not.toThrow();
     expect(stage.removeChild).toHaveBeenCalledWith(model);
     expect(model.destroy).toHaveBeenCalledWith({ texture: true, baseTexture: true });
+  });
+});
+
+describe("renderLive2DFrame", () => {
+  test("forces an immediate Pixi render after canvas resize or model placement", () => {
+    const app = { render: vi.fn() };
+
+    renderLive2DFrame(app as never);
+
+    expect(app.render).toHaveBeenCalledTimes(1);
+  });
+
+  test("does not throw if Pixi rejects a transient resize render", () => {
+    const warn = vi.spyOn(console, "warn").mockImplementation(() => undefined);
+    const app = {
+      render: vi.fn(() => {
+        throw new Error("context lost during resize");
+      })
+    };
+
+    expect(() => renderLive2DFrame(app as never)).not.toThrow();
+    expect(warn).toHaveBeenCalledWith("[Live2D] Pixi render failed.", expect.any(Error));
+    warn.mockRestore();
   });
 });
 
