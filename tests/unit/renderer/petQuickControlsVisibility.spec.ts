@@ -17,11 +17,13 @@ describe("Vue pet quick controls visibility", () => {
     expect(petAppSource).not.toContain(':visible="isHoverUiVisible"');
   });
 
-  test("uses the same root hover selector for the orange frame and model translucency", () => {
+  test("keeps orange frame hover while avoiding model fade during resize interactions", () => {
     const petAppSource = readPetAppSource();
 
     expect(petAppSource).toMatch(/\.pet-vue-root:hover\s+\.pet-vue-model-shell\s*{[^}]*box-shadow:\s*inset 0 0 0 2px #f97316;/s);
-    expect(petAppSource).toMatch(/\.pet-vue-root:hover\s+\.pet-vue-live2d-frame\s*{[^}]*opacity:\s*0\.4;/s);
+    expect(petAppSource).toMatch(
+      /\.pet-vue-root\[data-resizing="false"\]:hover:not\(:has\(\.pet-vue-resize-grip:hover\)\)\s+\.pet-vue-live2d-frame\s*{[^}]*opacity:\s*0\.4;/s
+    );
     expect(petAppSource).not.toContain("pet-vue-model-hovering");
     expect(petAppSource).not.toContain(":class=\"{ 'pet-vue-model-hovering'");
   });

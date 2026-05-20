@@ -3,6 +3,7 @@
     class="desktop-pet pet-vue-root"
     :data-agent-status="petStore.agentStatus"
     :data-click-through="petStore.petSettings.clickThroughPet ? 'true' : 'false'"
+    :data-resizing="resizeDraggingDirection ? 'true' : 'false'"
     :aria-label="t(petStore.displayLanguage, 'desktopLive2DPet')"
     @pointermove="handlePointerMove"
     @pointerleave="void clickThrough.handlePointerLeave()"
@@ -19,10 +20,12 @@
           :model-path="petStore.modelPath"
           :focus-at="petStore.focusAt"
           :pointer-at="pointerAt"
-          :view-scale="live2dViewScale"
+          :view-transform="live2dViewTransform"
+          :zoom-request="live2dZoomRequest"
           @canvas-ready="handleCanvasReady"
           @interactive-area-change="(value) => (isInteractiveAreaHovering = value)"
           @model-ready="syncAgentMotion"
+          @view-transform-change="handleLive2DViewTransformChange"
         >
           <TaskStickyNotes :tasks="petStore.tasks" :display-language="petStore.displayLanguage" />
         </Scene>
@@ -44,11 +47,11 @@
       @pointerleave="onResizeGripsPointerLeave"
     >
       <div
-        v-for="corner in resizeCorners"
-        :key="corner"
-        :class="['pet-vue-resize-grip', `pet-vue-resize-grip--${corner}`]"
-        @pointerdown="(e) => handleResizePointerDown(corner, e)"
-        @pointermove="(e) => handleResizePointerMove(corner, e)"
+        v-for="direction in resizeDirections"
+        :key="direction"
+        :class="['pet-vue-resize-grip', `pet-vue-resize-grip--${direction}`]"
+        @pointerdown="(e) => handleResizePointerDown(direction, e)"
+        @pointermove="(e) => handleResizePointerMove(direction, e)"
         @pointerup="handleResizePointerEnd"
         @pointercancel="handleResizePointerEnd"
       />
@@ -58,21 +61,21 @@
 
 <script setup lang="ts">
 import { computed, ref, watch } from "vue";
-import type { PetResizeCorner } from "../../shared/contracts/ipc";
+import type { PetResizeDirection } from "../../shared/contracts/ipc";
 import { useAuraBotStore } from "../../app/store";
 import { t } from "../../i18n";
 import {
-  calculateNextLive2DViewScale,
-  readStoredLive2DViewScale,
-  writeStoredLive2DViewScale
+  readStoredLive2DViewTransform,
+  writeStoredLive2DViewTransform
 } from "../live2d/live2dViewScale";
+import type { Live2DViewTransform } from "../live2d/live2dDiagnostics";
 import { useClickThrough } from "./composables/useClickThrough";
 import ControlButtons from "./components/ControlButtons.vue";
 import TaskStickyNotes from "./components/TaskStickyNotes.vue";
 import Scene from "./live2d/Scene.vue";
 import { useMotionQueueStore } from "./stores/motionQueue";
 
-const resizeCorners: PetResizeCorner[] = ["nw", "ne", "sw", "se"];
+const resizeDirections: PetResizeDirection[] = ["n", "s", "e", "w", "nw", "ne", "sw", "se"];
 
 const petStore = useAuraBotStore();
 const motionQueueStore = useMotionQueueStore();
@@ -82,16 +85,17 @@ const isControlsHovering = ref(false);
 const isVoiceInputActive = ref(false);
 const isInteractiveAreaHovering = ref(false);
 const isResizeGripHovering = ref(false);
-const resizeDraggingCorner = ref<PetResizeCorner | null>(null);
+const resizeDraggingDirection = ref<PetResizeDirection | null>(null);
 const pointerAt = ref<{ x: number; y: number } | undefined>(undefined);
 const canvasRef = ref<HTMLCanvasElement | null>(null);
-const live2dViewScale = ref(readStoredLive2DViewScale(window.localStorage));
+const live2dViewTransform = ref(readStoredLive2DViewTransform(window.localStorage));
+const live2dZoomRequest = ref<{ id: number; deltaY: number; focalPoint: { x: number; y: number } } | undefined>(undefined);
 
 const clickThrough = useClickThrough({
   enabled: computed(() => petStore.petSettings.clickThroughPet),
   canvasRef,
   interactiveUiHovering: computed(
-    () => isControlsHovering.value || isResizeGripHovering.value || resizeDraggingCorner.value !== null
+    () => isControlsHovering.value || isResizeGripHovering.value || resizeDraggingDirection.value !== null
   )
 });
 
@@ -154,13 +158,13 @@ function handleCanvasReady(canvas: HTMLCanvasElement) {
 }
 
 function onResizeGripsPointerLeave() {
-  if (resizeDraggingCorner.value !== null) {
+  if (resizeDraggingDirection.value !== null) {
     return;
   }
   isResizeGripHovering.value = false;
 }
 
-function handleResizePointerDown(corner: PetResizeCorner, event: PointerEvent) {
+function handleResizePointerDown(direction: PetResizeDirection, event: PointerEvent) {
   event.preventDefault();
   void clickThrough.setPassthrough(false);
   const target = event.currentTarget as HTMLElement | null;
@@ -168,14 +172,14 @@ function handleResizePointerDown(corner: PetResizeCorner, event: PointerEvent) {
     return;
   }
   target.setPointerCapture(event.pointerId);
-  resizeDraggingCorner.value = corner;
+  resizeDraggingDirection.value = direction;
 }
 
-function handleResizePointerMove(corner: PetResizeCorner, event: PointerEvent) {
-  if (resizeDraggingCorner.value !== corner) {
+function handleResizePointerMove(direction: PetResizeDirection, event: PointerEvent) {
+  if (resizeDraggingDirection.value !== direction) {
     return;
   }
-  void window.aurabot.resizePetWindowCorner(corner, {
+  void window.aurabot.resizePetWindowCorner(direction, {
     x: event.movementX,
     y: event.movementY
   });
@@ -186,7 +190,7 @@ function handleResizePointerEnd(event: PointerEvent) {
   if (target?.hasPointerCapture(event.pointerId)) {
     target.releasePointerCapture(event.pointerId);
   }
-  resizeDraggingCorner.value = null;
+  resizeDraggingDirection.value = null;
 }
 
 function handlePointerMove(event: PointerEvent) {
@@ -204,13 +208,25 @@ function handleWheel(event: WheelEvent) {
   }
 
   event.preventDefault();
-  const nextScale = calculateNextLive2DViewScale(live2dViewScale.value, event.deltaY);
-  if (nextScale === live2dViewScale.value) {
+  const canvas = canvasRef.value;
+  if (!canvas) {
     return;
   }
 
-  live2dViewScale.value = nextScale;
-  writeStoredLive2DViewScale(window.localStorage, nextScale);
+  const rect = canvas.getBoundingClientRect();
+  live2dZoomRequest.value = {
+    id: Date.now(),
+    deltaY: event.deltaY,
+    focalPoint: {
+      x: event.clientX - rect.left,
+      y: event.clientY - rect.top
+    }
+  };
+}
+
+function handleLive2DViewTransformChange(transform: Live2DViewTransform) {
+  live2dViewTransform.value = transform;
+  writeStoredLive2DViewTransform(window.localStorage, transform);
 }
 </script>
 
@@ -233,12 +249,52 @@ function handleWheel(event: WheelEvent) {
 
 .pet-vue-resize-grip {
   position: absolute;
-  width: 32px;
-  height: 32px;
   box-sizing: border-box;
   pointer-events: auto;
   touch-action: none;
   background: transparent;
+}
+
+.pet-vue-resize-grip--n,
+.pet-vue-resize-grip--s {
+  left: 32px;
+  right: 32px;
+  height: 14px;
+}
+
+.pet-vue-resize-grip--e,
+.pet-vue-resize-grip--w {
+  top: 32px;
+  bottom: 32px;
+  width: 14px;
+}
+
+.pet-vue-resize-grip--nw,
+.pet-vue-resize-grip--ne,
+.pet-vue-resize-grip--sw,
+.pet-vue-resize-grip--se {
+  width: 32px;
+  height: 32px;
+}
+
+.pet-vue-resize-grip--n {
+  top: 0;
+  cursor: ns-resize;
+}
+
+.pet-vue-resize-grip--s {
+  bottom: 0;
+  cursor: ns-resize;
+}
+
+.pet-vue-resize-grip--e {
+  right: 0;
+  cursor: ew-resize;
+}
+
+.pet-vue-resize-grip--w {
+  left: 0;
+  cursor: ew-resize;
 }
 
 .pet-vue-resize-grip--nw {
@@ -284,7 +340,7 @@ function handleWheel(event: WheelEvent) {
   box-shadow: inset 0 0 0 2px #f97316;
 }
 
-.pet-vue-root:hover .pet-vue-live2d-frame {
+.pet-vue-root[data-resizing="false"]:hover:not(:has(.pet-vue-resize-grip:hover)) .pet-vue-live2d-frame {
   opacity: 0.4;
 }
 

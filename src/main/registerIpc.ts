@@ -2,7 +2,7 @@ import { randomUUID } from "node:crypto";
 import { ipcMain, shell } from "electron";
 import {
   IPC_CHANNELS,
-  type PetResizeCorner,
+  type PetResizeDirection,
   type TaskControlActionInput,
   type TaskControlActionResult,
   type TaskDetailInput,
@@ -57,7 +57,7 @@ export interface WindowController {
   updatePetSettings(patch: PetSettingsPatch): PetSettings;
   setPetMousePassthrough(enabled: boolean): void;
   movePetWindowBy(delta: { x: number; y: number }): void;
-  resizePetWindowCorner(corner: PetResizeCorner, movement: { x: number; y: number }): void;
+  resizePetWindowCorner(direction: PetResizeDirection, movement: { x: number; y: number }): void;
   broadcastPetActivity(activity: PetActivity): void;
   broadcastAgentStatus(status: AgentStatus): void;
   broadcastChatMessage(message: Message): void;
@@ -206,8 +206,8 @@ export function registerIpc(services: AppServices, windows: WindowController): v
 
   ipcMain.handle(
     IPC_CHANNELS.resizePetWindowCorner,
-    (_event, payload: { corner: PetResizeCorner; movement: { x: number; y: number } }) => {
-      windows.resizePetWindowCorner(payload.corner, payload.movement);
+    (_event, payload: { direction?: PetResizeDirection; corner?: PetResizeDirection; movement: { x: number; y: number } }) => {
+      windows.resizePetWindowCorner(payload.direction ?? payload.corner!, payload.movement);
     }
   );
 

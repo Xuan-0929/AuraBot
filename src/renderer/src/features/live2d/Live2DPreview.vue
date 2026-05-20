@@ -3,9 +3,11 @@
     :pet-ready="true"
     :model-path="modelPath"
     :focus-at="{ x: 0, y: 0 }"
+    :view-transform="{ scale: 1, offset: { x: 0, y: 0 } }"
     @canvas-ready="() => undefined"
     @interactive-area-change="() => undefined"
     @model-ready="() => undefined"
+    @view-transform-change="() => undefined"
   />
 </template>
 

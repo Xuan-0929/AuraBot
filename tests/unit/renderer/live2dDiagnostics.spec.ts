@@ -57,11 +57,11 @@ describe("calculateLive2DPlacement", () => {
         hostSize: { width: 270, height: 380 },
         modelSize: { width: 900, height: 1600 },
         compact: true,
-        viewScale: 0.5
+        viewTransform: { scale: 0.5, offset: { x: 12, y: -8 } }
       })
     ).toEqual({
-      x: 135,
-      y: 280.63,
+      x: 147,
+      y: 272.63,
       scale: 0.125875
     });
   });

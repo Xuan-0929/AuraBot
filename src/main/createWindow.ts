@@ -1,6 +1,6 @@
 import { join } from "node:path";
 import { BrowserWindow, screen } from "electron";
-import { IPC_CHANNELS, type PetResizeCorner } from "../shared/contracts/ipc";
+import { IPC_CHANNELS, type PetResizeDirection } from "../shared/contracts/ipc";
 import type { AgentStatus } from "../shared/contracts/chat";
 import type { Live2DModelState } from "../shared/contracts/live2dModel";
 import type { NotificationSettings } from "../shared/contracts/notificationSettings";
@@ -176,7 +176,7 @@ export function movePetWindowBy(delta: { x: number; y: number }): void {
  * Resize the pet BrowserWindow from a corner drag. Uses pointer movement deltas
  * (same coordinate space as `movePetWindowBy`) so hit targets can be large CSS overlays.
  */
-export function resizePetWindowCorner(corner: PetResizeCorner, movement: { x: number; y: number }): void {
+export function resizePetWindowCorner(direction: PetResizeDirection, movement: { x: number; y: number }): void {
   if (!petWindow || petWindow.isDestroyed()) {
     return;
   }
@@ -189,43 +189,23 @@ export function resizePetWindowCorner(corner: PetResizeCorner, movement: { x: nu
   const rightEdge = x + width;
   const bottomEdge = y + height;
 
-  switch (corner) {
-    case "se": {
-      width += mx;
-      height += my;
-      width = Math.max(PET_WINDOW_MIN_SIZE.width, width);
-      height = Math.max(PET_WINDOW_MIN_SIZE.height, height);
-      break;
-    }
-    case "sw": {
-      x += mx;
-      width -= mx;
-      height += my;
-      width = Math.max(PET_WINDOW_MIN_SIZE.width, width);
-      height = Math.max(PET_WINDOW_MIN_SIZE.height, height);
-      x = rightEdge - width;
-      break;
-    }
-    case "ne": {
-      y += my;
-      width += mx;
-      height -= my;
-      width = Math.max(PET_WINDOW_MIN_SIZE.width, width);
-      height = Math.max(PET_WINDOW_MIN_SIZE.height, height);
-      y = bottomEdge - height;
-      break;
-    }
-    case "nw": {
-      x += mx;
-      y += my;
-      width -= mx;
-      height -= my;
-      width = Math.max(PET_WINDOW_MIN_SIZE.width, width);
-      height = Math.max(PET_WINDOW_MIN_SIZE.height, height);
-      x = rightEdge - width;
-      y = bottomEdge - height;
-      break;
-    }
+  if (direction.includes("e")) {
+    width += mx;
+    width = Math.max(PET_WINDOW_MIN_SIZE.width, width);
+  }
+  if (direction.includes("w")) {
+    const nextWidth = Math.max(PET_WINDOW_MIN_SIZE.width, width - mx);
+    width = nextWidth;
+    x = rightEdge - width;
+  }
+  if (direction.includes("s")) {
+    height += my;
+    height = Math.max(PET_WINDOW_MIN_SIZE.height, height);
+  }
+  if (direction.includes("n")) {
+    const nextHeight = Math.max(PET_WINDOW_MIN_SIZE.height, height - my);
+    height = nextHeight;
+    y = bottomEdge - height;
   }
 
   const nextBounds = clampPetBoundsToVisibleWorkArea({ x, y, width, height });

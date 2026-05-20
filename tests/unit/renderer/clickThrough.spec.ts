@@ -8,18 +8,18 @@ describe("resolvePetMousePassthroughState", () => {
         canvasReady: true,
         enabled: true,
         interactiveUiHovering: false,
-        overResizeCorner: false
+        resizeUiHovering: false
       })
     ).toBe(true);
   });
 
-  it("keeps controls and resize corners interactive while click-through is enabled", () => {
+  it("keeps controls and resize handles interactive while click-through is enabled", () => {
     expect(
       resolvePetMousePassthroughState({
         canvasReady: true,
         enabled: true,
         interactiveUiHovering: true,
-        overResizeCorner: false
+        resizeUiHovering: false
       })
     ).toBe(false);
     expect(
@@ -27,7 +27,7 @@ describe("resolvePetMousePassthroughState", () => {
         canvasReady: true,
         enabled: true,
         interactiveUiHovering: false,
-        overResizeCorner: true
+        resizeUiHovering: true
       })
     ).toBe(false);
   });
@@ -38,7 +38,7 @@ describe("resolvePetMousePassthroughState", () => {
         canvasReady: true,
         enabled: false,
         interactiveUiHovering: false,
-        overResizeCorner: false
+        resizeUiHovering: false
       })
     ).toBeUndefined();
     expect(
@@ -46,7 +46,7 @@ describe("resolvePetMousePassthroughState", () => {
         canvasReady: false,
         enabled: true,
         interactiveUiHovering: false,
-        overResizeCorner: false
+        resizeUiHovering: false
       })
     ).toBeUndefined();
   });

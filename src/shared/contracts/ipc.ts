@@ -110,8 +110,9 @@ export interface PetCursorPosition {
   localY: number;
 }
 
-/** Corner being dragged to resize the frameless pet window (programmatic resize). */
-export type PetResizeCorner = "nw" | "ne" | "sw" | "se";
+/** Edge or corner being dragged to resize the frameless pet window. */
+export type PetResizeDirection = "n" | "s" | "e" | "w" | "nw" | "ne" | "sw" | "se";
+export type PetResizeCorner = Extract<PetResizeDirection, "nw" | "ne" | "sw" | "se">;
 
 export interface TaskResultFileActionResult {
   ok: boolean;
@@ -150,7 +151,7 @@ export interface AuraBotApi {
   updatePetSettings(patch: PetSettingsPatch): Promise<PetSettings>;
   setPetMousePassthrough(enabled: boolean): Promise<void>;
   movePetWindowBy(delta: { x: number; y: number }): Promise<void>;
-  resizePetWindowCorner(corner: PetResizeCorner, movement: { x: number; y: number }): Promise<void>;
+  resizePetWindowCorner(direction: PetResizeDirection, movement: { x: number; y: number }): Promise<void>;
   onPetSettingsChanged(listener: (settings: PetSettings) => void): () => void;
   onPetActivity(listener: (activity: PetActivity) => void): () => void;
   onLive2DModelStateChanged(listener: (state: Live2DModelState) => void): () => void;

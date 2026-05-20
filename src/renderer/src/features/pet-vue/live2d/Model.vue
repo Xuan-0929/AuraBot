@@ -6,6 +6,8 @@
 import { onUnmounted, watch } from "vue";
 import type { Application } from "pixi.js";
 import { calculateLive2DPlacement } from "./live2dPlacement";
+import type { Live2DSize, Live2DViewTransform } from "../../live2d/live2dDiagnostics";
+import { calculateFocusedLive2DViewTransform } from "../../live2d/live2dViewScale";
 import { useMotionQueueStore } from "../stores/motionQueue";
 import {
   loadLive2DModel,
@@ -30,12 +32,14 @@ const props = defineProps<{
   focusAt: FocusPoint;
   canvasSize: { width: number; height: number };
   pointerAt?: PointerPoint;
-  viewScale?: number;
+  viewTransform: Live2DViewTransform;
+  zoomRequest?: { id: number; deltaY: number; focalPoint: { x: number; y: number } };
 }>();
 
 const emit = defineEmits<{
   interactiveChange: [boolean];
   modelReady: [];
+  viewTransformChange: [Live2DViewTransform];
 }>();
 
 const motionQueueStore = useMotionQueueStore();
@@ -47,10 +51,12 @@ let lastMotionSignature: string | undefined;
 let loadGeneration = 0;
 let lastCanvasW = 0;
 let lastCanvasH = 0;
+let naturalModelSize: Live2DSize | undefined;
 
 function teardownModelFromStage(app: Application | null) {
   removeAndDestroyLive2DModel(app, model);
   model = undefined;
+  naturalModelSize = undefined;
   motionQueueStore.clearQueue();
 }
 
@@ -80,6 +86,10 @@ watch(
 
     model = nextModel;
     model.anchor.set(0.5, 0.95);
+    naturalModelSize = resolveNaturalModelSize(model, {
+      width: Math.max(1, Math.round(props.canvasSize.width)),
+      height: Math.max(1, Math.round(props.canvasSize.height))
+    });
     // pixi-live2d-display defaults autoUpdate to true after init; reasserting
     // here documents the intent and re-arms the shared ticker if a previous
     // teardown turned it off via this same model instance.
@@ -112,8 +122,29 @@ watch(
 );
 
 watch(
-  () => props.viewScale,
+  () => props.viewTransform,
   () => resizeModel()
+);
+
+watch(
+  () => props.zoomRequest,
+  (request) => {
+    if (!request || !model || !naturalModelSize) {
+      return;
+    }
+    emit(
+      "viewTransformChange",
+      calculateFocusedLive2DViewTransform({
+        hostSize: resolveHostSize(),
+        modelSize: naturalModelSize,
+        compact: false,
+        current: props.viewTransform,
+        focalPoint: request.focalPoint,
+        wheelDeltaY: request.deltaY
+      })
+    );
+  },
+  { deep: true }
 );
 
 watch(
@@ -179,23 +210,31 @@ function resizeModel() {
   if (!model) {
     return;
   }
-  const hostSize = {
-    width: Math.max(1, Math.round(props.canvasSize.width)),
-    height: Math.max(1, Math.round(props.canvasSize.height))
-  };
-  const modelSize = {
-    width: model.internalModel?.width ?? model.width ?? hostSize.width,
-    height: model.internalModel?.height ?? model.height ?? hostSize.height
-  };
+  const hostSize = resolveHostSize();
+  const modelSize = naturalModelSize ?? resolveNaturalModelSize(model, hostSize);
   const placement = calculateLive2DPlacement({
     hostSize,
     modelSize,
     compact: false,
-    viewScale: props.viewScale ?? 1
+    viewTransform: props.viewTransform
   });
   model.scale.set(placement.scale);
   model.x = placement.x;
   model.y = placement.y;
+}
+
+function resolveHostSize(): Live2DSize {
+  return {
+    width: Math.max(1, Math.round(props.canvasSize.width)),
+    height: Math.max(1, Math.round(props.canvasSize.height))
+  };
+}
+
+function resolveNaturalModelSize(model: Live2DModelRuntime, fallbackSize: Live2DSize): Live2DSize {
+  return {
+    width: Math.max(1, Math.round(model.internalModel?.width ?? model.width ?? fallbackSize.width)),
+    height: Math.max(1, Math.round(model.internalModel?.height ?? model.height ?? fallbackSize.height))
+  };
 }
 
 onUnmounted(() => {

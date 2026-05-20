@@ -9,9 +9,11 @@
         :focus-at="focusAt"
         :canvas-size="canvasSize"
         :pointer-at="pointerAt"
-        :view-scale="viewScale"
+        :view-transform="viewTransform"
+        :zoom-request="zoomRequest"
         @interactive-change="(value) => emit('interactiveAreaChange', value)"
         @model-ready="() => emit('modelReady')"
+        @view-transform-change="(value) => emit('viewTransformChange', value)"
       />
     </div>
     <slot />
@@ -21,6 +23,7 @@
 <script setup lang="ts">
 import { ref } from "vue";
 import type { Application } from "pixi.js";
+import type { Live2DViewTransform } from "../../live2d/live2dDiagnostics";
 import Canvas from "./Canvas.vue";
 import Model from "./Model.vue";
 
@@ -29,13 +32,15 @@ defineProps<{
   modelPath: string;
   focusAt: { x: number; y: number };
   pointerAt?: { x: number; y: number };
-  viewScale?: number;
+  viewTransform: Live2DViewTransform;
+  zoomRequest?: { id: number; deltaY: number; focalPoint: { x: number; y: number } };
 }>();
 
 const emit = defineEmits<{
   canvasReady: [HTMLCanvasElement];
   interactiveAreaChange: [boolean];
   modelReady: [];
+  viewTransformChange: [Live2DViewTransform];
 }>();
 
 const app = ref<Application | null>(null);

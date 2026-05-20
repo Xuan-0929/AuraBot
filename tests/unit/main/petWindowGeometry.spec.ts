@@ -134,6 +134,22 @@ describe("pet window geometry", () => {
     });
   });
 
+  test("resizes from a single window edge for full-border resize handles", async () => {
+    const { createPetWindow, resizePetWindowCorner } = await loadWindowModule();
+
+    createPetWindow({
+      savedBounds: { x: 100, y: 100, width: 300, height: 430 }
+    });
+    resizePetWindowCorner("e", { x: 40, y: 999 });
+
+    expect(electronMock.instances[0]?.getBounds()).toEqual({
+      x: 100,
+      y: 100,
+      width: 340,
+      height: 430
+    });
+  });
+
   test("normalizes legacy saved bounds that are smaller than the renderer-safe minimum", async () => {
     const { createPetWindow } = await loadWindowModule();
 

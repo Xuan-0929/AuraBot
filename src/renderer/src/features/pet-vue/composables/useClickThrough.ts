@@ -10,14 +10,14 @@ interface PetMousePassthroughState {
   enabled: boolean;
   canvasReady: boolean;
   interactiveUiHovering: boolean;
-  overResizeCorner: boolean;
+  resizeUiHovering: boolean;
 }
 
 export function resolvePetMousePassthroughState(state: PetMousePassthroughState): boolean | undefined {
   if (!state.enabled || !state.canvasReady) {
     return undefined;
   }
-  if (state.interactiveUiHovering || state.overResizeCorner) {
+  if (state.interactiveUiHovering || state.resizeUiHovering) {
     return false;
   }
   return true;
@@ -32,7 +32,7 @@ export function useClickThrough(options: UseClickThroughOptions) {
       canvasReady: Boolean(options.canvasRef.value),
       enabled: options.enabled.value,
       interactiveUiHovering: options.interactiveUiHovering.value,
-      overResizeCorner: isPointerOverWindowCornerResizeZone(event.clientX, event.clientY)
+      resizeUiHovering: options.interactiveUiHovering.value
     });
     if (nextValue === undefined) {
       return;
@@ -67,18 +67,4 @@ export function useClickThrough(options: UseClickThroughOptions) {
     handlePointerLeave,
     setPassthrough
   };
-}
-
-/** Margin from each window edge for combined corner zones (matches `.pet-vue-resize-grip` hit targets). */
-const CORNER_RESIZE_MARGIN_PX = 32;
-
-function isPointerOverWindowCornerResizeZone(clientX: number, clientY: number): boolean {
-  const w = window.innerWidth;
-  const h = window.innerHeight;
-  const m = CORNER_RESIZE_MARGIN_PX;
-  const nearLeft = clientX < m;
-  const nearRight = clientX > w - m;
-  const nearTop = clientY < m;
-  const nearBottom = clientY > h - m;
-  return (nearLeft || nearRight) && (nearTop || nearBottom);
 }
