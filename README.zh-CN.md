@@ -412,6 +412,7 @@ docs/
   memory/
     aurabot-memory-structure.md
     open-source-graph-memory-roadmap.md
+    memory-pipeline-analysis.html
     memory-system-and-roadmap.html
 ```
 
