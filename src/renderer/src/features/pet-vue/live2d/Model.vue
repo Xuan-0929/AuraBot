@@ -8,6 +8,7 @@ import type { Application } from "pixi.js";
 import { calculateLive2DPlacement } from "./live2dPlacement";
 import type { Live2DSize, Live2DViewTransform } from "../../live2d/live2dDiagnostics";
 import { calculateFocusedLive2DViewTransform } from "../../live2d/live2dViewScale";
+import { createMotionSmoothingUpdateHook } from "../../live2d/motionSmoothing";
 import { useMotionQueueStore } from "../stores/motionQueue";
 import {
   loadLive2DModel,
@@ -53,6 +54,7 @@ let loadGeneration = 0;
 let lastCanvasW = 0;
 let lastCanvasH = 0;
 let naturalModelSize: Live2DSize | undefined;
+let lastMotionUpdateTime = 0;
 
 function teardownModelFromStage(app: Application | null) {
   removeAndDestroyLive2DModel(app, model);
@@ -97,6 +99,7 @@ watch(
     model.autoUpdate = true;
     app.stage.addChild(model as unknown as DisplayObject);
     motionQueueStore.setMotionDefinitions(model.internalModel?.motionManager?.definitions);
+    installMotionManagerUpdateHook(model);
     resizeModel();
     // Prime focus so the head/eyes look at the most recent cursor position
     // even before the next IPC tick (otherwise the model stares straight ahead
@@ -240,6 +243,30 @@ function resolveNaturalModelSize(model: Live2DModelRuntime, fallbackSize: Live2D
   return {
     width: Math.max(1, Math.round(model.internalModel?.width ?? model.width ?? fallbackSize.width)),
     height: Math.max(1, Math.round(model.internalModel?.height ?? model.height ?? fallbackSize.height))
+  };
+}
+
+function installMotionManagerUpdateHook(model: Live2DModelRuntime) {
+  const internalModel = model.internalModel;
+  const motionManager = internalModel?.motionManager;
+  const coreModel = internalModel?.coreModel;
+  if (!motionManager?.update || !coreModel) {
+    return;
+  }
+
+  const hookedUpdate = motionManager.update.bind(motionManager);
+  const smoothingUpdate = createMotionSmoothingUpdateHook();
+  lastMotionUpdateTime = 0;
+
+  motionManager.update = (nextCoreModel: unknown, now: number) => {
+    const deltaSeconds = lastMotionUpdateTime > 0 ? now - lastMotionUpdateTime : 0;
+    lastMotionUpdateTime = now;
+    return smoothingUpdate(
+      nextCoreModel as typeof coreModel,
+      deltaSeconds,
+      (updateCoreModel, updateNow) => hookedUpdate(updateCoreModel, updateNow),
+      now
+    );
   };
 }
 

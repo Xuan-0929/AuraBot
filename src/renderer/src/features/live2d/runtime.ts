@@ -12,7 +12,15 @@ export interface Live2DModelRuntime {
   internalModel?: {
     width?: number;
     height?: number;
-    motionManager?: { definitions?: unknown };
+    coreModel?: {
+      getParameterCount(): number;
+      getParameterValueByIndex(index: number): number;
+      setParameterValueByIndex(index: number, value: number): void;
+    };
+    motionManager?: {
+      definitions?: unknown;
+      update?: (model: unknown, now: number) => boolean;
+    };
     hitAreas?: unknown;
   };
   motion(group: string, index?: number, priority?: number): unknown;
