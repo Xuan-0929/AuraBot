@@ -25,6 +25,7 @@ const api: AuraBotApi = {
   getModelHealth: () => ipcRenderer.invoke(IPC_CHANNELS.getModelHealth),
   testModelConnection: (input) => ipcRenderer.invoke(IPC_CHANNELS.testModelConnection, input),
   updateProactiveSettings: (patch) => ipcRenderer.invoke(IPC_CHANNELS.updateProactiveSettings, patch),
+  getBackendStatus: () => ipcRenderer.invoke(IPC_CHANNELS.getBackendStatus),
   updatePersonaSettings: (settings) => ipcRenderer.invoke(IPC_CHANNELS.updatePersonaSettings, settings),
   getLive2DModelState: () => ipcRenderer.invoke(IPC_CHANNELS.getLive2DModelState),
   setCurrentLive2DModel: (modelId: string) => ipcRenderer.invoke(IPC_CHANNELS.setCurrentLive2DModel, modelId),
@@ -118,6 +119,7 @@ const api: AuraBotApi = {
     ipcRenderer.invoke(IPC_CHANNELS.showTaskResultFileInFolder, input),
   getTaskDetail: (input) => ipcRenderer.invoke(IPC_CHANNELS.getTaskDetail, input),
   getEventLogs: () => ipcRenderer.invoke(IPC_CHANNELS.getEventLogs),
+  getTaskDebugSnapshot: () => ipcRenderer.invoke(IPC_CHANNELS.getTaskDebugSnapshot),
   getMemoryDebugSnapshot: () => ipcRenderer.invoke(IPC_CHANNELS.getMemoryDebugSnapshot)
 };
 

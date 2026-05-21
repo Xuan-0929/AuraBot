@@ -1,8 +1,9 @@
 import type { AppInitialState, SendChatMessageInput, SendChatMessageResult } from "./chat";
+import type { BackendStatus } from "./backend";
 import type { Live2DModelState } from "./live2dModel";
 import type { NotificationSettings } from "./notificationSettings";
 import type { PetActivity } from "./pet";
-import type { TaskDetail } from "./taskDetail";
+import type { TaskDebugSnapshot, TaskDetail } from "./taskDetail";
 import type { Message } from "../schemas/message";
 import type { MemoryEdge, MemoryNode, MemorySummary } from "../schemas/memory";
 import type { PetSettings, PetSettingsPatch } from "../schemas/petSettings";
@@ -29,6 +30,7 @@ export const IPC_CHANNELS = {
   getModelHealth: "config:get-model-health",
   testModelConnection: "config:test-model-connection",
   updateProactiveSettings: "config:update-proactive-settings",
+  getBackendStatus: "backend:get-status",
   updatePersonaSettings: "config:update-persona-settings",
   getLive2DModelState: "live2d:get-model-state",
   setCurrentLive2DModel: "live2d:set-current-model",
@@ -56,6 +58,7 @@ export const IPC_CHANNELS = {
   showTaskResultFileInFolder: "task:show-result-file-in-folder",
   getTaskDetail: "task:get-detail",
   getEventLogs: "debug:get-event-logs",
+  getTaskDebugSnapshot: "debug:get-task-snapshot",
   getMemoryDebugSnapshot: "debug:get-memory-snapshot"
 } as const;
 
@@ -140,6 +143,7 @@ export interface AuraBotApi {
   getModelHealth(): Promise<PublicModelHealthMap>;
   testModelConnection(input: ModelConnectionTestInput): Promise<PublicModelHealth>;
   updateProactiveSettings(patch: ProactiveSettingsPatch): Promise<PublicAppConfig>;
+  getBackendStatus(): Promise<BackendStatus>;
   updatePersonaSettings(settings: PersonaSettings): Promise<Profile>;
   getLive2DModelState(): Promise<Live2DModelState>;
   setCurrentLive2DModel(modelId: string): Promise<Live2DModelState>;
@@ -170,5 +174,6 @@ export interface AuraBotApi {
   showTaskResultFileInFolder(input: TaskResultFileActionInput): Promise<TaskResultFileActionResult>;
   getTaskDetail(input: TaskDetailInput): Promise<TaskDetail | undefined>;
   getEventLogs(): Promise<EventLogRecord[]>;
+  getTaskDebugSnapshot(): Promise<TaskDebugSnapshot>;
   getMemoryDebugSnapshot(): Promise<MemoryDebugSnapshot>;
 }

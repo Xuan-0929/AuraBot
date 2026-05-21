@@ -47,6 +47,11 @@ export interface SendChatMessageResult {
   deletedTaskId?: string;
 }
 
+export interface MainSessionMessagesSnapshot {
+  sessionId: string;
+  messages: Message[];
+}
+
 export interface AppInitialState {
   profile: Profile;
   mainSessionId: string;

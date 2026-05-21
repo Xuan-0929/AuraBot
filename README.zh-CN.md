@@ -26,7 +26,8 @@ AuraBot 是一个桌面优先的陪伴型 AI MVP。它不是传统意义上常�
 
 | 模块 | 当前状态 |
 | --- | --- |
-| 桌面壳层 | Electron + React + TypeScript + Vite 应用可以本地启动。 |
+| 桌面壳层 | Electron + Vue + TypeScript + Vite 应用可以从 `app/` workspace 本地启动。 |
+| 后端网关 | Python FastAPI gateway 已提供本机 `/health`、`/services`、只读调试端点和 backend-first 主聊天历史/任务列表读取。 |
 | Live2D 表面 | 官方 Live2D Hiyori 样例模型可以在桌宠窗口渲染。 |
 | 双窗口体验 | 小人窗口可以通过悬浮控制打开或聚焦普通控制台窗口。 |
 | 桌宠行为设置 | 控制台设置可以让点击穿透小人窗口，便于点到后面的桌面内容。 |
@@ -47,7 +48,8 @@ AuraBot 是一个桌面优先的陪伴型 AI MVP。它不是传统意义上常�
 要求：
 
 1. Node.js 可用，并带 Corepack。
-2. macOS 是主要开发平台；Windows 10/11 x64 支持开发启动和可安装包。
+2. Python 3.11+，用于本机 FastAPI backend gateway。
+3. macOS 是主要开发平台；Windows 10/11 x64 支持开发启动和可安装包。
 
 平台状态：
 
@@ -60,19 +62,23 @@ AuraBot 是一个桌面优先的陪伴型 AI MVP。它不是传统意义上常�
 
 ```bash
 corepack enable
+cd app
 corepack pnpm install
 ```
 
 以开发模式启动桌面应用：
 
 ```bash
+cd app
 corepack pnpm dev
 ```
+
+`pnpm dev` 会同时拉起 Python backend gateway 和 Electron/Vue 桌面应用。单独调试时，也可以在 `app/` 下运行 `corepack pnpm dev:backend`、`corepack pnpm dev:frontend` 或 `corepack pnpm dev:desktop`。
 
 应用启动后应该会出现一个小型透明 Live2D 桌宠窗口。当前内置 Hiyori 模型，模型文件位于：
 
 ```text
-src/renderer/public/assets/live2d/hiyori/Hiyori.model3.json
+app/frontend/public/assets/live2d/hiyori/Hiyori.model3.json
 ```
 
 把鼠标放到小人身上，点击 `Console` 打开控制台。控制台输入规则：
@@ -319,36 +325,42 @@ Windows 上 AuraBot 会按 Windows 命令习惯从 `PATH` 自动发现 `codex.cm
 运行 unit 和 integration 测试：
 
 ```bash
+cd app
 corepack pnpm test
 ```
 
 运行类型检查：
 
 ```bash
+cd app
 corepack pnpm typecheck
 ```
 
 构建 Electron 应用：
 
 ```bash
+cd app
 corepack pnpm build
 ```
 
 打包 macOS 应用：
 
 ```bash
+cd app
 corepack pnpm package:mac
 ```
 
 在 Windows 上打包 Windows 安装器：
 
 ```bash
+cd app
 corepack pnpm package:win
 ```
 
 运行端到端测试：
 
 ```bash
+cd app
 corepack pnpm test:e2e
 ```
 
@@ -365,45 +377,36 @@ corepack pnpm test:e2e
 ## 项目结构
 
 ```text
-src/
-  main/
-    createWindow.ts          # 桌宠窗口和控制台窗口生命周期
-    index.ts                 # Electron 应用启动入口
-    petSettingsStore.ts      # 桌宠行为设置持久化
-    petWindowStateStore.ts   # 桌宠窗口位置持久化
-    registerIpc.ts           # typed IPC handlers
-    windowPlacement.ts       # 控制台靠近桌宠的窗口定位
-  preload/
-    index.ts                 # 安全 renderer API bridge
-  renderer/
+app/
+  backend/
+    app/gateway/             # FastAPI gateway、健康检查和服务发现
+    app/services/_template/  # feature service 模板，端口从 6402+ 开始
+    pyproject.toml           # Python backend 依赖
+  desktop/
+    src/main/                # Electron 启动、窗口和 IPC handlers
+    src/preload/             # 安全 renderer API bridge
+    electron.vite.config.ts  # 使用 Vue frontend root 的 Electron 构建配置
+  frontend/
     public/assets/live2d/    # 内置 Live2D 样例模型
     src/
-      App.tsx                # 桌宠/控制台 route 切换
-      app/store.ts           # renderer 状态和 IPC 调用
+      App.vue                # 桌宠/控制台/设置 surface 切换
+      app/store.ts           # Pinia 状态和 preload API 调用
       features/
-        pet/                 # 桌面小人表面
+        pet-vue/             # 桌面小人表面
         live2d/              # Pixi + Live2D 渲染器
         console/             # 完整对话控制台
         chat/                # composer 和 message list
-        settings/            # 紧凑桌宠行为设置
+        settings/            # 设置中心和调试面板
         tasks/               # 任务状态条
         status/              # agent 状态指示器
-  core/
-    bootstrap/               # service wiring
-    orchestration/           # gate 和 chat pipeline
-    llm/                     # 模型角色接口和 OpenAI-compatible adapters
-    memory/                  # 记忆写入、召回和联想关系
-    tasks/                   # 任务生命周期和 deterministic runner
-    storage/                 # SQLite migrations 和 repositories
-    profiles/                # 默认 profile 和 soul seed
-    telemetry/               # event log service
-  shared/
-    contracts/               # IPC 和 chat DTOs
-    schemas/                 # Zod schemas
-tests/
-  unit/
-  integration/
-  e2e/
+  packages/
+    core-legacy/             # 当前 TS 业务内核：chat、memory、tasks、storage
+    shared/                  # IPC/backend contracts、常量和 Zod schemas
+  configs/                   # Vitest 和 Playwright 配置
+  tests/
+    unit/
+    integration/
+    e2e/
 docs/
   PRD-v1.md
   TODO.md
@@ -458,13 +461,23 @@ Cubism Core runtime 通过 `live2dcubismcore@1.0.2` 本地打包，应用启动�
 
 这还是 MVP 骨架，不是生产级陪伴产品：
 
-1. 模型角色默认走 deterministic local fallback；外部调用需要本地配置文件或环境变量。
+1. 模型角色默认是未配置 API 状态；用户真实运行需要本地配置文件或环境变量，不再在用户端静默回退 deterministic 文案。
 2. 用户消息已经能即时显示，助手消息可以通过 update 广播流式更新；还没有支持用户新消息打断 in-flight generation。
 3. 记忆层配置 `memoryModel` 后可用 API 做结构化抽取、重复记忆合并、候选关系边判断、召回语义检索词生成和 seed node 重排；还没有 embedding。
 4. 任务 runner 显式配置后可以调用本机 Codex、Claude Code 或 Hermes，广播子任务进度，在主聊天打断时取消子进程，并在启动时把失联运行态任务标记为失败；真正 resume 和更完整的 artifact 管理还没有实现。
 5. Live2D 状态行为复用 Hiyori 内置 motion group，并已接入全局鼠标追踪眼动；还没有定制表情资源或更细的动画状态机。
 6. 语音输入依赖 Chromium 的 `SpeechRecognition`；还需要稳定的本地或模型 STT adapter。
 7. Profile 切换、定时任务、桌面通知、打包发布和开机自启还没有实现。
+
+## 前后端分离差距
+
+当前 backend-first 读取已经覆盖 gateway 状态、服务发现、主聊天历史、任务列表、event logs、memory debug snapshot 和 task debug snapshot。但距离目标分离还有这些差距：
+
+1. `getInitialState` 仍由 Electron 拼装；profile、settings、model health、pet/Live2D 状态和通知设置仍从 TypeScript service 或本地 store 读取。
+2. 聊天发送、记忆写入、任务创建/控制/执行和主动触发仍走 Electron + `core-legacy`。
+3. Python backend 目前直接以 read-only 模式打开 SQLite；还没有独立 repository、迁移管理、写事务、鉴权或 schema version 协商。
+4. service registry 已存在，但还没有真实的 `6402+` feature services，也没有生命周期管理。
+5. Python gateway 的生产打包和运行时 supervisor 还没完成；`pnpm dev` 会在开发期启动它，但生产环境的重启、端口恢复等还没做。
 
 ## 下一步推荐
 

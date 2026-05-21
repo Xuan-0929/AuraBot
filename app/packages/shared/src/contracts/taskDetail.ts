@@ -52,3 +52,8 @@ export interface TaskDetail {
   completedAt?: string;
   durationMs?: number;
 }
+
+export interface TaskDebugSnapshot {
+  generatedAt: string;
+  tasks: TaskDetail[];
+}

@@ -9,6 +9,7 @@ import { createChatModel } from "../../../packages/core-legacy/src/llm/chatModel
 import { createGateModel } from "../../../packages/core-legacy/src/llm/gateModel";
 import { createModelHealthService, type ModelHealthService } from "../../../packages/core-legacy/src/llm/modelHealth";
 import { createVoiceAdapter } from "../../../packages/core-legacy/src/voice/voiceAdapter";
+import { getBackendStatus } from "./backendGatewayClient";
 import {
   createMemoryExtractor,
   createMemoryMergePlanner,
@@ -101,6 +102,7 @@ async function bootstrap(): Promise<void> {
     getModelHealth: () => getModelHealth(),
     testModelConnection: (role) => testModelConnection(role),
     updateProactiveSettings: (patch) => updateProactiveSettings(userDataPath, patch),
+    getBackendStatus: () => getBackendStatus(),
     updatePersonaSettings: (settings) => updatePersonaSettings(settings),
     getLive2DModelState: () => getLive2DModelState(),
     setCurrentLive2DModel: (modelId) => setCurrentLive2DModel(modelId),

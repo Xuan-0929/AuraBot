@@ -1,7 +1,11 @@
 import { mkdtempSync, readFileSync, rmSync } from "node:fs";
 import { tmpdir } from "node:os";
-import { join } from "node:path";
+import { dirname, join, resolve } from "node:path";
+import { fileURLToPath } from "node:url";
 import { _electron as electron, expect, type ElectronApplication, type Page, test } from "@playwright/test";
+
+const appRoot = resolve(dirname(fileURLToPath(import.meta.url)), "../..");
+const desktopRoot = join(appRoot, "desktop");
 
 async function launchAuraBot(): Promise<{
   electronApp: ElectronApplication;
@@ -20,7 +24,8 @@ async function launchAuraBot(inputUserDataDir?: string): Promise<{
 }> {
   const userDataDir = inputUserDataDir ?? mkdtempSync(join(tmpdir(), "aurabot-e2e-"));
   const electronApp = await electron.launch({
-    args: [join(process.cwd(), "out/main/index.js")],
+    args: [join(desktopRoot, "out/main/index.js")],
+    cwd: desktopRoot,
     env: {
       ...process.env,
       NODE_ENV: "test",

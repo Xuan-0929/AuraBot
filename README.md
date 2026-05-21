@@ -26,7 +26,8 @@ Console window:
 
 | Area | Status |
 | --- | --- |
-| Desktop shell | Electron + React + TypeScript + Vite app boots locally. |
+| Desktop shell | Electron + Vue + TypeScript + Vite app boots locally from the `app/` workspace. |
+| Backend gateway | Python FastAPI gateway exposes local `/health`, `/services`, read-only debug endpoints, and backend-first main chat history/task list reads. |
 | Live2D surface | Official Live2D Hiyori sample model renders in the pet window. |
 | Two-window UX | Small pet window opens or focuses a normal console window from the hover control. |
 | Pet behavior settings | Console settings can let clicks pass through the pet window. |
@@ -47,7 +48,8 @@ Console window:
 Requirements:
 
 1. Node.js with Corepack available.
-2. macOS is the primary development platform; Windows 10/11 x64 is supported for development and installable builds.
+2. Python 3.11+ for the local FastAPI backend gateway.
+3. macOS is the primary development platform; Windows 10/11 x64 is supported for development and installable builds.
 
 Platform status:
 
@@ -60,19 +62,23 @@ Install dependencies:
 
 ```bash
 corepack enable
+cd app
 corepack pnpm install
 ```
 
 Run the desktop app in development mode:
 
 ```bash
+cd app
 corepack pnpm dev
 ```
+
+`pnpm dev` starts the Python backend gateway and the Electron/Vue desktop app together. During focused development you can also run `corepack pnpm dev:backend`, `corepack pnpm dev:frontend`, or `corepack pnpm dev:desktop` from `app/`.
 
 The app should open a small transparent Live2D pet window. The bundled Hiyori model is loaded from:
 
 ```text
-src/renderer/public/assets/live2d/hiyori/Hiyori.model3.json
+app/frontend/public/assets/live2d/hiyori/Hiyori.model3.json
 ```
 
 Hover the character and click `Console` to open the console window. In the console composer:
@@ -319,36 +325,42 @@ On Windows, AuraBot auto-discovers CLI commands from `PATH` using Windows comman
 Run all unit and integration tests:
 
 ```bash
+cd app
 corepack pnpm test
 ```
 
 Run type checking:
 
 ```bash
+cd app
 corepack pnpm typecheck
 ```
 
 Build the Electron app:
 
 ```bash
+cd app
 corepack pnpm build
 ```
 
 Package the macOS app:
 
 ```bash
+cd app
 corepack pnpm package:mac
 ```
 
 Package the Windows installer on Windows:
 
 ```bash
+cd app
 corepack pnpm package:win
 ```
 
 Run end-to-end tests:
 
 ```bash
+cd app
 corepack pnpm test:e2e
 ```
 
@@ -365,45 +377,36 @@ The last verified local run recorded:
 ## Project Layout
 
 ```text
-src/
-  main/
-    createWindow.ts          # pet window and console window lifecycle
-    index.ts                 # Electron app bootstrap
-    petSettingsStore.ts      # persisted desktop pet behavior settings
-    petWindowStateStore.ts   # persisted pet window placement
-    registerIpc.ts           # typed IPC handlers
-    windowPlacement.ts       # console placement near the pet window
-  preload/
-    index.ts                 # safe renderer API bridge
-  renderer/
+app/
+  backend/
+    app/gateway/             # FastAPI gateway, health, and service discovery
+    app/services/_template/  # feature service template for ports 6402+
+    pyproject.toml           # Python backend dependencies
+  desktop/
+    src/main/                # Electron app bootstrap, windows, IPC handlers
+    src/preload/             # safe renderer API bridge
+    electron.vite.config.ts  # Electron build config using the Vue frontend root
+  frontend/
     public/assets/live2d/    # bundled Live2D sample model
     src/
-      App.tsx                # pet/console route switch
-      app/store.ts           # renderer state and IPC calls
+      App.vue                # pet/console/settings surface switch
+      app/store.ts           # Pinia state and preload API calls
       features/
-        pet/                 # desktop pet surface
+        pet-vue/             # desktop pet surface
         live2d/              # Pixi + Live2D renderer
         console/             # full conversation window
         chat/                # composer and message list
-        settings/            # compact pet behavior settings
+        settings/            # settings center and debug panels
         tasks/               # task status strip
         status/              # agent status indicator
-  core/
-    bootstrap/               # service wiring
-    orchestration/           # gate and chat pipeline
-    llm/                     # model-role interfaces and OpenAI-compatible adapters
-    memory/                  # memory write, retrieval, associations
-    tasks/                   # task lifecycle and deterministic runner
-    storage/                 # SQLite migrations and repositories
-    profiles/                # default profile and soul seed
-    telemetry/               # event log service
-  shared/
-    contracts/               # IPC and chat DTOs
-    schemas/                 # Zod schemas
-tests/
-  unit/
-  integration/
-  e2e/
+  packages/
+    core-legacy/             # current TS business core: chat, memory, tasks, storage
+    shared/                  # IPC/backend contracts, constants, and Zod schemas
+  configs/                   # Vitest and Playwright configs
+  tests/
+    unit/
+    integration/
+    e2e/
 docs/
   PRD-v1.md
   TODO.md
@@ -465,6 +468,16 @@ This is still an MVP skeleton, not a production companion:
 5. Live2D status behavior uses the bundled Hiyori motion groups and global cursor focus; custom expressions and richer animation tuning are not implemented yet.
 6. Voice input currently depends on Chromium's `SpeechRecognition`; a stable local or model-backed STT adapter is still needed.
 7. Profile switching, scheduled jobs, desktop notifications, packaging, and auto-start are not implemented yet.
+
+## Frontend/Backend Split Gap
+
+Current backend-first reads cover gateway status, service discovery, main chat history, task lists, event logs, memory debug snapshots, and task debug snapshots. The target split is not complete yet:
+
+1. Electron still assembles `getInitialState`; profile, settings, model health, pet/Live2D state, and notification settings still read from TypeScript services or local stores.
+2. Chat sending, memory writes, task creation/control/execution, and proactive triggers still run through Electron + `core-legacy`.
+3. The Python backend opens SQLite directly in read-only mode; it does not yet own repositories, migrations, write transactions, auth, or schema-version negotiation.
+4. The service registry exists but has no real `6402+` feature services or lifecycle supervision.
+5. Packaging/runtime supervision for the Python gateway is still pending; `pnpm dev` starts it for development, but production restart/port-recovery behavior is not done.
 
 ## Next Recommended Work
 

@@ -2,6 +2,9 @@ import { randomUUID } from "node:crypto";
 import { ipcMain, shell } from "electron";
 import {
   IPC_CHANNELS,
+  type EventLogRecord,
+  type MemoryDebugSnapshot,
+  type MemoryRecallDebugTrace,
   type PetResizeDirection,
   type TaskControlActionInput,
   type TaskControlActionResult,
@@ -9,11 +12,18 @@ import {
   type TaskResultFileActionInput,
   type TaskResultFileActionResult
 } from "../../../packages/shared/src/contracts/ipc";
-import type { AgentStatus, SendChatMessageInput, SendChatMessageResult } from "../../../packages/shared/src/contracts/chat";
+import type {
+  AgentStatus,
+  MainSessionMessagesSnapshot,
+  SendChatMessageInput,
+  SendChatMessageResult
+} from "../../../packages/shared/src/contracts/chat";
+import type { BackendStatus } from "../../../packages/shared/src/contracts/backend";
 import type { Message } from "../../../packages/shared/src/schemas/message";
 import type { Live2DModelState } from "../../../packages/shared/src/contracts/live2dModel";
 import type { NotificationSettings } from "../../../packages/shared/src/contracts/notificationSettings";
 import type { PetActivity } from "../../../packages/shared/src/contracts/pet";
+import type { TaskDebugSnapshot } from "../../../packages/shared/src/contracts/taskDetail";
 import { parsePetSettingsPatch, type PetSettings, type PetSettingsPatch } from "../../../packages/shared/src/schemas/petSettings";
 import type { PersonaSettings } from "../../../packages/shared/src/contracts/personaSettings";
 import type { Profile } from "../../../packages/shared/src/schemas/profile";
@@ -23,6 +33,13 @@ import { shouldAutoRunTasks } from "../../../packages/core-legacy/src/bootstrap/
 import { buildTaskDetail } from "../../../packages/core-legacy/src/tasks/taskDetails";
 import { isTaskResultPathAllowed } from "../../../packages/core-legacy/src/tasks/taskPresentation";
 import { TaskExecutionCoordinator } from "./taskExecutionCoordinator";
+import {
+  getBackendEventLogs,
+  getBackendMainSessionMessages,
+  getBackendMemoryDebugSnapshot,
+  getBackendTasks,
+  getBackendTaskDebugSnapshot
+} from "./backendGatewayClient";
 import { splitTextIntoSentences } from "../../../packages/shared/src/text/sentences";
 import {
   createPublicAppConfig,
@@ -45,6 +62,7 @@ export interface WindowController {
   getModelHealth(): PublicModelHealthMap;
   testModelConnection(role: ModelRoleKey): Promise<PublicModelHealth>;
   updateProactiveSettings(patch: ProactiveSettingsPatch): Promise<PublicAppConfig>;
+  getBackendStatus(): Promise<BackendStatus>;
   updatePersonaSettings(settings: PersonaSettings): Profile;
   getLive2DModelState(): Live2DModelState;
   setCurrentLive2DModel(modelId: string): Live2DModelState;
@@ -99,9 +117,22 @@ export function registerIpc(services: AppServices, windows: WindowController): v
       : undefined;
   });
 
-  ipcMain.handle(IPC_CHANNELS.getInitialState, () => {
+  ipcMain.handle(IPC_CHANNELS.getInitialState, async () => {
     const profile = services.profileService.getOrSeedActiveProfile();
     const mainSession = services.sessionRepository.getOrCreateMainSession(profile.id);
+    const messages = await loadMainSessionMessagesBackendFirst({
+      storagePath: services.config.storagePath,
+      profileId: profile.id,
+      sessionId: mainSession.id,
+      backendReader: getBackendMainSessionMessages,
+      localReader: (sessionId) => services.messageRepository.listBySession(sessionId)
+    });
+    const tasks = await loadTasksBackendFirst({
+      storagePath: services.config.storagePath,
+      profileId: profile.id,
+      backendReader: getBackendTasks,
+      localReader: (profileId) => services.taskService.listTasksForProfile(profileId)
+    });
 
     services.eventLogService.record("app.initial_state_loaded", {
       profileId: profile.id,
@@ -111,8 +142,8 @@ export function registerIpc(services: AppServices, windows: WindowController): v
     return {
       profile,
       mainSessionId: mainSession.id,
-      messages: services.messageRepository.listBySession(mainSession.id),
-      tasks: services.taskService.listTasksForProfile(profile.id),
+      messages,
+      tasks,
       agentStatus: "idle",
       petSettings: windows.getPetSettings(),
       appConfig: createPublicAppConfig(services.config),
@@ -171,6 +202,8 @@ export function registerIpc(services: AppServices, windows: WindowController): v
   ipcMain.handle(IPC_CHANNELS.updateProactiveSettings, async (_event, patch: ProactiveSettingsPatch) =>
     windows.updateProactiveSettings(patch)
   );
+
+  ipcMain.handle(IPC_CHANNELS.getBackendStatus, () => windows.getBackendStatus());
 
   ipcMain.handle(IPC_CHANNELS.updatePersonaSettings, (_event, settings: PersonaSettings) =>
     windows.updatePersonaSettings(settings)
@@ -329,24 +362,153 @@ export function registerIpc(services: AppServices, windows: WindowController): v
     );
   });
 
-  ipcMain.handle(IPC_CHANNELS.getEventLogs, () => services.eventLogService.list());
+  ipcMain.handle(IPC_CHANNELS.getEventLogs, () =>
+    listEventLogsBackendFirst({
+      storagePath: services.config.storagePath,
+      backendReader: getBackendEventLogs,
+      localReader: () => services.eventLogService.list()
+    })
+  );
 
-  ipcMain.handle(IPC_CHANNELS.getMemoryDebugSnapshot, () => {
+  ipcMain.handle(IPC_CHANNELS.getTaskDebugSnapshot, () => {
     const profile = services.profileService.getOrSeedActiveProfile();
-    const memoryContext = services.memoryService.retrieveForProfile(profile.id);
-    const recentEvents = services.eventLogService
-      .list(80)
-      .filter((event) => event.eventType.startsWith("memory."));
+
+    return loadTaskDebugSnapshotBackendFirst({
+      storagePath: services.config.storagePath,
+      profileId: profile.id,
+      backendReader: (options) => getBackendTaskDebugSnapshot({ ...options, limit: 50 }),
+      localReader: () => buildLocalTaskDebugSnapshot(services, profile.id)
+    });
+  });
+
+  ipcMain.handle(IPC_CHANNELS.getMemoryDebugSnapshot, async () => {
+    const profile = services.profileService.getOrSeedActiveProfile();
+    return loadMemoryDebugSnapshotBackendFirst({
+      storagePath: services.config.storagePath,
+      profileId: profile.id,
+      backendReader: (options) => getBackendMemoryDebugSnapshot({ ...options, eventLimit: 80 }),
+      localReader: () => buildLocalMemoryDebugSnapshot(services, profile.id),
+      getLastRecallTrace: () => services.memoryService.getLastRecallTrace()
+    });
+  });
+}
+
+function buildLocalTaskDebugSnapshot(services: AppServices, profileId: string): TaskDebugSnapshot {
+  return {
+    generatedAt: new Date().toISOString(),
+    tasks: services.taskService.listTasksForProfile(profileId).map((task) =>
+      buildTaskDetail(
+        task,
+        services.taskService.listTaskEvents(task.id),
+        services.taskArtifactRepository.listByTask(task.id),
+        services.taskInputArtifactRepository.listByTask(task.id)
+      )
+    )
+  };
+}
+
+export async function loadTaskDebugSnapshotBackendFirst(input: {
+  storagePath: string;
+  profileId: string;
+  backendReader: (options: { storagePath: string; profileId: string }) => Promise<TaskDebugSnapshot>;
+  localReader: () => TaskDebugSnapshot;
+}): Promise<TaskDebugSnapshot> {
+  try {
+    return await input.backendReader({
+      storagePath: input.storagePath,
+      profileId: input.profileId
+    });
+  } catch {
+    return input.localReader();
+  }
+}
+
+export async function loadMainSessionMessagesBackendFirst(input: {
+  storagePath: string;
+  profileId: string;
+  sessionId: string;
+  backendReader: (options: { storagePath: string; profileId: string }) => Promise<MainSessionMessagesSnapshot>;
+  localReader: (sessionId: string) => Message[];
+}): Promise<Message[]> {
+  try {
+    const snapshot = await input.backendReader({
+      storagePath: input.storagePath,
+      profileId: input.profileId
+    });
+
+    return snapshot.sessionId === input.sessionId ? snapshot.messages : input.localReader(input.sessionId);
+  } catch {
+    return input.localReader(input.sessionId);
+  }
+}
+
+export async function loadTasksBackendFirst(input: {
+  storagePath: string;
+  profileId: string;
+  backendReader: (options: { storagePath: string; profileId: string }) => Promise<Task[]>;
+  localReader: (profileId: string) => Task[];
+}): Promise<Task[]> {
+  try {
+    return await input.backendReader({
+      storagePath: input.storagePath,
+      profileId: input.profileId
+    });
+  } catch {
+    return input.localReader(input.profileId);
+  }
+}
+
+function buildLocalMemoryDebugSnapshot(services: AppServices, profileId: string): MemoryDebugSnapshot {
+  const memoryContext = services.memoryService.retrieveForProfile(profileId);
+  const recentEvents = services.eventLogService
+    .list(80)
+    .filter((event) => event.eventType.startsWith("memory."));
+
+  return {
+    generatedAt: new Date().toISOString(),
+    nodes: memoryContext.nodes,
+    edges: memoryContext.edges,
+    summaries: memoryContext.summaries,
+    recentEvents,
+    lastRecallTrace: services.memoryService.getLastRecallTrace()
+  };
+}
+
+export async function loadMemoryDebugSnapshotBackendFirst(input: {
+  storagePath: string;
+  profileId: string;
+  backendReader: (options: { storagePath: string; profileId: string }) => Promise<MemoryDebugSnapshot>;
+  localReader: () => MemoryDebugSnapshot;
+  getLastRecallTrace: () => MemoryRecallDebugTrace | undefined;
+}): Promise<MemoryDebugSnapshot> {
+  try {
+    const snapshot = await input.backendReader({
+      storagePath: input.storagePath,
+      profileId: input.profileId
+    });
+    const lastRecallTrace = input.getLastRecallTrace();
 
     return {
-      generatedAt: new Date().toISOString(),
-      nodes: memoryContext.nodes,
-      edges: memoryContext.edges,
-      summaries: memoryContext.summaries,
-      recentEvents,
-      lastRecallTrace: services.memoryService.getLastRecallTrace()
+      ...snapshot,
+      lastRecallTrace
     };
-  });
+  } catch {
+    return input.localReader();
+  }
+}
+
+export async function listEventLogsBackendFirst(input: {
+  storagePath: string;
+  backendReader: (options: { storagePath: string }) => Promise<EventLogRecord[]>;
+  localReader: () => EventLogRecord[];
+}): Promise<EventLogRecord[]> {
+  try {
+    return await input.backendReader({
+      storagePath: input.storagePath
+    });
+  } catch {
+    return input.localReader();
+  }
 }
 
 async function openTaskResultFile(

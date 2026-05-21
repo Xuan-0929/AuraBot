@@ -1,6 +1,6 @@
 # AuraBot 当前开发状态
 
-更新时间：2026-05-17
+更新时间：2026-05-21
 
 这份文档记录当前工作分支与近期已集成分支已经完成的工程事实、最近一次验证结果，以及下一步最应该推进的任务。它是执行状态板，不替代 PRD，也不替代 MVP 计划。
 
@@ -9,6 +9,42 @@
 当前集成基线：远端 `main` 已包含任务系统第一至第七阶段改动；本地工作区保留了同步合并提交，并继续在 `main` 上推进小步迭代。
 
 分支边界：这一侧已经集成 Live2D 桌宠体验、主控制台、任务便签快捷操作、流式回复、模型 gate、记忆调试、follow-up 主动提醒，以及 soul 驱动的统一回复/播报机制。后续如果继续并行开发，记忆模型/配置大改、任务执行器大改、桌宠 UI 大改仍建议分支隔离，避免在 `chatOrchestrator`、`createWindow`、`store`、IPC contract 和 renderer 样式上互相抢修改权。
+
+## 2026-05-21 前后端分离 read bridge checkpoint
+
+本次 checkpoint 把最新主干对齐到 `app/` monorepo 后，完成前后端分离第一阶段和第二阶段的一批只读迁移。策略仍是“Electron 作为桥，renderer 不直连 Python backend；先读后写，backend 离线时本地 TypeScript fallback”。
+
+已完成：
+
+1. 文档同步到当前真实结构：`app/frontend` 是 Vue/Pinia renderer，`app/desktop` 是 Electron main/preload，`app/packages/shared` 承载 IPC/backend contracts，`app/packages/core-legacy` 仍是业务内核，`app/backend` 是 Python FastAPI gateway。
+2. Python gateway 已拆成 `status_routes.py`、`chat_routes.py`、`task_routes.py`、`debug_routes.py`，并保留 `/health`、`/services`。
+3. 新增 backend status contract 和 `backend:get-status` IPC；设置页 Memory Debug 中可见 gateway online/offline、端口和 registered services 数量。
+4. Electron main 新增 `backendGatewayClient`，统一访问 `http://127.0.0.1:6401`，短超时、错误可序列化。
+5. 主聊天历史读取已迁成 backend-first：`GET /chat/main-session?storage_path=<sqlite>&profile_id=<profile>`，失败时回落 `messageRepository.listBySession()`。
+6. 任务列表读取已迁成 backend-first：`GET /tasks?storage_path=<sqlite>&profile_id=<profile>`，失败时回落 `taskService.listTasksForProfile()`。
+7. 调试读接口已迁成 backend-first：`/debug/events`、`/debug/memory`、`/debug/tasks` 分别覆盖 event log、memory snapshot、task detail snapshot。
+8. 修复 dashboard 发送消息问题：进入 Electron IPC 前会把 Vue reactive attachments 规范化为普通对象，避免 `An object could not be cloned.`。
+9. 修复 e2e 启动路径，让 Playwright 从 `app/` 运行时也能定位 `app/desktop/out/main/index.js`。
+
+本轮验证记录：
+
+| 命令/检查 | 结果 |
+| --- | --- |
+| `cd app/backend && PYTHONDONTWRITEBYTECODE=1 python -m unittest discover -s tests` | 12 个 tests 通过 |
+| `cd app && corepack pnpm typecheck` | 通过 |
+| `cd app && corepack pnpm test:unit` | 60 个 test files、241 个 tests 通过 |
+| `cd app && corepack pnpm test` | 70 个 test files、291 个 tests 通过 |
+| `cd app && corepack pnpm test:e2e --grep "persists a chat message|sends console input"` | 2 个 e2e tests 通过 |
+
+距离前后端分离目标的差距：
+
+1. renderer 已保持只通过 `window.aurabot` 访问本地能力，但 `getInitialState` 仍由 Electron 拼装；profile、settings、model health、pet/live2D/notification settings 还没有 backend read path。
+2. 聊天发送、记忆写入、任务创建/控制/执行仍在 Electron + `core-legacy` 写链路；backend 目前只承担读路径。
+3. Python backend 直接只读 SQLite，还没有独立 repository/service 层、鉴权/请求签名、schema version check 或迁移管理。
+4. `/debug/*` 与普通 `/chat`、`/tasks` 已拆 endpoint，但 Python 侧仍有一些 SQLite mapper 重复，后续需要收敛成 backend 内部读模型。
+5. service registry 仍是静态空 registry，`6402+` feature services 还没有真实注册、健康聚合或启动管理。
+6. 还没有把 backend 生命周期纳入 Electron dev/runtime supervisor；`pnpm dev` 能并行启动，但生产打包、崩溃重启和端口占用恢复仍未完成。
+7. 后续最安全的迁移顺序：profile/main session read -> settings/model health read -> event/task/memory 普通读模型整理 -> 最后才评估聊天/任务/记忆写链路迁移。
 
 ## 2026-05-18 任务控制歧义选择 checkpoint
 

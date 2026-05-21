@@ -5,11 +5,12 @@ import type {
   ChatInputAttachment,
   SendChatMessageResult
 } from "@aurabot/shared/contracts/chat";
+import type { BackendStatus } from "@aurabot/shared/contracts/backend";
 import type { Live2DModelState } from "@aurabot/shared/contracts/live2dModel";
 import type { MemoryDebugSnapshot, PetCursorPosition } from "@aurabot/shared/contracts/ipc";
 import type { NotificationSettings } from "@aurabot/shared/contracts/notificationSettings";
 import type { PetActivity } from "@aurabot/shared/contracts/pet";
-import type { TaskDetail } from "@aurabot/shared/contracts/taskDetail";
+import type { TaskDebugSnapshot, TaskDetail } from "@aurabot/shared/contracts/taskDetail";
 import type {
   ModelProviderSettingsPatch,
   ModelRoleKey,
@@ -40,6 +41,7 @@ interface AuraBotState {
   petSettings: PetSettings;
   appConfig?: PublicAppConfig;
   modelHealth?: PublicModelHealthMap;
+  backendStatus?: BackendStatus;
   live2dModelState?: Live2DModelState;
   notificationSettings?: NotificationSettings;
   petActivity?: PetActivity;
@@ -49,6 +51,7 @@ interface AuraBotState {
   memoryDebugSnapshot?: MemoryDebugSnapshot;
   selectedTaskDetail?: TaskDetail;
   selectedTaskDetailTaskId?: string;
+  taskDebugSnapshot?: TaskDebugSnapshot;
   isTaskDetailLoading: boolean;
   debugPetOverlay: boolean;
   isInitialized: boolean;
@@ -66,6 +69,7 @@ export const useAuraBotStore = defineStore("auraBot", {
     petSettings: { ...DEFAULT_PET_SETTINGS },
     appConfig: undefined,
     modelHealth: undefined,
+    backendStatus: undefined,
     live2dModelState: undefined,
     notificationSettings: undefined,
     petActivity: undefined,
@@ -75,6 +79,7 @@ export const useAuraBotStore = defineStore("auraBot", {
     memoryDebugSnapshot: undefined,
     selectedTaskDetail: undefined,
     selectedTaskDetailTaskId: undefined,
+    taskDebugSnapshot: undefined,
     isTaskDetailLoading: false,
     debugPetOverlay: false,
     isInitialized: false
@@ -102,6 +107,12 @@ export const useAuraBotStore = defineStore("auraBot", {
     },
     async loadMemoryDebugSnapshot() {
       this.memoryDebugSnapshot = await window.aurabot.getMemoryDebugSnapshot();
+    },
+    async loadTaskDebugSnapshot() {
+      this.taskDebugSnapshot = await window.aurabot.getTaskDebugSnapshot();
+    },
+    async loadBackendStatus() {
+      this.backendStatus = await window.aurabot.getBackendStatus();
     },
     subscribeToPetEvents(): Unsubscribe {
       const unsubscribers: Unsubscribe[] = [];
@@ -237,6 +248,7 @@ export const useAuraBotStore = defineStore("auraBot", {
       attachments: ChatInputAttachment[] = []
     ) {
       const trimmed = content.trim();
+      const normalizedAttachments = normalizeChatInputAttachments(attachments);
 
       if (!trimmed) {
         return;
@@ -248,7 +260,7 @@ export const useAuraBotStore = defineStore("auraBot", {
         profileId: this.profile?.id ?? "profile-pending",
         role: "user",
         content: trimmed,
-        attachments: attachments.map((attachment, index) => ({
+        attachments: normalizedAttachments.map((attachment, index) => ({
           id: `local-input-attachment-${Date.now()}-${index}`,
           kind: attachment.kind,
           purpose: "input",
@@ -261,7 +273,11 @@ export const useAuraBotStore = defineStore("auraBot", {
       this.messages = [...this.messages, pendingUserMessage];
 
       try {
-        const result = await window.aurabot.sendChatMessage({ content: trimmed, source, attachments });
+        const result = await window.aurabot.sendChatMessage({
+          content: trimmed,
+          source,
+          attachments: normalizedAttachments
+        });
         this.messages = reconcileMessages(this.messages, pendingUserMessage.id, result);
         this.tasks = updateTasks(this.tasks, result.createdTask ?? result.updatedTask);
         if (result.deletedTaskId) {
@@ -364,6 +380,16 @@ export const useAuraBotStore = defineStore("auraBot", {
 
 function isPriorityPetActivity(petActivity: PetActivity): boolean {
   return petActivity.kind !== "chat_reply";
+}
+
+function normalizeChatInputAttachments(attachments: ChatInputAttachment[]): ChatInputAttachment[] {
+  return attachments.map((attachment) => ({
+    kind: attachment.kind,
+    name: attachment.name,
+    path: attachment.path,
+    mimeType: attachment.mimeType,
+    sizeBytes: attachment.sizeBytes
+  }));
 }
 
 function removeTask(tasks: Task[], taskId: string): Task[] {

@@ -1,9 +1,12 @@
 import { setActivePinia, createPinia } from "pinia";
 import { beforeEach, describe, expect, it, vi } from "vitest";
+import { reactive } from "vue";
 import { useAuraBotStore } from "../../../frontend/src/app/store";
-import type { SendChatMessageResult } from "../../../packages/shared/src/contracts/chat";
+import type { BackendStatus } from "../../../packages/shared/src/contracts/backend";
+import type { ChatInputAttachment, SendChatMessageInput, SendChatMessageResult } from "../../../packages/shared/src/contracts/chat";
 import type { PetActivity } from "../../../packages/shared/src/contracts/pet";
 import type { TaskDetail } from "../../../packages/shared/src/contracts/taskDetail";
+import type { TaskDebugSnapshot } from "../../../packages/shared/src/contracts/taskDetail";
 import type { Message } from "../../../packages/shared/src/schemas/message";
 
 function createDeferred<T>() {
@@ -103,6 +106,48 @@ describe("useAuraBotStore", () => {
     expect(store.tasks).toEqual([]);
   });
 
+  it("sends plain cloned attachments over chat IPC", async () => {
+    const sendChatMessage = vi.fn((input: SendChatMessageInput) => {
+      structuredClone(input);
+
+      return Promise.resolve({
+        userMessage: message("server-user", "user", "看一下附件"),
+        agentStatus: "idle"
+      } satisfies SendChatMessageResult);
+    });
+    vi.stubGlobal("window", {
+      aurabot: {
+        sendChatMessage
+      }
+    });
+    const store = useAuraBotStore();
+    const attachments = reactive([
+      {
+        kind: "file",
+        name: "report.md",
+        path: "/tmp/report.md",
+        mimeType: "text/markdown",
+        sizeBytes: 12
+      }
+    ] satisfies ChatInputAttachment[]);
+
+    await store.sendMessage("看一下附件", "console", attachments);
+
+    expect(sendChatMessage).toHaveBeenCalledWith({
+      content: "看一下附件",
+      source: "console",
+      attachments: [
+        {
+          kind: "file",
+          name: "report.md",
+          path: "/tmp/report.md",
+          mimeType: "text/markdown",
+          sizeBytes: 12
+        }
+      ]
+    });
+  });
+
 
   it("uses one cursor subscription and updates focus from IPC", () => {
     let cursorListener: ((position: { localX: number; localY: number; screenX: number; screenY: number }) => void) | undefined;
@@ -191,6 +236,50 @@ describe("useAuraBotStore", () => {
 
     expect(store.selectedTaskDetail).toBeUndefined();
     expect(store.selectedTaskDetailTaskId).toBeUndefined();
+  });
+
+  it("loads backend status through the preload API", async () => {
+    const backendStatus: BackendStatus = {
+      online: true,
+      checkedAt: "2026-05-21T00:00:00.000Z",
+      gateway: {
+        ok: true,
+        service: "gateway",
+        host: "127.0.0.1",
+        port: 6401,
+        frontend: "http://127.0.0.1:6400"
+      },
+      services: []
+    };
+    vi.stubGlobal("window", {
+      aurabot: {
+        getBackendStatus: vi.fn(() => Promise.resolve(backendStatus))
+      }
+    });
+    const store = useAuraBotStore();
+
+    await store.loadBackendStatus();
+
+    expect(window.aurabot.getBackendStatus).toHaveBeenCalledTimes(1);
+    expect(store.backendStatus).toEqual(backendStatus);
+  });
+
+  it("loads task debug snapshot through the preload API", async () => {
+    const taskDebugSnapshot: TaskDebugSnapshot = {
+      generatedAt: "2026-05-21T00:00:00.000Z",
+      tasks: []
+    };
+    vi.stubGlobal("window", {
+      aurabot: {
+        getTaskDebugSnapshot: vi.fn(() => Promise.resolve(taskDebugSnapshot))
+      }
+    });
+    const store = useAuraBotStore();
+
+    await store.loadTaskDebugSnapshot();
+
+    expect(window.aurabot.getTaskDebugSnapshot).toHaveBeenCalledTimes(1);
+    expect(store.taskDebugSnapshot).toEqual(taskDebugSnapshot);
   });
 });
 
