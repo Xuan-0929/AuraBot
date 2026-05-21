@@ -1,0 +1,4 @@
+name = "_template"
+host = "127.0.0.1"
+port = 6402
+health_path = "/health"

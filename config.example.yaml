@@ -1,0 +1,19 @@
+# AuraBot local configuration example.
+#
+# Copy this file to the runtime configuration location used by your
+# environment, then fill in provider-specific secrets there. Do not put real
+# secrets in this repository.
+
+ports:
+  frontend: 6400
+  backend_gateway: 6401
+  services_start: 6402
+
+hosts:
+  frontend: 127.0.0.1
+  backend: 127.0.0.1
+
+model_provider:
+  provider: openai-compatible
+  base_url: http://127.0.0.1:11434/v1
+  api_key: replace-me

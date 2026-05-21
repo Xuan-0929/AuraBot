@@ -1,0 +1,64 @@
+{
+  "name": "@aurabot/desktop",
+  "version": "0.1.0",
+  "private": true,
+  "type": "module",
+  "main": "out/main/index.js",
+  "productName": "AuraBot",
+  "scripts": {
+    "dev": "electron-rebuild -f -w better-sqlite3 && electron-vite dev --config electron.vite.config.ts",
+    "build": "tsc -p tsconfig.json --noEmit && electron-vite build --config electron.vite.config.ts",
+    "package:win": "electron-builder --win nsis --x64",
+    "rebuild:node": "pnpm rebuild better-sqlite3",
+    "rebuild:native": "electron-rebuild -f -w better-sqlite3",
+    "typecheck": "tsc -p tsconfig.json --noEmit"
+  },
+  "dependencies": {
+    "@aurabot/core-legacy": "workspace:*",
+    "@aurabot/shared": "workspace:*",
+    "@langchain/openai": "^1.4.5",
+    "better-sqlite3": "^12.9.0",
+    "p-queue": "^9.2.0",
+    "zod": "^4.4.2"
+  },
+  "devDependencies": {
+    "@electron/rebuild": "^4.0.4",
+    "@types/better-sqlite3": "^7.6.13",
+    "@types/node": "^20.19.25",
+    "electron": "^41.5.0",
+    "electron-builder": "^26.0.12",
+    "electron-vite": "^5.0.0",
+    "typescript": "^6.0.3",
+    "vite": "^7.3.2"
+  },
+  "build": {
+    "appId": "com.xuan.aurabot",
+    "productName": "AuraBot",
+    "directories": {
+      "output": "dist"
+    },
+    "files": [
+      "out/**/*",
+      "package.json"
+    ],
+    "asarUnpack": [
+      "node_modules/better-sqlite3/**/*"
+    ],
+    "npmRebuild": true,
+    "win": {
+      "target": [
+        {
+          "target": "nsis",
+          "arch": [
+            "x64"
+          ]
+        }
+      ]
+    },
+    "nsis": {
+      "oneClick": false,
+      "perMachine": false,
+      "allowToChangeInstallationDirectory": true
+    }
+  }
+}
