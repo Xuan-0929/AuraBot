@@ -16,11 +16,11 @@ The current build validates the first useful loop:
 
 Desktop pet:
 
-![AuraBot desktop pet](artifacts/desktop-pet.png)
+![AuraBot desktop pet](assets/desktop-pet.png)
 
 Console window:
 
-![AuraBot console window](artifacts/console-window.png)
+![AuraBot console window](assets/console-window.png)
 
 ## What Works Now
 
