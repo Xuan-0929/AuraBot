@@ -26,7 +26,7 @@ Console window:
 
 | Area | Status |
 | --- | --- |
-| Desktop shell | Electron + Vue + TypeScript + Vite app boots locally from the `app/` workspace. |
+| Desktop shell | Electron + Vue + TypeScript + Vite app boots locally from the `frontend/` directory. |
 | Backend gateway | Python FastAPI gateway exposes local `/health`, `/services`, read-only debug endpoints, and backend-first main chat history/task list reads. |
 | Live2D surface | Official Live2D Hiyori sample model renders in the pet window. |
 | Two-window UX | Small pet window opens or focuses a normal console window from the hover control. |
@@ -47,7 +47,7 @@ Console window:
 
 Requirements:
 
-1. Node.js with Corepack available.
+1. Node.js (v18+) with npm.
 2. Python 3.11+ for the local FastAPI backend gateway.
 3. macOS is the primary development platform; Windows 10/11 x64 is supported for development and installable builds.
 
@@ -55,30 +55,35 @@ Platform status:
 
 | Platform | Status | Packaging |
 | --- | --- | --- |
-| macOS | Primary and regression-protected | `corepack pnpm package:mac` |
-| Windows 10/11 x64 | Supported installable build target | `corepack pnpm package:win` |
+| macOS | Primary and regression-protected | `npm run package:mac` |
+| Windows 10/11 x64 | Supported installable build target | `npm run package:win` |
 
 Install dependencies:
 
 ```bash
-corepack enable
-cd app
-corepack pnpm install
+cd frontend
+npm install
 ```
 
 Run the desktop app in development mode:
 
 ```bash
-cd app
-corepack pnpm dev
+cd frontend
+npm run dev
 ```
 
-`pnpm dev` starts the Python backend gateway and the Electron/Vue desktop app together. During focused development you can also run `corepack pnpm dev:backend`, `corepack pnpm dev:frontend`, or `corepack pnpm dev:desktop` from `app/`.
+`npm run dev` starts the Python backend gateway and the Electron/Vue desktop app together. During focused development you can also run individual processes from `frontend/`:
+
+```bash
+npm run dev:backend    # Python gateway only (port 6401)
+npm run dev:frontend   # Vite renderer only (port 6400)
+npm run dev:desktop    # Electron + renderer
+```
 
 The app should open a small transparent Live2D pet window. The bundled Hiyori model is loaded from:
 
 ```text
-app/frontend/public/assets/live2d/hiyori/Hiyori.model3.json
+frontend/public/assets/live2d/hiyori/Hiyori.model3.json
 ```
 
 Hover the character and click `Console` to open the console window. In the console composer:
@@ -90,7 +95,7 @@ Hover the character and click `Console` to open the console window. In the conso
 Run with clean temporary user data and a small Live2D debug badge:
 
 ```bash
-corepack pnpm dev:clean
+npm run dev:clean
 ```
 
 Clean launches create a temporary user data directory, set `AURABOT_DEBUG_PET=1`, and skip macOS system-level AuraBot config when applicable. Use this mode when checking whether the desktop pet and Live2D model can render without your local API config influencing the run; chat/model features need config before they can answer.
@@ -98,7 +103,7 @@ Clean launches create a temporary user data directory, set `AURABOT_DEBUG_PET=1`
 Run the production build with clean temporary user data:
 
 ```bash
-corepack pnpm start:clean
+npm run start:clean
 ```
 
 ## External Model API
@@ -285,10 +290,10 @@ AURABOT_CODEX_COMMAND=/Applications/Codex.app/Contents/Resources/codex \
 AURABOT_CODEX_WORKDIR=/path/to/AuraBot \
 AURABOT_CODEX_SANDBOX=workspace-write \
 AURABOT_CODEX_APPROVAL_POLICY=never \
-corepack pnpm dev:clean
+npm run dev:clean
 ```
 
-Keep API keys local and out of git. `corepack pnpm dev` reads the normal system-level config above; `corepack pnpm dev:clean` ignores it unless you pass env vars.
+Keep API keys local and out of git. `npm run dev` reads the normal system-level config above; `npm run dev:clean` ignores it unless you pass env vars.
 
 ## Task CLI Runners
 
@@ -322,101 +327,97 @@ On Windows, AuraBot auto-discovers CLI commands from `PATH` using Windows comman
 
 ## Verification Commands
 
+All commands run from the `frontend/` directory:
+
+```bash
+cd frontend
+```
+
 Run all unit and integration tests:
 
 ```bash
-cd app
-corepack pnpm test
+npm test
 ```
 
 Run type checking:
 
 ```bash
-cd app
-corepack pnpm typecheck
+npm run typecheck
 ```
 
 Build the Electron app:
 
 ```bash
-cd app
-corepack pnpm build
+npm run build
 ```
 
 Package the macOS app:
 
 ```bash
-cd app
-corepack pnpm package:mac
+npm run package:mac
 ```
 
 Package the Windows installer on Windows:
 
 ```bash
-cd app
-corepack pnpm package:win
+npm run package:win
 ```
 
 Run end-to-end tests:
 
 ```bash
-cd app
-corepack pnpm test:e2e
+npm run test:e2e
 ```
 
 The last verified local run recorded:
 
 | Check | Result |
 | --- | --- |
-| `corepack pnpm test` | 23 test files, 74 tests passed |
-| `corepack pnpm typecheck` | passed |
-| `corepack pnpm build` | passed |
-| `corepack pnpm test:e2e` | 11 tests passed |
+| `npm test` | 23 test files, 74 tests passed |
+| `npm run typecheck` | passed |
+| `npm run build` | passed |
+| `npm run test:e2e` | 11 tests passed |
 | Live2D cold-start check | `dev:clean` renders the Hiyori model with `renderState=ready` and `motionGroup=Idle` |
 
 ## Project Layout
 
 ```text
-app/
-  backend/
-    app/gateway/             # FastAPI gateway, health, and service discovery
-    app/services/_template/  # feature service template for ports 6402+
-    pyproject.toml           # Python backend dependencies
-  desktop/
-    src/main/                # Electron app bootstrap, windows, IPC handlers
-    src/preload/             # safe renderer API bridge
-    electron.vite.config.ts  # Electron build config using the Vue frontend root
-  frontend/
-    public/assets/live2d/    # bundled Live2D sample model
-    src/
-      App.vue                # pet/console/settings surface switch
-      app/store.ts           # Pinia state and preload API calls
-      features/
-        pet-vue/             # desktop pet surface
-        live2d/              # Pixi + Live2D renderer
-        console/             # full conversation window
-        chat/                # composer and message list
-        settings/            # settings center and debug panels
-        tasks/               # task status strip
-        status/              # agent status indicator
-  packages/
-    core-legacy/             # current TS business core: chat, memory, tasks, storage
-    shared/                  # IPC/backend contracts, constants, and Zod schemas
-  configs/                   # Vitest and Playwright configs
+frontend/                        # Electron + Vue desktop app (npm)
+  package.json                   # single package, npm managed
+  electron.vite.config.ts        # unified main/preload/renderer build
+  tsconfig.json                  # unified TypeScript config
+  index.html                     # Vite renderer entry
+  public/assets/live2d/          # bundled Live2D sample model
+  src/
+    main/                        # Electron main process bootstrap, windows, IPC
+    preload/                     # safe renderer API bridge
+    core/                        # TS business core: chat, memory, tasks, storage
+    shared/                      # IPC/backend contracts, constants, Zod schemas
+    App.vue                      # pet/console/settings surface switch
+    app/store.ts                 # Pinia state and preload API calls
+    features/
+      pet-vue/                   # desktop pet surface
+      live2d/                    # Pixi + Live2D renderer
+      console/                   # full conversation window
+      chat/                      # composer and message list
+      settings/                  # settings center and debug panels
+      tasks/                     # task status strip
+      status/                    # agent status indicator
+  configs/                       # Vitest and Playwright configs
+  scripts/                       # dev.mjs, package-macos.mjs, run-clean.mjs
   tests/
     unit/
     integration/
     e2e/
-docs/
-  PRD-v1.md
-  TODO.md
-  TS.md
-  aurabot-development-status.md
-  memory/
-    aurabot-memory-structure.md
-    open-source-graph-memory-roadmap.md
-    memory-pipeline-analysis.html
-    memory-system-and-roadmap.html
+
+backend/                         # Python FastAPI microservices
+  app/gateway/                   # gateway, health, service discovery
+  app/services/_template/        # feature service template for ports 6402+
+  pyproject.toml                 # Python dependencies
+  tests/
+
+dev/                             # development docs, PRD, module specs
+docs/                            # project documentation
 ```
 
 ## Live2D Model Loading
@@ -432,7 +433,7 @@ assets/live2d/hiyori/Hiyori.model3.json
 Renderer constant:
 
 ```text
-src/renderer/src/features/pet/DesktopPet.tsx
+frontend/src/features/pet-vue/
 ```
 
 Current code:
@@ -443,16 +444,16 @@ const MODEL_PATH = "assets/live2d/hiyori/Hiyori.model3.json";
 
 To replace the model:
 
-1. Put the Cubism 4 model folder under `src/renderer/public/assets/live2d/<model-name>/`.
+1. Put the Cubism 4 model folder under `frontend/public/assets/live2d/<model-name>/`.
 2. Keep the model's `*.model3.json`, textures, motions, physics, and expression files in the relative layout expected by that manifest.
-3. Update `MODEL_PATH` in `src/renderer/src/features/pet/DesktopPet.tsx`.
+3. Update `MODEL_PATH` in the Live2D renderer component.
 4. Add or update a `SOURCE.md` in the model folder with source and license notes.
-5. Start with `corepack pnpm dev:clean`; the debug badge should show `ready` when the model loads.
+5. Start with `npm run dev:clean`; the debug badge should show `ready` when the model loads.
 
 Source metadata is kept at:
 
 ```text
-src/renderer/public/assets/live2d/hiyori/SOURCE.md
+frontend/public/assets/live2d/hiyori/SOURCE.md
 ```
 
 The Cubism Core runtime is bundled through `live2dcubismcore@1.0.2`; app startup does not fetch the runtime from a CDN.
@@ -474,10 +475,10 @@ This is still an MVP skeleton, not a production companion:
 Current backend-first reads cover gateway status, service discovery, main chat history, task lists, event logs, memory debug snapshots, and task debug snapshots. The target split is not complete yet:
 
 1. Electron still assembles `getInitialState`; profile, settings, model health, pet/Live2D state, and notification settings still read from TypeScript services or local stores.
-2. Chat sending, memory writes, task creation/control/execution, and proactive triggers still run through Electron + `core-legacy`.
+2. Chat sending, memory writes, task creation/control/execution, and proactive triggers still run through Electron + `src/core`.
 3. The Python backend opens SQLite directly in read-only mode; it does not yet own repositories, migrations, write transactions, auth, or schema-version negotiation.
 4. The service registry exists but has no real `6402+` feature services or lifecycle supervision.
-5. Packaging/runtime supervision for the Python gateway is still pending; `pnpm dev` starts it for development, but production restart/port-recovery behavior is not done.
+5. Packaging/runtime supervision for the Python gateway is still pending; `npm run dev` starts it for development, but production restart/port-recovery behavior is not done.
 
 ## Next Recommended Work
 
@@ -485,7 +486,7 @@ The current priority order is:
 
 1. Live2D desktop-pet behavior layer: tune status motions, add richer expression assets, keep hardening click-through hit testing, and add diagnostics for global cursor tracking.
 2. Real model adapter layer v2: add in-flight interruption, retry/backoff, and a visible model connection status now that streaming replies are wired.
-3. Memory v2: keep expanding realistic multi-turn evaluation fixtures; the app-running follow-up background scheduler plus desktop-pet bubble path is wired in, Memory Debug shows the latest recall trace, and `corepack pnpm eval:memory` runs the fixed recall fixture.
+3. Memory v2: keep expanding realistic multi-turn evaluation fixtures; the app-running follow-up background scheduler plus desktop-pet bubble path is wired in, Memory Debug shows the latest recall trace, and `npm run eval:memory` runs the fixed recall fixture.
 4. Task executor v2: add real task types, artifact handling, tool execution, and cancellation signals while keeping main chat as the primary control plane.
 5. Main-thread task control v2: extend the current hint-based router with richer references like "第一个", "刚才那个", and task aliases.
 
