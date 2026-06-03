@@ -14,12 +14,10 @@
     "noEmit": true,
     "skipLibCheck": true,
     "types": ["node", "vitest/globals"],
-    "ignoreDeprecations": "6.0",
-    "baseUrl": ".",
     "paths": {
-      "@shared/*": ["src/shared/*"],
-      "@core/*": ["src/core/*"],
-      "@renderer/*": ["src/*"]
+      "@shared/*": ["./src/shared/*"],
+      "@core/*": ["./src/core/*"],
+      "@renderer/*": ["./src/*"]
     }
   },
   "include": [
