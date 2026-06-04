@@ -18,5 +18,6 @@ playwright-report/
 # research repos
 airi/
 deer-flow/
+hermes-agent/
 
 .pnpm-store
