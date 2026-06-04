@@ -20,4 +20,11 @@ airi/
 deer-flow/
 hermes-agent/
 
-.pnpm-store
+
+# Python
+__pycache__/
+
+
+# config & env
+.env
+config.yaml

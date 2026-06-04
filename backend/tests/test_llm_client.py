@@ -64,10 +64,10 @@ class LLMClientTests(unittest.TestCase):
             base_url="https://api.example.com/v1",
             api_key="test-key",
             model="test-model",
-            stream=False,
         )
+        messages = [{"role": "user", "content": "hello"}]
 
-        result = client.invoke([{"role": "user", "content": "hello"}])
+        result = client.invoke(messages)
 
         self.assertEqual(result, "hello from model")
         self.assertFalse(hasattr(client, "complete"))
@@ -77,10 +77,10 @@ class LLMClientTests(unittest.TestCase):
         self.assertEqual(request["headers"]["Authorization"], "Bearer test-key")
         body = json.loads(request["body"].decode("utf-8"))
         self.assertEqual(body["model"], "test-model")
-        self.assertEqual(body["messages"], [{"role": "user", "content": "hello"}])
+        self.assertEqual(body["messages"], messages)
         self.assertNotIn("stream", body)
 
-    def test_streaming_invoke_posts_streaming_request_and_returns_content(self):
+    def test_stream_posts_streaming_request_and_yields_deltas(self):
         client = FakeLLMClient(
             [
                 b'data: {"choices":[{"delta":{"content":"hel"}}]}\n\n',
@@ -90,13 +90,14 @@ class LLMClientTests(unittest.TestCase):
             base_url="https://api.example.com/v1/",
             api_key="test-key",
             model="test-model",
-            stream=True,
         )
+        messages = [{"role": "user", "content": "hello"}]
 
-        result = client.invoke([{"role": "user", "content": "hello"}])
+        result = list(client.stream(messages))
 
-        self.assertEqual(result, "hello")
+        self.assertEqual(result, ["hel", "lo"])
         body = json.loads(client.requests[0]["body"].decode("utf-8"))
+        self.assertEqual(body["messages"], messages)
         self.assertTrue(body["stream"])
 
     def test_raises_when_non_streaming_response_has_no_content(self):
@@ -105,7 +106,6 @@ class LLMClientTests(unittest.TestCase):
             base_url="https://api.example.com/v1",
             api_key="test-key",
             model="test-model",
-            stream=False,
         )
 
         with self.assertRaisesRegex(ValueError, "did not include content"):
@@ -117,11 +117,10 @@ class LLMClientTests(unittest.TestCase):
             base_url="https://api.example.com/v1",
             api_key="test-key",
             model="test-model",
-            stream=True,
         )
 
         with self.assertRaisesRegex(ValueError, "did not include content"):
-            client.invoke([{"role": "user", "content": "hello"}])
+            list(client.stream([{"role": "user", "content": "hello"}]))
 
 
 if __name__ == "__main__":
