@@ -69,7 +69,7 @@ const lastCheckedLabel = computed(() => {
   }
 
   return new Date(store.backendStatus.checkedAt).toLocaleTimeString(
-    store.displayLanguage === "zh" ? "zh-CN" : "en",
+    store.displayLanguage === "zh" ? "zh-CN" : store.displayLanguage === "ja" ? "ja-JP" : "en",
     {
       hour: "2-digit",
       minute: "2-digit",

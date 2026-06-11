@@ -5,7 +5,7 @@ export const DEFAULT_PET_SETTINGS = {
   displayLanguage: "en"
 } as const;
 
-const displayLanguageSchema = z.enum(["en", "zh"]);
+const displayLanguageSchema = z.enum(["en", "zh", "ja"]);
 
 export const petSettingsSchema = z.object({
   clickThroughPet: z.boolean().default(DEFAULT_PET_SETTINGS.clickThroughPet),

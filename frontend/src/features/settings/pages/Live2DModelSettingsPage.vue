@@ -23,7 +23,7 @@
           type="button"
           class="settings-live2d-model-item"
           :data-active="model.id === store.live2dModelState?.currentModelId"
-          :aria-label="`${store.displayLanguage === 'zh' ? '切换到' : 'Switch to'} ${model.displayName} ${store.displayLanguage === 'zh' ? '模型' : 'model'}`"
+          :aria-label="getSwitchModelLabel(model.displayName)"
           @click="void store.setCurrentLive2DModel(model.id)"
         >
           <strong>{{ model.displayName }}</strong>
@@ -46,4 +46,16 @@ const store = useAuraBotStore();
 const currentModel = computed(() =>
   store.live2dModelState?.models.find((model) => model.id === store.live2dModelState?.currentModelId)
 );
+
+function getSwitchModelLabel(modelName: string): string {
+  if (store.displayLanguage === "zh") {
+    return `切换到 ${modelName} 模型`;
+  }
+
+  if (store.displayLanguage === "ja") {
+    return `${modelName} モデルに切り替え`;
+  }
+
+  return `Switch to ${modelName} model`;
+}
 </script>

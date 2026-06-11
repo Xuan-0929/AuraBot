@@ -80,6 +80,25 @@ describe("PetSettingsStore", () => {
     }
   });
 
+  test("persists Japanese as a display language setting", () => {
+    const userDataPath = mkdtempSync(join(tmpdir(), "aurabot-pet-settings-"));
+
+    try {
+      const store = new PetSettingsStore(userDataPath);
+
+      expect(store.update({ displayLanguage: "ja" })).toEqual({
+        clickThroughPet: false,
+        displayLanguage: "ja"
+      });
+
+      const reloadedStore = new PetSettingsStore(userDataPath);
+
+      expect(reloadedStore.get().displayLanguage).toBe("ja");
+    } finally {
+      rmSync(userDataPath, { force: true, recursive: true });
+    }
+  });
+
   test("treats incoming pet settings payloads as patches without restoring defaults", () => {
     const userDataPath = mkdtempSync(join(tmpdir(), "aurabot-pet-settings-"));
 

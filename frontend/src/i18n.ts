@@ -47,6 +47,7 @@ const UI_TEXT = {
     language: "Language",
     english: "English",
     chinese: "中文",
+    japanese: "日本語",
     model: "Model",
     modelSettings: "Model settings",
     modelSettingsHint: "Keep the engines in the back room tidy here; the exact keys and model names still live in config.json.",
@@ -251,6 +252,7 @@ const UI_TEXT = {
     language: "语言",
     english: "English",
     chinese: "中文",
+    japanese: "日本語",
     model: "模型",
     modelSettings: "模型设置",
     modelSettingsHint: "把后台那几盏灯和连线照看好，聊天、记忆和任务就会更稳；更细的线路仍然放在 config.json 里。",
@@ -415,6 +417,221 @@ const UI_TEXT = {
   }
 } as const;
 
+export type UiTextKey = keyof typeof UI_TEXT.en;
+
+const JAPANESE_UI_TEXT: Record<UiTextKey, string> = {
+  ...UI_TEXT.en,
+  appTitle: "AuraBot",
+  consoleTitle: "AuraBot コンソール",
+  consoleDashboardTitle: "Aura ダッシュボード",
+  consoleSubtitle: "きちんと話したいときは、ここでゆっくり話そう。",
+  mainConversation: "メイン会話",
+  conversationMessages: "会話メッセージ",
+  readyWhenYouAre: "ここにいるよ。今日は何から始めようか？",
+  saySomething: "メッセージを入力",
+  send: "送信",
+  attachFile: "添付",
+  removeAttachment: "添付を削除",
+  you: "あなた",
+  aura: "Aura",
+  openFile: "ファイルを開く",
+  showInFolder: "フォルダで表示",
+  settings: "設定",
+  openSettingsMenu: "設定メニューを開く",
+  settingsMenu: "設定メニュー",
+  quickSettings: "クイック設定",
+  openFullSettings: "すべての設定を開く",
+  settingsWindowEyebrow: "Aura の小さな部屋",
+  productSettingsSubtitle: "Aura がそばにいる感じになるよう、この部屋を整えよう。",
+  settingsNavigation: "設定ナビゲーション",
+  settingsContent: "設定内容",
+  backToSettings: "設定に戻る",
+  settingsSidebarHint: "左から場所を選んで、ひとつずつ整えよう。",
+  settingsSectionBasics: "基本",
+  settingsSectionBasicsHint: "言語、通知、日常の既定値。",
+  settingsSectionCompanion: "コンパニオン",
+  settingsSectionCompanionHint: "デスクトップペット、人格、Live2D の存在感。",
+  settingsSectionIntelligence: "知能",
+  settingsSectionIntelligenceHint: "モデルルーティングとメモリ確認。",
+  settingsSectionAutomation: "自動化",
+  settingsSectionAutomationHint: "ローカルタスク補助と実行上限。",
+  general: "一般",
+  generalSettingsHint: "まずは毎日使う基本を扱いやすく整えよう。",
+  petBehavior: "ペットの動き",
+  petBehaviorSettingsHint: "Aura が机のそばにいるときの小さなふるまいを調整します。",
+  language: "言語",
+  english: "English",
+  chinese: "中文",
+  japanese: "日本語",
+  model: "モデル",
+  modelSettings: "モデル設定",
+  modelSettingsHint: "裏側のモデル接続をここで確認します。細かいキーやモデル名は config.json にあります。",
+  configNotLoaded: "設定が読み込まれていません",
+  openConfigFile: "config ファイルを開く",
+  character: "キャラクター",
+  characterSettings: "キャラクター設定",
+  persona: "人格",
+  live2dModel: "Live2D モデル",
+  live2dModelSettingsHint: "Aura がこの部屋でまとう姿を選び、今のモデルを確認します。",
+  notifications: "通知",
+  notificationSettingsHint: "Aura がどんな小さな合図を送ってよいかを選びます。",
+  notificationAppRunningOnlyHint: "現時点では、これらの通知は AuraBot の起動中だけ動作します。",
+  memoryDebugSettingsHint: "Aura の記憶を詳しく確認したいときだけ開くページです。",
+  personaSettingsHint: "Aura の話し方や距離感を整えます。必要なときだけ詳細設定を開いてください。",
+  personaSettingsComingSoon: "人格編集はこのフェーズでここに入ります。",
+  live2dModelSettingsComingSoon: "Live2D モデルのプレビューと切り替えはこのフェーズでここに入ります。",
+  live2dCurrentModel: "現在のモデル",
+  live2dModelPath: "モデルパス",
+  live2dLocalModels: "ローカルモデル",
+  systemNotifications: "システム通知",
+  enableSystemNotifications: "システム通知を有効化",
+  notificationPermission: "権限",
+  notificationPermissionSystemManaged: "システムが管理",
+  notificationPermissionUnsupported: "この環境では未対応",
+  followUpNotifications: "フォローアップ通知",
+  enableFollowUpNotifications: "フォローアップ通知を有効化",
+  timeReminderNotifications: "時刻リマインダータスク",
+  enableTimeReminderNotifications: "時刻リマインダー通知を有効化",
+  idleNudgeNotifications: "待機中の声かけ",
+  enableIdleNudgeNotifications: "待機中の声かけ通知を有効化",
+  personaName: "名前",
+  personaDescription: "説明",
+  personaTone: "口調",
+  personaRelationship: "距離感",
+  personaProactiveLevel: "積極性",
+  personaProactiveLow: "低",
+  personaProactiveBalanced: "標準",
+  personaProactiveHigh: "高",
+  personaPrinciples: "原則",
+  personaTaboos: "避けること",
+  personaReminderStyle: "リマインダーの文体",
+  personaReplyPreference: "返信の好み",
+  openAdvancedPersonaEditing: "詳細な人格編集を開く",
+  closeAdvancedPersonaEditing: "詳細な人格編集を閉じる",
+  savePersonaSettings: "人格設定を保存",
+  clickThroughCharacter: "キャラクターのクリック透過",
+  provider: "プロバイダー",
+  providerOpenAICompatible: "OpenAI 互換",
+  providerLangChainOpenAI: "LangChain OpenAI",
+  modelHealth: "状態",
+  testConnection: "接続テスト",
+  modelStateNotConfigured: "未設定",
+  modelStateConfigured: "設定済み",
+  modelStateTesting: "テスト中",
+  modelStateConnected: "接続済み",
+  modelStateError: "接続失敗",
+  modelStateUsingTestDouble: "テストダブル",
+  modelErrorMissingConfiguration: "モデル設定が不完全です。",
+  modelErrorUnsupportedProvider: "未対応のモデルプロバイダーです。",
+  modelErrorAuthenticationFailed: "API キーが無効、または権限がありません。",
+  modelErrorTimeout: "モデルリクエストがタイムアウトしました。",
+  modelErrorNetwork: "モデルサービスに接続できません。",
+  modelErrorMalformedResponse: "モデル応答の形式が不正です。",
+  modelErrorInvocationFailed: "モデルリクエストに失敗しました。",
+  apiKey: "API キー",
+  apiKeySaved: "API キー保存済み",
+  notSet: "未設定",
+  enabled: "有効",
+  disabled: "無効",
+  chatModel: "チャット",
+  gateModel: "判定",
+  memoryModel: "メモリ",
+  taskCli: "タスク CLI",
+  taskCliSettings: "タスク CLI 設定",
+  taskCliHint: "タスクで使うコマンドライン補助を選びます。",
+  taskCliTimeoutHint: "タスクがよくタイムアウトする場合は、ここで上限を上げてください。",
+  taskCliCommand: "コマンド",
+  taskCliWorkingDirectory: "作業ディレクトリ",
+  taskRunner: "タスク実行器",
+  taskRunnerPriority: "タスク実行器の優先度",
+  taskTimeLimit: "時間上限（分）",
+  taskTimeLimitMinutesAria: "タスク時間上限の分数",
+  proactiveMessages: "自発メッセージ",
+  proactiveMessagesHint: "Aura が軽く声をかけるまでの待ち時間を設定します。",
+  proactiveWaitMinutes: "待機分数",
+  proactiveMessageWaitMinutes: "自発メッセージの待機分数",
+  enable: "有効化",
+  priority: "優先度",
+  petQuickControls: "ペットのクイック操作",
+  dragPet: "ペットをドラッグ",
+  drag: "ドラッグ",
+  startVoiceInput: "音声入力を開始",
+  stopVoiceRecording: "音声録音を停止",
+  voice: "音声",
+  openAuraBotConsole: "AuraBot コンソールを開く",
+  console: "コンソール",
+  openAuraBotSettings: "AuraBot 設定を開く",
+  petQuickChat: "ペットのクイックチャット",
+  petChatPlaceholder: "メイン会話へ送信",
+  sendPetChat: "ペットチャットを送信",
+  openPetQuickChat: "ペットのクイックチャットを開く",
+  petChatCompact: "チャット",
+  petControlDragLabel: "移動",
+  petControlVoiceLabel: "話す",
+  petControlConsoleLabel: "会話",
+  petControlSettingsLabel: "調整",
+  chat: "チャット",
+  petMessage: "ペットメッセージ",
+  desktopLive2DPet: "デスクトップ Live2D ペット",
+  interactWithAuraBot: "AuraBot とやりとり",
+  memoryDebugTools: "メモリデバッグツール",
+  memoryDebug: "メモリデバッグ",
+  backendStatus: "バックエンド状態",
+  backendGateway: "バックエンドゲートウェイ",
+  backendStatusUnknown: "未確認",
+  backendStatusOnline: "オンライン",
+  backendStatusOffline: "オフライン",
+  backendGatewayEndpoint: "ゲートウェイ",
+  backendFrontendEndpoint: "フロントエンド",
+  backendRegisteredServices: "サービス",
+  backendLastChecked: "確認時刻",
+  refresh: "更新",
+  memoryDebugPanel: "メモリデバッグパネル",
+  memoryDebugMetrics: "メモリデバッグ指標",
+  nodes: "ノード",
+  edges: "エッジ",
+  summaries: "要約",
+  events: "イベント",
+  recentEvents: "最近のイベント",
+  noMemorySnapshot: "メモリスナップショットはまだ読み込まれていません。",
+  lastMemoryRecallTrace: "直近のメモリ想起トレース",
+  lastRecall: "直近の想起",
+  seeds: "シード",
+  expanded: "展開",
+  returned: "返却",
+  taskStatus: "タスク状態",
+  taskStickyNotes: "今日のメモ",
+  taskStickyNoteHint: "大事なことはそばに軽く留めておくね。",
+  consoleTaskViewportTitle: "タスクメモ",
+  consoleTaskViewportIdle: "待機中",
+  consoleTaskViewportActive: "稼働中",
+  cancel: "キャンセル",
+  delete: "削除",
+  cancelTask: "タスクをキャンセル",
+  deleteTask: "タスクを削除",
+  detail: "詳細",
+  close: "閉じる",
+  viewTaskDetail: "タスク詳細を見る",
+  closeTaskDetail: "タスク詳細を閉じる",
+  taskDetail: "タスク詳細",
+  taskExecutor: "実行器",
+  taskWorkingDirectory: "作業ディレクトリ",
+  taskSandbox: "サンドボックス",
+  taskDuration: "所要時間",
+  taskRecentError: "最近のエラー",
+  taskInputArtifacts: "入力ファイル",
+  taskNoInputArtifacts: "入力ファイルはありません。",
+  taskArtifacts: "成果物",
+  taskNoArtifacts: "成果物はまだありません。",
+  taskTimeline: "タイムライン"
+};
+
+const UI_TEXT_BY_LANGUAGE: Record<DisplayLanguage, Record<UiTextKey, string>> = {
+  en: UI_TEXT.en,
+  zh: UI_TEXT.zh,
+  ja: JAPANESE_UI_TEXT
+};
+
 const AGENT_STATUS_LABELS: Record<DisplayLanguage, Record<AgentStatus, string>> = {
   en: {
     idle: "idle",
@@ -429,6 +646,13 @@ const AGENT_STATUS_LABELS: Record<DisplayLanguage, Record<AgentStatus, string>> 
     thinking: "判断中",
     typing: "对方正在输入中",
     tasking: "任务中"
+  },
+  ja: {
+    idle: "待機中",
+    listening: "聞き取り中",
+    thinking: "考え中",
+    typing: "入力中",
+    tasking: "タスク中"
   }
 };
 
@@ -448,13 +672,19 @@ const TASK_STATUS_LABELS: Record<DisplayLanguage, Record<Task["status"], string>
     completed: "完成",
     failed: "没跑成",
     interrupted: "已停下"
+  },
+  ja: {
+    queued: "待機中",
+    running: "処理中",
+    waiting: "待機中",
+    completed: "完了",
+    failed: "失敗",
+    interrupted: "停止済み"
   }
 };
 
-export type UiTextKey = keyof typeof UI_TEXT.en;
-
 export function t(displayLanguage: DisplayLanguage | undefined, key: UiTextKey): string {
-  return UI_TEXT[displayLanguage ?? "en"][key];
+  return UI_TEXT_BY_LANGUAGE[displayLanguage ?? "en"][key];
 }
 
 export function agentStatusLabel(displayLanguage: DisplayLanguage | undefined, status: AgentStatus): string {
@@ -468,31 +698,33 @@ export function taskStatusLabel(displayLanguage: DisplayLanguage | undefined, st
 export function taskProgressLabel(displayLanguage: DisplayLanguage | undefined, task: Task): string {
   const language = displayLanguage ?? "en";
 
-  if (language === "zh") {
+  if (language === "zh" || language === "ja") {
     if (task.kind === "time_reminder") {
       if (task.status === "queued" && task.dueAt) {
-        return `会在 ${formatTaskDueTime(task.dueAt, language)} 提醒`;
+        return language === "zh"
+          ? `会在 ${formatTaskDueTime(task.dueAt, language)} 提醒`
+          : `${formatTaskDueTime(task.dueAt, language)} にリマインド`;
       }
 
       if (task.status === "completed") {
-        return "已经提醒过";
+        return language === "zh" ? "已经提醒过" : "リマインド済み";
       }
     }
 
     if (task.status === "queued") {
-      return "还没开始";
+      return language === "zh" ? "还没开始" : "まだ開始していません";
     }
 
     if (task.status === "completed") {
-      return "结果已经准备好";
+      return language === "zh" ? "结果已经准备好" : "結果の準備ができました";
     }
 
     if (task.status === "failed") {
-      return "遇到一点问题";
+      return language === "zh" ? "遇到一点问题" : "少し問題が起きました";
     }
 
     if (task.status === "interrupted") {
-      return "已经停下";
+      return language === "zh" ? "已经停下" : "停止しました";
     }
 
     return cleanTaskProgress(task.latestProgress, language);
@@ -532,21 +764,21 @@ function formatTaskDueTime(value: string, language: DisplayLanguage): string {
     return value;
   }
 
-  return date.toLocaleTimeString(language === "zh" ? "zh-CN" : "en", {
+  return date.toLocaleTimeString(language === "zh" ? "zh-CN" : language === "ja" ? "ja-JP" : "en", {
     hour: "2-digit",
     minute: "2-digit"
   });
 }
 
 function cleanTaskProgress(progress: string, displayLanguage: DisplayLanguage): string {
-  const fallback = displayLanguage === "zh" ? "正在处理" : "Working";
+  const fallback = displayLanguage === "zh" ? "正在处理" : displayLanguage === "ja" ? "処理中" : "Working";
   const cleaned = progress
-    .replace(/^(Codex|Claude Code|Hermes) 子任务会话已建立：.*$/u, displayLanguage === "zh" ? "已经接上任务线程" : "Task thread connected")
-    .replace(/^(Codex|Claude Code|Hermes) 子任务开始处理任务。?$/u, displayLanguage === "zh" ? "正在处理" : "Working")
-    .replace(/^开始调用 (Codex|Claude Code|Hermes) 子任务：.*$/u, displayLanguage === "zh" ? "正在处理" : "Working")
-    .replace(/^(Codex|Claude Code|Hermes) 子任务完成命令：.*$/u, displayLanguage === "zh" ? "刚完成一步处理" : "Completed one step")
-    .replace(/^(Codex|Claude Code|Hermes) 子任务(?:新增|修改|删除)文件：.*$/u, displayLanguage === "zh" ? "正在整理结果文件" : "Preparing result files")
-    .replace(/^(Codex|Claude Code|Hermes) 子任务本轮处理完成，正在收尾。?$/u, displayLanguage === "zh" ? "正在收尾" : "Wrapping up")
+    .replace(/^(Codex|Claude Code|Hermes) 子任务会话已建立：.*$/u, displayLanguage === "zh" ? "已经接上任务线程" : displayLanguage === "ja" ? "タスクスレッドに接続しました" : "Task thread connected")
+    .replace(/^(Codex|Claude Code|Hermes) 子任务开始处理任务。?$/u, displayLanguage === "zh" ? "正在处理" : displayLanguage === "ja" ? "処理中" : "Working")
+    .replace(/^开始调用 (Codex|Claude Code|Hermes) 子任务：.*$/u, displayLanguage === "zh" ? "正在处理" : displayLanguage === "ja" ? "処理中" : "Working")
+    .replace(/^(Codex|Claude Code|Hermes) 子任务完成命令：.*$/u, displayLanguage === "zh" ? "刚完成一步处理" : displayLanguage === "ja" ? "処理を一段階進めました" : "Completed one step")
+    .replace(/^(Codex|Claude Code|Hermes) 子任务(?:新增|修改|删除)文件：.*$/u, displayLanguage === "zh" ? "正在整理结果文件" : displayLanguage === "ja" ? "結果ファイルを整理中" : "Preparing result files")
+    .replace(/^(Codex|Claude Code|Hermes) 子任务本轮处理完成，正在收尾。?$/u, displayLanguage === "zh" ? "正在收尾" : displayLanguage === "ja" ? "仕上げ中" : "Wrapping up")
     .trim();
 
   return cleaned || fallback;

@@ -10,6 +10,7 @@
       >
         <option value="en">{{ t(store.displayLanguage, "english") }}</option>
         <option value="zh">{{ t(store.displayLanguage, "chinese") }}</option>
+        <option value="ja">{{ t(store.displayLanguage, "japanese") }}</option>
       </select>
     </label>
   </section>

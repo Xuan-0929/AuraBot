@@ -87,6 +87,26 @@ function buildSystemNotificationPayload(
     }
   }
 
+  if (displayLanguage === "ja") {
+    switch (kind) {
+      case "memory_follow_up":
+        return {
+          title: "Aura から小さなリマインダー",
+          body: message
+        };
+      case "task_reminder":
+        return {
+          title: "Aura が時間通りに知らせに来ました",
+          body: message
+        };
+      case "proactive_idle":
+        return {
+          title: "Aura がそっと声をかけています",
+          body: message
+        };
+    }
+  }
+
   switch (kind) {
     case "memory_follow_up":
       return {
