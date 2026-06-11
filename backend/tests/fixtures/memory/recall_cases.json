@@ -1,0 +1,58 @@
+{
+  "version": 1,
+  "cases": [
+    {
+      "id": "preference-direct",
+      "memories": [
+        {
+          "content": "用户喜欢热拿铁。",
+          "memory_type": "preference",
+          "metadata": {
+            "entities": ["热拿铁"]
+          }
+        }
+      ],
+      "query": "我喜欢喝什么？",
+      "expected_contains": ["热拿铁"]
+    },
+    {
+      "id": "entity-graph-hop",
+      "memories": [
+        {
+          "content": "用户喜欢热拿铁。",
+          "memory_type": "preference",
+          "metadata": {
+            "entities": ["热拿铁"]
+          }
+        },
+        {
+          "content": "用户明天要去咖啡店和阿杰讨论项目。",
+          "memory_type": "event",
+          "metadata": {
+            "entities": ["咖啡店", "阿杰", "项目"]
+          }
+        }
+      ],
+      "query": "阿杰项目那件事和咖啡有关吗？",
+      "context_hints": {
+        "entities": ["阿杰"]
+      },
+      "expected_contains": ["阿杰", "热拿铁"]
+    },
+    {
+      "id": "forget-excludes-archived",
+      "memories": [
+        {
+          "content": "用户讨厌过甜的咖啡。",
+          "memory_type": "preference",
+          "metadata": {
+            "entities": ["咖啡"]
+          },
+          "forget": true
+        }
+      ],
+      "query": "我讨厌什么咖啡？",
+      "expected_contains": []
+    }
+  ]
+}
