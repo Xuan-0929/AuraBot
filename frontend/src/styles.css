@@ -58,26 +58,26 @@ textarea {
 }
 
 .app-shell-console {
-  --console-bg: #ffffff;
-  --console-bg-elevated: #f5f5f7;
-  --console-surface: rgba(255, 255, 255, 0.72);
-  --console-surface-strong: rgba(255, 255, 255, 0.88);
-  --console-glass: rgba(255, 255, 255, 0.5);
-  --console-glass-strong: rgba(255, 255, 255, 0.66);
-  --console-border: rgba(0, 0, 0, 0.1);
-  --console-border-strong: rgba(0, 0, 0, 0.16);
-  --console-text: #111111;
-  --console-text-muted: rgba(17, 17, 17, 0.56);
-  --console-bubble-assistant: rgba(255, 255, 255, 0.68);
-  --console-bubble-user: #e9e9eb;
-  --console-attachment: rgba(247, 247, 249, 0.82);
-  --console-focus: rgba(0, 122, 255, 0.34);
-  --console-blue: #007aff;
-  --console-green: #34c759;
-  --console-orange: #ff9500;
-  --console-red: #ff3b30;
-  --console-shadow: 0 18px 46px rgba(0, 0, 0, 0.1);
-  --console-shadow-soft: 0 10px 28px rgba(0, 0, 0, 0.08);
+  --console-bg: #f6f1ea;
+  --console-bg-elevated: #ebe2d7;
+  --console-surface: rgba(255, 255, 255, 0.5);
+  --console-surface-strong: rgba(255, 255, 255, 0.68);
+  --console-glass: rgba(255, 255, 255, 0.36);
+  --console-glass-strong: rgba(255, 255, 255, 0.58);
+  --console-border: rgba(91, 68, 52, 0.16);
+  --console-border-strong: rgba(91, 68, 52, 0.28);
+  --console-text: #211b17;
+  --console-text-muted: rgba(33, 27, 23, 0.58);
+  --console-bubble-assistant: rgba(255, 255, 255, 0.64);
+  --console-bubble-user: rgba(224, 212, 198, 0.78);
+  --console-attachment: rgba(248, 241, 233, 0.72);
+  --console-focus: rgba(133, 94, 62, 0.25);
+  --console-blue: #5e7f93;
+  --console-green: #4f8b65;
+  --console-orange: #b2743d;
+  --console-red: #c35f54;
+  --console-shadow: 0 26px 76px rgba(89, 66, 49, 0.18);
+  --console-shadow-soft: 0 16px 44px rgba(89, 66, 49, 0.12);
   color: var(--console-text);
   background: var(--console-bg);
 }
@@ -97,26 +97,26 @@ textarea {
   }
 
   .app-shell-console {
-    --console-bg: #000000;
-    --console-bg-elevated: #1c1c1e;
-    --console-surface: rgba(28, 28, 30, 0.68);
-    --console-surface-strong: rgba(38, 38, 41, 0.84);
-    --console-glass: rgba(44, 44, 46, 0.46);
-    --console-glass-strong: rgba(58, 58, 60, 0.62);
-    --console-border: rgba(255, 255, 255, 0.12);
-    --console-border-strong: rgba(255, 255, 255, 0.2);
-    --console-text: #f5f5f7;
-    --console-text-muted: rgba(245, 245, 247, 0.58);
-    --console-bubble-assistant: rgba(44, 44, 46, 0.72);
-    --console-bubble-user: #2c2c2e;
-    --console-attachment: rgba(44, 44, 46, 0.84);
-    --console-focus: rgba(10, 132, 255, 0.42);
-    --console-blue: #0a84ff;
-    --console-green: #30d158;
-    --console-orange: #ff9f0a;
-    --console-red: #ff453a;
-    --console-shadow: 0 20px 52px rgba(0, 0, 0, 0.46);
-    --console-shadow-soft: 0 10px 32px rgba(0, 0, 0, 0.34);
+    --console-bg: #101215;
+    --console-bg-elevated: #1b1d20;
+    --console-surface: rgba(29, 31, 35, 0.62);
+    --console-surface-strong: rgba(44, 46, 50, 0.76);
+    --console-glass: rgba(45, 48, 53, 0.42);
+    --console-glass-strong: rgba(64, 66, 72, 0.6);
+    --console-border: rgba(255, 244, 231, 0.12);
+    --console-border-strong: rgba(255, 244, 231, 0.22);
+    --console-text: #f6efe6;
+    --console-text-muted: rgba(246, 239, 230, 0.58);
+    --console-bubble-assistant: rgba(43, 45, 50, 0.7);
+    --console-bubble-user: rgba(64, 58, 52, 0.78);
+    --console-attachment: rgba(43, 45, 50, 0.82);
+    --console-focus: rgba(200, 155, 105, 0.32);
+    --console-blue: #92adc0;
+    --console-green: #83b58e;
+    --console-orange: #c89b69;
+    --console-red: #d27a6f;
+    --console-shadow: 0 26px 72px rgba(0, 0, 0, 0.44);
+    --console-shadow-soft: 0 14px 40px rgba(0, 0, 0, 0.32);
   }
 }
 
@@ -2014,10 +2014,12 @@ textarea {
 }
 
 .console-window {
-  padding: 18px 20px 16px;
+  padding: clamp(16px, 2.1vw, 28px);
   color: var(--console-text);
   background:
-    linear-gradient(180deg, var(--console-bg) 0%, var(--console-bg-elevated) 100%);
+    radial-gradient(ellipse at 18% -12%, rgba(255, 250, 241, 0.9), transparent 44%),
+    radial-gradient(ellipse at 92% 4%, rgba(179, 145, 111, 0.2), transparent 36%),
+    linear-gradient(145deg, var(--console-bg) 0%, var(--console-bg-elevated) 100%);
 }
 
 .console-window::before {
@@ -2026,9 +2028,21 @@ textarea {
   inset: 0;
   pointer-events: none;
   background:
-    linear-gradient(180deg, rgba(255, 255, 255, 0.28), transparent 28%),
-    radial-gradient(circle at 50% -18%, rgba(255, 255, 255, 0.42), transparent 32%);
-  opacity: 0.55;
+    linear-gradient(115deg, rgba(255, 255, 255, 0.54), transparent 31%, rgba(255, 255, 255, 0.12) 64%, transparent),
+    repeating-linear-gradient(90deg, rgba(91, 68, 52, 0.04) 0 1px, transparent 1px 72px),
+    repeating-linear-gradient(0deg, rgba(91, 68, 52, 0.03) 0 1px, transparent 1px 72px);
+  mask-image: linear-gradient(180deg, #000 0%, rgba(0, 0, 0, 0.84) 62%, transparent 100%);
+  opacity: 0.7;
+}
+
+.console-window::after {
+  content: "";
+  position: absolute;
+  inset: auto 0 0;
+  height: 38%;
+  pointer-events: none;
+  background: linear-gradient(180deg, transparent, rgba(111, 86, 66, 0.1));
+  opacity: 0.7;
 }
 
 .console-window > * {
@@ -2048,13 +2062,20 @@ textarea {
 .console-glass-panel {
   border: 1px solid var(--console-border);
   border-radius: 24px;
-  background: var(--console-glass);
-  box-shadow: var(--console-shadow-soft);
-  backdrop-filter: blur(24px) saturate(135%);
+  background:
+    linear-gradient(180deg, rgba(255, 255, 255, 0.16), transparent 42%),
+    var(--console-glass);
+  box-shadow:
+    inset 0 1px 0 rgba(255, 255, 255, 0.26),
+    inset 0 -1px 0 rgba(91, 68, 52, 0.08),
+    var(--console-shadow-soft);
+  backdrop-filter: blur(30px) saturate(150%);
 }
 
 .console-glass-panel-control {
-  background: var(--console-glass-strong);
+  background:
+    linear-gradient(180deg, rgba(255, 255, 255, 0.2), transparent 44%),
+    var(--console-glass-strong);
 }
 
 .console-glass-panel-pill {
@@ -2078,60 +2099,76 @@ textarea {
 }
 
 .console-header {
-  grid-template-columns: minmax(260px, 0.82fr) minmax(340px, 1.18fr);
-  gap: 12px;
-  margin-bottom: 12px;
-  min-height: 132px;
+  grid-template-columns: minmax(320px, 0.9fr) minmax(420px, 1.1fr);
+  gap: clamp(14px, 1.8vw, 24px);
+  margin-bottom: clamp(14px, 1.6vw, 22px);
+  min-height: 148px;
 }
 
 .console-task-settings-button {
   border-color: var(--console-border);
-  background: var(--console-glass);
+  background:
+    linear-gradient(180deg, rgba(255, 255, 255, 0.2), transparent),
+    var(--console-glass);
   color: var(--console-text);
   box-shadow: var(--console-shadow-soft);
   backdrop-filter: blur(22px) saturate(135%);
+  transition:
+    transform 180ms ease,
+    border-color 180ms ease,
+    background 180ms ease,
+    box-shadow 180ms ease;
 }
 
 .console-task-settings-button:hover {
   border-color: var(--console-border-strong);
   background: var(--console-surface-strong);
-  box-shadow: var(--console-shadow-soft);
+  box-shadow: var(--console-shadow);
+  transform: translateY(-1px);
+}
+
+.console-task-settings-button:active {
+  transform: translateY(0) scale(0.98);
 }
 
 .console-header-copy {
   justify-content: center;
-  padding: 2px 0;
+  padding: 8px 0 10px;
 }
 
 .console-header-title-row {
-  gap: 10px;
-  margin-bottom: 7px;
+  align-items: center;
+  gap: 12px;
+  margin-bottom: 10px;
 }
 
 .console-header h1 {
   color: var(--console-text);
-  font-family: -apple-system, BlinkMacSystemFont, "SF Pro Display", "SF Pro Text", "PingFang SC", sans-serif;
-  font-size: 25px;
-  font-weight: 700;
-  line-height: 1.12;
+  font-family: "Avenir Next", "SF Pro Display", "PingFang SC", "Hiragino Sans GB", sans-serif;
+  font-size: clamp(30px, 3.2vw, 46px);
+  font-weight: 760;
+  line-height: 0.98;
+  text-wrap: balance;
 }
 
 .console-header p {
-  max-width: 520px;
+  max-width: 58ch;
   color: var(--console-text-muted);
-  font-size: 13px;
-  line-height: 1.45;
+  font-size: 14px;
+  line-height: 1.62;
+  text-wrap: pretty;
 }
 
 .console-window .status-bar {
   min-height: 30px;
-  padding: 5px 11px;
+  padding: 5px 12px;
   border: none;
   background: transparent;
   color: var(--console-text);
   box-shadow: none;
   font-size: 12px;
-  font-weight: 600;
+  font-weight: 680;
+  font-variant-numeric: tabular-nums;
 }
 
 .console-window .status-dot {
@@ -2149,23 +2186,24 @@ textarea {
 }
 
 .console-task-sticky-layer {
-  gap: 7px;
+  gap: 9px;
 }
 
 .console-task-panel-meta {
-  padding: 0 5px;
+  padding: 0 6px;
 }
 
 .console-task-panel-meta strong {
   color: var(--console-text);
-  font-size: 14px;
-  font-weight: 700;
+  font-size: 15px;
+  font-weight: 760;
+  text-wrap: balance;
 }
 
 .console-task-panel-meta span {
   color: var(--console-text-muted);
   font-size: 12px;
-  font-weight: 600;
+  font-weight: 620;
 }
 
 .console-task-viewport {
@@ -2178,36 +2216,79 @@ textarea {
   backdrop-filter: none;
 }
 
+.console-task-viewport-empty {
+  position: relative;
+  height: 100%;
+  overflow: hidden;
+  border-radius: 18px;
+}
+
+.console-task-viewport-empty::before,
+.console-task-viewport-empty::after {
+  content: "";
+  position: absolute;
+  left: 12px;
+  right: 12px;
+  height: 1px;
+  background: linear-gradient(90deg, transparent, var(--console-border-strong), transparent);
+  opacity: 0.46;
+}
+
+.console-task-viewport-empty::before {
+  top: 34%;
+}
+
+.console-task-viewport-empty::after {
+  top: 64%;
+  opacity: 0.28;
+}
+
 .console-task-viewport-list {
   scrollbar-width: thin;
   scrollbar-color: var(--console-border-strong) transparent;
 }
 
 .console-window .task-sticky-notes-console {
-  gap: 8px;
+  gap: 10px;
 }
 
 .console-window .task-sticky-notes-console .task-sticky-note {
-  width: 142px;
+  width: 152px;
   height: 100%;
-  padding: 9px 10px;
+  padding: 10px 11px;
   border: 1px solid var(--console-border);
-  border-radius: 16px;
-  background: var(--console-surface-strong);
-  box-shadow: none;
-  backdrop-filter: blur(18px) saturate(135%);
+  border-radius: 18px;
+  background:
+    linear-gradient(160deg, rgba(255, 255, 255, 0.2), transparent 42%),
+    var(--console-surface-strong);
+  box-shadow:
+    inset 0 1px 0 rgba(255, 255, 255, 0.18),
+    0 12px 28px rgba(89, 66, 49, 0.08);
+  backdrop-filter: blur(22px) saturate(145%);
+  transition:
+    transform 220ms cubic-bezier(0.2, 0.8, 0.2, 1),
+    border-color 220ms ease,
+    box-shadow 220ms ease;
+}
+
+.console-window .task-sticky-notes-console .task-sticky-note:hover {
+  border-color: var(--console-border-strong);
+  box-shadow:
+    inset 0 1px 0 rgba(255, 255, 255, 0.22),
+    0 18px 36px rgba(89, 66, 49, 0.14);
+  transform: translateY(-2px);
 }
 
 .console-window .task-sticky-notes-console .task-sticky-note strong {
   color: var(--console-text);
-  font-size: 11px;
-  font-weight: 650;
+  font-size: 12px;
+  font-weight: 720;
 }
 
 .console-window .task-sticky-notes-console .task-sticky-note span {
   color: var(--console-text-muted);
-  font-size: 9px;
-  font-weight: 500;
+  font-size: 10px;
+  font-weight: 560;
 }
 
 .console-window .task-sticky-notes-console .task-sticky-note-action {
@@ -2232,13 +2313,17 @@ textarea {
 }
 
 .console-chat {
-  gap: 13px;
-  padding: 16px;
+  gap: 14px;
+  padding: clamp(14px, 1.7vw, 22px);
   border: 1px solid var(--console-border);
-  border-radius: 28px;
-  background: var(--console-surface);
-  box-shadow: var(--console-shadow);
-  backdrop-filter: blur(24px) saturate(140%);
+  border-radius: 30px;
+  background:
+    linear-gradient(180deg, rgba(255, 255, 255, 0.2), transparent 38%),
+    linear-gradient(135deg, var(--console-surface), rgba(255, 255, 255, 0.28));
+  box-shadow:
+    inset 0 1px 0 rgba(255, 255, 255, 0.22),
+    var(--console-shadow);
+  backdrop-filter: blur(30px) saturate(150%);
 }
 
 .task-detail-panel {
@@ -2250,11 +2335,15 @@ textarea {
   min-height: 0;
   padding: 16px;
   border: 1px solid var(--console-border);
-  border-radius: 28px;
-  background: var(--console-surface);
+  border-radius: 30px;
+  background:
+    linear-gradient(180deg, rgba(255, 255, 255, 0.16), transparent 36%),
+    var(--console-surface);
   color: var(--console-text);
-  box-shadow: var(--console-shadow);
-  backdrop-filter: blur(24px) saturate(140%);
+  box-shadow:
+    inset 0 1px 0 rgba(255, 255, 255, 0.2),
+    var(--console-shadow);
+  backdrop-filter: blur(30px) saturate(150%);
 }
 
 .task-detail-header {
@@ -2421,8 +2510,8 @@ textarea {
 }
 
 .console-window .message-list {
-  gap: 10px;
-  padding-right: 6px;
+  gap: 12px;
+  padding: 4px 7px 4px 2px;
   scrollbar-width: thin;
   scrollbar-color: var(--console-border-strong) transparent;
 }
@@ -2433,20 +2522,28 @@ textarea {
 }
 
 .console-window .message {
-  max-width: min(660px, 82%);
-  padding: 11px 14px;
+  max-width: min(690px, 82%);
+  padding: 12px 15px;
   border: 1px solid var(--console-border);
-  border-radius: 19px;
-  background: var(--console-bubble-assistant);
+  border-radius: 20px 20px 20px 8px;
+  background:
+    linear-gradient(160deg, rgba(255, 255, 255, 0.18), transparent 44%),
+    var(--console-bubble-assistant);
   color: var(--console-text);
-  box-shadow: 0 6px 18px rgba(0, 0, 0, 0.06);
-  backdrop-filter: blur(18px) saturate(130%);
+  box-shadow:
+    inset 0 1px 0 rgba(255, 255, 255, 0.18),
+    0 12px 26px rgba(89, 66, 49, 0.08);
+  backdrop-filter: blur(22px) saturate(142%);
+  animation: consoleMessageIn 260ms ease both;
 }
 
 .console-window .message-user {
   align-self: flex-end;
   border-color: var(--console-border);
-  background: var(--console-bubble-user);
+  border-radius: 20px 20px 8px 20px;
+  background:
+    linear-gradient(145deg, rgba(255, 255, 255, 0.15), transparent 46%),
+    var(--console-bubble-user);
 }
 
 .console-window .message-assistant {
@@ -2454,23 +2551,26 @@ textarea {
 }
 
 .console-window .message-role {
-  margin-bottom: 5px;
+  margin-bottom: 6px;
   color: var(--console-text-muted);
-  font-size: 10px;
-  font-weight: 650;
+  font-size: 10.5px;
+  font-weight: 700;
   letter-spacing: 0;
   text-transform: none;
 }
 
 .console-window .message p {
-  font-size: 13px;
-  line-height: 1.5;
+  font-size: 13.5px;
+  line-height: 1.58;
+  text-wrap: pretty;
 }
 
 .console-window .message-attachment {
   border: 1px solid var(--console-border);
   border-radius: 12px;
-  background: var(--console-attachment);
+  background:
+    linear-gradient(180deg, rgba(255, 255, 255, 0.12), transparent),
+    var(--console-attachment);
 }
 
 .console-window .message-attachment-name {
@@ -2495,30 +2595,50 @@ textarea {
 }
 
 .console-window .empty-state {
+  position: relative;
+  overflow: hidden;
+  max-width: min(420px, 88%);
+  padding: 24px 26px;
   border: 1px solid var(--console-border);
-  border-radius: 22px;
-  background: var(--console-surface-strong);
+  border-radius: 26px;
+  background:
+    linear-gradient(150deg, rgba(255, 255, 255, 0.22), transparent 40%),
+    var(--console-surface-strong);
   color: var(--console-text);
-  box-shadow: var(--console-shadow-soft);
-  backdrop-filter: blur(20px) saturate(135%);
+  box-shadow:
+    inset 0 1px 0 rgba(255, 255, 255, 0.24),
+    var(--console-shadow-soft);
+  backdrop-filter: blur(26px) saturate(145%);
+}
+
+.console-window .empty-state::before {
+  content: "";
+  position: absolute;
+  inset: 0;
+  background: linear-gradient(110deg, transparent, rgba(255, 255, 255, 0.22), transparent);
+  transform: translateX(-100%);
+  animation: consoleEmptySheen 4.8s ease-in-out infinite;
 }
 
 .console-window .empty-state-kicker {
+  position: relative;
   color: var(--console-text-muted);
-  font-size: 11px;
-  font-weight: 650;
+  font-size: 12px;
+  font-weight: 720;
   letter-spacing: 0;
   text-transform: none;
 }
 
 .console-window .empty-state p {
+  position: relative;
   color: var(--console-text);
+  font-size: 14px;
 }
 
 .console-window .composer {
   min-height: 78px;
   gap: 10px;
-  padding: 11px;
+  padding: 12px;
   border: none;
   border-radius: 24px;
   background: transparent;
@@ -2531,7 +2651,9 @@ textarea {
 
 .console-window .composer-attachment {
   border-color: var(--console-border);
-  background: var(--console-surface);
+  background:
+    linear-gradient(180deg, rgba(255, 255, 255, 0.12), transparent),
+    var(--console-surface);
 }
 
 .console-window .composer-attachment-name {
@@ -2552,15 +2674,23 @@ textarea {
 }
 
 .console-window .composer textarea {
-  min-height: 52px;
+  min-height: 54px;
   border: 1px solid var(--console-border);
-  border-radius: 18px;
-  padding: 12px 13px;
-  background: var(--console-surface-strong);
+  border-radius: 20px;
+  padding: 13px 14px;
+  background:
+    linear-gradient(180deg, rgba(255, 255, 255, 0.16), transparent 45%),
+    var(--console-surface-strong);
   color: var(--console-text);
-  font-size: 13px;
-  line-height: 1.45;
-  box-shadow: inset 0 1px 0 rgba(255, 255, 255, 0.12);
+  font-size: 13.5px;
+  line-height: 1.5;
+  box-shadow:
+    inset 0 1px 0 rgba(255, 255, 255, 0.18),
+    inset 0 0 0 1px rgba(255, 255, 255, 0.03);
+  transition:
+    border-color 180ms ease,
+    box-shadow 180ms ease,
+    background 180ms ease;
 }
 
 .console-window .composer textarea::placeholder {
@@ -2574,20 +2704,33 @@ textarea {
 
 .console-window .composer button {
   align-self: end;
-  height: 42px;
-  min-width: 76px;
+  height: 44px;
+  min-width: 78px;
   border: 1px solid var(--console-border);
   border-radius: 999px;
-  background: var(--console-surface-strong);
+  background:
+    linear-gradient(180deg, rgba(255, 255, 255, 0.18), transparent 44%),
+    var(--console-surface-strong);
   color: var(--console-blue);
   font-size: 13px;
-  font-weight: 700;
-  box-shadow: none;
+  font-weight: 760;
+  box-shadow: 0 10px 24px rgba(89, 66, 49, 0.08);
+  transition:
+    transform 180ms ease,
+    border-color 180ms ease,
+    background 180ms ease,
+    box-shadow 180ms ease;
 }
 
 .console-window .composer button:not(:disabled):hover {
   border-color: var(--console-border-strong);
   background: var(--console-glass-strong);
+  box-shadow: 0 14px 30px rgba(89, 66, 49, 0.12);
+  transform: translateY(-1px);
+}
+
+.console-window .composer button:not(:disabled):active {
+  transform: translateY(0) scale(0.98);
 }
 
 .console-window .composer button:disabled {
@@ -2627,15 +2770,23 @@ textarea {
 @media (prefers-color-scheme: dark) {
   .console-window::before {
     background:
-      linear-gradient(180deg, rgba(255, 255, 255, 0.08), transparent 24%),
-      radial-gradient(circle at 50% -18%, rgba(255, 255, 255, 0.1), transparent 32%);
+      linear-gradient(115deg, rgba(255, 244, 231, 0.08), transparent 31%, rgba(255, 244, 231, 0.05) 64%, transparent),
+      repeating-linear-gradient(90deg, rgba(255, 244, 231, 0.035) 0 1px, transparent 1px 72px),
+      repeating-linear-gradient(0deg, rgba(255, 244, 231, 0.025) 0 1px, transparent 1px 72px);
     opacity: 1;
+  }
+
+  .console-window::after {
+    background: linear-gradient(180deg, transparent, rgba(0, 0, 0, 0.24));
   }
 }
 
 @media (prefers-reduced-motion: reduce) {
   .console-window .composer button,
-  .console-window .task-sticky-note-action {
+  .console-window .task-sticky-note-action,
+  .console-window .message,
+  .console-window .empty-state::before {
+    animation: none !important;
     transition: none !important;
   }
 }
@@ -2677,6 +2828,28 @@ textarea {
 
   .console-window .message {
     max-width: min(620px, 88%);
+  }
+}
+
+@keyframes consoleMessageIn {
+  from {
+    opacity: 0;
+    transform: translateY(8px) scale(0.985);
+  }
+  to {
+    opacity: 1;
+    transform: translateY(0) scale(1);
+  }
+}
+
+@keyframes consoleEmptySheen {
+  0%,
+  44% {
+    transform: translateX(-100%);
+  }
+  64%,
+  100% {
+    transform: translateX(100%);
   }
 }
 
