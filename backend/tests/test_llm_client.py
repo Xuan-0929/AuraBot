@@ -46,11 +46,44 @@ class FakeLLMClient(LLMClient):
         return FakeResponse(self.response)
 
 
-class LLMClientTests(unittest.TestCase):
+class LLMClientTests(unittest.IsolatedAsyncioTestCase):
+    async def _collect_stream(self, stream):
+        chunks = []
+
+        async for chunk in stream:
+            chunks.append(chunk)
+
+        return chunks
+
     def test_exports_llm_client_from_agent_package(self):
         self.assertIs(ExportedLLMClient, LLMClient)
 
-    def test_invoke_posts_openai_compatible_non_streaming_request(self):
+    def test_chunk_invoke_posts_non_streaming_request_and_returns_one_chunk(self):
+        client = FakeLLMClient(
+            {
+                "choices": [
+                    {
+                        "message": {
+                            "content": "single response",
+                        }
+                    }
+                ]
+            },
+            base_url="https://api.example.com/v1",
+            api_key="test-key",
+            model="test-model",
+        )
+        messages = [{"role": "user", "content": "hello"}]
+
+        result = client.chunk_invoke(messages)
+
+        self.assertEqual(result, "single response")
+        self.assertEqual(len(client.requests), 1)
+        body = json.loads(client.requests[0]["body"].decode("utf-8"))
+        self.assertEqual(body["messages"], messages)
+        self.assertNotIn("stream", body)
+
+    async def test_invoke_posts_openai_compatible_non_streaming_request(self):
         client = FakeLLMClient(
             {
                 "choices": [
@@ -67,7 +100,7 @@ class LLMClientTests(unittest.TestCase):
         )
         messages = [{"role": "user", "content": "hello"}]
 
-        result = client.invoke(messages)
+        result = await client.invoke(messages)
 
         self.assertEqual(result, "hello from model")
         self.assertFalse(hasattr(client, "complete"))
@@ -80,7 +113,7 @@ class LLMClientTests(unittest.TestCase):
         self.assertEqual(body["messages"], messages)
         self.assertNotIn("stream", body)
 
-    def test_stream_posts_streaming_request_and_yields_deltas(self):
+    async def test_stream_posts_streaming_request_and_yields_deltas(self):
         client = FakeLLMClient(
             [
                 b'data: {"choices":[{"delta":{"content":"hel"}}]}\n\n',
@@ -93,14 +126,14 @@ class LLMClientTests(unittest.TestCase):
         )
         messages = [{"role": "user", "content": "hello"}]
 
-        result = list(client.stream(messages))
+        result = await self._collect_stream(client.stream(messages))
 
         self.assertEqual(result, ["hel", "lo"])
         body = json.loads(client.requests[0]["body"].decode("utf-8"))
         self.assertEqual(body["messages"], messages)
         self.assertTrue(body["stream"])
 
-    def test_raises_when_non_streaming_response_has_no_content(self):
+    async def test_raises_when_non_streaming_response_has_no_content(self):
         client = FakeLLMClient(
             {"choices": [{"message": {"content": ""}}]},
             base_url="https://api.example.com/v1",
@@ -109,9 +142,9 @@ class LLMClientTests(unittest.TestCase):
         )
 
         with self.assertRaisesRegex(ValueError, "did not include content"):
-            client.invoke([{"role": "user", "content": "hello"}])
+            await client.invoke([{"role": "user", "content": "hello"}])
 
-    def test_raises_when_streaming_response_has_no_content(self):
+    async def test_raises_when_streaming_response_has_no_content(self):
         client = FakeLLMClient(
             [b"data: [DONE]\n\n"],
             base_url="https://api.example.com/v1",
@@ -120,7 +153,9 @@ class LLMClientTests(unittest.TestCase):
         )
 
         with self.assertRaisesRegex(ValueError, "did not include content"):
-            list(client.stream([{"role": "user", "content": "hello"}]))
+            await self._collect_stream(
+                client.stream([{"role": "user", "content": "hello"}])
+            )
 
 
 if __name__ == "__main__":

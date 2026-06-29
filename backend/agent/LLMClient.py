@@ -1,5 +1,5 @@
 import json
-from collections.abc import Iterable
+from collections.abc import AsyncIterator, Iterable
 from typing import Any
 from urllib.error import HTTPError
 from urllib.parse import urljoin
@@ -24,17 +24,24 @@ class LLMClient:
         self.temperature = temperature
         self.timeout = timeout
 
-    def invoke(self, messages: list[Message]) -> str:
+    def chunk_invoke(self, messages: list[Message]) -> str:
         response = self._post(self._build_body(messages))
 
         with response:
             return self._extract_content(json.loads(response.read().decode("utf-8")))
 
-    def stream(self, messages: list[Message]) -> Iterable[str]:
+    async def invoke(self, messages: list[Message]) -> str:
+        return self.chunk_invoke(messages)
+
+    async def aysnc_invoke(self, messages: list[Message]) -> str:
+        return self.chunk_invoke(messages)
+
+    async def stream(self, messages: list[Message]) -> AsyncIterator[str]:
         response = self._post(self._build_body(messages, stream=True))
 
         with response:
-            yield from self._iter_stream(response)
+            for delta in self._iter_stream(response):
+                yield delta
 
     def _build_body(self, messages: list[Message], stream: bool = False) -> bytes:
         body = {

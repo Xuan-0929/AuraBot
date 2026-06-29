@@ -1,0 +1,65 @@
+from agent.skill.SkillGroup import SkillGroup
+from agent.tool.ToolGroup import ToolGroup
+
+
+
+"""
+定义任务本体
+"""
+
+from enum import Enum
+
+
+class TaskType(Enum):
+    ReAct = "ReAct"
+    PlanAndSave = "PlanAndSave"
+    Goal = "Goal" #这一版不做它
+
+class TaskState(Enum):
+    Initializing = "Initializing" #任务正在初始化中
+    Pending = "Pending" #任务已经初始化，但是还没有执行
+    Planning = "Planning" #仅P&S任务
+    Running = "Running" #正在调用工具
+    Concluding = "Concluding" #整理这一阶段的产物中
+    Waiting = "Waiting" #等待主Agent的下一步指令或者用户输入
+    Completed = "Completed" #完成了
+    Failed = "Failed" #失败了
+    Interrupted = "Interrupted" #被打断
+
+
+
+class Task:
+    def __init__(self, task_id: int, task_title: str, parent_session_id: str,
+                 task_type: TaskType, task_prompt: str,
+                 workdir: str | None = None, constraints: str | None = None, 
+                 skill_group: SkillGroup | None = None, tool_group: ToolGroup | None = None,
+                 timeout_ms: int = 60000
+                 ):
+        self.task_id = task_id
+        self.task_title = task_title
+        self.parent_session_id = parent_session_id
+        self.task_type = task_type
+        self.task_prompt = task_prompt
+        self.workdir = workdir
+        self.constraints = constraints
+
+        self.skill_group = skill_group
+        self.tool_group = tool_group
+
+        self.messages = []
+        self.checkpoint : str = None
+
+        self.timeout_ms = timeout_ms
+
+        if self.task_type == TaskType.PlanAndSave:
+            self.plan : str = None
+        elif self.task_type == TaskType.Goal:
+            self.goal : str = None
+
+
+        self.current_state : TaskState = TaskState.Pending
+    
+
+    @property
+    def state(self) -> TaskState:
+        return self.current_state
