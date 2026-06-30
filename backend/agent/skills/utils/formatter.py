@@ -18,7 +18,7 @@ def parse_frontmatter(metadata_text: str) -> dict[str, str]:
         if not key:
             continue
 
-        metadata[key] = Skill._unquote_yaml_scalar(value)
+        metadata[key] = unquote_yaml_scalar(value)
 
     return metadata
 
