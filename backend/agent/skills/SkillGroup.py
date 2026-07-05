@@ -29,4 +29,11 @@ class SkillGroup:
         self.skills = [skill for skill in self.skills if skill.name != skill_name]
     
 
-    
+    def list_skills(self) -> list[Skill]:
+        """
+        列出技能组中的所有技能
+
+        Returns:
+            list[Skill]: 技能组中的所有技能对象列表
+        """
+        return self.skills
