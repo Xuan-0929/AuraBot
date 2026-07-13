@@ -1,0 +1,157 @@
+import os
+import tempfile
+import unittest
+from pathlib import Path
+from unittest.mock import patch
+
+from backend.config import (
+    CONFIG_PATH_ENV,
+    Config,
+    ConfigError,
+    ConfigNotInitializedError,
+    PROJECT_ROOT,
+    resolve_config_path,
+)
+
+
+class ConfigTests(unittest.TestCase):
+    def test_loads_complete_yaml_into_memory(self):
+        with tempfile.TemporaryDirectory() as directory:
+            config_path = Path(directory) / "config.yaml"
+            config_path.write_text(
+                """
+ports:
+  frontend: 6400
+  backend_gateway: 6401
+features:
+  enabled: true
+  names:
+    - memory
+    - tasks
+optional_value: null
+""".strip(),
+                encoding="utf-8",
+            )
+
+            runtime_config = Config().initialize(config_path)
+
+        self.assertEqual(runtime_config["ports"]["backend_gateway"], 6401)
+        self.assertEqual(runtime_config.ports["frontend"], 6400)
+        self.assertEqual(runtime_config["features"]["names"], ["memory", "tasks"])
+        self.assertIsNone(runtime_config["optional_value"])
+        self.assertEqual(runtime_config.path, config_path.resolve())
+
+    def test_initialization_is_idempotent_and_keeps_in_memory_values(self):
+        with tempfile.TemporaryDirectory() as directory:
+            config_path = Path(directory) / "config.yaml"
+            config_path.write_text("value: original\n", encoding="utf-8")
+            runtime_config = Config()
+
+            first = runtime_config.initialize(config_path)
+            config_path.write_text("value: changed\n", encoding="utf-8")
+            second = runtime_config.initialize(config_path)
+
+        self.assertIs(first, second)
+        self.assertEqual(runtime_config["value"], "original")
+
+    def test_rejects_reinitialization_from_another_file(self):
+        with tempfile.TemporaryDirectory() as directory:
+            first_path = Path(directory) / "first.yaml"
+            second_path = Path(directory) / "second.yaml"
+            first_path.write_text("value: first\n", encoding="utf-8")
+            second_path.write_text("value: second\n", encoding="utf-8")
+            runtime_config = Config().initialize(first_path)
+
+            with self.assertRaisesRegex(ConfigError, "already initialized"):
+                runtime_config.initialize(second_path)
+
+    def test_reports_missing_and_invalid_configuration(self):
+        runtime_config = Config()
+        with self.assertRaises(ConfigNotInitializedError):
+            _ = runtime_config["missing"]
+
+        with tempfile.TemporaryDirectory() as directory:
+            missing_path = Path(directory) / "missing.yaml"
+            with self.assertRaisesRegex(ConfigError, "config file not found"):
+                runtime_config.initialize(missing_path)
+
+            invalid_path = Path(directory) / "invalid.yaml"
+            invalid_path.write_text("- not\n- a\n- mapping\n", encoding="utf-8")
+            with self.assertRaisesRegex(ConfigError, "root must be a mapping"):
+                Config().initialize(invalid_path)
+
+    def test_environment_path_is_resolved_against_project_root(self):
+        with patch.dict(os.environ, {CONFIG_PATH_ENV: "custom/config.yaml"}):
+            self.assertEqual(
+                resolve_config_path(),
+                (PROJECT_ROOT / "custom/config.yaml").resolve(),
+            )
+
+    def test_expands_environment_references_recursively(self):
+        with tempfile.TemporaryDirectory() as directory:
+            config_path = Path(directory) / "config.yaml"
+            config_path.write_text(
+                """
+chat_model:
+  api_key: "${AURABOT_TEST_API_KEY}"
+  base_url: "https://${AURABOT_TEST_API_HOST:-example.invalid}/v1"
+providers:
+  - token: "Bearer ${AURABOT_TEST_API_KEY}"
+""".strip(),
+                encoding="utf-8",
+            )
+
+            with patch.dict(
+                os.environ,
+                {"AURABOT_TEST_API_KEY": "secret:#value"},
+                clear=False,
+            ):
+                os.environ.pop("AURABOT_TEST_API_HOST", None)
+                runtime_config = Config().initialize(config_path)
+
+        self.assertEqual(runtime_config.chat_model["api_key"], "secret:#value")
+        self.assertEqual(
+            runtime_config.chat_model["base_url"],
+            "https://example.invalid/v1",
+        )
+        self.assertEqual(
+            runtime_config["providers"][0]["token"],
+            "Bearer secret:#value",
+        )
+
+    def test_missing_required_environment_variable_prevents_initialization(self):
+        with tempfile.TemporaryDirectory() as directory:
+            config_path = Path(directory) / "config.yaml"
+            config_path.write_text(
+                'api_key: "${AURABOT_REQUIRED_TEST_API_KEY}"\n',
+                encoding="utf-8",
+            )
+
+            with patch.dict(os.environ, {}, clear=False):
+                os.environ.pop("AURABOT_REQUIRED_TEST_API_KEY", None)
+                with self.assertRaisesRegex(
+                    ConfigError,
+                    "AURABOT_REQUIRED_TEST_API_KEY",
+                ):
+                    runtime_config = Config()
+                    runtime_config.initialize(config_path)
+
+        self.assertFalse(runtime_config.initialized)
+
+    def test_project_example_reads_each_model_api_key_from_environment(self):
+        environment = {
+            "AURABOT_CHAT_MODEL_API_KEY": "chat-secret",
+            "AURABOT_GATEWAY_MODEL_API_KEY": "gateway-secret",
+            "AURABOT_TASK_MODEL_API_KEY": "task-secret",
+        }
+
+        with patch.dict(os.environ, environment, clear=False):
+            runtime_config = Config().initialize(PROJECT_ROOT / "config.example.yaml")
+
+        self.assertEqual(runtime_config.chat_model["api_key"], "chat-secret")
+        self.assertEqual(runtime_config.gateway_model["api_key"], "gateway-secret")
+        self.assertEqual(runtime_config.task_model["api_key"], "task-secret")
+
+
+if __name__ == "__main__":
+    unittest.main()

@@ -1,0 +1,9 @@
+ports:
+  frontend: 6400
+  backend_gateway: 6401
+  services_start: 6402
+
+chat_model:
+  base_url: https://example.invalid/v1
+  model_name: test-chat-model
+  api_key: test-only

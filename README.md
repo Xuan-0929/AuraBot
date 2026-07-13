@@ -80,6 +80,30 @@ npm run dev:frontend   # Vite renderer only (port 6400)
 npm run dev:desktop    # Electron + renderer
 ```
 
+The Python backend entry point is `backend/main.py`, loaded by Uvicorn as
+`backend.main:app`.
+
+Before importing the API routes, the entry point loads the repository-root
+`config.yaml` into the process-wide `backend.config.config` singleton. Copy
+`config.example.yaml` to `config.yaml` before starting the backend. Backend
+classes can read the same in-memory object with
+`from backend.config import config`. Set `AURABOT_CONFIG_PATH` only when a
+different configuration path is required, such as in tests or deployments.
+
+Model API keys in `config.yaml` use environment references such as
+`${AURABOT_CHAT_MODEL_API_KEY}`. Export the variables before starting AuraBot:
+
+```bash
+export AURABOT_CHAT_MODEL_API_KEY="..."
+export AURABOT_GATEWAY_MODEL_API_KEY="..."
+export AURABOT_TASK_MODEL_API_KEY="..."
+```
+
+Configuration strings support required `${VARIABLE}` references and optional
+`${VARIABLE:-fallback}` references. Missing required variables stop backend
+startup before any API routes are imported, and secret values are never added
+to the error message.
+
 The app should open a small transparent Live2D pet window. The bundled Hiyori model is loaded from:
 
 ```text

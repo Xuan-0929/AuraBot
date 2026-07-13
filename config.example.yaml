@@ -1,19 +1,39 @@
 # AuraBot local configuration example.
 #
 # Copy this file to the runtime configuration location used by your
-# environment, then fill in provider-specific secrets there. Do not put real
-# secrets in this repository.
+# environment, then export the API key environment variables referenced below.
+# Do not put real secrets in this repository.
 
 ports:
   frontend: 6400
   backend_gateway: 6401
   services_start: 6402
 
-hosts:
-  frontend: 127.0.0.1
-  backend: 127.0.0.1
 
-model_provider:
-  provider: openai-compatible
-  base_url: http://127.0.0.1:11434/v1
-  api_key: replace-me
+
+
+
+# -----------------------------------------------------
+# LLM Model Configuration
+# -----------------------------------------------------
+
+chat_model:
+  # The model to use for chat.
+  # Better use a model that is not too large, as it will be used for all chat messages, make fluent responses.
+  base_url: "api.deepseek.com/v1"
+  model_name: "deepseek-v4-flash"
+  api_key: "${AURABOT_CHAT_MODEL_API_KEY}"
+
+gateway_model:
+  # The model to use for the gateway.
+  # Just need to be immediately fast.
+  base_url: "api.deepseek.com/v1"
+  model_name: "deepseek-v4-flash"
+  api_key: "${AURABOT_GATEWAY_MODEL_API_KEY}"
+
+task_model:
+  # The model to use for task execution.
+  # Need to be smart enough to understand the task and execute it correctly.
+  base_url: "api.deepseek.com/v1"
+  model_name: "deepseek-v4-pro"
+  api_key: "${AURABOT_TASK_MODEL_API_KEY}"

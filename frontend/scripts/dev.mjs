@@ -6,8 +6,8 @@ const processes = [
   {
     name: "backend",
     command: python,
-    args: ["-m", "uvicorn", "app.gateway.main:app", "--host", "127.0.0.1", "--port", "6401"],
-    cwd: new URL("../../backend/", import.meta.url)
+    args: ["-m", "uvicorn", "backend.main:app", "--host", "127.0.0.1", "--port", "6401"],
+    cwd: new URL("../../", import.meta.url)
   },
   {
     name: "desktop",

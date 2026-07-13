@@ -1,14 +1,28 @@
 import unittest
 import sqlite3
+import os
 import tempfile
 from pathlib import Path
 
 from fastapi.testclient import TestClient
 
-from app.gateway.main import app, health, services
+os.environ.setdefault(
+    "AURABOT_CONFIG_PATH",
+    str(Path(__file__).parent / "fixtures" / "runtime_config.yaml"),
+)
+
+from backend.config import config as global_config
+from backend.main import app, health, services
 
 
 class GatewayEndpointTests(unittest.TestCase):
+    def test_main_initializes_the_global_config_singleton(self):
+        from backend.main import config as main_config
+
+        self.assertIs(main_config, global_config)
+        self.assertTrue(main_config.initialized)
+        self.assertEqual(main_config["ports"]["backend_gateway"], 6401)
+
     def test_health_reports_gateway_and_frontend(self):
         payload = health()
 

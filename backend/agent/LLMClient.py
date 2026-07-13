@@ -1,14 +1,21 @@
+import asyncio
 import json
 from collections.abc import AsyncIterator, Iterable
 from typing import Any
-from urllib.error import HTTPError
 from urllib.parse import urljoin
-from urllib.request import Request, urlopen
+
+import httpx
 
 Message = dict[str, Any]
 
 
 class LLMClient:
+    """Shared OpenAI-compatible HTTP client for concurrent agent loops.
+
+    Request-specific state stays in local variables, so one instance can be
+    shared by multiple asyncio tasks running on the same event loop.
+    """
+
     def __init__(
         self,
         *,
@@ -17,31 +24,99 @@ class LLMClient:
         model: str,
         temperature: float = 0.2,
         timeout: float | None = 30,
+        max_concurrency: int = 8,
+        http_client: httpx.AsyncClient | None = None,
     ):
+        if max_concurrency < 1:
+            raise ValueError("max_concurrency must be at least 1")
+
         self.base_url = base_url
         self.api_key = api_key
         self.model = model
         self.temperature = temperature
         self.timeout = timeout
+        self.max_concurrency = max_concurrency
+
+        self._semaphore = asyncio.Semaphore(max_concurrency)
+        self._http_client = http_client or httpx.AsyncClient(
+            headers=self._headers(),
+            timeout=timeout,
+        )
 
     def chunk_invoke(self, messages: list[Message]) -> str:
-        response = self._post(self._build_body(messages))
+        """Compatibility API for callers that still require blocking I/O."""
+        try:
+            response = httpx.post(
+                self._chat_completions_url(),
+                headers=self._headers(),
+                content=self._build_body(messages),
+                timeout=self.timeout,
+            )
+            response.raise_for_status()
+        except httpx.HTTPStatusError as exc:
+            raise RuntimeError(
+                f"OpenAI-compatible request failed with status {exc.response.status_code}"
+            ) from exc
 
-        with response:
-            return self._extract_content(json.loads(response.read().decode("utf-8")))
+        return self._extract_content(response.json())
 
     async def invoke(self, messages: list[Message]) -> str:
-        return self.chunk_invoke(messages)
+        async with self._semaphore:
+            response = await self._http_client.post(
+                self._chat_completions_url(),
+                content=self._build_body(messages),
+                headers=self._headers(),
+            )
+            self._raise_for_status(response)
+
+        return self._extract_content(response.json())
 
     async def aysnc_invoke(self, messages: list[Message]) -> str:
-        return self.chunk_invoke(messages)
+        """Backward-compatible alias for the historical misspelled method."""
+        return await self.invoke(messages)
 
     async def stream(self, messages: list[Message]) -> AsyncIterator[str]:
-        response = self._post(self._build_body(messages, stream=True))
+        content = ""
+        buffer = ""
 
-        with response:
-            for delta in self._iter_stream(response):
+        async with self._semaphore:
+            async with self._http_client.stream(
+                "POST",
+                self._chat_completions_url(),
+                content=self._build_body(messages, stream=True),
+                headers=self._headers(),
+            ) as response:
+                self._raise_for_status(response)
+
+                async for chunk in response.aiter_text():
+                    buffer += chunk
+                    parsed = self._consume_sse_buffer(buffer)
+                    buffer = parsed["remaining"]
+
+                    for delta in parsed["deltas"]:
+                        content += delta
+                        yield delta
+
+        if buffer.strip():
+            parsed = self._consume_sse_buffer(f"{buffer}\n\n")
+
+            for delta in parsed["deltas"]:
+                content += delta
                 yield delta
+
+        if not content.strip():
+            raise ValueError(
+                "OpenAI-compatible streaming response did not include content"
+            )
+
+    async def aclose(self) -> None:
+        await self._http_client.aclose()
+
+    async def __aenter__(self) -> "LLMClient":
+        return self
+
+    async def __aexit__(self, exc_type, exc, traceback) -> None:
+        await self.aclose()
 
     def _build_body(self, messages: list[Message], stream: bool = False) -> bytes:
         body = {
@@ -64,19 +139,12 @@ class LLMClient:
     def _chat_completions_url(self) -> str:
         return urljoin(self.base_url.rstrip("/") + "/", "chat/completions")
 
-    def _post(self, body: bytes) -> Any:
-        request = Request(
-            self._chat_completions_url(),
-            data=body,
-            headers=self._headers(),
-            method="POST",
-        )
-
+    def _raise_for_status(self, response: httpx.Response) -> None:
         try:
-            return urlopen(request, timeout=self.timeout)
-        except HTTPError as exc:
+            response.raise_for_status()
+        except httpx.HTTPStatusError as exc:
             raise RuntimeError(
-                f"OpenAI-compatible request failed with status {exc.code}"
+                f"OpenAI-compatible request failed with status {response.status_code}"
             ) from exc
 
     def _extract_content(self, payload: dict[str, Any]) -> str:
@@ -93,6 +161,7 @@ class LLMClient:
         self,
         chunks: Iterable[bytes],
     ) -> Iterable[str]:
+        """Retained parser helper for compatibility with existing callers."""
         buffer = ""
         content = ""
 
@@ -116,8 +185,6 @@ class LLMClient:
             raise ValueError(
                 "OpenAI-compatible streaming response did not include content"
             )
-
-        return content
 
     def _consume_sse_buffer(
         self,
