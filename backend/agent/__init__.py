@@ -1,3 +1,3 @@
-from backend.agent.LLMClient import LLMClient
+from .LLMClient import LLMClient
 
 __all__ = ["LLMClient"]

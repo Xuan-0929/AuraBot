@@ -1,6 +1,6 @@
 import unittest
 
-from agent.task.TaskManager import TaskManager
+from backend.agent.task.TaskManager import TaskManager
 
 
 class TaskManagerSingletonTests(unittest.TestCase):

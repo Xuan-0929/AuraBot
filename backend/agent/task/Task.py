@@ -1,5 +1,5 @@
-from agent.skill.SkillGroup import SkillGroup
-from agent.tool.ToolGroup import ToolGroup
+from ..skills.SkillGroup import SkillGroup
+from ..tools.ToolGroup import ToolGroup
 
 
 
