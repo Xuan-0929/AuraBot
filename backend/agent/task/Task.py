@@ -63,3 +63,18 @@ class Task:
     @property
     def state(self) -> TaskState:
         return self.current_state
+    
+
+    def set_completed(self):
+        self.current_state = TaskState.Completed
+        pass
+
+
+    def set_failed(self):
+        self.current_state = TaskState.Failed
+        pass
+
+
+    def set_interrupted(self):
+        self.current_state = TaskState.Interrupted
+        pass
