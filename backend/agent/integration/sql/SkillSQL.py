@@ -13,7 +13,6 @@ from ...skills.Skill import Skill
 """
 
 
-
 class SkillSQL:
     """
     这个类没有必要被实例化，只是一个工具包
