@@ -1,50 +1,55 @@
-import json
 import unittest
 
 from agent.tools.Tool import Tool
 from agent.tools.ToolGroup import ToolGroup
 
 
-class ToolInfoTests(unittest.TestCase):
-    def test_tool_get_info_returns_openai_compatible_function_schema(self):
-        tool = Tool("search", "Search the workspace")
-
-        info = json.loads(tool.get_info())
+class ToolDescriptionTests(unittest.TestCase):
+    def test_tool_load_intro_returns_complete_xml_function_schema(self):
+        tool = Tool("search & inspect", "Find <matches>")
 
         self.assertEqual(
-            info,
-            {
-                "type": "function",
-                "function": {
-                    "name": "search",
-                    "description": "Search the workspace",
-                    "parameters": {
-                        "type": "object",
-                        "properties": {
-                            "query": {
-                                "type": "string",
-                                "description": "Input query for the tool.",
-                            }
-                        },
-                        "required": ["query"],
-                    },
-                },
-            },
+            tool.load_intro(),
+            "<tool>\n"
+            "<type>function</type>\n"
+            "<function>\n"
+            "<name>search &amp; inspect</name>\n"
+            "<description>Find &lt;matches&gt;</description>\n"
+            "<parameters>\n"
+            "<type>object</type>\n"
+            "<properties>\n"
+            "<query>\n"
+            "<type>string</type>\n"
+            "<description>Input query for the tool.</description>\n"
+            "</query>\n"
+            "</properties>\n"
+            "<required>\n"
+            "<field>query</field>\n"
+            "</required>\n"
+            "</parameters>\n"
+            "</function>\n"
+            "</tool>",
         )
 
-    def test_tool_group_get_info_returns_openai_compatible_tools_array(self):
+    def test_tool_group_lists_prompt_ready_tool_descriptions(self):
         group = ToolGroup(
-            "filesystem",
-            [
-                Tool("read_file", "Read a file"),
-                Tool("write_file", "Write a file"),
-            ],
+            "filesystem & shell",
+            [Tool("read <file>", "Read & inspect a file")],
+            "Local <tools>",
         )
 
-        info = json.loads(group.get_info())
+        description = group.list_tools_descriptions()
 
-        self.assertEqual([tool["function"]["name"] for tool in info], ["read_file", "write_file"])
-        self.assertEqual([tool["type"] for tool in info], ["function", "function"])
+        self.assertEqual(
+            description,
+            "<tool_group>\n"
+            "<name>filesystem &amp; shell</name>\n"
+            "<description>Local &lt;tools&gt;</description>\n"
+            "<tools>\n"
+            f"{group.tools[0].load_intro()}\n"
+            "</tools>\n"
+            "</tool_group>",
+        )
 
 
 if __name__ == "__main__":

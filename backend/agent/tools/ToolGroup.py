@@ -1,8 +1,6 @@
-import json
+from html import escape
 
 from .Tool import Tool
-
-
 
 
 class ToolGroup:
@@ -14,13 +12,14 @@ class ToolGroup:
         self.tools = tools
         self.description = description
 
-    def get_info(self) -> str:
-        """
-        Author: SCPZ24
-
-        获取工具组的字符串信息，OpenAI兼容格式
-        """
-        return json.dumps(
-            [json.loads(tool.get_info()) for tool in self.tools],
-            ensure_ascii=False,
-        )
+    def list_tools_descriptions(self) -> str:
+        """Generate a prompt-ready group description and tool summary."""
+        descriptor_lines = [
+            "<tool_group>",
+            f"<name>{escape(self.name)}</name>",
+            f"<description>{escape(self.description)}</description>",
+            "<tools>",
+        ]
+        descriptor_lines.extend(tool.load_intro() for tool in self.tools)
+        descriptor_lines.extend(["</tools>", "</tool_group>"])
+        return "\n".join(descriptor_lines)

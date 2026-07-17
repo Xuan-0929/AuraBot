@@ -1,7 +1,7 @@
 from html import escape
 from pathlib import Path
 
-from .utils.formatter import parse_frontmatter, unquote_yaml_scalar
+from .utils.formatter import parse_frontmatter
 
 
 """
@@ -72,6 +72,6 @@ class Skill:
             if line.strip() == "---":
                 metadata_text = "".join(lines[1:index])
                 body = "".join(lines[index + 1 :]).lstrip("\r\n")
-                return self._parse_frontmatter(metadata_text), body
+                return parse_frontmatter(metadata_text), body
 
         return {}, content

@@ -1,39 +1,35 @@
-
-
-import json
+from html import escape
 
 
 class Tool:
     def __init__(self, name: str, description: str):
         self.name = name
         self.description = description
-    
 
-    """
-    Author: SCPZ24
-
-    获取工具的字符串信息，OpenAI兼容格式
-    """
-    def get_info(self) -> str:
-        return json.dumps(
-            {
-                "type": "function",
-                "function": {
-                    "name": self.name,
-                    "description": self.description,
-                    "parameters": {
-                        "type": "object",
-                        "properties": {
-                            "query": {
-                                "type": "string",
-                                "description": "Input query for the tool.",
-                            }
-                        },
-                        "required": ["query"],
-                    },
-                },
-            },
-            ensure_ascii=False,
+    def load_intro(self) -> str:
+        """Generate a complete, prompt-ready XML description of this tool."""
+        return "\n".join(
+            [
+                "<tool>",
+                "<type>function</type>",
+                "<function>",
+                f"<name>{escape(self.name)}</name>",
+                f"<description>{escape(self.description)}</description>",
+                "<parameters>",
+                "<type>object</type>",
+                "<properties>",
+                "<query>",
+                "<type>string</type>",
+                "<description>Input query for the tool.</description>",
+                "</query>",
+                "</properties>",
+                "<required>",
+                "<field>query</field>",
+                "</required>",
+                "</parameters>",
+                "</function>",
+                "</tool>",
+            ]
         )
 
     def execute(self, query: str) -> str:

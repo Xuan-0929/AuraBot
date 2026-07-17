@@ -1,9 +1,9 @@
 import unittest
 
-from backend.agent.task.Harness import Harness
-from backend.agent.task.HarnessFactory import HarnessFactory
-from backend.agent.task.PlanAndSaveHarness import PlanAndSaveHarness
-from backend.agent.task.ReActHarness import ReActHarness
+from backend.agent.task.harness.Harness import Harness
+from backend.agent.task.harness.HarnessFactory import HarnessFactory
+from backend.agent.task.harness.PlanAndSolveHarness import PlanAndSolveHarness
+from backend.agent.task.harness.ReActHarness import ReActHarness
 from backend.agent.task.Task import Task, TaskType
 
 
@@ -40,12 +40,12 @@ class HarnessFactoryTests(unittest.TestCase):
         self.assertIs(harness.task, task)
         self.assertIs(harness.llm_client, self.llm_client)
 
-    def test_creates_plan_harness_for_plan_and_save_task(self):
-        task = make_task(2, TaskType.PlanAndSave)
+    def test_creates_plan_harness_for_plan_and_solve_task(self):
+        task = make_task(2, TaskType.PlanAndSolve)
 
         harness = self.factory.create(task)
 
-        self.assertIsInstance(harness, PlanAndSaveHarness)
+        self.assertIsInstance(harness, PlanAndSolveHarness)
         self.assertIs(harness.task, task)
         self.assertIs(harness.llm_client, self.llm_client)
 

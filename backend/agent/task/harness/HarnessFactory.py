@@ -1,10 +1,10 @@
 from collections.abc import Mapping
 
-from ..LLMClient import LLMClient
+from ...LLMClient import LLMClient
 from .Harness import Harness
-from .PlanAndSaveHarness import PlanAndSaveHarness
+from .PlanAndSolveHarness import PlanAndSolveHarness
 from .ReActHarness import ReActHarness
-from .Task import Task, TaskType
+from ..Task import Task, TaskType
 
 HarnessType = type[Harness]
 
@@ -14,7 +14,7 @@ class HarnessFactory:
 
     DEFAULT_HARNESS_TYPES: Mapping[TaskType, HarnessType] = {
         TaskType.ReAct: ReActHarness,
-        TaskType.PlanAndSave: PlanAndSaveHarness,
+        TaskType.PlanAndSolve: PlanAndSolveHarness,
     }
 
     def __init__(

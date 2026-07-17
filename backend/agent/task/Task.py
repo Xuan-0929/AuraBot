@@ -12,7 +12,7 @@ from enum import Enum
 
 class TaskType(Enum):
     ReAct = "ReAct"
-    PlanAndSave = "PlanAndSave"
+    PlanAndSolve = "PlanAndSolve"
     Goal = "Goal" #这一版不做它
 
 class TaskState(Enum):
@@ -31,8 +31,9 @@ class TaskState(Enum):
 class Task:
     def __init__(self, task_id: int, task_title: str, parent_session_id: str,
                  task_type: TaskType, task_prompt: str,
-                 workdir: str | None = None, constraints: str | None = None, 
-                 skill_group: SkillGroup | None = None, tool_group: ToolGroup | None = None,
+                 workdir: str | None = None, constraints: str | None = None,
+                 skill_groups: list[SkillGroup] | None = None,
+                 tool_groups: list[ToolGroup] | None = None,
                  timeout_ms: int = 60000
                  ):
         self.task_id = task_id
@@ -43,21 +44,21 @@ class Task:
         self.workdir = workdir
         self.constraints = constraints
 
-        self.skill_group = skill_group
-        self.tool_group = tool_group
+        self.skill_groups = skill_groups if skill_groups is not None else []
+        self.tool_groups = tool_groups if tool_groups is not None else []
 
         self.messages = []
         self.checkpoint : str = None
 
         self.timeout_ms = timeout_ms
 
-        if self.task_type == TaskType.PlanAndSave:
+        if self.task_type == TaskType.PlanAndSolve:
             self.plan : str = None
         elif self.task_type == TaskType.Goal:
             self.goal : str = None
 
 
-        self.current_state : TaskState = TaskState.Pending
+        self.current_state : TaskState = TaskState.Initializing
     
 
     @property
