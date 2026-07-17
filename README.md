@@ -1,7 +1,5 @@
 # AuraBot
 
-[中文 README](README.zh-CN.md)
-
 AuraBot is a desktop-first companion AI MVP. The product shape is not a traditional always-open chat app: the default surface is a small Live2D desktop pet, and hovering the character reveals lightweight controls for drag, voice input, inline quick chat, and the full console conversation.
 
 The current build validates the first useful loop:
@@ -63,7 +61,12 @@ Install dependencies:
 ```bash
 cd frontend
 npm install
+python3 -m pip install -r ../backend/requirements.txt
 ```
+
+Before the first normal launch, create the Python runtime configuration from
+`config.example.yaml` as `config.yaml` in the repository root and export the
+referenced API-key environment variables. Do not commit `config.yaml`.
 
 Run the desktop app in development mode:
 
@@ -79,6 +82,11 @@ npm run dev:backend    # Python gateway only (port 6401)
 npm run dev:frontend   # Vite renderer only (port 6400)
 npm run dev:desktop    # Electron + renderer
 ```
+
+The combined launcher resolves `PYTHON`, then `AURABOT_PYTHON`, then
+`python3`. Set either variable to an absolute interpreter path when npm resolves
+a different Python environment from the one where the backend dependencies were
+installed.
 
 The Python backend entry point is `backend/main.py`, loaded by Uvicorn as
 `backend.main:app`.
@@ -103,6 +111,12 @@ Configuration strings support required `${VARIABLE}` references and optional
 `${VARIABLE:-fallback}` references. Missing required variables stop backend
 startup before any API routes are imported, and secret values are never added
 to the error message.
+
+During the backend migration there are two explicit configuration scopes:
+`config.yaml` configures the Python gateway, while the Electron user-data JSON
+files described below configure the current TypeScript runtime. They do not
+automatically synchronize. The ownership and eventual unification plan live in
+[the backend runtime contract](docs/backend-runtime-contract.md).
 
 The app should open a small transparent Live2D pet window. The bundled Hiyori model is loaded from:
 
@@ -348,6 +362,12 @@ Default task CLI execution settings are intentionally conservative:
 The runner records `task.agent.started`, `task.agent.progress`, `task.agent.completed`, and `task.agent.failed` events. Failed child runs are reported as failed in the main chat instead of being treated as completed work.
 
 On Windows, AuraBot auto-discovers CLI commands from `PATH` using Windows command names such as `codex.cmd`, `codex.exe`, `claude.cmd`, and `hermes.cmd`. Explicit `taskRunner.runners[].command` values always take priority over auto-discovery.
+
+## Documentation
+
+Current product, architecture, migration, and module documentation is indexed
+in [docs/README.md](docs/README.md). The current development baseline and
+next runtime phase are tracked in [docs/aurabot-development-status.md](docs/aurabot-development-status.md).
 
 ## Verification Commands
 

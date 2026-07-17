@@ -31,6 +31,21 @@
 
 迁移到 Python 后端时，应保留现有编排经验，但把主对话、任务、记忆和主动触发从前端 TypeScript core 迁到后端主进程。
 
+## 最小实现 v0
+
+第一个 Python Main Agent 只验证编排与记忆边界，不接真实模型、MCP 或真实任务
+执行。它必须包含：
+
+1. 一个按顺序消费 `UserMessageEvent` 的进程内队列。
+2. 一个固定的 `main` session、按 profile 隔离的短期缓冲区和可持久化 pending 状态。
+3. 对 Python `MemoryService` 的受控 recall / remember 调用；memory service 不自行触发写入。
+4. `POST /main-agent/messages`、`GET /main-agent/status` 和最小 WebSocket 事件输出，具体字段以[运行时契约](../backend-runtime-contract.md)为准。
+5. 可注入的确定性回复器，用于验证消息、记忆断点、重启恢复和错误路径。
+
+当前 `backend/memory/api.py` 已提供记忆能力，但尚未在 `backend.main` 中挂载；
+`frontend/src/core/orchestration/ChatOrchestrator` 仍是生产 MVP 的主编排器。v0 的
+目标是证明 Python 能安全接管一条消息链路，而不是复制完整 TypeScript 功能。
+
 ## 职责边界
 
 主 Agent 负责：

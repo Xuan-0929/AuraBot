@@ -4,6 +4,10 @@
 
 # 产品需求分析
 
+> 当前产品需求基线。实现状态、迁移阶段和接口细节分别以
+> [当前状态](aurabot-development-status.md)、[后端迁移路线](backend-runtime-migration.md)
+> 和 [运行时契约](backend-runtime-contract.md) 为准。
+
 
 ## 产品定义
 
@@ -41,6 +45,13 @@ Bot在给用户回复时，也不会是一长段。会做断句。
 前端与后端通信方式：
 - HTTP：提交消息、查询历史、查询任务、修改设置等请求/响应场景
 - WebSocket：接收聊天流式输出、任务进度、Live2D 情绪动作信号、主动提醒等实时事件
+
+### 当前迁移约束
+
+当前 MVP 的聊天、记忆和任务写链路仍在 Electron 的 TypeScript core 中；Python
+网关目前主要承载配置和只读接口。后端迁移必须按垂直链路逐步完成，不能让两个
+运行时同时对同一业务对象写入。Python 成为唯一业务 owner 后，前端才只保留界面、
+窗口和网络职责。
 
 
 #### Live2D渲染

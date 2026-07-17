@@ -1,6 +1,11 @@
 # SQLite表格存储内容
 
 > 对于SQLite的建表脚本必须是幂等的。
+>
+> 状态：这是 Python Skill / SkillGroup 的候选持久化模型，不是当前任务运行时的
+> 已上线 schema。任务、artifact 和 Main Agent 的数据所有权以
+> `docs/backend-runtime-contract.md` 为准；在接入真实数据库迁移前不得将本文档
+> 当作运行时事实。
 
 
 ## Skill元信息

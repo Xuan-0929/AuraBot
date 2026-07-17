@@ -26,19 +26,21 @@ Task Agent 采用 **按任务创建的运行时执行者** 范式。
 
 本文档描述的是目标后端形态。
 
-当前仓库里的任务执行仍是 TypeScript core 里的过渡实现：
+当前仓库有两类过渡实现：
 
-- 默认使用 deterministic runner，便于测试和 demo。
-- 显式配置后可调用 Codex、Claude Code 或 Hermes CLI runner。
-- CLI runner 会记录 `task.agent.started`、`task.agent.progress`、`task.agent.completed`、`task.agent.failed` 等事件。
-- 当前可以取消 child process，并在启动时把 orphan `running` / `waiting` 任务标记为失败。
+1. TypeScript core 仍承担当前 MVP 的任务执行：默认 deterministic runner，显式配置后可调用 Codex、Claude Code 或 Hermes CLI runner；它能记录进度、取消 child process，并将 orphan `running` / `waiting` 标记为失败。
+2. Python 侧已新增 `Task`、`Harness`、`ReActHarness`、`PlanAndSaveHarness`、`HarnessFactory`、Skill / Tool 数据模型和内存型 `TaskManager`。这些是设计验证脚手架，尚未被 `backend.main`、HTTP API、事件总线或持久化任务表调用。
 
-这些能力是目标 runtime task agent 的雏形，但还不等同于最终 Python 后端内的线程级 task-agent：
+两者都不等同于最终 Python 后端内的线程级 task-agent：
 
 - true resume 尚未实现。
 - 结构化 artifact registry 仍需补强。
 - MCP tool group 注入仍是目标形态。
 - 复杂任务的 Plan-and-Execute 协议尚未完整落地。
+
+迁移顺序固定为：先持久化 task-manager 的状态与事件，再接 deterministic
+harness，随后迁移 CLI runner，最后才考虑 MCP、并发策略和 true resume。详见
+[后端迁移路线](../backend-runtime-migration.md)。
 
 ## 职责边界
 
@@ -244,16 +246,16 @@ RUNNING ──→ CHECKPOINTING ┘
 
 状态定义：
 
-| 状态 | 含义 |
-| --- | --- |
-| `PENDING` | task-manager 已创建任务，但尚未启动执行 |
-| `PLANNING` | 复杂任务正在生成计划 |
-| `RUNNING` | 正在执行工具、技能、CLI 或 MCP 调用 |
-| `CHECKPOINTING` | 正在整理阶段进度或产物 |
-| `WAITING_FOR_INFO` | 暂停执行，等待主 Agent 向用户取得信息 |
-| `COMPLETED` | 完成并提交结果 |
-| `FAILED` | 失败并提交原因 |
-| `INTERRUPTED` | 被用户或系统打断 |
+| 状态                 | 含义                         |
+| ------------------ | -------------------------- |
+| `PENDING`          | task-manager 已创建任务，但尚未启动执行 |
+| `PLANNING`         | 复杂任务正在生成计划                 |
+| `RUNNING`          | 正在执行工具、技能、CLI 或 MCP 调用     |
+| `CHECKPOINTING`    | 正在整理阶段进度或产物                |
+| `WAITING_FOR_INFO` | 暂停执行，等待主 Agent 向用户取得信息     |
+| `COMPLETED`        | 完成并提交结果                    |
+| `FAILED`           | 失败并提交原因                    |
+| `INTERRUPTED`      | 被用户或系统打断                   |
 
 当前实现中的持久化状态可以先映射为：
 

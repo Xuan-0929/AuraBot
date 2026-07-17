@@ -1,5 +1,8 @@
 # AuraBot Windows Platform Adaptation
 
+> 状态：设计与代码路径已具备第一版，但尚未完成 Windows 实机打包和回归验证。
+> 本文只定义适配范围；当前运行时迁移见 [后端迁移路线](backend-runtime-migration.md)。
+
 ## Goals
 
 - Add Windows 10/11 x64 support for a normal installable AuraBot desktop app.
@@ -30,7 +33,7 @@
 - Use Electron `userData` as the Windows configuration location. In normal installs this is `%APPDATA%\AuraBot\config.json`.
 - Extend task CLI command discovery to work with Windows `PATH` semantics and `.cmd` / `.exe` commands.
 - Guard optional window APIs so a Windows-specific failure does not prevent the pet window from opening.
-- Update English and Chinese README platform instructions.
+- Keep the root README platform instructions accurate; the repository does not maintain a duplicate Chinese README.
 
 ## Execution Rules
 
@@ -41,13 +44,13 @@
 
 ## Acceptance Checklist
 
-- `corepack pnpm typecheck`
-- `corepack pnpm test:unit`
-- `corepack pnpm build`
-- `corepack pnpm package:mac` on macOS
-- `corepack pnpm package:win` on Windows
+- `cd frontend && npm run typecheck`
+- `cd frontend && npm run test:unit`
+- `cd frontend && npm run build`
+- `cd frontend && npm run package:mac` on macOS
+- `cd frontend && npm run package:win` on Windows
 - Manual smoke checks:
-  - `corepack pnpm dev:clean` opens the desktop pet.
+  - `cd frontend && npm run dev:clean` opens the desktop pet.
   - Live2D reaches ready state.
   - Console and Settings open.
   - Click-through, dragging, and saved pet placement still work.

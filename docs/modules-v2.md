@@ -1,12 +1,25 @@
-> 此为第一轮产品设计归档前的终稿。
-
 # 后端模块划分
+
+> 这是 AuraBot 的目标运行时架构。当前迁移状态见
+> [当前状态](aurabot-development-status.md)，实施顺序见
+> [后端迁移路线](backend-runtime-migration.md)。
 
 后端采用 **单服务进程架构**。
 
 默认运行时不再把每个模块拆成独立 Python 进程，而是启动一个后端主进程，由该进程承载 HTTP API、WebSocket、主对话、门控、记忆、任务管理、定时唤醒、配置管理等核心业务。
 
 前端与后端之间采用 HTTP + WebSocket；后端内部模块之间采用 Python 方法调用、事件总线、队列和后台任务协作，不通过本机 HTTP 二次转发。
+
+## 当前实现与迁移边界
+
+当前 Electron TypeScript core 仍是聊天、记忆和任务写链路的事实来源；Python
+FastAPI 网关已具备配置加载和只读数据接口，Python memory service 与 Agent
+脚手架尚未成为请求路径的一部分。迁移期间：
+
+1. 新 Python 功能只经后端内部方法调用，不在模块间二次 HTTP 转发。
+2. 每次只迁移一条完整垂直链路，并明确唯一写入 owner。
+3. Electron 只通过 HTTP / WebSocket 使用已迁移能力；未迁移能力可暂时保留现有 IPC。
+4. connector、MCP、重型语音 worker 与复杂任务 resume 不属于主链路第一阶段。
 
 ---
 
