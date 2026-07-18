@@ -17,7 +17,7 @@ describe("Composer", () => {
     vi.restoreAllMocks();
   });
 
-  it("sends on Enter and inserts a line break on Ctrl+Enter", async () => {
+  it("sends on Enter and inserts a line break on Shift+Enter", async () => {
     const onSend = vi.fn(async () => undefined);
     const app = createApp(Composer, { displayLanguage: "en", onSend });
     app.mount(container);
@@ -29,7 +29,7 @@ describe("Composer", () => {
 
     textarea.value = "hello";
     textarea.dispatchEvent(new Event("input", { bubbles: true }));
-    textarea.dispatchEvent(new KeyboardEvent("keydown", { key: "Enter", bubbles: true, ctrlKey: true }));
+    textarea.dispatchEvent(new KeyboardEvent("keydown", { key: "Enter", bubbles: true, shiftKey: true }));
     expect(textarea.value).toBe("hello\n");
 
     textarea.value = "send me";
@@ -38,6 +38,46 @@ describe("Composer", () => {
     await Promise.resolve();
 
     expect(onSend).toHaveBeenCalledWith("send me", []);
+    app.unmount();
+  });
+
+  it("grows with its content and caps its height", async () => {
+    const onSend = vi.fn(async () => undefined);
+    const app = createApp(Composer, { displayLanguage: "en", onSend });
+    app.mount(container);
+
+    const textarea = container.querySelector("textarea");
+    if (!textarea) {
+      throw new Error("textarea not found");
+    }
+
+    Object.defineProperty(textarea, "scrollHeight", { configurable: true, value: 152 });
+    textarea.dispatchEvent(new Event("input", { bubbles: true }));
+    expect(textarea.style.height).toBe("152px");
+
+    Object.defineProperty(textarea, "scrollHeight", { configurable: true, value: 260 });
+    textarea.dispatchEvent(new Event("input", { bubbles: true }));
+    expect(textarea.style.height).toBe("198px");
+    app.unmount();
+  });
+
+  it("shows only the agent status light and label in the action rail", () => {
+    const onSend = vi.fn(async () => undefined);
+    const app = createApp(Composer, { agentStatus: "tasking", displayLanguage: "en", onSend });
+    app.mount(container);
+
+    expect(container.querySelector(".composer-status-dot-tasking")).not.toBeNull();
+    expect(container.querySelector(".composer-presence")?.textContent).toContain("tasking");
+    expect(container.querySelector(".composer-presence-mark")).toBeNull();
+    app.unmount();
+  });
+
+  it("uses a plain plus glyph for the attachment action", () => {
+    const onSend = vi.fn(async () => undefined);
+    const app = createApp(Composer, { displayLanguage: "en", onSend });
+    app.mount(container);
+
+    expect(container.querySelector(".composer-add-icon")?.textContent).toBe("+");
     app.unmount();
   });
 

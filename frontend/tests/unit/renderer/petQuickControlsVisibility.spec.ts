@@ -1,12 +1,13 @@
 import { readFileSync } from "node:fs";
-import { join } from "node:path";
+import { dirname, join } from "node:path";
+import { fileURLToPath } from "node:url";
 import { describe, expect, test } from "vitest";
 
-const repoRoot = join(import.meta.dirname, "../../..");
+const rendererRoot = join(dirname(fileURLToPath(import.meta.url)), "../../../src");
 
 describe("Vue pet quick controls visibility", () => {
   function readPetAppSource() {
-    return readFileSync(join(repoRoot, "frontend/src/features/pet-vue/PetApp.vue"), "utf8");
+    return readFileSync(join(rendererRoot, "features/pet-vue/PetApp.vue"), "utf8");
   }
 
   test("keeps the three quick control buttons always visible instead of hover-gated", () => {

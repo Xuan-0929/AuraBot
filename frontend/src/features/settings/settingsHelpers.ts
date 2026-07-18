@@ -96,6 +96,10 @@ export function testConnectionAriaLabel(label: string, displayLanguage: PetSetti
     return `测试${label}连接`;
   }
 
+  if (displayLanguage === "ja") {
+    return `${label}の接続をテスト`;
+  }
+
   return `Test ${label} connection`;
 }
 

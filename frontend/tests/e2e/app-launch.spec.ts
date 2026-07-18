@@ -5,7 +5,7 @@ import { fileURLToPath } from "node:url";
 import { _electron as electron, expect, type ElectronApplication, type Page, test } from "@playwright/test";
 
 const appRoot = resolve(dirname(fileURLToPath(import.meta.url)), "../..");
-const desktopRoot = join(appRoot, "desktop");
+const desktopRoot = appRoot;
 
 async function launchAuraBot(): Promise<{
   electronApp: ElectronApplication;
@@ -95,11 +95,25 @@ async function openConsole(electronApp: ElectronApplication, petWindow: Page): P
 }
 
 async function openSettingsFromConsole(electronApp: ElectronApplication, consoleWindow: Page): Promise<Page> {
+  await ensureTaskSidebarExpanded(consoleWindow);
   const settingsPromise = electronApp.waitForEvent("window");
   await consoleWindow.getByRole("button", { name: /Open AuraBot settings|打开 AuraBot 设置/ }).click();
   const settingsWindow = await settingsPromise;
   await settingsWindow.getByRole("main", { name: "Settings" }).waitFor({ state: "visible" });
   return settingsWindow;
+}
+
+function getAgentStatus(consoleWindow: Page) {
+  return consoleWindow.locator(".composer-presence");
+}
+
+async function ensureTaskSidebarExpanded(consoleWindow: Page): Promise<void> {
+  const taskContent = consoleWindow.locator("#console-task-sidebar-content");
+
+  if (!(await taskContent.isVisible())) {
+    await consoleWindow.locator(".console-task-sidebar-toggle").click();
+    await expect(taskContent).toBeVisible();
+  }
 }
 
 async function openSettingsViaConsole(electronApp: ElectronApplication, petWindow: Page): Promise<Page> {
@@ -136,6 +150,15 @@ async function backToSettingsRoot(settingsWindow: Page): Promise<void> {
 }
 
 async function openSettingsPage(settingsWindow: Page, section: string, page: string): Promise<void> {
+  const desktopPage = settingsWindow
+    .getByRole("navigation", { name: /Settings navigation|设置导航/ })
+    .getByRole("button", { name: page, exact: true });
+
+  if (await desktopPage.count()) {
+    await desktopPage.first().click();
+    return;
+  }
+
   await backToSettingsRoot(settingsWindow);
   await settingsWindow.getByRole("button", { name: section, exact: true }).click();
   await settingsWindow.getByRole("button", { name: page, exact: true }).click();
@@ -150,7 +173,7 @@ test("launches as a small desktop pet and opens console from the hover control",
 
     const consoleWindow = await openConsole(electronApp, petWindow);
     await expect(consoleWindow.getByRole("main", { name: "AuraBot Console" })).toBeVisible();
-    await expect(consoleWindow.getByLabel("Agent status")).toContainText("idle");
+    await expect(getAgentStatus(consoleWindow)).toContainText("idle");
 
     const settingsWindow = await openSettingsFromConsole(electronApp, consoleWindow);
     await expect(settingsWindow.getByRole("main", { name: "Settings" })).toBeVisible();
@@ -181,22 +204,18 @@ test("keeps pet quick controls available and syncs click-through settings while 
     await expect(consoleWindow.getByLabel("Hide character on hover")).toHaveCount(0);
     await expect(consoleWindow.getByLabel("Language")).toHaveCount(0);
     await expect(consoleWindow.getByRole("button", { name: "Open settings menu" })).toHaveCount(0);
-    await expect(consoleWindow.getByRole("button", { name: "Open AuraBot settings" })).toBeVisible();
-
     const settingsWindow = await openSettingsFromConsole(electronApp, consoleWindow);
     const settingsNav = settingsWindow.getByRole("navigation", { name: "Settings navigation" });
-    await expect(settingsNav).toContainText("Basics");
-    await expect(settingsNav).toContainText("Companion");
-    await expect(settingsNav).toContainText("Intelligence");
+    await expect(settingsNav).toContainText("General");
+    await expect(settingsNav).toContainText("Appearance & Personality");
+    await expect(settingsNav).toContainText("Models & Connections");
     await expect(settingsWindow.locator(".settings-nav-icon.iconify").first()).toBeVisible();
 
     await openSettingsPage(settingsWindow, "Basics", "General");
     await settingsWindow.getByLabel("Language").selectOption("zh");
-    await expect(consoleWindow.getByLabel("Agent status")).toContainText("空闲中");
-    await expect(consoleWindow.getByRole("button", { name: "打开 AuraBot 设置" })).toBeVisible();
+    await expect(getAgentStatus(consoleWindow)).toContainText("空闲中");
     await settingsWindow.getByLabel("语言").selectOption("en");
-    await expect(consoleWindow.getByLabel("Agent status")).toContainText("idle");
-    await expect(consoleWindow.getByRole("button", { name: "Open AuraBot settings" })).toBeVisible();
+    await expect(getAgentStatus(consoleWindow)).toContainText("idle");
 
     await openSettingsPage(settingsWindow, "Companion", "Pet Behavior");
     await settingsWindow.getByLabel("Click through character").check();
@@ -216,10 +235,10 @@ test("opens the product settings window from the console settings button", async
 
     await expect(settingsWindow.getByRole("main", { name: "Settings" })).toBeVisible();
     const settingsNav = settingsWindow.getByRole("navigation", { name: "Settings navigation" });
-    await expect(settingsNav).toContainText("Basics");
-    await expect(settingsNav).toContainText("Companion");
-    await expect(settingsNav).toContainText("Intelligence");
-    await expect(settingsNav).toContainText("Automation");
+    await expect(settingsNav).toContainText("General");
+    await expect(settingsNav).toContainText("Appearance & Personality");
+    await expect(settingsNav).toContainText("Models & Connections");
+    await expect(settingsNav).toContainText("Task Execution");
 
     await openSettingsPage(settingsWindow, "Intelligence", "Model");
     await expect(settingsWindow.getByLabel("Model settings")).toContainText("Chat");
@@ -371,9 +390,7 @@ test("returns from Live2D model settings without Live2D teardown or hit-area err
 
     await openSettingsPage(settingsWindow, "Companion", "Live2D Model");
     await expect(settingsWindow.getByRole("region", { name: "Live2D Model" })).toContainText("Current model");
-    await settingsWindow.getByRole("button", { name: "Back to settings" }).click();
-    await expect(settingsWindow.getByRole("button", { name: "Persona", exact: true })).toBeVisible();
-    await settingsWindow.getByRole("button", { name: "Persona", exact: true }).click();
+    await openSettingsPage(settingsWindow, "Companion", "Persona");
     await expect(settingsWindow.getByRole("region", { name: "Persona" })).toContainText("Name");
     await settingsWindow.waitForTimeout(200);
 
@@ -445,7 +462,7 @@ test("shows memory debug inside the full settings window instead of the console 
   }
 });
 
-test("sends console input with Enter and inserts line breaks with Ctrl+Enter", async () => {
+test("sends console input with Enter and inserts line breaks with Shift+Enter", async () => {
   const { electronApp, petWindow, userDataDir } = await launchAuraBot();
 
   try {
@@ -458,7 +475,7 @@ test("sends console input with Enter and inserts line breaks with Ctrl+Enter", a
     await expect(input).toHaveValue("");
 
     await input.fill("第一行");
-    await input.press("Control+Enter");
+    await input.press("Shift+Enter");
     await input.type("第二行");
     await expect(input).toHaveValue("第一行\n第二行");
     await expect(consoleWindow.locator(".message-user").filter({ hasText: /第一行\s*第二行/ })).toHaveCount(0);
@@ -480,7 +497,7 @@ test("waits on fragmented input and replies after the thought is completed", asy
 
     await input.fill("然后我觉得");
     await consoleWindow.getByRole("button", { name: "Send" }).click();
-    await expect(consoleWindow.getByLabel("Agent status")).toContainText("listening");
+    await expect(getAgentStatus(consoleWindow)).toContainText("listening");
     await expect(consoleWindow.locator(".message-assistant")).toHaveCount(0);
 
     await input.fill("我喜欢吃火锅。");
@@ -532,7 +549,7 @@ test("creates a visible queued task from a task-like chat request", async () => 
     await sendConsoleMessage(consoleWindow, "帮我整理一份明天会议的清单。");
 
     await expect(consoleWindow.locator(".message-assistant").filter({ hasText: /开始弄/ })).toBeVisible();
-    await expect(consoleWindow.getByLabel("Agent status")).toContainText("tasking");
+    await expect(getAgentStatus(consoleWindow)).toContainText("tasking");
     await expect(petWindow.getByLabel("Desktop Live2D pet")).toHaveAttribute("data-agent-status", "tasking");
     await expect(petWindow.locator(".live2d-canvas-host")).toHaveAttribute("data-render-state", "ready");
     await expect(getConsoleStickyNotes(consoleWindow)).toBeVisible();

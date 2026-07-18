@@ -20,12 +20,12 @@ let onPetBoundsChanged: ((bounds: WindowRectangle) => void) | undefined;
 let petCursorTrackingInterval: NodeJS.Timeout | undefined;
 
 const CONSOLE_WINDOW_SIZE = {
-  width: 920,
-  height: 700
+  width: 1280,
+  height: 820
 };
 const SETTINGS_WINDOW_SIZE = {
-  width: 760,
-  height: 720
+  width: 1280,
+  height: 820
 };
 const PET_CURSOR_TRACKING_INTERVAL_MS = 50;
 

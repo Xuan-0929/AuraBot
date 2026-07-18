@@ -4,6 +4,7 @@
     :class="[
       'task-sticky-notes',
       `task-sticky-notes-${variant}`,
+      `task-sticky-notes-layout-${layout}`,
       variant === 'pet' ? 'desktop-pet-sticky-notes' : undefined
     ]"
     :aria-label="ariaLabel === false ? undefined : ariaLabel ?? t(displayLanguage, 'taskStickyNotes')"
@@ -68,13 +69,14 @@ const props = withDefaults(
     tasks: Task[];
     displayLanguage: PetSettings["displayLanguage"];
     variant: "pet" | "console";
+    layout?: "horizontal" | "vertical";
     showHeader?: boolean;
     ariaLabel?: string | false;
     onCancelTask?: (taskId: string) => void;
     onDeleteTask?: (taskId: string) => void;
     onViewTaskDetail?: (taskId: string) => void;
   }>(),
-  { showHeader: true, ariaLabel: undefined }
+  { layout: "horizontal", showHeader: true, ariaLabel: undefined }
 );
 
 const visibleTasks = computed(() => (props.variant === "pet" ? pickVisiblePetTasks(props.tasks) : props.tasks));

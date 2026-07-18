@@ -2767,6 +2767,137 @@ textarea {
   padding: 0;
 }
 
+/* The console composer is a writing surface with an action rail, not a control bar. */
+.console-composer-glass {
+  border: 0;
+  background: transparent;
+  box-shadow: none;
+  backdrop-filter: none;
+}
+
+.console-window .composer {
+  gap: 0;
+  padding: 10px 0 0;
+  border: 0;
+  border-top: 1px solid var(--console-border);
+  border-radius: 0;
+  background: transparent;
+  box-shadow: none;
+}
+
+.console-window .composer-writing-surface {
+  border: 1px solid var(--console-border);
+  border-radius: 16px;
+  background: var(--console-surface-strong);
+  box-shadow: none;
+}
+
+.console-window .composer-writing-surface:focus-within {
+  border-color: var(--console-blue);
+  box-shadow: 0 0 0 2px color-mix(in srgb, var(--console-blue) 28%, transparent);
+}
+
+.console-window .composer textarea {
+  min-height: 72px;
+  max-height: 198px;
+  padding: 15px 16px;
+  resize: none;
+  border: 0;
+  border-radius: inherit;
+  background: transparent;
+  box-shadow: none;
+  color: var(--console-text);
+  font-size: 14px;
+  line-height: 1.65;
+}
+
+/* The writing surface owns the single visible focus treatment. */
+.console-window .composer textarea:focus {
+  border: 0;
+  box-shadow: none;
+}
+
+.console-window .composer-action-rail {
+  display: grid;
+  grid-template-columns: minmax(0, 1fr) auto minmax(0, 1fr);
+  align-items: center;
+  min-height: 34px;
+  padding: 1px 2px 0;
+}
+
+.console-window .composer-rail-actions {
+  display: flex;
+  min-width: 34px;
+}
+
+.console-window .composer-rail-actions-end { justify-content: flex-end; }
+
+.console-window .composer .composer-attach-button,
+.console-window .composer .composer-send-button {
+  display: grid;
+  width: 32px;
+  height: 32px;
+  min-width: 32px;
+  padding: 0;
+  place-items: center;
+  border: 0;
+  border-radius: 50%;
+  background: transparent;
+  box-shadow: none;
+  color: var(--console-text-muted);
+}
+
+.console-window .composer .composer-send-button { color: var(--console-text); }
+
+.console-window .composer-attach-button:hover,
+.console-window .composer-send-button:not(:disabled):hover {
+  border: 0;
+  background: color-mix(in srgb, var(--console-blue) 10%, transparent);
+  box-shadow: none;
+  color: var(--console-blue);
+  transform: none;
+}
+
+.console-window .composer-action-icon { width: 18px; height: 18px; }
+
+.console-window .composer-add-icon {
+  color: var(--console-text);
+  font-size: 24px;
+  font-weight: 300;
+  line-height: 1;
+  transform: translateY(-1px);
+}
+
+.console-window .composer-presence {
+  display: inline-flex;
+  align-items: center;
+  gap: 7px;
+  color: var(--console-text-muted);
+  font-size: 11px;
+}
+
+.console-window .composer-presence-mark {
+  position: relative;
+  display: block;
+  width: 24px;
+  height: 24px;
+  border: 1px solid var(--console-blue);
+  border-radius: 9px 9px 9px 4px;
+  background: color-mix(in srgb, var(--console-blue) 12%, transparent);
+}
+
+.console-window .composer-presence-mark::after {
+  content: "";
+  position: absolute;
+  top: 7px;
+  left: 5px;
+  width: 11px;
+  height: 7px;
+  border: 1.5px solid var(--console-blue);
+  border-top: 0;
+  border-radius: 0 0 9px 9px;
+}
+
 @media (prefers-color-scheme: dark) {
   .console-window::before {
     background:
@@ -3088,5 +3219,1045 @@ textarea {
   .backend-status-panel dl,
   .memory-debug-grid {
     grid-template-columns: 1fr;
+  }
+}
+
+/* Console task rail: the conversation remains primary, tasks stay nearby. */
+.console-window .console-body {
+  display: grid;
+  grid-template-columns: minmax(0, 1fr) 292px;
+  gap: 16px;
+  min-height: 0;
+}
+
+.console-window .console-chat {
+  min-width: 0;
+}
+
+.console-task-sidebar {
+  display: flex;
+  width: 100%;
+  min-width: 0;
+  min-height: 0;
+  overflow: hidden;
+  border: 1px solid var(--console-border);
+  border-radius: 22px;
+  background:
+    linear-gradient(180deg, rgba(255, 255, 255, 0.2), transparent 40%),
+    var(--console-glass);
+  box-shadow: var(--console-shadow-soft);
+  backdrop-filter: blur(20px) saturate(135%);
+  transition: flex-basis 180ms ease, width 180ms ease;
+}
+
+.console-task-sidebar-collapsed {
+  width: 100%;
+}
+
+.console-window-task-sidebar-collapsed .console-body {
+  grid-template-columns: minmax(0, 1fr) 48px;
+}
+
+.console-task-sidebar-rail {
+  display: flex;
+  flex: 0 0 48px;
+  flex-direction: column;
+  align-items: center;
+  gap: 7px;
+  padding: 11px 7px;
+  border-right: 1px solid var(--console-border);
+}
+
+.console-task-sidebar-toggle {
+  display: grid;
+  width: 32px;
+  height: 32px;
+  padding: 0;
+  place-items: center;
+  border: 1px solid var(--console-border);
+  border-radius: 10px;
+  background: var(--console-glass-strong);
+  color: var(--console-text-muted);
+  cursor: pointer;
+}
+
+.console-task-sidebar-toggle:hover {
+  border-color: var(--console-border-strong);
+  background: var(--console-surface-strong);
+  color: var(--console-blue);
+}
+
+.console-task-sidebar-toggle svg { width: 17px; height: 17px; }
+
+.console-task-sidebar-count {
+  display: grid;
+  min-width: 18px;
+  height: 18px;
+  padding: 0 4px;
+  place-items: center;
+  border-radius: 999px;
+  background: color-mix(in srgb, var(--console-blue) 18%, transparent);
+  color: var(--console-blue);
+  font-size: 10px;
+  font-weight: 750;
+}
+
+.console-task-sidebar-content {
+  display: grid;
+  grid-template-rows: auto minmax(0, 1fr);
+  flex: 1 1 auto;
+  min-width: 0;
+  min-height: 0;
+  padding: 16px 14px 14px;
+}
+
+.console-task-sidebar-header {
+  display: flex;
+  align-items: center;
+  justify-content: space-between;
+  gap: 8px;
+  padding: 0 0 13px;
+  border-bottom: 1px solid var(--console-border);
+}
+
+.console-task-sidebar-header strong {
+  color: var(--console-text);
+  font-size: 13px;
+  font-weight: 760;
+}
+
+.console-task-sidebar-header .console-task-settings-button {
+  width: 28px;
+  height: 28px;
+  box-shadow: none;
+}
+
+.console-task-sidebar-header .console-task-settings-button svg { width: 15px; height: 15px; }
+
+.console-task-sidebar-list {
+  min-height: 0;
+  overflow-y: auto;
+  padding: 14px 2px 4px 0;
+  scrollbar-width: thin;
+  scrollbar-color: var(--console-border-strong) transparent;
+}
+
+.console-task-sidebar .task-sticky-notes-console.task-sticky-notes-layout-vertical {
+  display: grid;
+  width: 100%;
+  min-width: 0;
+  height: auto;
+  gap: 10px;
+}
+
+.console-task-sidebar .task-sticky-notes-console .task-sticky-note {
+  display: grid;
+  width: 100%;
+  height: auto;
+  min-height: 88px;
+  padding: 12px;
+  border: 1px solid var(--console-border);
+  border-radius: 14px;
+  background:
+    linear-gradient(150deg, rgba(255, 255, 255, 0.2), transparent 48%),
+    var(--console-surface);
+  box-shadow: 0 8px 18px rgba(89, 66, 49, 0.06);
+}
+
+.console-task-sidebar .task-sticky-notes-console .task-sticky-note-copy {
+  display: grid;
+  gap: 5px;
+  min-width: 0;
+}
+
+.console-task-sidebar .task-sticky-notes-console .task-sticky-note strong {
+  overflow: visible;
+  color: var(--console-text);
+  font-size: 12px;
+  line-height: 1.45;
+  text-overflow: clip;
+  white-space: normal;
+}
+
+.console-task-sidebar .task-sticky-notes-console .task-sticky-note span {
+  display: block;
+  overflow: hidden;
+  color: var(--console-text-muted);
+  font-size: 10px;
+  line-height: 1.45;
+  -webkit-line-clamp: unset;
+}
+
+.console-task-sidebar .task-sticky-notes-console .task-sticky-note-actions {
+  justify-content: flex-start;
+  margin-top: 4px;
+}
+
+.console-task-sidebar .task-sticky-notes-console .task-sticky-note-action {
+  min-height: 23px;
+  padding: 0 7px;
+  border-color: var(--console-border);
+  background: var(--console-glass-strong);
+  color: var(--console-text-muted);
+  font-size: 9px;
+}
+
+.console-task-sidebar-empty {
+  position: relative;
+  margin: 0;
+  padding: 14px 0 14px 16px;
+  border-left: 2px solid color-mix(in srgb, var(--console-blue) 52%, transparent);
+  color: var(--console-text-muted);
+  font-size: 12px;
+  line-height: 1.6;
+}
+
+.console-task-sidebar .task-detail-panel {
+  min-width: 0;
+  overflow-y: auto;
+  padding: 14px 0 0;
+  border: 0;
+  border-radius: 0;
+  background: transparent;
+  box-shadow: none;
+}
+
+/* Status stays quiet and informative between the composer actions. */
+.console-window .composer-presence {
+  gap: 7px;
+  color: var(--console-text-muted);
+  font-size: 11px;
+}
+
+.console-window .composer-status-dot {
+  width: 8px;
+  height: 8px;
+  border-radius: 50%;
+  background: var(--console-green);
+  box-shadow: 0 0 0 3px color-mix(in srgb, var(--console-green) 16%, transparent);
+}
+
+.console-window .composer-status-dot-thinking,
+.console-window .composer-status-dot-typing {
+  background: var(--console-orange);
+  box-shadow: 0 0 0 3px color-mix(in srgb, var(--console-orange) 18%, transparent);
+}
+
+.console-window .composer-status-dot-tasking {
+  background: var(--console-blue);
+  box-shadow: 0 0 0 3px color-mix(in srgb, var(--console-blue) 16%, transparent);
+}
+
+/* Liquid Glass V2: final scoped material system */
+.app-shell-console,
+.app-shell-settings {
+  --surface-canvas: #e9eef3;
+  --surface-primary-glass: rgba(255, 255, 255, 0.36);
+  --surface-secondary-glass: rgba(255, 255, 255, 0.26);
+  --surface-raised: rgba(255, 255, 255, 0.58);
+  --surface-muted: rgba(228, 236, 244, 0.7);
+  --surface-accent: rgba(104, 152, 198, 0.13);
+  --edge-subtle: rgba(49, 68, 87, 0.13);
+  --edge-lit: rgba(255, 255, 255, 0.72);
+  --text-primary: #15202b;
+  --text-secondary: #617180;
+  --accent: #4c88bc;
+  --focus-ring: rgba(76, 136, 188, 0.22);
+  --shadow-ambient: 0 16px 38px rgba(55, 75, 96, 0.1);
+}
+
+.app-shell-console {
+  --console-bg: var(--surface-canvas);
+  --console-bg-elevated: var(--surface-muted);
+  --console-surface: var(--surface-raised);
+  --console-surface-strong: var(--surface-raised);
+  --console-glass: var(--surface-primary-glass);
+  --console-glass-strong: var(--surface-raised);
+  --console-border: var(--edge-subtle);
+  --console-border-strong: color-mix(in srgb, var(--accent) 36%, var(--edge-subtle));
+  --console-text: var(--text-primary);
+  --console-text-muted: var(--text-secondary);
+  --console-bubble-assistant: var(--surface-raised);
+  --console-bubble-user: color-mix(in srgb, var(--accent) 14%, var(--surface-raised));
+  --console-attachment: var(--surface-muted);
+  --console-focus: var(--focus-ring);
+  --console-blue: var(--accent);
+  --console-green: #4c9a78;
+  --console-orange: #c28747;
+  --console-red: #bf5c61;
+  --console-shadow: var(--shadow-ambient);
+  --console-shadow-soft: 0 10px 28px rgba(55, 75, 96, 0.09);
+}
+
+.app-shell-settings {
+  --settings-bg: var(--surface-canvas);
+  --settings-surface: var(--surface-raised);
+  --settings-surface-soft: var(--surface-muted);
+  --settings-text: var(--text-primary);
+  --settings-muted: var(--text-secondary);
+  --settings-border: var(--edge-subtle);
+  --settings-border-strong: color-mix(in srgb, var(--edge-subtle) 78%, var(--text-secondary));
+  --settings-primary: var(--accent);
+  --settings-primary-soft: var(--surface-accent);
+  --settings-shadow: var(--shadow-ambient);
+}
+
+@media (prefers-color-scheme: dark) {
+  .app-shell-console,
+  .app-shell-settings {
+    --surface-canvas: #111820;
+    --surface-primary-glass: rgba(28, 39, 50, 0.46);
+    --surface-secondary-glass: rgba(24, 33, 43, 0.34);
+    --surface-raised: rgba(33, 44, 56, 0.78);
+    --surface-muted: rgba(50, 65, 79, 0.55);
+    --surface-accent: rgba(111, 171, 220, 0.16);
+    --edge-subtle: rgba(213, 230, 244, 0.13);
+    --edge-lit: rgba(230, 242, 252, 0.2);
+    --text-primary: #ecf3f8;
+    --text-secondary: #a7b7c4;
+    --accent: #80b7e5;
+    --focus-ring: rgba(128, 183, 229, 0.22);
+    --shadow-ambient: 0 20px 48px rgba(0, 0, 0, 0.26);
+  }
+}
+
+.app-shell-console .console-window {
+  padding: clamp(14px, 2vw, 24px);
+  color: var(--text-primary);
+  background: linear-gradient(128deg, color-mix(in srgb, var(--surface-canvas) 78%, #d7e6f2), var(--surface-canvas) 52%, color-mix(in srgb, var(--surface-canvas) 84%, #cbd9e7));
+}
+
+.app-shell-console .console-window::before {
+  inset: 0;
+  opacity: 1;
+  background: linear-gradient(118deg, rgba(255, 255, 255, 0.18), transparent 34%, rgba(115, 164, 207, 0.09) 72%, transparent);
+}
+
+.app-shell-console .console-window::after {
+  content: none;
+}
+
+.app-shell-console .console-window .console-body {
+  grid-template-columns: minmax(0, 1fr) 262px;
+  gap: 14px;
+}
+
+.app-shell-console .console-chat,
+.app-shell-console .console-task-sidebar {
+  isolation: isolate;
+  overflow: hidden;
+  border: 1px solid var(--edge-lit);
+}
+
+.app-shell-console .console-chat {
+  gap: 12px;
+  padding: clamp(14px, 1.8vw, 20px);
+  border-radius: 24px;
+  background: var(--surface-primary-glass);
+  box-shadow: var(--shadow-ambient);
+  backdrop-filter: blur(22px) saturate(118%);
+}
+
+.app-shell-console .console-task-sidebar {
+  position: relative;
+  border-radius: 20px;
+  background: var(--surface-secondary-glass);
+  border-color: color-mix(in srgb, var(--edge-lit) 78%, transparent);
+  box-shadow: 0 10px 26px rgba(55, 75, 96, 0.08);
+  backdrop-filter: blur(14px) saturate(112%);
+}
+
+.app-shell-console .console-task-sidebar-rail {
+  flex-basis: 44px;
+  gap: 6px;
+  padding: 10px 6px;
+  border-right-color: var(--edge-subtle);
+}
+
+.app-shell-console .console-task-sidebar-toggle {
+  width: 30px;
+  height: 30px;
+  border-color: var(--edge-subtle);
+  border-radius: 9px;
+  background: transparent;
+  color: var(--text-secondary);
+}
+
+.app-shell-console .console-task-sidebar-toggle:hover {
+  border-color: color-mix(in srgb, var(--accent) 34%, var(--edge-subtle));
+  background: var(--surface-accent);
+  color: var(--accent);
+}
+
+.app-shell-console .console-window-task-sidebar-collapsed .console-body {
+  grid-template-columns: minmax(0, 1fr) 44px;
+}
+
+.app-shell-console .console-task-sidebar-content {
+  padding: 15px 13px 13px;
+}
+
+.app-shell-console .console-task-sidebar-header {
+  padding-bottom: 11px;
+  border-bottom-color: var(--edge-subtle);
+}
+
+.app-shell-console .console-task-sidebar-header strong {
+  color: var(--text-primary);
+  font-size: 12px;
+  font-weight: 700;
+}
+
+.app-shell-console .console-task-sidebar-list {
+  padding-top: 12px;
+}
+
+.app-shell-console .console-task-sidebar .task-sticky-notes-console .task-sticky-note,
+.app-shell-console .console-task-sidebar .task-sticky-notes-console .task-sticky-note-action,
+.app-shell-console .console-task-sidebar .task-detail-panel,
+.app-shell-console .console-window .message,
+.app-shell-console .console-window .message-attachment,
+.app-shell-console .console-window .composer-writing-surface,
+.app-shell-console .console-window .composer-attachment,
+.app-shell-console .console-window .empty-state {
+  background: var(--surface-raised);
+  box-shadow: none;
+  backdrop-filter: none;
+}
+
+.app-shell-console .console-task-sidebar .task-sticky-notes-console .task-sticky-note {
+  min-height: 76px;
+  padding: 11px;
+  border-color: var(--edge-subtle);
+  border-radius: 12px;
+}
+
+.app-shell-console .console-task-sidebar .task-sticky-notes-console .task-sticky-note-action {
+  border-color: var(--edge-subtle);
+}
+
+.app-shell-console .console-task-sidebar-empty {
+  padding: 10px 0 10px 12px;
+  border-left-color: color-mix(in srgb, var(--accent) 62%, transparent);
+  color: var(--text-secondary);
+}
+
+.app-shell-console .console-window .message-list {
+  width: 100%;
+  margin: 0;
+  gap: 10px;
+  padding: 2px 2px 6px;
+}
+
+.app-shell-console .console-window .message-list:focus-visible {
+  outline: 2px solid var(--focus-ring);
+  outline-offset: 3px;
+}
+
+.app-shell-console .console-window .message {
+  max-width: min(620px, 84%);
+  padding: 11px 14px;
+  border-color: color-mix(in srgb, var(--edge-subtle) 72%, transparent);
+  border-radius: 16px 16px 16px 6px;
+  color: var(--text-primary);
+  animation: liquidGlassV2MessageIn 180ms ease-out both;
+}
+
+.app-shell-console .console-window .message-user {
+  border-radius: 16px 16px 6px 16px;
+  background: var(--console-bubble-user);
+}
+
+.app-shell-console .console-window .message-role {
+  margin-bottom: 5px;
+  color: var(--text-secondary);
+  font-size: 10px;
+}
+
+.app-shell-console .console-window .message p {
+  color: var(--text-primary);
+  font-size: 13.5px;
+  line-height: 1.56;
+}
+
+.app-shell-console .console-window .message-attachment {
+  border-color: var(--edge-subtle);
+  background: var(--surface-muted);
+}
+
+.app-shell-console .console-window .message-attachment button {
+  border-color: var(--edge-subtle);
+  background: transparent;
+  color: var(--accent);
+}
+
+.app-shell-console .console-window .empty-state {
+  max-width: min(430px, 88%);
+  padding: 20px 22px;
+  border-color: var(--edge-subtle);
+  border-radius: 18px;
+}
+
+.app-shell-console .console-window .empty-state::before {
+  content: none;
+}
+
+.app-shell-console .console-window .empty-state-kicker,
+.app-shell-console .console-window .empty-state p {
+  color: var(--text-secondary);
+}
+
+.app-shell-console .console-composer-glass {
+  border: 0;
+  background: transparent;
+  box-shadow: none;
+  backdrop-filter: none;
+}
+
+.app-shell-console .console-window .composer {
+  padding-top: 10px;
+  border-top-color: color-mix(in srgb, var(--edge-subtle) 78%, transparent);
+}
+
+.app-shell-console .console-window .composer-writing-surface {
+  border-color: var(--edge-subtle);
+  border-radius: 14px;
+}
+
+.app-shell-console .console-window .composer-writing-surface:focus-within {
+  border-color: color-mix(in srgb, var(--accent) 62%, var(--edge-subtle));
+  box-shadow: 0 0 0 2px color-mix(in srgb, var(--accent) 15%, transparent);
+}
+
+.app-shell-console .console-window .composer textarea {
+  min-height: 64px;
+  padding: 13px 15px;
+  color: var(--text-primary);
+}
+
+.app-shell-console .console-window .composer textarea::placeholder {
+  color: color-mix(in srgb, var(--text-secondary) 76%, transparent);
+}
+
+.app-shell-console .console-window .composer-action-rail {
+  min-height: 32px;
+  padding-top: 0;
+}
+
+.app-shell-console .console-window .composer .composer-attach-button,
+.app-shell-console .console-window .composer .composer-send-button {
+  width: 30px;
+  height: 30px;
+  min-width: 30px;
+  color: var(--text-secondary);
+}
+
+.app-shell-console .console-window .composer .composer-send-button {
+  color: var(--text-primary);
+}
+
+.app-shell-console .console-window .composer .composer-attach-button:hover,
+.app-shell-console .console-window .composer .composer-send-button:not(:disabled):hover {
+  background: var(--surface-accent);
+  color: var(--accent);
+}
+
+.app-shell-console .console-window .composer-add-icon {
+  color: var(--text-secondary);
+  font-size: 22px;
+}
+
+.app-shell-console .console-window .composer-presence {
+  color: var(--text-secondary);
+}
+
+.app-shell-console .console-window .composer-status-dot {
+  box-shadow: 0 0 0 3px color-mix(in srgb, var(--console-green) 16%, transparent);
+}
+
+.app-shell-settings .settings-window {
+  padding: 22px 24px;
+  color: var(--text-primary);
+  background: linear-gradient(128deg, color-mix(in srgb, var(--surface-canvas) 80%, #d7e6f2), var(--surface-canvas) 56%, color-mix(in srgb, var(--surface-canvas) 86%, #cbd9e7));
+}
+
+.app-shell-settings .settings-window-shell {
+  width: min(1180px, 100%);
+  min-height: calc(100vh - 44px);
+  margin: 0 auto;
+}
+
+.app-shell-settings .settings-v2-layout {
+  display: grid;
+  grid-template-columns: 214px minmax(0, 1fr);
+  min-height: calc(100vh - 44px);
+  gap: 14px;
+}
+
+.app-shell-settings .settings-v2-sidebar,
+.app-shell-settings .settings-v2-content {
+  border: 1px solid var(--edge-lit);
+  box-shadow: var(--shadow-ambient);
+}
+
+.app-shell-settings .settings-v2-sidebar {
+  position: sticky;
+  top: 0;
+  align-self: start;
+  min-height: calc(100vh - 44px);
+  padding: 18px 12px;
+  border-radius: 20px;
+  background: var(--surface-secondary-glass);
+  backdrop-filter: blur(14px) saturate(112%);
+}
+
+.app-shell-settings .settings-v2-sidebar-brand {
+  padding: 4px 8px 20px;
+  color: var(--text-primary);
+  font-size: 15px;
+  font-weight: 760;
+}
+
+.app-shell-settings .settings-v2-navigation,
+.app-shell-settings .settings-v2-nav-section {
+  display: grid;
+  gap: 4px;
+}
+
+.app-shell-settings .settings-v2-nav-section + .settings-v2-nav-section {
+  margin-top: 18px;
+}
+
+.app-shell-settings .settings-v2-nav-section h2 {
+  margin: 0 0 4px;
+  padding: 0 8px;
+  color: var(--text-secondary);
+  font-size: 10px;
+  font-weight: 720;
+  letter-spacing: 0;
+}
+
+.app-shell-settings .settings-v2-nav-item {
+  display: flex;
+  align-items: center;
+  min-height: 34px;
+  gap: 9px;
+  width: 100%;
+  padding: 0 8px;
+  border: 1px solid transparent;
+  border-radius: 9px;
+  background: transparent;
+  color: var(--text-secondary);
+  font: inherit;
+  font-size: 12px;
+  text-align: left;
+  cursor: pointer;
+}
+
+.app-shell-settings .settings-v2-nav-item .settings-nav-icon {
+  position: static;
+  width: 16px;
+  height: 16px;
+  color: currentColor;
+  opacity: 0.88;
+  transform: none;
+}
+
+.app-shell-settings .settings-v2-nav-item:hover {
+  background: color-mix(in srgb, var(--surface-raised) 64%, transparent);
+  color: var(--text-primary);
+}
+
+.app-shell-settings .settings-v2-nav-item[aria-current="page"] {
+  border-color: color-mix(in srgb, var(--accent) 30%, var(--edge-subtle));
+  background: var(--surface-accent);
+  color: var(--accent);
+}
+
+.app-shell-settings .settings-v2-content {
+  min-width: 0;
+  padding: clamp(22px, 3vw, 38px);
+  border-radius: 22px;
+  background: var(--surface-primary-glass);
+  backdrop-filter: blur(20px) saturate(116%);
+}
+
+.app-shell-settings .settings-page-transition {
+  min-width: 0;
+}
+
+.app-shell-settings .settings-page-enter-active {
+  transition: opacity 160ms ease-out, transform 160ms ease-out;
+}
+
+.app-shell-settings .settings-page-leave-active {
+  transition: opacity 80ms ease-in;
+}
+
+.app-shell-settings .settings-page-enter-from {
+  opacity: 0;
+  transform: translateY(4px);
+}
+
+.app-shell-settings .settings-page-leave-to {
+  opacity: 0;
+}
+
+.app-shell-settings .settings-v2-content-header {
+  padding-bottom: 24px;
+  border-bottom: 1px solid var(--edge-subtle);
+}
+
+.app-shell-settings .settings-v2-content-header span {
+  color: var(--text-secondary);
+  font-size: 11px;
+}
+
+.app-shell-settings .settings-v2-content-header h1 {
+  margin: 5px 0 7px;
+  color: var(--text-primary);
+  font-size: 26px;
+  font-weight: 740;
+  line-height: 1.15;
+}
+
+.app-shell-settings .settings-v2-content-header p {
+  max-width: 620px;
+  margin: 0;
+  color: var(--text-secondary);
+  font-size: 13px;
+  line-height: 1.55;
+}
+
+.app-shell-settings .settings-v2-content .settings-page-container {
+  width: 100%;
+  gap: 20px;
+  padding: 24px 0 0;
+}
+
+.app-shell-settings .settings-v2-content .settings-page-field,
+.app-shell-settings .settings-v2-content .settings-page-toggle,
+.app-shell-settings .settings-v2-content .settings-model-card,
+.app-shell-settings .settings-v2-content .settings-task-cli-card,
+.app-shell-settings .settings-v2-content .settings-live2d-preview-card,
+.app-shell-settings .settings-v2-content .settings-live2d-list,
+.app-shell-settings .settings-v2-content .backend-status-panel,
+.app-shell-settings .settings-v2-content .memory-debug-panel {
+  border-color: var(--edge-subtle);
+  background: var(--surface-raised);
+  box-shadow: none;
+}
+
+.app-shell-settings .settings-v2-content .settings-page-field,
+.app-shell-settings .settings-v2-content .settings-page-toggle,
+.app-shell-settings .settings-v2-content .settings-model-card,
+.app-shell-settings .settings-v2-content .settings-task-cli-card,
+.app-shell-settings .settings-v2-content .settings-live2d-preview-card,
+.app-shell-settings .settings-v2-content .settings-live2d-list,
+.app-shell-settings .settings-v2-content .backend-status-panel,
+.app-shell-settings .settings-v2-content .memory-debug-panel {
+  border-radius: 12px;
+}
+
+.app-shell-settings .settings-v2-content .settings-page-section {
+  border: 0;
+  background: transparent;
+  box-shadow: none;
+}
+
+.app-shell-settings .settings-v2-content .settings-page-lead {
+  display: none;
+}
+
+.app-shell-settings .settings-v2-content input,
+.app-shell-settings .settings-v2-content textarea,
+.app-shell-settings .settings-v2-content select,
+.app-shell-settings .settings-v2-content .settings-model-provider-select {
+  border-color: var(--edge-subtle);
+  border-radius: 9px;
+  background: var(--surface-muted);
+  color: var(--text-primary);
+}
+
+.app-shell-settings .settings-v2-content input:focus,
+.app-shell-settings .settings-v2-content textarea:focus,
+.app-shell-settings .settings-v2-content select:focus {
+  outline: 2px solid var(--focus-ring);
+  outline-offset: 1px;
+}
+
+.app-shell-settings .settings-v2-content .settings-config-button,
+.app-shell-settings .settings-v2-content .settings-model-test-button,
+.app-shell-settings .settings-v2-content .memory-debug-toggle,
+.app-shell-settings .settings-v2-content .memory-debug-refresh {
+  border-color: var(--edge-subtle);
+  border-radius: 9px;
+  background: transparent;
+  color: var(--text-primary);
+  box-shadow: none;
+}
+
+.app-shell-settings .settings-v2-content .settings-config-button:hover,
+.app-shell-settings .settings-v2-content .settings-model-test-button:hover,
+.app-shell-settings .settings-v2-content .memory-debug-toggle:hover,
+.app-shell-settings .settings-v2-content .memory-debug-refresh:hover {
+  border-color: color-mix(in srgb, var(--accent) 40%, var(--edge-subtle));
+  background: var(--surface-accent);
+  color: var(--accent);
+}
+
+@keyframes liquidGlassV2MessageIn {
+  from { opacity: 0; transform: translateY(4px); }
+  to { opacity: 1; transform: translateY(0); }
+}
+
+@media (max-width: 1024px) {
+  .app-shell-console .console-window .console-body {
+    grid-template-columns: minmax(0, 1fr) 44px;
+  }
+}
+
+@media (max-width: 960px) {
+  .app-shell-settings .settings-window {
+    padding: 0 20px 28px;
+  }
+
+  .app-shell-settings .settings-window-shell {
+    width: min(960px, 100%);
+    min-height: 100%;
+    gap: 18px;
+  }
+
+  .app-shell-settings .settings-center {
+    min-height: 0;
+    padding-bottom: 24px;
+  }
+
+  .app-shell-settings .settings-center-tab {
+    min-height: 84px;
+    padding: 15px 64px 15px 16px;
+    border: 1px solid var(--edge-lit);
+    border-radius: 14px;
+    background: var(--surface-secondary-glass);
+    box-shadow: 0 8px 22px rgba(55, 75, 96, 0.07);
+  }
+
+  .app-shell-settings .settings-center-tab::after,
+  .app-shell-settings .settings-center-tab::before {
+    content: none;
+  }
+
+  .app-shell-settings .settings-center-tab:hover {
+    border-color: color-mix(in srgb, var(--accent) 34%, var(--edge-subtle));
+    background: var(--surface-primary-glass);
+    box-shadow: 0 10px 24px rgba(55, 75, 96, 0.08);
+    transform: none;
+  }
+
+  .app-shell-settings .settings-center-tab .settings-nav-icon {
+    right: -4px;
+    bottom: -8px;
+    width: 76px;
+    height: 76px;
+    color: color-mix(in srgb, var(--text-secondary) 26%, transparent);
+    opacity: 0.68;
+  }
+
+  .app-shell-settings .settings-menu-watermark {
+    display: none;
+  }
+}
+
+@media (max-width: 720px) {
+  .app-shell-console .console-window {
+    padding: 10px;
+  }
+
+  .app-shell-console .console-chat {
+    padding: 12px;
+    border-radius: 18px;
+  }
+
+  .app-shell-console .console-window .message {
+    max-width: 90%;
+  }
+}
+
+@media (prefers-reduced-motion: reduce) {
+  .app-shell-console .console-window .message,
+  .app-shell-settings .settings-v2-nav-item,
+  .app-shell-settings .settings-page-enter-active,
+  .app-shell-settings .settings-page-leave-active {
+    animation: none;
+    transition: none;
+  }
+}
+
+/* Resizable task notes: preserve the chat reading width and preview from the rail. */
+.app-shell-console .console-window .console-body {
+  grid-template-columns: minmax(0, 1fr) 14px var(--task-sidebar-width, 262px);
+  gap: 0;
+  position: relative;
+}
+
+.app-shell-console .console-chat {
+  grid-column: 1;
+}
+
+.app-shell-console .console-task-sidebar-resize-handle {
+  display: grid;
+  grid-column: 2;
+  width: 14px;
+  min-height: 0;
+  place-items: center;
+  cursor: col-resize;
+  touch-action: none;
+  outline: none;
+}
+
+.app-shell-console .console-task-sidebar {
+  grid-column: 3;
+}
+
+.app-shell-console .console-task-sidebar-resize-handle > span {
+  width: 1px;
+  height: 48px;
+  border-radius: 999px;
+  background: color-mix(in srgb, var(--edge-lit) 72%, transparent);
+  transition: height 160ms ease, background 160ms ease, box-shadow 160ms ease;
+}
+
+.app-shell-console .console-task-sidebar-resize-handle:hover > span,
+.app-shell-console .console-task-sidebar-resize-handle:focus-visible > span,
+.app-shell-console .console-window-task-sidebar-resizing .console-task-sidebar-resize-handle > span {
+  height: 82px;
+  background: color-mix(in srgb, var(--accent) 68%, var(--edge-lit));
+  box-shadow: 0 0 0 3px color-mix(in srgb, var(--accent) 15%, transparent);
+}
+
+.app-shell-console .console-window-task-sidebar-rail-mode .console-body {
+  grid-template-columns: minmax(0, 1fr) 0 44px;
+}
+
+.app-shell-console .console-window-task-sidebar-closing .console-body,
+.app-shell-console .console-window-task-sidebar-layout-transitioning .console-body {
+  transition: grid-template-columns 280ms linear;
+}
+
+.app-shell-console .console-window-task-sidebar-resizing .console-body {
+  transition: none;
+}
+
+.app-shell-console .console-window-task-sidebar-rail-mode .console-task-sidebar {
+  overflow: visible;
+}
+
+.app-shell-console .console-window-task-sidebar-rail-mode .console-task-sidebar-rail {
+  position: relative;
+  z-index: 2;
+  border-right: 0;
+  border-radius: 20px;
+}
+
+.app-shell-console .console-window-task-sidebar-rail-mode .console-task-sidebar-content {
+  position: absolute;
+  z-index: 1;
+  top: 0;
+  right: 44px;
+  width: calc(var(--task-sidebar-width, 262px) - 44px);
+  height: 100%;
+  box-sizing: border-box;
+  border: 1px solid color-mix(in srgb, var(--edge-lit) 82%, transparent);
+  border-right: 0;
+  border-radius: 20px 0 0 20px;
+  background: var(--surface-secondary-glass);
+  box-shadow: -14px 12px 30px rgba(39, 56, 72, 0.14);
+  backdrop-filter: blur(18px) saturate(116%);
+}
+
+.app-shell-console .console-window-task-sidebar-layout-transitioning .console-task-sidebar {
+  overflow: hidden;
+}
+
+.app-shell-console .console-window-task-sidebar-rail-mode:not(.console-window-task-sidebar-layout-transitioning) .console-task-sidebar {
+  border-color: transparent;
+  background: transparent;
+  box-shadow: none;
+  backdrop-filter: none;
+}
+
+.app-shell-console .console-window:not(.console-window-task-sidebar-rail-mode) .console-task-sidebar-content,
+.app-shell-console .console-window-task-sidebar-layout-transitioning .console-task-sidebar-content {
+  position: absolute;
+  z-index: 1;
+  top: 0;
+  right: 0;
+  width: calc(var(--task-sidebar-width, 262px) - 44px);
+  height: 100%;
+  box-sizing: border-box;
+  border: 0;
+  border-radius: 0;
+  background: transparent;
+  box-shadow: none;
+  backdrop-filter: none;
+}
+
+.task-sidebar-preview-enter-active,
+.task-sidebar-preview-leave-active {
+  will-change: opacity;
+  transition: opacity 220ms ease;
+}
+
+.task-sidebar-preview-enter-from {
+  opacity: 0;
+}
+
+.task-sidebar-preview-leave-to {
+  opacity: 0;
+  transform: none;
+}
+
+.task-sidebar-preview-enter-to,
+.task-sidebar-preview-leave-from {
+  opacity: 1;
+}
+
+.app-shell-console .console-task-sidebar-toggle {
+  width: 28px;
+  height: 28px;
+  border-color: transparent;
+  border-radius: 50%;
+  background: transparent;
+}
+
+.app-shell-console .console-task-sidebar-toggle:hover,
+.app-shell-console .console-task-sidebar-toggle:focus-visible {
+  border-color: transparent;
+  background: color-mix(in srgb, var(--surface-accent) 82%, transparent);
+  color: var(--accent);
+  outline: none;
+}
+
+.app-shell-console .console-task-sidebar-toggle:focus-visible {
+  box-shadow: 0 0 0 2px var(--focus-ring);
+}
+
+html.is-task-sidebar-resizing,
+html.is-task-sidebar-resizing * {
+  cursor: col-resize !important;
+  user-select: none !important;
+}
+
+@media (prefers-reduced-motion: reduce) {
+  .app-shell-console .console-task-sidebar-resize-handle > span,
+  .task-sidebar-preview-enter-active,
+  .task-sidebar-preview-leave-active {
+    animation: none;
+    transition: none;
+  }
+
+  .app-shell-console .console-window-task-sidebar-closing .console-body,
+  .app-shell-console .console-window-task-sidebar-layout-transitioning .console-body {
+    transition: none;
   }
 }

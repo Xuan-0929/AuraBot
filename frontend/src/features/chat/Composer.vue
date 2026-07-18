@@ -15,46 +15,74 @@
         </button>
       </span>
     </div>
-    <div class="composer-input-row">
-      <button
-        type="button"
-        class="composer-attach-button"
-        :aria-label="t(displayLanguage, 'attachFile')"
-        @click="fileInputRef?.click()"
-      >
-        <span class="composer-paperclip" aria-hidden="true"></span>
-      </button>
+    <div class="composer-writing-surface">
       <textarea
+        ref="textareaRef"
         v-model="content"
         :placeholder="t(displayLanguage, 'saySomething')"
-        rows="2"
+        :aria-label="t(displayLanguage, 'saySomething')"
+        rows="1"
+        @input="resizeTextarea"
         @keydown="handleKeyDown"
       />
-      <button type="submit" :disabled="submitting || !content.trim()">
-        {{ t(displayLanguage, "send") }}
-      </button>
+    </div>
+    <div class="composer-action-rail">
+      <div class="composer-rail-actions">
+        <button
+          type="button"
+          class="composer-attach-button"
+          :aria-label="t(displayLanguage, 'attachFile')"
+          :title="t(displayLanguage, 'attachFile')"
+          @click="fileInputRef?.click()"
+        >
+          <span class="composer-add-icon" aria-hidden="true">+</span>
+        </button>
+      </div>
+      <span class="composer-presence" aria-live="polite">
+        <span :class="['composer-status-dot', `composer-status-dot-${agentStatus}`]" aria-hidden="true"></span>
+        {{ agentStatusLabel(displayLanguage, agentStatus) }}
+      </span>
+      <div class="composer-rail-actions composer-rail-actions-end">
+        <button
+          v-if="content.trim()"
+          type="submit"
+          class="composer-send-button"
+          :disabled="submitting"
+          :aria-label="t(displayLanguage, 'send')"
+          :title="t(displayLanguage, 'send')"
+        >
+          <Icon class="composer-action-icon" icon="solar:arrow-up-linear" aria-hidden="true" />
+        </button>
+      </div>
     </div>
   </form>
 </template>
 
 <script setup lang="ts">
-import { ref } from "vue";
-import type { ChatInputAttachment } from "@shared/contracts/chat";
+import { nextTick, ref } from "vue";
+import { Icon, addCollection } from "@iconify/vue";
+import solarIcons from "@iconify-json/solar/icons.json";
+import type { AgentStatus, ChatInputAttachment } from "@shared/contracts/chat";
 import type { PetSettings } from "@shared/schemas/petSettings";
-import { t } from "../../i18n";
+import { agentStatusLabel, t } from "../../i18n";
+
+addCollection(solarIcons);
 
 const props = withDefaults(
   defineProps<{
     displayLanguage?: PetSettings["displayLanguage"];
+    agentStatus?: AgentStatus;
     onSend(content: string, attachments: ChatInputAttachment[]): Promise<void>;
   }>(),
-  { displayLanguage: "en" }
+  { displayLanguage: "en", agentStatus: "idle" }
 );
 
 const content = ref("");
 const submitting = ref(false);
 const fileInputRef = ref<HTMLInputElement | null>(null);
+const textareaRef = ref<HTMLTextAreaElement | null>(null);
 const attachments = ref<DisplayChatInputAttachment[]>([]);
+const MAX_COMPOSER_HEIGHT = 198;
 
 type DisplayChatInputAttachment = ChatInputAttachment & {
   displayName: string;
@@ -78,6 +106,8 @@ async function sendContent(nextContent: string) {
     throw error;
   } finally {
     submitting.value = false;
+    await nextTick();
+    resizeTextarea();
   }
 }
 
@@ -86,13 +116,13 @@ function handleSubmit() {
 }
 
 function handleKeyDown(event: KeyboardEvent) {
-  if (event.key !== "Enter" || event.isComposing) {
+  if (event.key !== "Enter" || event.isComposing || event.keyCode === 229) {
     return;
   }
 
   const textarea = event.currentTarget as HTMLTextAreaElement;
 
-  if (event.ctrlKey) {
+  if (event.shiftKey) {
     event.preventDefault();
     insertLineBreak(textarea);
     return;
@@ -102,12 +132,23 @@ function handleKeyDown(event: KeyboardEvent) {
   void sendContent(textarea.value);
 }
 
+function resizeTextarea() {
+  const textarea = textareaRef.value;
+  if (!textarea) {
+    return;
+  }
+
+  textarea.style.height = "auto";
+  textarea.style.height = `${Math.min(textarea.scrollHeight, MAX_COMPOSER_HEIGHT)}px`;
+}
+
 function insertLineBreak(textarea: HTMLTextAreaElement) {
   const selectionStart = textarea.selectionStart ?? textarea.value.length;
   const selectionEnd = textarea.selectionEnd ?? textarea.value.length;
 
   textarea.setRangeText("\n", selectionStart, selectionEnd, "end");
   content.value = textarea.value;
+  resizeTextarea();
 }
 
 function handleFileInput(event: Event) {

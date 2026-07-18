@@ -44,7 +44,7 @@
           <dt>{{ t(store.displayLanguage, "model") }}</dt>
           <dd>{{ store.appConfig[row.key].model }}</dd>
           <template v-if="store.appConfig[row.key].baseUrl">
-            <dt>Base URL</dt>
+            <dt>{{ t(store.displayLanguage, "baseUrl") }}</dt>
             <dd>{{ store.appConfig[row.key].baseUrl }}</dd>
           </template>
           <dt>{{ t(store.displayLanguage, "apiKey") }}</dt>
