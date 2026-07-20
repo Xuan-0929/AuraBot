@@ -19,8 +19,16 @@ class TaskTests(unittest.TestCase):
             SkillGroup("writing", []),
         ]
         tool_groups = [
-            ToolGroup("web", [Tool("search", "Search the web")], "Web tools"),
-            ToolGroup("files", [Tool("read", "Read a file")], "File tools"),
+            ToolGroup(
+                "web",
+                [Tool("search", "Search the web", "localhost:6410")],
+                "Web tools",
+            ),
+            ToolGroup(
+                "files",
+                [Tool("read", "Read a file", "localhost:6410")],
+                "File tools",
+            ),
         ]
 
         task = Task(
@@ -42,7 +50,11 @@ class TaskTests(unittest.TestCase):
 
         first.skill_groups.append(SkillGroup("research", []))
         first.tool_groups.append(
-            ToolGroup("web", [Tool("search", "Search the web")], "Web tools")
+            ToolGroup(
+                "web",
+                [Tool("search", "Search the web", "localhost:6410")],
+                "Web tools",
+            )
         )
 
         self.assertEqual(second.skill_groups, [])

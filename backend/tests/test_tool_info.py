@@ -1,12 +1,44 @@
+import tempfile
 import unittest
+from pathlib import Path
+from unittest.mock import patch
 
 from agent.tools.Tool import Tool
 from agent.tools.ToolGroup import ToolGroup
+from backend.config import Config
 
 
 class ToolDescriptionTests(unittest.TestCase):
+    def test_tool_uses_configured_local_server_when_url_is_omitted(self):
+        with tempfile.TemporaryDirectory() as directory:
+            config_path = Path(directory) / "config.yaml"
+            config_path.write_text(
+                'local_mcp_server: "localhost:7654"\n',
+                encoding="utf-8",
+            )
+            runtime_config = Config().initialize(config_path)
+
+            with patch("backend.config.config", runtime_config):
+                tool = Tool("search", "Search locally")
+
+        self.assertEqual(tool.server_url, "localhost:7654")
+
+    def test_explicit_server_url_does_not_require_initialized_config(self):
+        with patch("backend.config.config", Config()):
+            tool = Tool(
+                "search",
+                "Search remotely",
+                server_url="https://mcp.example.com",
+            )
+
+        self.assertEqual(tool.server_url, "https://mcp.example.com")
+
     def test_tool_load_intro_returns_complete_xml_function_schema(self):
-        tool = Tool("search & inspect", "Find <matches>")
+        tool = Tool(
+            "search & inspect",
+            "Find <matches>",
+            server_url="localhost:6410",
+        )
 
         self.assertEqual(
             tool.load_intro(),
@@ -34,7 +66,13 @@ class ToolDescriptionTests(unittest.TestCase):
     def test_tool_group_lists_prompt_ready_tool_descriptions(self):
         group = ToolGroup(
             "filesystem & shell",
-            [Tool("read <file>", "Read & inspect a file")],
+            [
+                Tool(
+                    "read <file>",
+                    "Read & inspect a file",
+                    server_url="localhost:6410",
+                )
+            ],
             "Local <tools>",
         )
 

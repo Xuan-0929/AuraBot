@@ -7,9 +7,9 @@
 ports:
   frontend: 6400
   backend_gateway: 6401
-  services_start: 6402
+  
 
-
+local_mcp_server: "localhost:6410"
 
 
 

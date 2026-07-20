@@ -66,12 +66,12 @@ class ReActHarnessPromptTests(unittest.IsolatedAsyncioTestCase):
                 tool_groups=[
                     ToolGroup(
                         "filesystem",
-                        [Tool("read_file", "Read one file")],
+                        [Tool("read_file", "Read one file", "localhost:6410")],
                         "File tools",
                     ),
                     ToolGroup(
                         "search",
-                        [Tool("web_search", "Search the web")],
+                        [Tool("web_search", "Search the web", "localhost:6410")],
                         "Search tools",
                     ),
                 ],

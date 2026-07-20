@@ -2,9 +2,16 @@ from html import escape
 
 
 class Tool:
-    def __init__(self, name: str, description: str):
+    def __init__(self, name: str, description: str, server_url: str | None = None):
         self.name = name
         self.description = description
+
+        if server_url is not None:
+            self.server_url = server_url
+        else:
+            from backend.config import config
+
+            self.server_url = config["local_mcp_server"]
 
     def load_intro(self) -> str:
         """Generate a complete, prompt-ready XML description of this tool."""
