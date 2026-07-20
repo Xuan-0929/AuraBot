@@ -1,4 +1,6 @@
 import sqlite3
+from collections.abc import Iterator
+from contextlib import closing, contextmanager
 from pathlib import Path
 
 SQLITE_PATH = Path(__file__).with_name("agent_runtime_sql.sqlite")
@@ -129,14 +131,71 @@ class SchemaInitializationError(RuntimeError):
     """Raised when the Agent database cannot be initialized safely."""
 
 
-def get_connection() -> sqlite3.Connection:
-    connection = sqlite3.connect(SQLITE_PATH)
+def create_connection(
+    database_path: str | Path | None = None,
+) -> sqlite3.Connection:
+    """Create one configured, caller-owned Agent SQLite connection."""
+    path = Path(database_path) if database_path is not None else SQLITE_PATH
+    connection = sqlite3.connect(path, timeout=30.0)
     connection.row_factory = sqlite3.Row
+    connection.execute("PRAGMA foreign_keys = ON")
+
+    foreign_keys_enabled = connection.execute(
+        "PRAGMA foreign_keys"
+    ).fetchone()
+    if foreign_keys_enabled is None or foreign_keys_enabled[0] != 1:
+        connection.close()
+        raise SchemaInitializationError(
+            "SQLite foreign key enforcement could not be enabled"
+        )
+
     return connection
 
 
+@contextmanager
+def read_connection(
+    database_path: str | Path | None = None,
+) -> Iterator[sqlite3.Connection]:
+    """Open one configured connection for a complete logical read."""
+    connection = create_connection(database_path)
+    try:
+        yield connection
+    finally:
+        connection.close()
+
+
+@contextmanager
+def transaction(
+    database_path: str | Path | None = None,
+) -> Iterator[sqlite3.Connection]:
+    """Open, commit or roll back, then close one write transaction."""
+    connection = create_connection(database_path)
+    try:
+        connection.execute("BEGIN")
+        yield connection
+    except BaseException:
+        connection.rollback()
+        raise
+    else:
+        try:
+            connection.commit()
+        except BaseException:
+            connection.rollback()
+            raise
+    finally:
+        connection.close()
+
+
+def initialize_schema(
+    database_path: str | Path | None = None,
+) -> None:
+    """Initialize the idempotent Agent schema once for a database lifecycle."""
+    with closing(create_connection(database_path)) as connection:
+        ensure_schema(connection)
+
+
 def ensure_schema(connection: sqlite3.Connection) -> None:
-    """Idempotently create all Agent tables and indexes."""
+    """Idempotently create all Agent tables and indexes during initialization."""
 
     connection.execute("PRAGMA foreign_keys = ON")
     foreign_keys_enabled = connection.execute(

@@ -535,3 +535,8 @@ The current priority order is:
 5. Main-thread task control v2: extend the current hint-based router with richer references like "第一个", "刚才那个", and task aliases.
 
 See [AuraBot 当前开发状态](docs/aurabot-development-status.md) for the live status board.
+
+
+## Future Work Further than MVP
+
+- MCP Tool 原子全量同步

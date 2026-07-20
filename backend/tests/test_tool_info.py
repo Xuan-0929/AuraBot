@@ -1,11 +1,56 @@
 import tempfile
 import unittest
+from json import JSONDecodeError
 from pathlib import Path
+from xml.etree import ElementTree
 from unittest.mock import patch
 
 from agent.tools.Tool import Tool
 from agent.tools.ToolGroup import ToolGroup
+from agent.tools.utils.formatter import (
+    format_tool_group_intro,
+    parse_optional_schema_json,
+    parse_schema_json,
+    serialize_schema,
+)
 from backend.config import Config
+
+
+EMPTY_INPUT_SCHEMA = {"type": "object", "properties": {}}
+
+
+class ToolFormatterTests(unittest.TestCase):
+    def test_schema_json_helpers_round_trip_compact_unicode_json(self):
+        schema = {"type": "object", "title": "中文"}
+
+        serialized = serialize_schema(schema)
+
+        self.assertEqual(serialized, '{"type":"object","title":"中文"}')
+        self.assertEqual(parse_schema_json(serialized), schema)
+        self.assertIsNone(parse_optional_schema_json(None))
+
+    def test_schema_json_helpers_reject_non_object_json(self):
+        with self.assertRaises(TypeError):
+            serialize_schema([])
+        with self.assertRaises(ValueError):
+            parse_schema_json("[]")
+        with self.assertRaises(JSONDecodeError):
+            parse_schema_json("not-json")
+
+    def test_empty_tool_group_intro_has_valid_tools_container(self):
+        self.assertEqual(
+            format_tool_group_intro(
+                name="empty & safe",
+                description="No <tools>",
+                tool_intros=[],
+            ),
+            "<tool_group>\n"
+            "<name>empty &amp; safe</name>\n"
+            "<description>No &lt;tools&gt;</description>\n"
+            "<tools>\n"
+            "</tools>\n"
+            "</tool_group>",
+        )
 
 
 class ToolDescriptionTests(unittest.TestCase):
@@ -19,7 +64,11 @@ class ToolDescriptionTests(unittest.TestCase):
             runtime_config = Config().initialize(config_path)
 
             with patch("backend.config.config", runtime_config):
-                tool = Tool("search", "Search locally")
+                tool = Tool(
+                    "search",
+                    "Search locally",
+                    input_schema=EMPTY_INPUT_SCHEMA,
+                )
 
         self.assertEqual(tool.server_url, "localhost:7654")
 
@@ -29,39 +78,82 @@ class ToolDescriptionTests(unittest.TestCase):
                 "search",
                 "Search remotely",
                 server_url="https://mcp.example.com",
+                input_schema=EMPTY_INPUT_SCHEMA,
             )
 
         self.assertEqual(tool.server_url, "https://mcp.example.com")
 
+    def test_tool_requires_object_schemas(self):
+        with self.assertRaises(ValueError):
+            Tool("search", "Search locally", server_url="localhost:6410")
+        with self.assertRaises(TypeError):
+            Tool(
+                "search",
+                "Search locally",
+                server_url="localhost:6410",
+                input_schema=[],
+            )
+        with self.assertRaises(TypeError):
+            Tool(
+                "search",
+                "Search locally",
+                server_url="localhost:6410",
+                input_schema=EMPTY_INPUT_SCHEMA,
+                output_schema=[],
+            )
+
     def test_tool_load_intro_returns_complete_xml_function_schema(self):
+        input_schema = {
+            "type": "object",
+            "properties": {
+                "query": {
+                    "type": "string",
+                    "description": "Find <term> & 中文",
+                }
+            },
+            "required": ["query"],
+        }
+        output_schema = {
+            "type": "object",
+            "properties": {"matches": {"type": "array"}},
+        }
         tool = Tool(
             "search & inspect",
             "Find <matches>",
             server_url="localhost:6410",
+            input_schema=input_schema,
+            output_schema=output_schema,
         )
 
+        intro = tool.load_intro()
+        function = ElementTree.fromstring(intro).find("function")
+
+        self.assertIsNotNone(function)
+        self.assertEqual(function.findtext("name"), "search & inspect")
+        self.assertEqual(function.findtext("description"), "Find <matches>")
         self.assertEqual(
-            tool.load_intro(),
-            "<tool>\n"
-            "<type>function</type>\n"
-            "<function>\n"
-            "<name>search &amp; inspect</name>\n"
-            "<description>Find &lt;matches&gt;</description>\n"
-            "<parameters>\n"
-            "<type>object</type>\n"
-            "<properties>\n"
-            "<query>\n"
-            "<type>string</type>\n"
-            "<description>Input query for the tool.</description>\n"
-            "</query>\n"
-            "</properties>\n"
-            "<required>\n"
-            "<field>query</field>\n"
-            "</required>\n"
-            "</parameters>\n"
-            "</function>\n"
-            "</tool>",
+            parse_schema_json(function.findtext("parameters")),
+            input_schema,
         )
+        self.assertEqual(
+            parse_schema_json(function.findtext("returns")),
+            output_schema,
+        )
+        self.assertIn("Find &lt;term&gt; &amp; 中文", intro)
+        self.assertNotIn("Input query for the tool.", intro)
+
+    def test_tool_intro_omits_returns_without_output_schema(self):
+        tool = Tool(
+            "search",
+            "Search locally",
+            server_url="localhost:6410",
+            input_schema=EMPTY_INPUT_SCHEMA,
+        )
+
+        function = ElementTree.fromstring(tool.load_intro()).find("function")
+
+        self.assertIsNotNone(function)
+        self.assertIsNone(function.find("returns"))
 
     def test_tool_group_lists_prompt_ready_tool_descriptions(self):
         group = ToolGroup(
@@ -71,6 +163,11 @@ class ToolDescriptionTests(unittest.TestCase):
                     "read <file>",
                     "Read & inspect a file",
                     server_url="localhost:6410",
+                    input_schema={
+                        "type": "object",
+                        "properties": {"path": {"type": "string"}},
+                        "required": ["path"],
+                    },
                 )
             ],
             "Local <tools>",

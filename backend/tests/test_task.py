@@ -6,6 +6,9 @@ from backend.agent.tools.Tool import Tool
 from backend.agent.tools.ToolGroup import ToolGroup
 
 
+EMPTY_INPUT_SCHEMA = {"type": "object", "properties": {}}
+
+
 class TaskTypeTests(unittest.TestCase):
     def test_task_type_defines_supported_agent_modes(self):
         self.assertEqual(TaskType.ReAct.value, "ReAct")
@@ -21,12 +24,26 @@ class TaskTests(unittest.TestCase):
         tool_groups = [
             ToolGroup(
                 "web",
-                [Tool("search", "Search the web", "localhost:6410")],
+                [
+                    Tool(
+                        "search",
+                        "Search the web",
+                        "localhost:6410",
+                        input_schema=EMPTY_INPUT_SCHEMA,
+                    )
+                ],
                 "Web tools",
             ),
             ToolGroup(
                 "files",
-                [Tool("read", "Read a file", "localhost:6410")],
+                [
+                    Tool(
+                        "read",
+                        "Read a file",
+                        "localhost:6410",
+                        input_schema=EMPTY_INPUT_SCHEMA,
+                    )
+                ],
                 "File tools",
             ),
         ]
@@ -52,7 +69,14 @@ class TaskTests(unittest.TestCase):
         first.tool_groups.append(
             ToolGroup(
                 "web",
-                [Tool("search", "Search the web", "localhost:6410")],
+                [
+                    Tool(
+                        "search",
+                        "Search the web",
+                        "localhost:6410",
+                        input_schema=EMPTY_INPUT_SCHEMA,
+                    )
+                ],
                 "Web tools",
             )
         )

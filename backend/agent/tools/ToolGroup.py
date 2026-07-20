@@ -1,12 +1,13 @@
-from html import escape
-
 from .Tool import Tool
+from .utils.formatter import format_tool_group_intro
 
 
 class ToolGroup:
     def __init__(self, name: str, tools: list[Tool], description: str):
-        if not name or not tools or not description:
-            raise ValueError("ToolGroup name, tools, and description cannot be empty.")
+        if not name or tools is None or not description:
+            raise ValueError(
+                "ToolGroup name and description cannot be empty; tools cannot be None."
+            )
 
         self.name = name
         self.tools = tools
@@ -14,12 +15,8 @@ class ToolGroup:
 
     def list_tools_descriptions(self) -> str:
         """Generate a prompt-ready group description and tool summary."""
-        descriptor_lines = [
-            "<tool_group>",
-            f"<name>{escape(self.name)}</name>",
-            f"<description>{escape(self.description)}</description>",
-            "<tools>",
-        ]
-        descriptor_lines.extend(tool.load_intro() for tool in self.tools)
-        descriptor_lines.extend(["</tools>", "</tool_group>"])
-        return "\n".join(descriptor_lines)
+        return format_tool_group_intro(
+            name=self.name,
+            description=self.description,
+            tool_intros=[tool.load_intro() for tool in self.tools],
+        )

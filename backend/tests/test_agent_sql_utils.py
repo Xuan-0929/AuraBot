@@ -16,17 +16,21 @@ class AgentSQLUtilsTests(unittest.TestCase):
         self.assertEqual(utils.SQLITE_PATH.name, "agent_runtime_sql.sqlite")
         self.assertEqual(utils.SQLITE_PATH.parent, Path(utils.__file__).parent)
 
-    def test_get_connection_opens_runtime_sqlite_with_row_factory(self):
+    def test_create_connection_configures_runtime_sqlite(self):
         with tempfile.TemporaryDirectory() as tmpdir:
             sqlite_path = Path(tmpdir) / "agent_runtime_sql.sqlite"
 
             with patch.object(utils, "SQLITE_PATH", sqlite_path):
-                connection = utils.get_connection()
+                connection = utils.create_connection()
 
                 try:
                     self.assertIsInstance(connection, sqlite3.Connection)
                     self.assertTrue(sqlite_path.exists())
                     self.assertIs(connection.row_factory, sqlite3.Row)
+                    self.assertEqual(
+                        connection.execute("PRAGMA foreign_keys").fetchone()[0],
+                        1,
+                    )
 
                     connection.execute("create table runtime_context (value text)")
                     connection.execute(
@@ -41,11 +45,42 @@ class AgentSQLUtilsTests(unittest.TestCase):
                 finally:
                     connection.close()
 
+    def test_connection_contexts_close_and_manage_transactions(self):
+        with tempfile.TemporaryDirectory() as tmpdir:
+            sqlite_path = Path(tmpdir) / "agent_runtime_sql.sqlite"
+
+            with patch.object(utils, "SQLITE_PATH", sqlite_path):
+                utils.initialize_schema()
+
+                with utils.transaction() as connection:
+                    connection.execute(
+                        "INSERT INTO mcp_server (name, url) VALUES (?, ?)",
+                        ("committed", "localhost:6410"),
+                    )
+
+                with self.assertRaises(RuntimeError):
+                    with utils.transaction() as connection:
+                        connection.execute(
+                            "INSERT INTO mcp_server (name, url) VALUES (?, ?)",
+                            ("rolled-back", "localhost:6411"),
+                        )
+                        raise RuntimeError("force rollback")
+
+                with utils.read_connection() as connection:
+                    rows = connection.execute(
+                        "SELECT name FROM mcp_server ORDER BY id"
+                    ).fetchall()
+
+                self.assertEqual([row["name"] for row in rows], ["committed"])
+                with self.assertRaises(sqlite3.ProgrammingError):
+                    connection.execute("SELECT 1")
+
     def test_skill_group_crud_returns_runtime_objects(self):
         with tempfile.TemporaryDirectory() as tmpdir:
             sqlite_path = Path(tmpdir) / "agent_runtime_sql.sqlite"
 
             with patch.object(utils, "SQLITE_PATH", sqlite_path):
+                utils.initialize_schema()
                 group_id = SkillGroupSQL.insert_skill_group_metadata(
                     "core",
                     "Core skills",
@@ -91,6 +126,7 @@ class AgentSQLUtilsTests(unittest.TestCase):
             sqlite_path = Path(tmpdir) / "agent_runtime_sql.sqlite"
 
             with patch.object(utils, "SQLITE_PATH", sqlite_path):
+                utils.initialize_schema()
                 SkillGroupSQL.insert_skill_group_metadata("alpha")
                 SkillGroupSQL.insert_skill_group_metadata("beta")
 
@@ -154,8 +190,29 @@ class AgentSQLUtilsTests(unittest.TestCase):
                 self.assertEqual([skill.name for skill in skills], ["lookup"])
                 self.assertEqual(ids, [alpha_id])
 
-                group = SkillGroupSQL.get_skill_group("alpha")
+                with patch.object(
+                    utils,
+                    "create_connection",
+                    wraps=utils.create_connection,
+                ) as create_connection:
+                    group = SkillGroupSQL.get_skill_group("alpha")
+
+                self.assertEqual(create_connection.call_count, 1)
                 self.assertEqual([skill.name for skill in group.skills], ["lookup"])
+
+                with patch.object(
+                    utils,
+                    "create_connection",
+                    wraps=utils.create_connection,
+                ) as create_connection:
+                    groups, _ = SkillGroupSQL.list_skill_groups()
+
+                self.assertEqual(create_connection.call_count, 1)
+                self.assertEqual([group.name for group in groups], ["alpha", "beta"])
+                self.assertEqual(
+                    [[skill.name for skill in group.skills] for group in groups],
+                    [["lookup"], ["search"]],
+                )
 
                 self.assertTrue(SkillSQL.delete_skill_metadata("alpha", "lookup"))
                 self.assertIsNone(SkillSQL.get_skill("alpha", "lookup"))
@@ -165,6 +222,7 @@ class AgentSQLUtilsTests(unittest.TestCase):
             sqlite_path = Path(tmpdir) / "agent_runtime_sql.sqlite"
 
             with patch.object(utils, "SQLITE_PATH", sqlite_path):
+                utils.initialize_schema()
                 SkillGroupSQL.insert_skill_group_metadata("builtin-group", is_builtin=True)
                 SkillSQL.insert_skill_metadata(
                     "builtin-skill",

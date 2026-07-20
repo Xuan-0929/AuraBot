@@ -17,7 +17,6 @@ import argparse
 import sqlite3
 import sys
 from collections.abc import Sequence
-from contextlib import closing
 from pathlib import Path
 
 PROJECT_ROOT = Path(__file__).resolve().parents[1]
@@ -27,7 +26,7 @@ if str(PROJECT_ROOT) not in sys.path:
 from backend.agent.integration.sql.utils import (  # noqa: E402
     SQLITE_PATH,
     SchemaInitializationError,
-    ensure_schema,
+    initialize_schema,
 )
 
 DEFAULT_DATABASE_PATH = SQLITE_PATH
@@ -54,8 +53,7 @@ def initialize_database(
     resolved_path = _resolve_database_path(database_path)
     resolved_path.parent.mkdir(parents=True, exist_ok=True)
 
-    with closing(sqlite3.connect(resolved_path, timeout=30.0)) as connection:
-        ensure_schema(connection)
+    initialize_schema(resolved_path)
 
     return resolved_path
 

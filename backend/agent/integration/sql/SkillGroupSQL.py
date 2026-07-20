@@ -1,9 +1,10 @@
 import sqlite3
 import warnings
-from contextlib import closing
 
-from .utils import *
+
+from ...skills.Skill import Skill
 from ...skills.SkillGroup import SkillGroup
+from .utils import read_connection, transaction
 
 
 
@@ -21,14 +22,36 @@ class SkillGroupSQL:
     """
 
     @staticmethod
-    def _skill_group_from_row(row: sqlite3.Row,
-                              include_skills: bool = True) -> SkillGroup:
-        skills = []
-        if include_skills:
-            from .SkillSQL import SkillSQL
+    def _skill_groups_from_joined_rows(
+        rows: list[sqlite3.Row],
+    ) -> tuple[list[SkillGroup], list[int]]:
+        grouped: dict[int, tuple[str, str | None, list[Skill]]] = {}
 
-            skills, _ = SkillSQL.list_skills(row["name"])
-        return SkillGroup(row["name"], skills, description=row["description"])
+        for row in rows:
+            group_id = int(row["group_id"])
+            if group_id not in grouped:
+                grouped[group_id] = (
+                    row["group_name"],
+                    row["group_description"],
+                    [],
+                )
+
+            if row["skill_id"] is not None:
+                grouped[group_id][2].append(
+                    Skill(row["skill_name"], path=row["skill_url"])
+                )
+
+        return (
+            [
+                SkillGroup(name, skills, description=description)
+                for name, description, skills in grouped.values()
+            ],
+            list(grouped),
+        )
+
+    @staticmethod
+    def _skill_group_without_skills(row: sqlite3.Row) -> SkillGroup:
+        return SkillGroup(row["name"], [], description=row["description"])
 
     @staticmethod
     def insert_skill_group_metadata(name: str, description: str | None = None,
@@ -45,9 +68,8 @@ class SkillGroupSQL:
             int: 新创建的SkillGroup ID
             None: 写入失败，例如名称重复
         """
-        with closing(get_connection()) as connection:
-            ensure_schema(connection)
-            try:
+        try:
+            with transaction() as connection:
                 cursor = connection.execute(
                     """
                     INSERT INTO skill_group (
@@ -59,11 +81,9 @@ class SkillGroupSQL:
                     """,
                     (name, description, int(is_builtin)),
                 )
-                connection.commit()
                 return int(cursor.lastrowid)
-            except sqlite3.IntegrityError:
-                connection.rollback()
-                return None
+        except sqlite3.IntegrityError:
+            return None
 
     @staticmethod
     def delete_skill_group_metadata(name: str) -> bool:
@@ -79,8 +99,7 @@ class SkillGroupSQL:
             True: 删除成功
             False: 删除失败，例如不存在，或是项目原生SkillGroup
         """
-        with closing(get_connection()) as connection:
-            ensure_schema(connection)
+        with transaction() as connection:
             row = connection.execute(
                 "SELECT id, is_builtin FROM skill_group WHERE name = ?",
                 (name,),
@@ -95,7 +114,6 @@ class SkillGroupSQL:
                 "DELETE FROM skill_group WHERE id = ?",
                 (row["id"],),
             )
-            connection.commit()
             return cursor.rowcount > 0
 
     @staticmethod
@@ -118,44 +136,41 @@ class SkillGroupSQL:
             True: 更新成功
             False: 更新失败，例如目标不存在，或new_name冲突
         """
-        with closing(get_connection()) as connection:
-            ensure_schema(connection)
-            row = connection.execute(
-                "SELECT id FROM skill_group WHERE name = ?",
-                (name,),
-            ).fetchone()
-            if row is None:
-                return False
+        try:
+            with transaction() as connection:
+                row = connection.execute(
+                    "SELECT id FROM skill_group WHERE name = ?",
+                    (name,),
+                ).fetchone()
+                if row is None:
+                    return False
 
-            updates: list[str] = []
-            values: list[object] = []
+                updates: list[str] = []
+                values: list[object] = []
 
-            if new_name is not None:
-                updates.append("name = ?")
-                values.append(new_name)
-            if description is not None:
-                updates.append("description = ?")
-                values.append(description)
-            if is_builtin is not None:
-                updates.append("is_builtin = ?")
-                values.append(int(is_builtin))
+                if new_name is not None:
+                    updates.append("name = ?")
+                    values.append(new_name)
+                if description is not None:
+                    updates.append("description = ?")
+                    values.append(description)
+                if is_builtin is not None:
+                    updates.append("is_builtin = ?")
+                    values.append(int(is_builtin))
 
-            if not updates:
-                return True
+                if not updates:
+                    return True
 
-            updates.append("updated_at = CURRENT_TIMESTAMP")
-            values.append(row["id"])
+                updates.append("updated_at = CURRENT_TIMESTAMP")
+                values.append(row["id"])
 
-            try:
                 cursor = connection.execute(
                     f"UPDATE skill_group SET {', '.join(updates)} WHERE id = ?",
                     values,
                 )
-                connection.commit()
                 return cursor.rowcount > 0
-            except sqlite3.IntegrityError:
-                connection.rollback()
-                return False
+        except sqlite3.IntegrityError:
+            return False
 
     @staticmethod
     def get_skill_group(name: str, *,
@@ -171,19 +186,38 @@ class SkillGroupSQL:
             SkillGroup: 运行时SkillGroup对象
             None: 不存在
         """
-        with closing(get_connection()) as connection:
-            ensure_schema(connection)
-            row = connection.execute(
+        with read_connection() as connection:
+            if not include_skills:
+                row = connection.execute(
+                    """
+                    SELECT id, name, description
+                    FROM skill_group
+                    WHERE name = ?
+                    """,
+                    (name,),
+                ).fetchone()
+                if row is None:
+                    return None
+                return SkillGroupSQL._skill_group_without_skills(row)
+
+            rows = connection.execute(
                 """
-                SELECT id, name, description
+                SELECT
+                    skill_group.id AS group_id,
+                    skill_group.name AS group_name,
+                    skill_group.description AS group_description,
+                    skill.id AS skill_id,
+                    skill.name AS skill_name,
+                    skill.url AS skill_url
                 FROM skill_group
-                WHERE name = ?
+                LEFT JOIN skill ON skill.group_id = skill_group.id
+                WHERE skill_group.name = ?
+                ORDER BY skill.id
                 """,
                 (name,),
-            ).fetchone()
-            if row is None:
-                return None
-            return SkillGroupSQL._skill_group_from_row(row, include_skills)
+            ).fetchall()
+            groups, _ = SkillGroupSQL._skill_groups_from_joined_rows(rows)
+            return groups[0] if groups else None
 
     @staticmethod
     def get_skill_group_by_id(group_id: int, *,
@@ -199,19 +233,38 @@ class SkillGroupSQL:
             SkillGroup: 运行时SkillGroup对象
             None: 不存在
         """
-        with closing(get_connection()) as connection:
-            ensure_schema(connection)
-            row = connection.execute(
+        with read_connection() as connection:
+            if not include_skills:
+                row = connection.execute(
+                    """
+                    SELECT id, name, description
+                    FROM skill_group
+                    WHERE id = ?
+                    """,
+                    (group_id,),
+                ).fetchone()
+                if row is None:
+                    return None
+                return SkillGroupSQL._skill_group_without_skills(row)
+
+            rows = connection.execute(
                 """
-                SELECT id, name, description
+                SELECT
+                    skill_group.id AS group_id,
+                    skill_group.name AS group_name,
+                    skill_group.description AS group_description,
+                    skill.id AS skill_id,
+                    skill.name AS skill_name,
+                    skill.url AS skill_url
                 FROM skill_group
-                WHERE id = ?
+                LEFT JOIN skill ON skill.group_id = skill_group.id
+                WHERE skill_group.id = ?
+                ORDER BY skill.id
                 """,
                 (group_id,),
-            ).fetchone()
-            if row is None:
-                return None
-            return SkillGroupSQL._skill_group_from_row(row, include_skills)
+            ).fetchall()
+            groups, _ = SkillGroupSQL._skill_groups_from_joined_rows(rows)
+            return groups[0] if groups else None
 
     @staticmethod
     def list_skill_groups(*,
@@ -225,19 +278,32 @@ class SkillGroupSQL:
         ret:
             tuple[list[SkillGroup], list[int]]: 所有SkillGroup对象及其在数据库的ID
         """
-        with closing(get_connection()) as connection:
-            ensure_schema(connection)
+        with read_connection() as connection:
+            if not include_skills:
+                rows = connection.execute(
+                    """
+                    SELECT id, name, description
+                    FROM skill_group
+                    ORDER BY id
+                    """
+                ).fetchall()
+                return (
+                    [SkillGroupSQL._skill_group_without_skills(row) for row in rows],
+                    [int(row["id"]) for row in rows],
+                )
+
             rows = connection.execute(
                 """
-                SELECT id, name, description
+                SELECT
+                    skill_group.id AS group_id,
+                    skill_group.name AS group_name,
+                    skill_group.description AS group_description,
+                    skill.id AS skill_id,
+                    skill.name AS skill_name,
+                    skill.url AS skill_url
                 FROM skill_group
-                ORDER BY id
+                LEFT JOIN skill ON skill.group_id = skill_group.id
+                ORDER BY skill_group.id, skill.id
                 """
             ).fetchall()
-            return (
-                [
-                    SkillGroupSQL._skill_group_from_row(row, include_skills)
-                    for row in rows
-                ],
-                [int(row["id"]) for row in rows],
-            )
+            return SkillGroupSQL._skill_groups_from_joined_rows(rows)

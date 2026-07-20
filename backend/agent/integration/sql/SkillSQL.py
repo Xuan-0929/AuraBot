@@ -1,9 +1,8 @@
 import sqlite3
 import warnings
-from contextlib import closing
 
-from .utils import *
 from ...skills.Skill import Skill
+from .utils import read_connection, transaction
 
 
 """
@@ -21,7 +20,9 @@ class SkillSQL:
 
     @staticmethod
     def _skill_from_row(row: sqlite3.Row) -> Skill:
-        return Skill(row["name"], path=row["url"])
+        return Skill(
+            row["name"],
+            path=row["url"])
 
     @staticmethod
     def _get_group_id(connection: sqlite3.Connection, group_name: str) -> int | None:
@@ -51,13 +52,12 @@ class SkillSQL:
             int: 新创建的Skill ID
             None: 写入失败，例如SkillGroup不存在，或同组内Skill名称重复
         """
-        with closing(get_connection()) as connection:
-            ensure_schema(connection)
-            group_id = SkillSQL._get_group_id(connection, group_name)
-            if group_id is None:
-                return None
+        try:
+            with transaction() as connection:
+                group_id = SkillSQL._get_group_id(connection, group_name)
+                if group_id is None:
+                    return None
 
-            try:
                 cursor = connection.execute(
                     """
                     INSERT INTO skill (
@@ -77,11 +77,9 @@ class SkillSQL:
                         int(is_global_url),
                     ),
                 )
-                connection.commit()
                 return int(cursor.lastrowid)
-            except sqlite3.IntegrityError:
-                connection.rollback()
-                return None
+        except sqlite3.IntegrityError:
+            return None
 
 
     @staticmethod
@@ -99,8 +97,7 @@ class SkillSQL:
             True: 删除成功
             False: 删除失败，例如不存在，或是项目原生Skill
         """
-        with closing(get_connection()) as connection:
-            ensure_schema(connection)
+        with transaction() as connection:
             row = connection.execute(
                 """
                 SELECT skill.id, skill.is_builtin
@@ -121,7 +118,6 @@ class SkillSQL:
                 "DELETE FROM skill WHERE id = ?",
                 (row["id"],),
             )
-            connection.commit()
             return cursor.rowcount > 0
 
 
@@ -151,59 +147,56 @@ class SkillSQL:
             True: 更新成功
             False: 更新失败，例如目标不存在、目标SkillGroup不存在、同组内名称冲突
         """
-        with closing(get_connection()) as connection:
-            ensure_schema(connection)
-            row = connection.execute(
-                """
-                SELECT skill.id
-                FROM skill
-                JOIN skill_group ON skill_group.id = skill.group_id
-                WHERE skill_group.name = ?
-                  AND skill.name = ?
-                """,
-                (group_name, name),
-            ).fetchone()
-            if row is None:
-                return False
-
-            updates: list[str] = []
-            values: list[object] = []
-
-            if new_name is not None:
-                updates.append("name = ?")
-                values.append(new_name)
-            if path is not None:
-                updates.append("url = ?")
-                values.append(path)
-            if is_builtin is not None:
-                updates.append("is_builtin = ?")
-                values.append(int(is_builtin))
-            if is_global_url is not None:
-                updates.append("is_global_url = ?")
-                values.append(int(is_global_url))
-            if new_group_name is not None:
-                new_group_id = SkillSQL._get_group_id(connection, new_group_name)
-                if new_group_id is None:
+        try:
+            with transaction() as connection:
+                row = connection.execute(
+                    """
+                    SELECT skill.id
+                    FROM skill
+                    JOIN skill_group ON skill_group.id = skill.group_id
+                    WHERE skill_group.name = ?
+                      AND skill.name = ?
+                    """,
+                    (group_name, name),
+                ).fetchone()
+                if row is None:
                     return False
-                updates.append("group_id = ?")
-                values.append(new_group_id)
 
-            if not updates:
-                return True
+                updates: list[str] = []
+                values: list[object] = []
 
-            updates.append("updated_at = CURRENT_TIMESTAMP")
-            values.append(row["id"])
+                if new_name is not None:
+                    updates.append("name = ?")
+                    values.append(new_name)
+                if path is not None:
+                    updates.append("url = ?")
+                    values.append(path)
+                if is_builtin is not None:
+                    updates.append("is_builtin = ?")
+                    values.append(int(is_builtin))
+                if is_global_url is not None:
+                    updates.append("is_global_url = ?")
+                    values.append(int(is_global_url))
+                if new_group_name is not None:
+                    new_group_id = SkillSQL._get_group_id(connection, new_group_name)
+                    if new_group_id is None:
+                        return False
+                    updates.append("group_id = ?")
+                    values.append(new_group_id)
 
-            try:
+                if not updates:
+                    return True
+
+                updates.append("updated_at = CURRENT_TIMESTAMP")
+                values.append(row["id"])
+
                 cursor = connection.execute(
                     f"UPDATE skill SET {', '.join(updates)} WHERE id = ?",
                     values,
                 )
-                connection.commit()
                 return cursor.rowcount > 0
-            except sqlite3.IntegrityError:
-                connection.rollback()
-                return False
+        except sqlite3.IntegrityError:
+            return False
 
     @staticmethod
     def get_skill(group_name: str, name: str) -> Skill | None:
@@ -220,8 +213,7 @@ class SkillSQL:
             Skill: 运行时Skill对象，只包含name和path
             None: 不存在
         """
-        with closing(get_connection()) as connection:
-            ensure_schema(connection)
+        with read_connection() as connection:
             row = connection.execute(
                 """
                 SELECT skill.name, skill.url
@@ -249,8 +241,7 @@ class SkillSQL:
             Skill: 运行时Skill对象，只包含name和path
             None: 不存在
         """
-        with closing(get_connection()) as connection:
-            ensure_schema(connection)
+        with read_connection() as connection:
             row = connection.execute(
                 "SELECT name, url FROM skill WHERE id = ?",
                 (skill_id,),
@@ -271,8 +262,7 @@ class SkillSQL:
         ret:
             tuple[list[Skill], list[int]]: 该SkillGroup下的所有Skill对象及其在数据库的ID
         """
-        with closing(get_connection()) as connection:
-            ensure_schema(connection)
+        with read_connection() as connection:
             rows = connection.execute(
                 """
                 SELECT skill.id, skill.name, skill.url
@@ -303,8 +293,7 @@ class SkillSQL:
         ret:
             tuple[list[Skill], list[int]]: 所有同名Skill对象及其在数据库的ID
         """
-        with closing(get_connection()) as connection:
-            ensure_schema(connection)
+        with read_connection() as connection:
             rows = connection.execute(
                 """
                 SELECT id, name, url

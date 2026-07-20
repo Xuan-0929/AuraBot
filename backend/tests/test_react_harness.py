@@ -12,6 +12,9 @@ from backend.agent.tools.Tool import Tool
 from backend.agent.tools.ToolGroup import ToolGroup
 
 
+EMPTY_INPUT_SCHEMA = {"type": "object", "properties": {}}
+
+
 class FakeLLMClient:
     pass
 
@@ -66,12 +69,26 @@ class ReActHarnessPromptTests(unittest.IsolatedAsyncioTestCase):
                 tool_groups=[
                     ToolGroup(
                         "filesystem",
-                        [Tool("read_file", "Read one file", "localhost:6410")],
+                        [
+                            Tool(
+                                "read_file",
+                                "Read one file",
+                                "localhost:6410",
+                                input_schema=EMPTY_INPUT_SCHEMA,
+                            )
+                        ],
                         "File tools",
                     ),
                     ToolGroup(
                         "search",
-                        [Tool("web_search", "Search the web", "localhost:6410")],
+                        [
+                            Tool(
+                                "web_search",
+                                "Search the web",
+                                "localhost:6410",
+                                input_schema=EMPTY_INPUT_SCHEMA,
+                            )
+                        ],
                         "Search tools",
                     ),
                 ],
