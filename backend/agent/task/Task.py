@@ -1,6 +1,8 @@
+from collections.abc import Sequence
+
 from ..skills.SkillGroup import SkillGroup
 from ..tools.ToolGroup import ToolGroup
-
+from ..tools.core.ToolCallResolver import ToolCallResolver
 
 
 """
@@ -45,7 +47,9 @@ class Task:
         self.constraints = constraints
 
         self.skill_groups = skill_groups if skill_groups is not None else []
-        self.tool_groups = tool_groups if tool_groups is not None else []
+        self._tool_groups: tuple[ToolGroup, ...]
+        self._tool_call_resolver: ToolCallResolver
+        self.update_tool_groups(tool_groups or ())
 
         self.messages = []
         self.checkpoint : str = None
@@ -64,6 +68,26 @@ class Task:
     @property
     def state(self) -> TaskState:
         return self.current_state
+
+    @property
+    def tool_groups(self) -> tuple[ToolGroup, ...]:
+        """The immutable top-level snapshot of groups authorized for this task."""
+
+        return self._tool_groups
+
+    @property
+    def tool_call_resolver(self) -> ToolCallResolver:
+        """The resolver bound to this task's current tool authorization."""
+
+        return self._tool_call_resolver
+
+    def update_tool_groups(self, tool_groups: Sequence[ToolGroup]) -> None:
+        """Atomically replace the task's authorized groups and resolver."""
+
+        snapshot = tuple(tool_groups)
+        resolver = ToolCallResolver(snapshot)
+        self._tool_groups = snapshot
+        self._tool_call_resolver = resolver
     
 
     def set_completed(self):

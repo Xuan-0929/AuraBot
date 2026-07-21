@@ -66,7 +66,10 @@ class LLMClientTests(unittest.IsolatedAsyncioTestCase):
             )
             result = client.chunk_invoke(messages)
 
-        self.assertEqual(result, "sync reply")
+        self.assertEqual(
+            result,
+            {"role": "assistant", "content": "sync reply"},
+        )
         body = json.loads(post.call_args.kwargs["content"].decode("utf-8"))
         self.assertEqual(body["messages"], messages)
         asyncio.run(client.aclose())
@@ -91,7 +94,10 @@ class LLMClientTests(unittest.IsolatedAsyncioTestCase):
 
         result = await client.invoke(messages)
 
-        self.assertEqual(result, "hello from model")
+        self.assertEqual(
+            result,
+            {"role": "assistant", "content": "hello from model"},
+        )
         self.assertEqual(len(requests), 1)
         request = requests[0]
         self.assertEqual(
@@ -118,7 +124,10 @@ class LLMClientTests(unittest.IsolatedAsyncioTestCase):
             [{"role": "user", "content": "hello"}]
         )
 
-        self.assertEqual(result, "alias reply")
+        self.assertEqual(
+            result,
+            {"role": "assistant", "content": "alias reply"},
+        )
 
     async def test_one_client_serves_multiple_agent_loops_concurrently(self):
         active_requests = 0
@@ -164,7 +173,10 @@ class LLMClientTests(unittest.IsolatedAsyncioTestCase):
         release_requests.set()
         results = await asyncio.gather(first, second)
 
-        self.assertEqual(set(results), {"reply:task-a", "reply:task-b"})
+        self.assertEqual(
+            {result["content"] for result in results},
+            {"reply:task-a", "reply:task-b"},
+        )
         self.assertEqual(maximum_active_requests, 2)
 
     async def test_concurrency_limit_serializes_excess_requests(self):
@@ -259,8 +271,52 @@ class LLMClientTests(unittest.IsolatedAsyncioTestCase):
         client = make_client(handler)
         self.addAsyncCleanup(client.aclose)
 
-        with self.assertRaisesRegex(ValueError, "did not include content"):
+        with self.assertRaisesRegex(ValueError, "content or tool calls"):
             await client.invoke([{"role": "user", "content": "hello"}])
+
+    async def test_invoke_preserves_multiple_tool_calls(self):
+        tool_calls = [
+            {
+                "id": "call_1",
+                "type": "function",
+                "function": {"name": "first", "arguments": "{}"},
+            },
+            {
+                "id": "call_2",
+                "type": "function",
+                "function": {"name": "second", "arguments": "{}"},
+            },
+        ]
+
+        async def handler(request: httpx.Request) -> httpx.Response:
+            return httpx.Response(
+                200,
+                json={
+                    "choices": [
+                        {
+                            "message": {
+                                "role": "assistant",
+                                "content": None,
+                                "tool_calls": tool_calls,
+                            }
+                        }
+                    ]
+                },
+            )
+
+        client = make_client(handler)
+        self.addAsyncCleanup(client.aclose)
+
+        result = await client.invoke([{"role": "user", "content": "go"}])
+
+        self.assertEqual(
+            result,
+            {
+                "role": "assistant",
+                "content": None,
+                "tool_calls": tool_calls,
+            },
+        )
 
     async def test_raises_when_streaming_response_has_no_content(self):
         async def handler(request: httpx.Request) -> httpx.Response:
@@ -290,7 +346,7 @@ class LLMClientTests(unittest.IsolatedAsyncioTestCase):
         async with client:
             self.assertEqual(
                 await client.invoke([{"role": "user", "content": "hello"}]),
-                "ok",
+                {"role": "assistant", "content": "ok"},
             )
 
         self.assertTrue(client._http_client.is_closed)

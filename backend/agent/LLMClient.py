@@ -43,7 +43,7 @@ class LLMClient:
             timeout=timeout,
         )
 
-    def chunk_invoke(self, messages: list[Message]) -> str:
+    def chunk_invoke(self, messages: list[Message]) -> Message:
         """Compatibility API for callers that still require blocking I/O."""
         try:
             response = httpx.post(
@@ -58,9 +58,9 @@ class LLMClient:
                 f"OpenAI-compatible request failed with status {exc.response.status_code}"
             ) from exc
 
-        return self._extract_content(response.json())
+        return self._extract_message(response.json())
 
-    async def invoke(self, messages: list[Message]) -> str:
+    async def invoke(self, messages: list[Message]) -> Message:
         async with self._semaphore:
             response = await self._http_client.post(
                 self._chat_completions_url(),
@@ -69,9 +69,9 @@ class LLMClient:
             )
             self._raise_for_status(response)
 
-        return self._extract_content(response.json())
+        return self._extract_message(response.json())
 
-    async def aysnc_invoke(self, messages: list[Message]) -> str:
+    async def aysnc_invoke(self, messages: list[Message]) -> Message:
         """Backward-compatible alias for the historical misspelled method."""
         return await self.invoke(messages)
 
@@ -147,15 +147,34 @@ class LLMClient:
                 f"OpenAI-compatible request failed with status {response.status_code}"
             ) from exc
 
-    def _extract_content(self, payload: dict[str, Any]) -> str:
+    def _extract_message(self, payload: dict[str, Any]) -> Message:
         choice = (payload.get("choices") or [{}])[0]
-        message = choice.get("message") or {}
-        content = message.get("content") or choice.get("text") or ""
+        raw_message = choice.get("message")
 
-        if not content.strip():
-            raise ValueError("OpenAI-compatible response did not include content")
+        if raw_message is None and isinstance(choice.get("text"), str):
+            raw_message = {
+                "role": "assistant",
+                "content": choice["text"],
+            }
+        if not isinstance(raw_message, dict):
+            raise ValueError(
+                "OpenAI-compatible response did not include an assistant message"
+            )
 
-        return content
+        message = dict(raw_message)
+        message.setdefault("role", "assistant")
+        content = message.get("content")
+        tool_calls = message.get("tool_calls")
+
+        has_content = isinstance(content, str) and bool(content.strip())
+        has_tool_calls = isinstance(tool_calls, list) and bool(tool_calls)
+
+        if not has_content and not has_tool_calls:
+            raise ValueError(
+                "OpenAI-compatible response did not include content or tool calls"
+            )
+
+        return message
 
     def _iter_stream(
         self,

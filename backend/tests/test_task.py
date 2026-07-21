@@ -4,6 +4,8 @@ from backend.agent.skills.SkillGroup import SkillGroup
 from backend.agent.task.Task import Task, TaskType
 from backend.agent.tools.Tool import Tool
 from backend.agent.tools.ToolGroup import ToolGroup
+from backend.agent.tools.core.ToolCallEntity import ToolCall
+from backend.agent.tools.core.ToolExceptions import ToolCallResolveError
 
 
 EMPTY_INPUT_SCHEMA = {"type": "object", "properties": {}}
@@ -59,30 +61,103 @@ class TaskTests(unittest.TestCase):
         )
 
         self.assertEqual(task.skill_groups, skill_groups)
-        self.assertEqual(task.tool_groups, tool_groups)
+        self.assertEqual(task.tool_groups, tuple(tool_groups))
+        self.assertIsNotNone(task.tool_call_resolver)
 
-    def test_constructor_creates_independent_empty_group_lists(self):
+    def test_constructor_creates_independent_group_state(self):
         first = Task(1, "First", "session-1", TaskType.ReAct, "First task")
         second = Task(2, "Second", "session-1", TaskType.ReAct, "Second task")
 
         first.skill_groups.append(SkillGroup("research", []))
-        first.tool_groups.append(
-            ToolGroup(
-                "web",
-                [
-                    Tool(
-                        "search",
-                        "Search the web",
-                        "localhost:6410",
-                        input_schema=EMPTY_INPUT_SCHEMA,
-                    )
-                ],
-                "Web tools",
-            )
+        first.update_tool_groups(
+            [
+                ToolGroup(
+                    "web",
+                    [
+                        Tool(
+                            "search",
+                            "Search the web",
+                            "localhost:6410",
+                            input_schema=EMPTY_INPUT_SCHEMA,
+                        )
+                    ],
+                    "Web tools",
+                )
+            ]
         )
 
         self.assertEqual(second.skill_groups, [])
-        self.assertEqual(second.tool_groups, [])
+        self.assertEqual(second.tool_groups, ())
+
+    def test_update_tool_groups_replaces_resolver_and_permissions_together(self):
+        read = Tool(
+            "read",
+            "Read a file",
+            "localhost:6410",
+            input_schema=EMPTY_INPUT_SCHEMA,
+        )
+        task = Task(1, "Read", "session-1", TaskType.ReAct, "Read a file")
+        old_resolver = task.tool_call_resolver
+
+        task.update_tool_groups([ToolGroup("files", [read], "File tools")])
+
+        self.assertIsNot(task.tool_call_resolver, old_resolver)
+        resolved = task.tool_call_resolver.resolve_message(
+            {
+                "role": "assistant",
+                "content": None,
+                "tool_calls": [
+                    {
+                        "type": "function",
+                        "function": {"name": "read", "arguments": "{}"},
+                    }
+                ],
+            }
+        )
+        self.assertIs(resolved[0].tool, read)
+
+    def test_failed_tool_group_update_preserves_previous_authorization(self):
+        read = Tool(
+            "read",
+            "Read a file",
+            "localhost:6410",
+            input_schema=EMPTY_INPUT_SCHEMA,
+        )
+        task = Task(
+            1,
+            "Read",
+            "session-1",
+            TaskType.ReAct,
+            "Read a file",
+            tool_groups=[ToolGroup("files", [read], "File tools")],
+        )
+        old_groups = task.tool_groups
+        old_resolver = task.tool_call_resolver
+        duplicate_groups = [
+            ToolGroup("first", [read], "First group"),
+            ToolGroup(
+                "second",
+                [
+                    Tool(
+                        "read",
+                        "Another read tool",
+                        "localhost:6411",
+                        input_schema=EMPTY_INPUT_SCHEMA,
+                    )
+                ],
+                "Second group",
+            ),
+        ]
+
+        with self.assertRaises(ToolCallResolveError):
+            task.update_tool_groups(duplicate_groups)
+
+        self.assertIs(task.tool_groups, old_groups)
+        self.assertIs(task.tool_call_resolver, old_resolver)
+        self.assertIs(
+            task.tool_call_resolver.resolve([ToolCall("read", {})])[0].tool,
+            read,
+        )
 
 
 if __name__ == "__main__":
