@@ -36,6 +36,7 @@ class HarnessFactory:
         return self._llm_client
 
     def create(self, task: Task) -> Harness:
+        """Construct a harness without performing async initialization."""
         if not isinstance(task, Task):
             raise TypeError("task must be a Task")
 

@@ -7,13 +7,12 @@
 [完成] MCP Server SQL CRUD
 [完成] ToolGroup SQL CRUD
 [完成] Tool SQL CRUD 与查询
-[延后] MCP Tool 原子全量同步
-[部分] Tool domain model
-[未做] MCP client/session
+[完成] Tool domain model
+[完成] MCP client/session
 [未做] ToolGroup 权限解析
 [未做] Tool Call Gateway
 [未做] Harness Tool Call 解析协议
-[未做] 合法 Harness 初始化协议
+[部分] 合法 Harness 初始化协议
 [未做] ReAct loop
 ```
 
@@ -146,15 +145,16 @@ tools: list[Tool]
 
 ## 6. MCP client/session
 
-- [ ] 选择并接入 MCP Python SDK。
-- [ ] 根据 `server_url` 建立 MCP ClientSession。
-- [ ] 支持 MCP `initialize` 生命周期。
-- [ ] 支持 `tools/list` 及分页。
-- [ ] 支持 `tools/call`。
+- [x] 选择并接入 MCP Python SDK v1（依赖限制为 `mcp>=1.25,<2`）。
+- [x] 根据 `server_url` 为每次操作建立临时 MCP ClientSession。
+- [x] 支持 MCP `initialize` 生命周期。
+- [x] 支持在同一 session 内完整读取 `tools/list` 分页。
+- [x] 支持 `tools/call`。
 - [ ] 同一 Server 的并发调用复用 session 或受控连接池。
-- [ ] 连接失败后清理失效 session，并定义安全重连行为。
-- [ ] 应用关闭时关闭全部 session。
-- [ ] 为超时、协议错误、Server 返回错误定义统一异常。
+- [x] 每次成功、失败或取消后关闭临时 session；下次调用建立新 session。
+- [x] 当前无长期 session，应用关闭时无需额外清理 MCP 连接。
+- [x] 为连接、初始化、超时、协议和 Tool Call 失败定义统一异常。
+- [x] 使用 fake transport/session 测试初始化、分页、调用、失败、超时和关闭。
 - [ ] 使用 fake MCP Server 测试初始化、发现、调用、断线和关闭。
 
 完成标准：给定已注册 `server_url`，后端可以独立完成 `initialize`、`tools/list` 和
@@ -221,26 +221,17 @@ ReAct Harness 在每轮调用 `parse_tool_call()` 判断下一步动作。
 
 ## 10. 合法 Harness 初始化协议
 
-当前 `Harness` 使用非法的 `async def __init__`，必须修复后才能运行任何 Harness。
+`Harness` 已改为同步构造；消息初始化和完整状态转换留到 ReAct loop。
 
-- [ ] 把 `Harness.__init__` 改为同步构造函数。
-- [ ] `task`、`llm_client` property 改为同步 property。
-- [ ] 将异步 prompt 初始化移入 `async initialize()` 或异步工厂。
-- [ ] 推荐提供：
-
-```python
-@classmethod
-async def create(cls, *, task, llm_client, ...):
-    harness = cls(task=task, llm_client=llm_client, ...)
-    await harness.initialize()
-    return harness
-```
-
+- [x] 把 `Harness.__init__` 改为同步构造函数。
+- [x] `task`、`llm_client` property 改为同步 property。
+- [x] `HarnessFactory.create()` 只负责同步构造，不提供异步构造入口。
+- [ ] 在 ReAct loop 初始化阶段写入 system/user 初始消息。
 - [ ] 保证 system/user 初始消息只写入一次。
 - [ ] 明确 Harness 状态转换：Initializing → Pending → Running → Completed/Failed。
 - [ ] 初始化失败时 Task 状态和异常可观察。
-- [ ] 修复现有 `TypeError: __init__() should return None, not 'coroutine'`。
-- [ ] 恢复 Harness prompt 测试。
+- [x] 修复构造函数 coroutine 错误。
+- [x] 恢复 Harness prompt 测试。
 
 
 ## 11. ReAct loop

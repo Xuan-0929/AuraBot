@@ -28,3 +28,5 @@ __pycache__/
 # config & env
 .env
 config.yaml
+# Added by code-review-graph
+.code-review-graph/

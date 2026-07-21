@@ -96,6 +96,5 @@ class HarnessFactoryTests(unittest.TestCase):
         with self.assertRaisesRegex(TypeError, "task must be a Task"):
             self.factory.create(object())
 
-
 if __name__ == "__main__":
     unittest.main()

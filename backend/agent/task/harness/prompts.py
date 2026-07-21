@@ -19,9 +19,11 @@ return a truthful, verifiable result to the parent agent.
 
 ## Runtime context
 
-Your working directory on user's filesystem is: {workdir}.
+Working directory:
+{workdir}
 
-Note that there are some constraints from user: {constraints}.
+Constraints:
+{constraints}
 
 Available skill groups:
 {skill_groups}

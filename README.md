@@ -540,3 +540,5 @@ See [AuraBot 当前开发状态](docs/aurabot-development-status.md) for the liv
 ## Future Work Further than MVP
 
 - MCP Tool 原子全量同步
+
+- MCP Client生命周期管理（当前：每次Tool Call都即时初始化一个MCPClient。每次call/list都探测一遍是否valid）。
