@@ -10,7 +10,7 @@
 - 已同步提交：`67e397a`（2026-07-15）
 - 桌面端：Electron + Vue + TypeScript + Vite。
 - 后端：Python FastAPI 单进程网关，开发端口 `6401`。
-- 开发入口：从 `frontend/` 执行 `npm run dev`；需要安装 `backend/requirements.txt` 并提供 `config.yaml`。
+- 开发入口：先从仓库根目录执行 `uv sync --project backend --locked`，再从 `frontend/` 执行 `npm run dev`；需要提供 `config.yaml`。
 
 ## 已落地
 
@@ -44,4 +44,4 @@
 - `curl http://127.0.0.1:6401/health`：网关返回 `ok: true`。
 - `cd frontend && npm run typecheck`：验证前端类型。
 - `cd frontend && npm test`：验证现有 TypeScript MVP。
-- `python3 -m unittest backend.tests.test_config backend.tests.test_gateway backend.tests.test_memory_invode`：验证 Python 配置、网关和记忆服务。
+- `cd frontend && npm run test:backend`：通过 uv 管理的 Python 环境验证完整后端测试集。

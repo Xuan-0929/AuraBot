@@ -10,4 +10,17 @@ class ToolCallResolveError(LookupError):
     """Raised when parsed tool calls cannot be mapped to authorized tools."""
 
 
-__all__ = ["ToolCallParseError", "ToolCallResolveError"]
+class ToolNotAuthorizedError(ToolCallResolveError):
+    """Raised when a tool is absent from the current Task authorization."""
+
+
+class DuplicateToolNameError(ToolCallResolveError):
+    """Raised when Task ToolGroups expose the same tool name more than once."""
+
+
+__all__ = [
+    "DuplicateToolNameError",
+    "ToolCallParseError",
+    "ToolCallResolveError",
+    "ToolNotAuthorizedError",
+]

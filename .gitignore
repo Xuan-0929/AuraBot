@@ -23,6 +23,7 @@ hermes-agent/
 
 # Python
 __pycache__/
+.venv/
 
 
 # config & env

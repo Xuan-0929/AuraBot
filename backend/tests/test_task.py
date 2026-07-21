@@ -5,7 +5,10 @@ from backend.agent.task.Task import Task, TaskType
 from backend.agent.tools.Tool import Tool
 from backend.agent.tools.ToolGroup import ToolGroup
 from backend.agent.tools.core.ToolCallEntity import ToolCall
-from backend.agent.tools.core.ToolExceptions import ToolCallResolveError
+from backend.agent.tools.core.ToolExceptions import (
+    DuplicateToolNameError,
+    ToolNotAuthorizedError,
+)
 
 
 EMPTY_INPUT_SCHEMA = {"type": "object", "properties": {}}
@@ -89,6 +92,23 @@ class TaskTests(unittest.TestCase):
         self.assertEqual(second.skill_groups, [])
         self.assertEqual(second.tool_groups, ())
 
+    def test_empty_tool_group_creates_an_empty_authorization_index(self):
+        empty_group = ToolGroup("empty", [], "No tools")
+
+        task = Task(
+            1,
+            "Empty",
+            "session-1",
+            TaskType.ReAct,
+            "No tools",
+            tool_groups=[empty_group],
+        )
+
+        self.assertEqual(task.tool_groups, (empty_group,))
+        self.assertEqual(task.tool_call_resolver.resolve([]), [])
+        with self.assertRaises(ToolNotAuthorizedError):
+            task.tool_call_resolver.resolve([ToolCall("missing", {})])
+
     def test_update_tool_groups_replaces_resolver_and_permissions_together(self):
         read = Tool(
             "read",
@@ -115,6 +135,52 @@ class TaskTests(unittest.TestCase):
             }
         )
         self.assertIs(resolved[0].tool, read)
+
+    def test_successful_update_revokes_old_tool_and_authorizes_new_tool(self):
+        read = Tool(
+            "read",
+            "Read a file",
+            "localhost:6410",
+            input_schema=EMPTY_INPUT_SCHEMA,
+        )
+        write = Tool(
+            "write",
+            "Write a file",
+            "localhost:6410",
+            input_schema=EMPTY_INPUT_SCHEMA,
+        )
+        task = Task(
+            1,
+            "Files",
+            "session-1",
+            TaskType.ReAct,
+            "Use file tools",
+            tool_groups=[ToolGroup("readers", [read], "Read tools")],
+        )
+
+        task.update_tool_groups([ToolGroup("writers", [write], "Write tools")])
+
+        with self.assertRaises(ToolNotAuthorizedError):
+            task.tool_call_resolver.resolve([ToolCall("read", {})])
+        self.assertIs(
+            task.tool_call_resolver.resolve([ToolCall("write", {})])[0].tool,
+            write,
+        )
+
+    def test_input_group_list_mutation_does_not_change_task_snapshot(self):
+        groups: list[ToolGroup] = []
+        task = Task(
+            1,
+            "Empty",
+            "session-1",
+            TaskType.ReAct,
+            "No tools",
+            tool_groups=groups,
+        )
+
+        groups.append(ToolGroup("later", [], "Added later"))
+
+        self.assertEqual(task.tool_groups, ())
 
     def test_failed_tool_group_update_preserves_previous_authorization(self):
         read = Tool(
@@ -149,7 +215,7 @@ class TaskTests(unittest.TestCase):
             ),
         ]
 
-        with self.assertRaises(ToolCallResolveError):
+        with self.assertRaises(DuplicateToolNameError):
             task.update_tool_groups(duplicate_groups)
 
         self.assertIs(task.tool_groups, old_groups)
@@ -158,6 +224,44 @@ class TaskTests(unittest.TestCase):
             task.tool_call_resolver.resolve([ToolCall("read", {})])[0].tool,
             read,
         )
+
+    def test_constructor_rejects_duplicate_tool_names(self):
+        groups = [
+            ToolGroup(
+                "local-search",
+                [
+                    Tool(
+                        "search",
+                        "Local search",
+                        "localhost:6410",
+                        input_schema=EMPTY_INPUT_SCHEMA,
+                    )
+                ],
+                "Local tools",
+            ),
+            ToolGroup(
+                "remote-search",
+                [
+                    Tool(
+                        "search",
+                        "Remote search",
+                        "localhost:6411",
+                        input_schema=EMPTY_INPUT_SCHEMA,
+                    )
+                ],
+                "Remote tools",
+            ),
+        ]
+
+        with self.assertRaisesRegex(DuplicateToolNameError, "search"):
+            Task(
+                1,
+                "Search",
+                "session-1",
+                TaskType.ReAct,
+                "Search",
+                tool_groups=groups,
+            )
 
 
 if __name__ == "__main__":

@@ -1,12 +1,20 @@
 import { spawn } from "node:child_process";
 
-const python = process.env.PYTHON ?? process.env.AURABOT_PYTHON ?? "python3";
-
 const processes = [
   {
     name: "backend",
-    command: python,
-    args: ["-m", "uvicorn", "backend.main:app", "--host", "127.0.0.1", "--port", "6401"],
+    command: "uv",
+    args: [
+      "run",
+      "--project",
+      "backend",
+      "uvicorn",
+      "backend.main:app",
+      "--host",
+      "127.0.0.1",
+      "--port",
+      "6401"
+    ],
     cwd: new URL("../../", import.meta.url)
   },
   {

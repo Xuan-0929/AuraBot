@@ -2,8 +2,8 @@ import tempfile
 import unittest
 from pathlib import Path
 
-from agent.skills.Skill import Skill
-from agent.skills.SkillGroup import SkillGroup
+from backend.agent.skills.Skill import Skill
+from backend.agent.skills.SkillGroup import SkillGroup
 
 
 class SkillGroupTests(unittest.TestCase):

@@ -22,7 +22,7 @@ class QdrantLocalVectorStore:
         except ImportError as exc:
             raise RuntimeError(
                 "qdrant-client is required for QdrantLocalVectorStore. "
-                "Install it with `pip install qdrant-client`."
+                "Run `uv sync --project backend` from the repository root."
             ) from exc
 
         self.path = Path(path)

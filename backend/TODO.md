@@ -9,15 +9,15 @@
 [完成] Tool SQL CRUD 与查询
 [完成] Tool domain model
 [完成] MCP client/session
-[未做] ToolGroup 权限解析
-[未做] Tool Call Gateway
+[完成] ToolGroup 权限解析
+[部分] Tool Call Gateway
 [未做] Harness Tool Call 解析协议
 [部分] 合法 Harness 初始化协议
 [未做] ReAct loop
 ```
 
-当前位于“工具注册与持久化层”。MCP Server、ToolGroup 和 Tool 的单条 CRUD 已经
-具备，但 MCP 连接和整个 Tool 执行链尚未完成，因此还不能开始可运行的 ReAct Harness。
+工具注册、持久化、MCP Client 和 Task 运行时 ToolGroup 权限解析已经具备。Tool Call
+Gateway 和完整执行循环尚未完成，因此还不能开始可运行的 ReAct Harness。
 
 
 ## 1. Runtime schema 单一来源
@@ -163,42 +163,37 @@ tools: list[Tool]
 
 ## 7. ToolGroup 权限解析
 
-完善 `ToolGroupManager` 或新增独立权限解析器。
+Task 接收上层已经加载的 ToolGroup，并为整个 Task 生命周期建立内存权限快照；这一层
+不重复查询 SQLite，也不区分全局未知 Tool 和已注册但未授权 Tool。
 
-- [ ] 根据 Task 获得授权的 ToolGroup 加载实际 Tool。
-- [ ] 展开多个 ToolGroup，生成当前 Task 唯一的可调用 Tool 集合。
-- [ ] 检查不同 Server 的同名 Tool 冲突。
-- [ ] 发现重名时拒绝启动 Task，不静默覆盖、不自动改写 Tool 名称。
-- [ ] 建立 `tool_name -> Tool(server_url, ...)` 路由索引。
-- [ ] Tool Call 前再次校验 Tool 是否仍属于授权 ToolGroup。
-- [ ] 未授权 Tool、未知 Tool、重名 Tool 返回不同错误。
-- [ ] 权限解析只存在于 Task 运行时，不写入 Tool 注册表。
-- [ ] 增加单组、多组、空组、重名、未授权调用测试。
+- [x] 根据 Task 已加载的授权 ToolGroup 使用其中的实际 Tool。
+- [x] 展开多个 ToolGroup，生成当前 Task 唯一的可调用 Tool 集合。
+- [x] 检查不同 Server 的同名 Tool 冲突。
+- [x] 在 `update_tool_groups()` 时发现重名并拒绝更新，不静默覆盖、不改写名称。
+- [x] 建立 `tool_name -> Tool(server_url, ...)` 路由索引。
+- [x] 每次 Tool Call 都针对 Task 当前权限快照重新解析和鉴权。
+- [x] 未授权 Tool 和重名 Tool 分别返回不同的 `ToolCallResolveError` 子类。
+- [x] 权限解析只存在于 Task 运行时，不写入 Tool 注册表。
+- [x] 增加单组、多组、空组、重名、未授权和权限更新测试。
 
 
 ## 8. Tool Call Gateway
 
 新增统一 Tool 执行入口，Harness 不直接操作 MCP session。
 
-- [ ] 接收 `tool_name`、`arguments` 和当前 Task 授权上下文。
-- [ ] 检查 Tool 名称存在且唯一。
-- [ ] 检查 Tool 已授权。
-- [ ] 使用 Tool 的 `input_schema` 校验 arguments。
-- [ ] 根据 `server_url` 取得或建立 MCP session。
-- [ ] 调用 MCP `tools/call`。
-- [ ] 标准化文本、结构化内容、错误和超时结果。
-- [ ] 不把异常 traceback、Token 或内部连接信息返回给 LLM。
+- [x] 接收已经完成名称唯一性和 Task 权限解析的 `ResolvedToolCall`。
+- [x] 使用 Tool 的 `input_schema` 校验 arguments。
+- [x] 根据 Tool 的 `server_url` 通过 `MCPClient` 建立临时 session。
+- [x] 调用 MCP `tools/call`。
+- [x] 使用 `ToolExecutionResult` 标准化内容、结构化内容、错误和超时结果。
+- [x] 不把异常 traceback、Token 或内部连接信息写入 Tool 执行结果。
 - [ ] 记录足够的 Task/Event 调试信息，但不在 Tool 表保存调用状态。
-- [ ] 增加成功、参数错误、未授权、未知 Tool、Server 超时、Server 错误测试。
+- [x] 增加成功、参数错误、Tool 错误、Server 超时和 Server 错误测试。
 
 建议接口：
 
 ```python
-await tool_gateway.call(
-    tool_name=tool_name,
-    arguments=arguments,
-    authorization=task_tool_authorization,
-)
+await tool_gateway.execute(resolved_tool_call)
 ```
 
 
@@ -209,9 +204,9 @@ ReAct Harness 在每轮调用 `parse_tool_call()` 判断下一步动作。
 
 - [ ] 定义可区分最终回答与 Tool Call 的稳定文本协议。
 - [ ] 每轮 LLM 响应后调用一次 `parse_tool_call()`。
-- [ ] 从 Tool Call 中解析 `tool_name` 和 JSON object `arguments`。
-- [ ] 明确单轮允许的 Tool Call 数量和多个调用的处理方式。
-- [ ] 非法格式或非法 JSON arguments 返回可恢复的解析错误，不让 loop 崩溃。
+- [x] 从 Tool Call 中解析 `tool_name` 和 JSON object `arguments`。
+- [x] parser 支持一次响应中的多个 Tool Call，并保持原始顺序。
+- [x] 非法格式或非法 JSON arguments 抛出稳定的 `ToolCallParseError`。
 - [ ] Tool Call 解析结果交给权限解析器和 Tool Call Gateway，不直接操作 MCP session。
 - [ ] 明确 Tool observation 写回 messages 的格式和 role。
 - [ ] `LLMClient` 保持普通消息请求，不增加原生 `tools`、`tool_choice` 或
@@ -226,6 +221,7 @@ ReAct Harness 在每轮调用 `parse_tool_call()` 判断下一步动作。
 - [x] 把 `Harness.__init__` 改为同步构造函数。
 - [x] `task`、`llm_client` property 改为同步 property。
 - [x] `HarnessFactory.create()` 只负责同步构造，不提供异步构造入口。
+- [ ] 根据任务配置从持久化层加载授权 ToolGroup，并注入 Task。
 - [ ] 在 ReAct loop 初始化阶段写入 system/user 初始消息。
 - [ ] 保证 system/user 初始消息只写入一次。
 - [ ] 明确 Harness 状态转换：Initializing → Pending → Running → Completed/Failed。
@@ -272,10 +268,10 @@ ReAct Harness 在每轮调用 `parse_tool_call()` 判断下一步动作。
 开始实现 Harness Tool Loop 前，以下条件必须全部满足：
 
 - [x] MCP Server 能通过正式 SQL API 注册、查询、更新和删除。
-- [ ] MCP Client 能完成 `initialize`、`tools/list` 和 `tools/call`。
+- [x] MCP Client 能完成 `initialize`、`tools/list` 和 `tools/call`。
 - [ ] MCP `tools/list` 结果能通过现有 ToolSQL CRUD 持久化。
 - [x] Runtime Tool 包含真实 input/output schema 和 `server_url`。
-- [ ] Task 授权 ToolGroup 能解析成无重名的 Tool 集合。
+- [x] Task 授权 ToolGroup 能解析成无重名的 Tool 集合。
 - [ ] Tool Call Gateway 能执行授权校验、参数校验和 MCP 调用。
 - [ ] Harness system prompt 能描述授权 Tool，且 `parse_tool_call()` 协议已确定并有测试。
 - [ ] Harness 构造和异步初始化协议合法。

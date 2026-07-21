@@ -1,12 +1,11 @@
 import unittest
 
 from backend.agent.tools.Tool import Tool
-from backend.agent.tools.ToolGroup import ToolGroup
 from backend.agent.tools.core.ToolCallEntity import ToolCall
 from backend.agent.tools.core.ToolCallResolver import ToolCallResolver
 from backend.agent.tools.core.ToolExceptions import (
     ToolCallParseError,
-    ToolCallResolveError,
+    ToolNotAuthorizedError,
 )
 
 
@@ -23,9 +22,7 @@ class ToolCallResolverTests(unittest.TestCase):
     def test_resolves_multiple_calls_and_preserves_order_and_call_id(self):
         read = make_tool("read")
         search = make_tool("search")
-        resolver = ToolCallResolver(
-            [ToolGroup("files", [read, search], "File tools")]
-        )
+        resolver = ToolCallResolver({"read": read, "search": search})
 
         resolved = resolver.resolve(
             [
@@ -39,36 +36,29 @@ class ToolCallResolverTests(unittest.TestCase):
         self.assertEqual(resolved[0].call_id, "call_1")
         self.assertIs(resolved[1].tool, read)
 
-    def test_rejects_unknown_or_unauthorized_tool(self):
-        resolver = ToolCallResolver(
-            [ToolGroup("files", [make_tool("read")], "File tools")]
-        )
+    def test_rejects_tool_outside_authorization_snapshot(self):
+        resolver = ToolCallResolver({"read": make_tool("read")})
 
-        with self.assertRaisesRegex(ToolCallResolveError, "delete"):
+        with self.assertRaisesRegex(ToolNotAuthorizedError, "delete"):
             resolver.resolve([ToolCall("delete", {"path": "TODO.md"})])
 
-    def test_rejects_ambiguous_authorized_tool_names(self):
-        groups = [
-            ToolGroup(
-                "local-search",
-                [make_tool("search", "http://local.test")],
-                "Local search",
-            ),
-            ToolGroup(
-                "remote-search",
-                [make_tool("search", "http://remote.test")],
-                "Remote search",
-            ),
-        ]
+    def test_empty_tool_call_batch_returns_empty_list(self):
+        self.assertEqual(ToolCallResolver({}).resolve([]), [])
 
-        with self.assertRaisesRegex(ToolCallResolveError, "ambiguous"):
-            ToolCallResolver(groups)
+    def test_rejects_entire_batch_when_one_tool_is_not_authorized(self):
+        resolver = ToolCallResolver({"read": make_tool("read")})
+
+        with self.assertRaisesRegex(ToolNotAuthorizedError, "delete"):
+            resolver.resolve(
+                [
+                    ToolCall("read", {"path": "TODO.md"}),
+                    ToolCall("delete", {"path": "TODO.md"}),
+                ]
+            )
 
     def test_resolver_parses_and_resolves_llm_message(self):
         ping = make_tool("ping")
-        resolver = ToolCallResolver(
-            [ToolGroup("system", [ping], "System tools")]
-        )
+        resolver = ToolCallResolver({"ping": ping})
         message = {
             "role": "assistant",
             "content": None,
@@ -88,9 +78,7 @@ class ToolCallResolverTests(unittest.TestCase):
         self.assertEqual(resolved[0].call_id, "call_1")
 
     def test_resolve_message_does_not_wrap_parse_errors(self):
-        resolver = ToolCallResolver(
-            [ToolGroup("system", [], "System tools")]
-        )
+        resolver = ToolCallResolver({})
 
         with self.assertRaises(ToolCallParseError):
             resolver.resolve_message('{"tool":')

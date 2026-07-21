@@ -8,7 +8,7 @@
   "scripts": {
     "dev": "npm run rebuild:native && node scripts/dev.mjs",
     "dev:frontend": "vite --host 127.0.0.1 --port 6400 --strictPort",
-    "dev:backend": "python3 -m uvicorn backend.main:app --host 127.0.0.1 --port 6401 --app-dir ..",
+    "dev:backend": "uv run --project ../backend uvicorn backend.main:app --host 127.0.0.1 --port 6401 --app-dir ..",
     "dev:desktop": "electron-rebuild -f -w better-sqlite3 && electron-vite dev",
     "dev:clean": "node scripts/run-clean.mjs dev",
     "start:clean": "npm run build && node scripts/run-clean.mjs start",
@@ -19,6 +19,7 @@
     "rebuild:native": "electron-rebuild -f -w better-sqlite3",
     "typecheck": "tsc --noEmit",
     "test": "npm run rebuild:node && vitest run --config configs/vitest.config.ts",
+    "test:backend": "uv run --project ../backend python -m unittest discover -s ../backend/tests -t ..",
     "test:unit": "npm run rebuild:node && vitest run --config configs/vitest.config.ts tests/unit",
     "test:integration": "npm run rebuild:node && vitest run --config configs/vitest.config.ts tests/integration",
     "test:e2e": "electron-rebuild -f -w better-sqlite3 && npm run build && playwright test --config configs/playwright.config.ts",

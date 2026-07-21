@@ -46,7 +46,7 @@ Console window:
 Requirements:
 
 1. Node.js (v18+) with npm.
-2. Python 3.11+ for the local FastAPI backend gateway.
+2. [uv](https://docs.astral.sh/uv/getting-started/installation/) for the local FastAPI backend gateway.
 3. macOS is the primary development platform; Windows 10/11 x64 is supported for development and installable builds.
 
 Platform status:
@@ -59,10 +59,16 @@ Platform status:
 Install dependencies:
 
 ```bash
+uv sync --project backend --locked
 cd frontend
 npm install
-python3 -m pip install -r ../backend/requirements.txt
 ```
+
+uv reads `backend/.python-version`, installs Python 3.12 when necessary, and
+maintains the backend environment in `backend/.venv`. Do not create or activate
+a virtual environment manually. The backend continues to declare Python 3.11+
+compatibility in `backend/pyproject.toml`; Python 3.12 is the shared development
+version.
 
 Before the first normal launch, create the Python runtime configuration from
 `config.example.yaml` as `config.yaml` in the repository root and export the
@@ -83,10 +89,16 @@ npm run dev:frontend   # Vite renderer only (port 6400)
 npm run dev:desktop    # Electron + renderer
 ```
 
-The combined launcher resolves `PYTHON`, then `AURABOT_PYTHON`, then
-`python3`. Set either variable to an absolute interpreter path when npm resolves
-a different Python environment from the one where the backend dependencies were
-installed.
+Both backend launch paths use `uv run` and automatically keep
+`backend/.venv` synchronized with `backend/pyproject.toml` and `backend/uv.lock`.
+Set `UV_PYTHON` only when an explicit compatible interpreter override is
+required.
+
+Run the complete Python backend test suite from `frontend/` with:
+
+```bash
+npm run test:backend
+```
 
 The Python backend entry point is `backend/main.py`, loaded by Uvicorn as
 `backend.main:app`.

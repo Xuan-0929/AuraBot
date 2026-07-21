@@ -2,7 +2,7 @@ import unittest
 
 from backend.agent.tools.core.ToolCallEntity import ToolCall
 from backend.agent.tools.core.ToolExceptions import ToolCallParseError
-from backend.agent.tools.core.parser import (
+from backend.agent.tools.utils.parser import (
     parse_tool_call,
     parse_tool_calls,
 )
