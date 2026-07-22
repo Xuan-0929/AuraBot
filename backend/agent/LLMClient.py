@@ -1,12 +1,23 @@
 import asyncio
 import json
 from collections.abc import AsyncIterator, Iterable
+from dataclasses import dataclass
 from typing import Any
 from urllib.parse import urljoin
 
 import httpx
 
 Message = dict[str, Any]
+OpenAITool = dict[str, Any]
+ToolChoice = str | dict[str, Any]
+
+
+@dataclass(frozen=True, slots=True)
+class ChatCompletionChoice:
+    """One non-streaming OpenAI Chat Completions choice."""
+
+    message: Message
+    finish_reason: str
 
 
 class LLMClient:
@@ -43,13 +54,23 @@ class LLMClient:
             timeout=timeout,
         )
 
-    def chunk_invoke(self, messages: list[Message]) -> Message:
+    def chunk_invoke(
+        self,
+        messages: list[Message],
+        *,
+        tools: list[OpenAITool] | None = None,
+        tool_choice: ToolChoice | None = None,
+    ) -> ChatCompletionChoice:
         """Compatibility API for callers that still require blocking I/O."""
         try:
             response = httpx.post(
                 self._chat_completions_url(),
                 headers=self._headers(),
-                content=self._build_body(messages),
+                content=self._build_body(
+                    messages,
+                    tools=tools,
+                    tool_choice=tool_choice,
+                ),
                 timeout=self.timeout,
             )
             response.raise_for_status()
@@ -58,24 +79,55 @@ class LLMClient:
                 f"OpenAI-compatible request failed with status {exc.response.status_code}"
             ) from exc
 
-        return self._extract_message(response.json())
+        return self._extract_choice(response.json())
 
-    async def invoke(self, messages: list[Message]) -> Message:
+    async def invoke(
+        self,
+        messages: list[Message],
+        *,
+        tools: list[OpenAITool] | None = None,
+        tool_choice: ToolChoice | None = None,
+    ) -> ChatCompletionChoice:
         async with self._semaphore:
             response = await self._http_client.post(
                 self._chat_completions_url(),
-                content=self._build_body(messages),
+                content=self._build_body(
+                    messages,
+                    tools=tools,
+                    tool_choice=tool_choice,
+                ),
                 headers=self._headers(),
             )
             self._raise_for_status(response)
 
-        return self._extract_message(response.json())
+        return self._extract_choice(response.json())
 
-    async def aysnc_invoke(self, messages: list[Message]) -> Message:
+    async def aysnc_invoke(
+        self,
+        messages: list[Message],
+        *,
+        tools: list[OpenAITool] | None = None,
+        tool_choice: ToolChoice | None = None,
+    ) -> ChatCompletionChoice:
         """Backward-compatible alias for the historical misspelled method."""
-        return await self.invoke(messages)
+        return await self.invoke(
+            messages,
+            tools=tools,
+            tool_choice=tool_choice,
+        )
 
-    async def stream(self, messages: list[Message]) -> AsyncIterator[str]:
+    async def stream(
+        self,
+        messages: list[Message],
+        *,
+        tools: list[OpenAITool] | None = None,
+        tool_choice: ToolChoice | None = None,
+    ) -> AsyncIterator[str]:
+        if tools or tool_choice is not None:
+            raise ValueError(
+                "streaming tool calls are not supported; use invoke()"
+            )
+
         content = ""
         buffer = ""
 
@@ -118,7 +170,17 @@ class LLMClient:
     async def __aexit__(self, exc_type, exc, traceback) -> None:
         await self.aclose()
 
-    def _build_body(self, messages: list[Message], stream: bool = False) -> bytes:
+    def _build_body(
+        self,
+        messages: list[Message],
+        stream: bool = False,
+        *,
+        tools: list[OpenAITool] | None = None,
+        tool_choice: ToolChoice | None = None,
+    ) -> bytes:
+        if tool_choice is not None and not tools:
+            raise ValueError("tool_choice requires non-empty tools")
+
         body = {
             "model": self.model,
             "messages": messages,
@@ -127,6 +189,10 @@ class LLMClient:
 
         if stream:
             body["stream"] = True
+        if tools:
+            body["tools"] = tools
+            if tool_choice is not None:
+                body["tool_choice"] = tool_choice
 
         return json.dumps(body).encode("utf-8")
 
@@ -147,8 +213,25 @@ class LLMClient:
                 f"OpenAI-compatible request failed with status {response.status_code}"
             ) from exc
 
-    def _extract_message(self, payload: dict[str, Any]) -> Message:
-        choice = (payload.get("choices") or [{}])[0]
+    def _extract_choice(self, payload: dict[str, Any]) -> ChatCompletionChoice:
+        choices = payload.get("choices")
+        if not isinstance(choices, list) or not choices:
+            raise ValueError(
+                "OpenAI-compatible response did not include a completion choice"
+            )
+
+        choice = choices[0]
+        if not isinstance(choice, dict):
+            raise ValueError(
+                "OpenAI-compatible completion choice must be an object"
+            )
+
+        finish_reason = choice.get("finish_reason")
+        if not isinstance(finish_reason, str) or not finish_reason:
+            raise ValueError(
+                "OpenAI-compatible response did not include finish_reason"
+            )
+
         raw_message = choice.get("message")
 
         if raw_message is None and isinstance(choice.get("text"), str):
@@ -163,19 +246,15 @@ class LLMClient:
 
         message = dict(raw_message)
         message.setdefault("role", "assistant")
-        content = message.get("content")
-        tool_calls = message.get("tool_calls")
-
-        if tool_calls is not None:
+        if message["role"] != "assistant":
             raise ValueError(
-                "Native tool_calls are not supported; return the text protocol"
-            )
-        if not isinstance(content, str) or not content.strip():
-            raise ValueError(
-                "OpenAI-compatible response did not include text content"
+                "OpenAI-compatible response message must have assistant role"
             )
 
-        return message
+        return ChatCompletionChoice(
+            message=message,
+            finish_reason=finish_reason,
+        )
 
     def _iter_stream(
         self,
@@ -254,3 +333,12 @@ class LLMClient:
             )
 
         return content or None
+
+
+__all__ = [
+    "ChatCompletionChoice",
+    "LLMClient",
+    "Message",
+    "OpenAITool",
+    "ToolChoice",
+]

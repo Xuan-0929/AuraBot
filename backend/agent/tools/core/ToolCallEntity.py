@@ -8,7 +8,7 @@ from ..Tool import Tool
 
 @dataclass(frozen=True, slots=True)
 class ToolCall:
-    """One parsed tool call in the order returned by the model."""
+    """One parsed tool call carrying its provider-assigned ID."""
 
     name: str
     arguments: dict[str, Any]
@@ -24,7 +24,7 @@ class ToolCallBatch:
 
 @dataclass(frozen=True, slots=True)
 class FinalResponse:
-    """A final textual response returned by a harness model."""
+    """A completed assistant response selected by finish_reason."""
 
     content: str
 

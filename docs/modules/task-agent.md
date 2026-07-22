@@ -29,7 +29,7 @@ Task Agent 采用 **按任务创建的运行时执行者** 范式。
 当前仓库有两类过渡实现：
 
 1. TypeScript core 仍承担当前 MVP 的任务执行：默认 deterministic runner，显式配置后可调用 Codex、Claude Code 或 Hermes CLI runner；它能记录进度、取消 child process，并将 orphan `running` / `waiting` 标记为失败。
-2. Python 侧已新增 `Task`、`Harness`、`ReActHarness`、`PlanAndSaveHarness`、`HarnessFactory`、Skill / Tool 数据模型和内存型 `TaskManager`。这些是设计验证脚手架，尚未被 `backend.main`、HTTP API、事件总线或持久化任务表调用。
+2. Python 侧已新增 `Task`、`Harness`、`ReActHarness`、`PlanAndSolveHarness`、`HarnessFactory`、Skill / Tool 数据模型和内存型 `TaskManager`。这些是设计验证脚手架，尚未被 `backend.main`、HTTP API、事件总线或持久化任务表调用。
 
 两者都不等同于最终 Python 后端内的线程级 task-agent：
 
@@ -172,23 +172,50 @@ v0.2 不支持“让 Agent 自主工作数小时直到 token 耗尽”的超长�
 
 ### 通用工具协议边界
 
-所有需要调用工具的 Harness 复用 `agent/tools` 的文本协议、权限解析、MCP Gateway 和
-结果编码。`agent/tools` 不依赖 Task、Harness、LLM message role 或事件存储；Harness
-只负责把 assistant 文本交给协议层，并把 `tool_observation` 作为 `user` role 运行时消息
-写回上下文。
+所有需要调用工具的 Harness 复用 `agent/tools` 的 OpenAI Chat Completions function-tool
+协议、权限解析、MCP Gateway 和结果编码。项目只支持 OpenAI 原生协议，不保留自定义
+文本信封或其他 Provider 适配器。
 
-模型只能返回以下两种严格 JSON 信封，不能使用原生 `tool_calls`：
-
-```json
-{"type":"tool_calls","calls":[{"name":"tool_name","arguments":{}}]}
-```
+授权 Tool 使用原生 `tools` 字段发送：
 
 ```json
-{"type":"final","content":"final response"}
+{"type":"function","function":{"name":"tool_name","description":"...","parameters":{"type":"object"}}}
 ```
 
-调用 ID 由协议层的进程级计数器生成，模型不创建 ID。多调用按声明顺序执行。Task/Event
-记录由 Harness 负责，并以 `task_id` 和 `call_id` 关联，不写入 Tool 注册表。
+`LLMClient` 返回 assistant message 和 `finish_reason`。`finish_reason=tool_calls` 时，
+`OpenAIChatToolProtocol` 原子解析原生调用：
+
+```json
+{"role":"assistant","content":null,"tool_calls":[{"id":"call_abc","type":"function","function":{"name":"tool_name","arguments":"{}"}}]}
+```
+
+调用 ID 直接使用 Provider 返回值，多调用按声明顺序解析和执行。每个结果写回一条
+`{"role":"tool","tool_call_id":"call_abc","content":"..."}` message；
+`finish_reason=stop` 的普通 assistant content 是最终回答。`length`、`content_filter`、旧版
+`function_call` 和不一致的 message 均视为协议错误。
+
+`agent/tools` 不导入 Task、Harness、`LLMClient` 或事件存储。Task/Event 记录由 Harness
+负责，并以 `task_id` 和 provider `call_id` 关联，不写入 Tool 注册表。完整 ReAct loop
+落地前，流式 Tool Call 暂不支持。
+
+### Harness 继承与组合边界
+
+`Harness` 提供所有执行模式共享的稳定能力：持有 Task 和 LLMClient，构建 OpenAI
+tools，解析 completion，编码 tool result messages，并定义同步
+`build_system_prompt()` 契约。`OpenAIChatToolProtocol` 是无状态静态能力，不作为
+Harness 成员保存。具体 Harness 使用自己的模板和原生 `.format()` 构建 system prompt，
+并实现自己的异步 `run()` 算法。
+
+```text
+Harness
+├── ReActHarness             # ReAct loop 与轮次策略
+└── PlanAndSolveHarness      # plan/checkpoint loop
+
+Harness ──call──> OpenAIChatToolProtocol ──> Resolver/Gateway
+```
+
+Prompt 的 optional、SkillGroup 和 ToolGroup 摘要由 `harness/utils/prompt.py` 的纯函数统一
+生成。基类不按 `TaskType` 分支；`HarnessFactory` 负责多态选择，并拒绝注册抽象 Harness。
 
 ## 复杂任务执行模式
 

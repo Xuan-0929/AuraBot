@@ -11,14 +11,14 @@
 [完成] MCP client/session
 [完成] ToolGroup 权限解析
 [完成] Tool Call Gateway
-[部分] Harness Tool Call 解析协议
-[部分] 合法 Harness 初始化协议
+[完成] Harness Tool Call 解析协议边界
+[部分] 合法 Harness 初始化与执行协议
 [未做] ReAct loop
 ```
 
 工具注册、持久化、MCP Client 和 Task 运行时 ToolGroup 权限解析已经具备。Tool Call
-Gateway 和 Harness 文本协议边界已经具备；完整执行循环尚未完成，因此还不能开始可运行
-的 ReAct Harness。
+Gateway、OpenAI 原生 Tool Call 协议和 Harness 公共 OOP 边界已经具备；完整执行循环尚未
+完成，因此还不能开始可运行的 ReAct Harness。
 
 
 ## 1. Runtime schema 单一来源
@@ -200,20 +200,23 @@ await tool_gateway.execute(resolved_tool_call)
 
 ## 9. Harness Tool Call 解析协议
 
-Tool 不注册进 `LLMClient`。Tool 定义和唯一文本协议由 Harness 写入系统提示词，LLM
-只返回普通文本。协议层不接收 OpenAI response 或 message 对象。
+Tool 通过 OpenAI Chat Completions 原生 `tools` 注册。`LLMClient` 只负责 HTTP 和 Choice
+解包；`OpenAIChatToolProtocol` 负责 function tool、`finish_reason`、`tool_calls` 和
+`role=tool` 的协议转换。
 
-- [x] 使用带 `type` 的严格 `tool_calls` / `final` 双信封区分下一步动作。
-- [ ] 每轮 LLM 响应后调用一次 `ToolCallProtocol.parse()`。
-- [x] 从 Tool Call 中解析 `tool_name` 和 JSON object `arguments`。
-- [x] parser 支持一次响应中的多个 Tool Call、保持原始顺序，并通过进程级计数器分配
-  唯一 `call_id`。
-- [x] 非法格式或非法 JSON arguments 抛出带稳定错误码的 `ToolCallParseError`。
+- [x] 将授权 Tool 编码为 OpenAI function tool definitions。
+- [ ] 每轮 LLM 响应后调用一次 `OpenAIChatToolProtocol.parse_completion()`。
+- [x] 使用 `finish_reason=tool_calls` / `stop` 区分调用和最终回答。
+- [x] 从原生 Tool Call 中解析 provider `id`、function `name` 和 JSON 字符串
+  `arguments`。
+- [x] 支持一次响应中的多个 Tool Call、保持原始顺序和 provider `call_id`。
+- [x] 非法 Tool Call、arguments、finish reason 或不一致 message 抛出带稳定错误码的
+  `ToolCallParseError`。
 - [ ] Tool Call 解析结果交给权限解析器和 Tool Call Gateway，不直接操作 MCP session。
-- [x] 使用严格 `tool_observation` JSON，并由 Harness 适配为 `user` role 普通消息。
-- [x] `LLMClient` 保持普通消息请求和文本响应，不增加或接受原生 `tools`、`tool_choice` 或
-  `tool_calls` 协议。
-- [x] 增加 final、合法调用、未知 Tool、非法 JSON、多调用、原子解析和并发 ID 测试。
+- [x] 每个执行结果编码为一条带 `tool_call_id` 的 `role=tool` message。
+- [x] `LLMClient` 支持非流式原生 `tools`、`tool_choice`、`tool_calls` 和
+  `finish_reason`；流式 Tool Call 暂不支持。
+- [x] 增加 stop、合法调用、非法 JSON、多调用、原子解析、finish reason 和工具结果测试。
 - [ ] 在 ReAct loop 增加解析错误写回和有限次数恢复测试。
 
 
@@ -222,27 +225,35 @@ Tool 不注册进 `LLMClient`。Tool 定义和唯一文本协议由 Harness 写�
 `Harness` 已改为同步构造；消息初始化和完整状态转换留到 ReAct loop。
 
 - [x] 把 `Harness.__init__` 改为同步构造函数。
-- [x] `task`、`llm_client` property 改为同步 property。
+- [x] `task`、`llm_client` 由基类持有；无状态 Tool Protocol 通过静态 API 直接调用，
+  不保存为 Harness 成员。
+- [x] OpenAI Tool 构建、Completion 解析和 Tool result message 编码迁移到基类。
+- [x] 基类定义同步 `build_system_prompt()` 契约；具体 Harness 使用模板原生 `.format()`
+  拼装提示词。
+- [x] prompt 纯格式化逻辑集中到 `harness/utils/prompt.py`。
+- [x] ReAct 和 Plan-and-Solve 分别实现自己的 system prompt 构建。
 - [x] `HarnessFactory.create()` 只负责同步构造，不提供异步构造入口。
+- [x] `HarnessFactory` 拒绝注册抽象 Harness。
 - [ ] 根据任务配置从持久化层加载授权 ToolGroup，并注入 Task。
 - [ ] 在 ReAct loop 初始化阶段写入 system/user 初始消息。
 - [ ] 保证 system/user 初始消息只写入一次。
 - [ ] 明确 Harness 状态转换：Initializing → Pending → Running → Completed/Failed。
 - [ ] 初始化失败时 Task 状态和异常可观察。
 - [x] 修复构造函数 coroutine 错误。
-- [x] 恢复 Harness prompt 测试。
+- [x] 增加基类、prompt utils、ReAct、Plan-and-Solve 和 Factory 多态测试。
 
 
 ## 11. ReAct loop
 
 - [ ] 获取 Task 当前授权 Tool 集合。
-- [ ] 将授权 Tool 的真实 schema 描述写入 system prompt。
-- [ ] 调用 LLM。
-- [ ] 每轮响应调用 `ToolCallProtocol.parse()`，区分最终回答、Tool Call 和解析错误。
+- [ ] 将授权 Tool 的真实 schema 作为 OpenAI `tools` 请求字段发送。
+- [ ] 使用 `tool_choice=auto` 调用 LLM。
+- [ ] 每轮响应调用 `OpenAIChatToolProtocol.parse_completion()`，根据 `finish_reason`
+  区分最终回答、Tool Call 和协议错误。
 - [ ] 最终文本响应结束 loop并保存结果。
 - [ ] 保存触发 Tool Call 的原始 assistant message。
 - [ ] 通过 Tool Call Gateway 执行解析出的调用。
-- [ ] 按已确定的 observation 协议写回执行结果。
+- [ ] 先保存原生 assistant Tool Call message，再按调用顺序写回 `role=tool` messages。
 - [ ] 再次调用 LLM，直到最终文本响应。
 - [ ] 设置最大轮数，达到上限时明确失败或进入 concluding。
 - [ ] 支持 Task 取消和中断。
@@ -260,8 +271,8 @@ Tool 不注册进 `LLMClient`。Tool 定义和唯一文本协议由 Harness 写�
 → MCP client/session
 → ToolGroup 权限解析
 → Tool Call Gateway
-→ Harness Tool Call 解析协议
-→ 修复 Harness 初始化协议
+→ OpenAI 原生 Harness Tool Call 协议
+→ 重构 Harness 公共 OOP 边界
 → ReAct loop
 ```
 
@@ -276,7 +287,7 @@ Tool 不注册进 `LLMClient`。Tool 定义和唯一文本协议由 Harness 写�
 - [x] Runtime Tool 包含真实 input/output schema 和 `server_url`。
 - [x] Task 授权 ToolGroup 能解析成无重名的 Tool 集合。
 - [x] Resolver + Tool Call Gateway 能执行授权解析、参数校验和 MCP 调用。
-- [x] Harness system prompt 能描述授权 Tool，且唯一文本协议已确定并有测试。
+- [x] Harness system prompt 能描述授权 Tool，且 OpenAI 原生协议已确定并有测试。
 - [ ] Harness 构造和异步初始化协议合法。
 
 这些门槛全部完成后，再实现 ReAct loop，避免 Harness 同时承担注册、同步、权限、连接和

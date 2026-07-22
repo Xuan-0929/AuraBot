@@ -5,16 +5,18 @@ from typing import Literal
 
 
 ToolCallParseErrorCode = Literal[
-    "invalid_json",
-    "invalid_envelope",
-    "invalid_final",
-    "invalid_calls",
+    "invalid_finish_reason",
+    "invalid_message",
+    "invalid_tool_calls",
     "invalid_call",
+    "invalid_arguments",
+    "incomplete_completion",
+    "content_filtered",
 ]
 
 
 class ToolCallParseError(ValueError):
-    """Raised when model text violates the canonical tool protocol."""
+    """Raised when an OpenAI Chat completion violates the tool protocol."""
 
     def __init__(self, code: ToolCallParseErrorCode, message: str):
         super().__init__(message)

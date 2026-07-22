@@ -1,3 +1,4 @@
+import inspect
 from collections.abc import Mapping
 
 from ...LLMClient import LLMClient
@@ -84,3 +85,5 @@ class HarnessFactory:
 
         if not isinstance(harness_type, type) or not issubclass(harness_type, Harness):
             raise TypeError("harness_type must inherit from Harness")
+        if inspect.isabstract(harness_type):
+            raise TypeError("harness_type must be a concrete Harness")

@@ -1,3 +1,3 @@
-from .LLMClient import LLMClient
+from .LLMClient import ChatCompletionChoice, LLMClient
 
-__all__ = ["LLMClient"]
+__all__ = ["ChatCompletionChoice", "LLMClient"]

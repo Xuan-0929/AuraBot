@@ -12,8 +12,15 @@ class FakeLLMClient:
 
 
 class GoalHarness(Harness):
+    def build_system_prompt(self) -> str:
+        return "Goal"
+
     async def run(self) -> object:
         return "goal result"
+
+
+class AbstractHarness(Harness):
+    pass
 
 
 def make_task(task_id: int, task_type: TaskType) -> Task:
@@ -91,6 +98,10 @@ class HarnessFactoryTests(unittest.TestCase):
     def test_rejects_non_harness_registration(self):
         with self.assertRaisesRegex(TypeError, "must inherit from Harness"):
             self.factory.register(TaskType.Goal, object)
+
+    def test_rejects_abstract_harness_registration(self):
+        with self.assertRaisesRegex(TypeError, "must be a concrete Harness"):
+            self.factory.register(TaskType.Goal, AbstractHarness)
 
     def test_rejects_non_task_input(self):
         with self.assertRaisesRegex(TypeError, "task must be a Task"):

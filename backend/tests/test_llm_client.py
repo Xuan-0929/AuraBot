@@ -5,8 +5,11 @@ from unittest.mock import patch
 
 import httpx
 
+from backend.agent import (
+    ChatCompletionChoice as ExportedChatCompletionChoice,
+)
 from backend.agent import LLMClient as ExportedLLMClient
-from backend.agent.LLMClient import LLMClient
+from backend.agent.LLMClient import ChatCompletionChoice, LLMClient
 
 
 def make_client(
@@ -26,17 +29,27 @@ def make_client(
     )
 
 
+def text_response(content: str) -> dict:
+    return {
+        "choices": [
+            {
+                "message": {"role": "assistant", "content": content},
+                "finish_reason": "stop",
+            }
+        ]
+    }
+
+
 class LLMClientTests(unittest.IsolatedAsyncioTestCase):
     async def _collect_stream(self, stream):
         chunks = []
-
         async for chunk in stream:
             chunks.append(chunk)
-
         return chunks
 
-    def test_exports_llm_client_from_agent_package(self):
+    def test_exports_public_client_and_choice(self):
         self.assertIs(ExportedLLMClient, LLMClient)
+        self.assertIs(ExportedChatCompletionChoice, ChatCompletionChoice)
 
     def test_rejects_invalid_concurrency_limit(self):
         with self.assertRaisesRegex(ValueError, "at least 1"):
@@ -47,16 +60,26 @@ class LLMClientTests(unittest.IsolatedAsyncioTestCase):
                 max_concurrency=0,
             )
 
-    def test_chunk_invoke_keeps_blocking_compatibility_api(self):
+    def test_chunk_invoke_sends_native_tools_and_returns_choice(self):
         response = httpx.Response(
             200,
             request=httpx.Request(
                 "POST",
                 "https://api.example.com/v1/chat/completions",
             ),
-            json={"choices": [{"message": {"content": "sync reply"}}]},
+            json=text_response("sync reply"),
         )
         messages = [{"role": "user", "content": "hello"}]
+        tools = [
+            {
+                "type": "function",
+                "function": {
+                    "name": "ping",
+                    "description": "Ping",
+                    "parameters": {"type": "object", "properties": {}},
+                },
+            }
+        ]
 
         with patch("backend.agent.LLMClient.httpx.post", return_value=response) as post:
             client = LLMClient(
@@ -64,29 +87,31 @@ class LLMClientTests(unittest.IsolatedAsyncioTestCase):
                 api_key="test-key",
                 model="test-model",
             )
-            result = client.chunk_invoke(messages)
+            result = client.chunk_invoke(
+                messages,
+                tools=tools,
+                tool_choice="auto",
+            )
 
         self.assertEqual(
             result,
-            {"role": "assistant", "content": "sync reply"},
+            ChatCompletionChoice(
+                message={"role": "assistant", "content": "sync reply"},
+                finish_reason="stop",
+            ),
         )
         body = json.loads(post.call_args.kwargs["content"].decode("utf-8"))
         self.assertEqual(body["messages"], messages)
+        self.assertEqual(body["tools"], tools)
+        self.assertEqual(body["tool_choice"], "auto")
         asyncio.run(client.aclose())
 
-    async def test_invoke_posts_openai_compatible_request(self):
+    async def test_invoke_posts_plain_openai_chat_request(self):
         requests = []
 
         async def handler(request: httpx.Request) -> httpx.Response:
             requests.append(request)
-            return httpx.Response(
-                200,
-                json={
-                    "choices": [
-                        {"message": {"content": "hello from model"}}
-                    ]
-                },
-            )
+            return httpx.Response(200, json=text_response("hello from model"))
 
         client = make_client(handler)
         self.addAsyncCleanup(client.aclose)
@@ -94,11 +119,8 @@ class LLMClientTests(unittest.IsolatedAsyncioTestCase):
 
         result = await client.invoke(messages)
 
-        self.assertEqual(
-            result,
-            {"role": "assistant", "content": "hello from model"},
-        )
-        self.assertEqual(len(requests), 1)
+        self.assertEqual(result.message["content"], "hello from model")
+        self.assertEqual(result.finish_reason, "stop")
         request = requests[0]
         self.assertEqual(
             str(request.url),
@@ -108,26 +130,30 @@ class LLMClientTests(unittest.IsolatedAsyncioTestCase):
         body = json.loads(request.content.decode("utf-8"))
         self.assertEqual(body["model"], "test-model")
         self.assertEqual(body["messages"], messages)
+        self.assertNotIn("tools", body)
+        self.assertNotIn("tool_choice", body)
         self.assertNotIn("stream", body)
 
-    async def test_misspelled_async_alias_uses_shared_async_client(self):
+    async def test_misspelled_async_alias_forwards_tool_options(self):
+        requests = []
+
         async def handler(request: httpx.Request) -> httpx.Response:
-            return httpx.Response(
-                200,
-                json={"choices": [{"message": {"content": "alias reply"}}]},
-            )
+            requests.append(request)
+            return httpx.Response(200, json=text_response("alias reply"))
 
         client = make_client(handler)
         self.addAsyncCleanup(client.aclose)
+        tools = [{"type": "function", "function": {"name": "ping"}}]
 
         result = await client.aysnc_invoke(
-            [{"role": "user", "content": "hello"}]
+            [{"role": "user", "content": "hello"}],
+            tools=tools,
+            tool_choice="auto",
         )
 
-        self.assertEqual(
-            result,
-            {"role": "assistant", "content": "alias reply"},
-        )
+        self.assertEqual(result.message["content"], "alias reply")
+        body = json.loads(requests[0].content)
+        self.assertEqual(body["tools"], tools)
 
     async def test_one_client_serves_multiple_agent_loops_concurrently(self):
         active_requests = 0
@@ -138,25 +164,14 @@ class LLMClientTests(unittest.IsolatedAsyncioTestCase):
         async def handler(request: httpx.Request) -> httpx.Response:
             nonlocal active_requests, maximum_active_requests
             active_requests += 1
-            maximum_active_requests = max(
-                maximum_active_requests,
-                active_requests,
-            )
-
+            maximum_active_requests = max(maximum_active_requests, active_requests)
             if active_requests == 2:
                 both_started.set()
 
             try:
                 await release_requests.wait()
                 prompt = json.loads(request.content)["messages"][0]["content"]
-                return httpx.Response(
-                    200,
-                    json={
-                        "choices": [
-                            {"message": {"content": f"reply:{prompt}"}}
-                        ]
-                    },
-                )
+                return httpx.Response(200, json=text_response(f"reply:{prompt}"))
             finally:
                 active_requests -= 1
 
@@ -174,7 +189,7 @@ class LLMClientTests(unittest.IsolatedAsyncioTestCase):
         results = await asyncio.gather(first, second)
 
         self.assertEqual(
-            {result["content"] for result in results},
+            {result.message["content"] for result in results},
             {"reply:task-a", "reply:task-b"},
         )
         self.assertEqual(maximum_active_requests, 2)
@@ -190,20 +205,12 @@ class LLMClientTests(unittest.IsolatedAsyncioTestCase):
             nonlocal request_count, active_requests, maximum_active_requests
             request_count += 1
             active_requests += 1
-            maximum_active_requests = max(
-                maximum_active_requests,
-                active_requests,
-            )
-
+            maximum_active_requests = max(maximum_active_requests, active_requests)
             try:
                 if request_count == 1:
                     first_started.set()
                     await release_first.wait()
-
-                return httpx.Response(
-                    200,
-                    json={"choices": [{"message": {"content": "ok"}}]},
-                )
+                return httpx.Response(200, json=text_response("ok"))
             finally:
                 active_requests -= 1
 
@@ -225,7 +232,93 @@ class LLMClientTests(unittest.IsolatedAsyncioTestCase):
         self.assertEqual(request_count, 2)
         self.assertEqual(maximum_active_requests, 1)
 
-    async def test_stream_posts_streaming_request_and_yields_deltas(self):
+    async def test_accepts_native_tool_call_choice_with_null_content(self):
+        tool_calls = [
+            {
+                "id": "call_provider_1",
+                "type": "function",
+                "function": {"name": "first", "arguments": "{}"},
+            },
+            {
+                "id": "call_provider_2",
+                "type": "function",
+                "function": {"name": "second", "arguments": "{}"},
+            },
+        ]
+
+        async def handler(request: httpx.Request) -> httpx.Response:
+            return httpx.Response(
+                200,
+                json={
+                    "choices": [
+                        {
+                            "message": {
+                                "role": "assistant",
+                                "content": None,
+                                "tool_calls": tool_calls,
+                            },
+                            "finish_reason": "tool_calls",
+                        }
+                    ]
+                },
+            )
+
+        client = make_client(handler)
+        self.addAsyncCleanup(client.aclose)
+
+        result = await client.invoke([{"role": "user", "content": "go"}])
+
+        self.assertEqual(result.finish_reason, "tool_calls")
+        self.assertEqual(result.message["tool_calls"], tool_calls)
+        self.assertIsNone(result.message["content"])
+
+    async def test_rejects_missing_choice_message_or_finish_reason(self):
+        payloads = [
+            {},
+            {"choices": []},
+            {"choices": [{"finish_reason": "stop"}]},
+            {"choices": [{"message": {"content": "done"}}]},
+            {
+                "choices": [
+                    {
+                        "message": {"role": "user", "content": "done"},
+                        "finish_reason": "stop",
+                    }
+                ]
+            },
+        ]
+
+        for payload in payloads:
+            with self.subTest(payload=payload):
+                async def handler(request: httpx.Request) -> httpx.Response:
+                    return httpx.Response(200, json=payload)
+
+                client = make_client(handler)
+                try:
+                    with self.assertRaises(ValueError):
+                        await client.invoke([{"role": "user", "content": "hello"}])
+                finally:
+                    await client.aclose()
+
+    async def test_empty_tools_are_omitted_and_tool_choice_requires_tools(self):
+        requests = []
+
+        async def handler(request: httpx.Request) -> httpx.Response:
+            requests.append(request)
+            return httpx.Response(200, json=text_response("ok"))
+
+        client = make_client(handler)
+        self.addAsyncCleanup(client.aclose)
+
+        await client.invoke([], tools=[])
+
+        body = json.loads(requests[0].content)
+        self.assertNotIn("tools", body)
+        self.assertNotIn("tool_choice", body)
+        with self.assertRaisesRegex(ValueError, "requires non-empty tools"):
+            await client.invoke([], tool_choice="auto")
+
+    async def test_stream_posts_streaming_request_and_yields_text_deltas(self):
         requests = []
 
         async def handler(request: httpx.Request) -> httpx.Response:
@@ -251,6 +344,21 @@ class LLMClientTests(unittest.IsolatedAsyncioTestCase):
         self.assertEqual(body["messages"], messages)
         self.assertTrue(body["stream"])
 
+    async def test_stream_rejects_tool_calls(self):
+        async def handler(request: httpx.Request) -> httpx.Response:
+            raise AssertionError("request must not be sent")
+
+        client = make_client(handler)
+        self.addAsyncCleanup(client.aclose)
+
+        with self.assertRaisesRegex(ValueError, "use invoke"):
+            await self._collect_stream(
+                client.stream(
+                    [{"role": "user", "content": "hello"}],
+                    tools=[{"type": "function", "function": {"name": "ping"}}],
+                )
+            )
+
     async def test_raises_compatible_error_for_http_status(self):
         async def handler(request: httpx.Request) -> httpx.Response:
             return httpx.Response(429, text="rate limited")
@@ -260,86 +368,6 @@ class LLMClientTests(unittest.IsolatedAsyncioTestCase):
 
         with self.assertRaisesRegex(RuntimeError, "status 429"):
             await client.invoke([{"role": "user", "content": "hello"}])
-
-    async def test_raises_when_non_streaming_response_has_no_content(self):
-        async def handler(request: httpx.Request) -> httpx.Response:
-            return httpx.Response(
-                200,
-                json={"choices": [{"message": {"content": ""}}]},
-            )
-
-        client = make_client(handler)
-        self.addAsyncCleanup(client.aclose)
-
-        with self.assertRaisesRegex(ValueError, "text content"):
-            await client.invoke([{"role": "user", "content": "hello"}])
-
-    async def test_invoke_rejects_native_tool_calls(self):
-        tool_calls = [
-            {
-                "id": "call_1",
-                "type": "function",
-                "function": {"name": "first", "arguments": "{}"},
-            },
-            {
-                "id": "call_2",
-                "type": "function",
-                "function": {"name": "second", "arguments": "{}"},
-            },
-        ]
-
-        async def handler(request: httpx.Request) -> httpx.Response:
-            return httpx.Response(
-                200,
-                json={
-                    "choices": [
-                        {
-                            "message": {
-                                "role": "assistant",
-                                "content": None,
-                                "tool_calls": tool_calls,
-                            }
-                        }
-                    ]
-                },
-            )
-
-        client = make_client(handler)
-        self.addAsyncCleanup(client.aclose)
-
-        with self.assertRaisesRegex(ValueError, "Native tool_calls"):
-            await client.invoke([{"role": "user", "content": "go"}])
-
-    async def test_invoke_rejects_native_tool_calls_even_with_text(self):
-        async def handler(request: httpx.Request) -> httpx.Response:
-            return httpx.Response(
-                200,
-                json={
-                    "choices": [
-                        {
-                            "message": {
-                                "role": "assistant",
-                                "content": '{"type":"final","content":"done"}',
-                                "tool_calls": [
-                                    {
-                                        "type": "function",
-                                        "function": {
-                                            "name": "ping",
-                                            "arguments": "{}",
-                                        },
-                                    }
-                                ],
-                            }
-                        }
-                    ]
-                },
-            )
-
-        client = make_client(handler)
-        self.addAsyncCleanup(client.aclose)
-
-        with self.assertRaisesRegex(ValueError, "Native tool_calls"):
-            await client.invoke([{"role": "user", "content": "go"}])
 
     async def test_raises_when_streaming_response_has_no_content(self):
         async def handler(request: httpx.Request) -> httpx.Response:
@@ -359,18 +387,13 @@ class LLMClientTests(unittest.IsolatedAsyncioTestCase):
 
     async def test_async_context_manager_closes_shared_http_client(self):
         async def handler(request: httpx.Request) -> httpx.Response:
-            return httpx.Response(
-                200,
-                json={"choices": [{"message": {"content": "ok"}}]},
-            )
+            return httpx.Response(200, json=text_response("ok"))
 
         client = make_client(handler)
 
         async with client:
-            self.assertEqual(
-                await client.invoke([{"role": "user", "content": "hello"}]),
-                {"role": "assistant", "content": "ok"},
-            )
+            result = await client.invoke([{"role": "user", "content": "hello"}])
+            self.assertEqual(result.message["content"], "ok")
 
         self.assertTrue(client._http_client.is_closed)
 
