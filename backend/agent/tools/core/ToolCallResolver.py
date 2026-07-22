@@ -1,18 +1,43 @@
-"""Resolve parsed LLM tool calls against a Task authorization snapshot."""
+"""Resolve parsed tool calls against a generic authorization snapshot."""
 
 from collections.abc import Mapping, Sequence
 
 from ..Tool import Tool
-from ..utils.parser import ParserInput, parse_tool_calls
+from ..ToolGroup import ToolGroup
 from .ToolCallEntity import ResolvedToolCall, ToolCall
-from .ToolExceptions import ToolNotAuthorizedError
+from .ToolExceptions import DuplicateToolNameError, ToolNotAuthorizedError
 
 
 class ToolCallResolver:
-    """Map tool calls using a prevalidated Task authorization index."""
+    """Map tool calls using a prevalidated authorization index."""
 
     def __init__(self, tools_by_name: Mapping[str, Tool]):
         self._tools_by_name = dict(tools_by_name)
+
+    @classmethod
+    def from_tool_groups(
+        cls,
+        tool_groups: Sequence[ToolGroup],
+    ) -> "ToolCallResolver":
+        """Build one resolver and reject ambiguous names atomically."""
+
+        tools_by_name: dict[str, Tool] = {}
+        group_by_tool_name: dict[str, str] = {}
+
+        for group in tool_groups:
+            for tool in group.tools:
+                existing = tools_by_name.get(tool.name)
+                if existing is not None:
+                    raise DuplicateToolNameError(
+                        f"tool {tool.name!r} is exposed by both "
+                        f"ToolGroup {group_by_tool_name[tool.name]!r} "
+                        f"({existing.server_url!r}) and ToolGroup "
+                        f"{group.name!r} ({tool.server_url!r})"
+                    )
+                tools_by_name[tool.name] = tool
+                group_by_tool_name[tool.name] = group.name
+
+        return cls(tools_by_name)
 
     def resolve(self, tool_calls: Sequence[ToolCall]) -> list[ResolvedToolCall]:
         """Resolve a complete batch while preserving model-returned order."""
@@ -23,7 +48,7 @@ class ToolCallResolver:
             if tool is None:
                 raise ToolNotAuthorizedError(
                     f"tool call at index {index} references a tool that is "
-                    f"not authorized for this Task: {call.name!r}"
+                    f"not present in the authorization snapshot: {call.name!r}"
                 )
             resolved.append(
                 ResolvedToolCall(
@@ -33,12 +58,5 @@ class ToolCallResolver:
                 )
             )
         return resolved
-
-    def resolve_message(self, response: ParserInput) -> list[ResolvedToolCall]:
-        """Parse and resolve all tool calls in one LLM response."""
-
-        tool_calls = parse_tool_calls(response)
-        return self.resolve(tool_calls)
-
 
 __all__ = ["ToolCallResolver"]

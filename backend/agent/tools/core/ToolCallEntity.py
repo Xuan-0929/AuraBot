@@ -1,7 +1,7 @@
-"""Entities used while parsing and resolving LLM tool calls."""
+"""Harness-neutral entities for parsing and executing tool calls."""
 
 from dataclasses import dataclass
-from typing import Any, Literal
+from typing import Any, Literal, TypeAlias
 
 from ..Tool import Tool
 
@@ -12,16 +12,33 @@ class ToolCall:
 
     name: str
     arguments: dict[str, Any]
-    call_id: str | None = None
+    call_id: str
+
+
+@dataclass(frozen=True, slots=True)
+class ToolCallBatch:
+    """One non-empty, atomically parsed batch of ordered tool calls."""
+
+    calls: tuple[ToolCall, ...]
+
+
+@dataclass(frozen=True, slots=True)
+class FinalResponse:
+    """A final textual response returned by a harness model."""
+
+    content: str
+
+
+ToolProtocolResponse: TypeAlias = ToolCallBatch | FinalResponse
 
 
 @dataclass(frozen=True, slots=True)
 class ResolvedToolCall:
-    """A parsed tool call mapped to an authorized runtime tool."""
+    """A parsed tool call mapped to an authorization snapshot."""
 
     tool: Tool
     arguments: dict[str, Any]
-    call_id: str | None = None
+    call_id: str
 
 
 ToolExecutionErrorCode = Literal[
@@ -42,7 +59,7 @@ class ToolExecutionResult:
     """JSON-serializable result of one resolved tool call."""
 
     tool_name: str
-    call_id: str | None
+    call_id: str
     content: list[dict[str, Any]]
     structured_content: dict[str, Any] | None
     is_error: bool
@@ -50,8 +67,11 @@ class ToolExecutionResult:
 
 
 __all__ = [
+    "FinalResponse",
     "ResolvedToolCall",
     "ToolCall",
+    "ToolCallBatch",
     "ToolExecutionErrorCode",
     "ToolExecutionResult",
+    "ToolProtocolResponse",
 ]

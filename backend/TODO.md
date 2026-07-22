@@ -10,14 +10,15 @@
 [完成] Tool domain model
 [完成] MCP client/session
 [完成] ToolGroup 权限解析
-[部分] Tool Call Gateway
-[未做] Harness Tool Call 解析协议
+[完成] Tool Call Gateway
+[部分] Harness Tool Call 解析协议
 [部分] 合法 Harness 初始化协议
 [未做] ReAct loop
 ```
 
 工具注册、持久化、MCP Client 和 Task 运行时 ToolGroup 权限解析已经具备。Tool Call
-Gateway 和完整执行循环尚未完成，因此还不能开始可运行的 ReAct Harness。
+Gateway 和 Harness 文本协议边界已经具备；完整执行循环尚未完成，因此还不能开始可运行
+的 ReAct Harness。
 
 
 ## 1. Runtime schema 单一来源
@@ -137,10 +138,8 @@ tools: list[Tool]
   MCP session。
 - [x] 增加 schema、默认本地 Server URL、显式外部 Server URL 测试。
 
-仍需考证：
-
-- [ ] 结合 Harness 的 `parse_tool_call()` 调用协议明确 `Tool.execute()` 的职责；当前
-  保持现有方法不变。
+- [x] 删除空的 `Tool.execute()`；Tool 只描述和路由能力，唯一执行入口为
+  `ToolCallGateway`。
 
 
 ## 6. MCP client/session
@@ -163,8 +162,9 @@ tools: list[Tool]
 
 ## 7. ToolGroup 权限解析
 
-Task 接收上层已经加载的 ToolGroup，并为整个 Task 生命周期建立内存权限快照；这一层
-不重复查询 SQLite，也不区分全局未知 Tool 和已注册但未授权 Tool。
+通用 Resolver 根据已加载的 ToolGroup 建立内存权限快照；Task 持有该快照但不负责实现
+ToolGroup 展开和重名检测。这一层不重复查询 SQLite，也不区分全局未知 Tool 和已注册但
+未授权 Tool。
 
 - [x] 根据 Task 已加载的授权 ToolGroup 使用其中的实际 Tool。
 - [x] 展开多个 ToolGroup，生成当前 Task 唯一的可调用 Tool 集合。
@@ -181,13 +181,14 @@ Task 接收上层已经加载的 ToolGroup，并为整个 Task 生命周期建�
 
 新增统一 Tool 执行入口，Harness 不直接操作 MCP session。
 
-- [x] 接收已经完成名称唯一性和 Task 权限解析的 `ResolvedToolCall`。
+- [x] 接收已经完成名称唯一性和权限解析的 `ResolvedToolCall`。
 - [x] 使用 Tool 的 `input_schema` 校验 arguments。
 - [x] 根据 Tool 的 `server_url` 通过 `MCPClient` 建立临时 session。
 - [x] 调用 MCP `tools/call`。
 - [x] 使用 `ToolExecutionResult` 标准化内容、结构化内容、错误和超时结果。
 - [x] 不把异常 traceback、Token 或内部连接信息写入 Tool 执行结果。
-- [ ] 记录足够的 Task/Event 调试信息，但不在 Tool 表保存调用状态。
+- [x] 明确 Gateway 不依赖 Task/Event；`task_id`、轮次、耗时和错误码由 Harness 在完整
+  loop 中记录，不在 Tool 表保存调用状态。
 - [x] 增加成功、参数错误、Tool 错误、Server 超时和 Server 错误测试。
 
 建议接口：
@@ -199,19 +200,21 @@ await tool_gateway.execute(resolved_tool_call)
 
 ## 9. Harness Tool Call 解析协议
 
-Tool 不注册进 `LLMClient`。Tool 定义由 Harness 写入系统提示词，LLM 返回普通文本，
-ReAct Harness 在每轮调用 `parse_tool_call()` 判断下一步动作。
+Tool 不注册进 `LLMClient`。Tool 定义和唯一文本协议由 Harness 写入系统提示词，LLM
+只返回普通文本。协议层不接收 OpenAI response 或 message 对象。
 
-- [ ] 定义可区分最终回答与 Tool Call 的稳定文本协议。
-- [ ] 每轮 LLM 响应后调用一次 `parse_tool_call()`。
+- [x] 使用带 `type` 的严格 `tool_calls` / `final` 双信封区分下一步动作。
+- [ ] 每轮 LLM 响应后调用一次 `ToolCallProtocol.parse()`。
 - [x] 从 Tool Call 中解析 `tool_name` 和 JSON object `arguments`。
-- [x] parser 支持一次响应中的多个 Tool Call，并保持原始顺序。
-- [x] 非法格式或非法 JSON arguments 抛出稳定的 `ToolCallParseError`。
+- [x] parser 支持一次响应中的多个 Tool Call、保持原始顺序，并通过进程级计数器分配
+  唯一 `call_id`。
+- [x] 非法格式或非法 JSON arguments 抛出带稳定错误码的 `ToolCallParseError`。
 - [ ] Tool Call 解析结果交给权限解析器和 Tool Call Gateway，不直接操作 MCP session。
-- [ ] 明确 Tool observation 写回 messages 的格式和 role。
-- [ ] `LLMClient` 保持普通消息请求，不增加原生 `tools`、`tool_choice` 或
+- [x] 使用严格 `tool_observation` JSON，并由 Harness 适配为 `user` role 普通消息。
+- [x] `LLMClient` 保持普通消息请求和文本响应，不增加或接受原生 `tools`、`tool_choice` 或
   `tool_calls` 协议。
-- [ ] 增加最终文本、合法调用、未知 Tool、非法 JSON、多调用和解析恢复测试。
+- [x] 增加 final、合法调用、未知 Tool、非法 JSON、多调用、原子解析和并发 ID 测试。
+- [ ] 在 ReAct loop 增加解析错误写回和有限次数恢复测试。
 
 
 ## 10. 合法 Harness 初始化协议
@@ -235,7 +238,7 @@ ReAct Harness 在每轮调用 `parse_tool_call()` 判断下一步动作。
 - [ ] 获取 Task 当前授权 Tool 集合。
 - [ ] 将授权 Tool 的真实 schema 描述写入 system prompt。
 - [ ] 调用 LLM。
-- [ ] 每轮响应调用 `parse_tool_call()`，区分最终回答、Tool Call 和解析错误。
+- [ ] 每轮响应调用 `ToolCallProtocol.parse()`，区分最终回答、Tool Call 和解析错误。
 - [ ] 最终文本响应结束 loop并保存结果。
 - [ ] 保存触发 Tool Call 的原始 assistant message。
 - [ ] 通过 Tool Call Gateway 执行解析出的调用。
@@ -272,8 +275,8 @@ ReAct Harness 在每轮调用 `parse_tool_call()` 判断下一步动作。
 - [ ] MCP `tools/list` 结果能通过现有 ToolSQL CRUD 持久化。
 - [x] Runtime Tool 包含真实 input/output schema 和 `server_url`。
 - [x] Task 授权 ToolGroup 能解析成无重名的 Tool 集合。
-- [ ] Tool Call Gateway 能执行授权校验、参数校验和 MCP 调用。
-- [ ] Harness system prompt 能描述授权 Tool，且 `parse_tool_call()` 协议已确定并有测试。
+- [x] Resolver + Tool Call Gateway 能执行授权解析、参数校验和 MCP 调用。
+- [x] Harness system prompt 能描述授权 Tool，且唯一文本协议已确定并有测试。
 - [ ] Harness 构造和异步初始化协议合法。
 
 这些门槛全部完成后，再实现 ReAct loop，避免 Harness 同时承担注册、同步、权限、连接和

@@ -1,10 +1,11 @@
 import unittest
 
 from backend.agent.tools.Tool import Tool
+from backend.agent.tools.ToolGroup import ToolGroup
 from backend.agent.tools.core.ToolCallEntity import ToolCall
 from backend.agent.tools.core.ToolCallResolver import ToolCallResolver
 from backend.agent.tools.core.ToolExceptions import (
-    ToolCallParseError,
+    DuplicateToolNameError,
     ToolNotAuthorizedError,
 )
 
@@ -40,7 +41,9 @@ class ToolCallResolverTests(unittest.TestCase):
         resolver = ToolCallResolver({"read": make_tool("read")})
 
         with self.assertRaisesRegex(ToolNotAuthorizedError, "delete"):
-            resolver.resolve([ToolCall("delete", {"path": "TODO.md"})])
+            resolver.resolve(
+                [ToolCall("delete", {"path": "TODO.md"}, "call_1")]
+            )
 
     def test_empty_tool_call_batch_returns_empty_list(self):
         self.assertEqual(ToolCallResolver({}).resolve([]), [])
@@ -51,37 +54,43 @@ class ToolCallResolverTests(unittest.TestCase):
         with self.assertRaisesRegex(ToolNotAuthorizedError, "delete"):
             resolver.resolve(
                 [
-                    ToolCall("read", {"path": "TODO.md"}),
-                    ToolCall("delete", {"path": "TODO.md"}),
+                    ToolCall("read", {"path": "TODO.md"}, "call_1"),
+                    ToolCall("delete", {"path": "TODO.md"}, "call_2"),
                 ]
             )
 
-    def test_resolver_parses_and_resolves_llm_message(self):
+    def test_builds_authorization_snapshot_from_tool_groups(self):
         ping = make_tool("ping")
-        resolver = ToolCallResolver({"ping": ping})
-        message = {
-            "role": "assistant",
-            "content": None,
-            "tool_calls": [
-                {
-                    "id": "call_1",
-                    "type": "function",
-                    "function": {"name": "ping", "arguments": "{}"},
-                }
-            ],
-        }
+        status = make_tool("status")
 
-        resolved = resolver.resolve_message(message)
+        resolver = ToolCallResolver.from_tool_groups(
+            [
+                ToolGroup("first", [ping], "First tools"),
+                ToolGroup("second", [status], "Second tools"),
+            ]
+        )
 
-        self.assertEqual(len(resolved), 1)
-        self.assertIs(resolved[0].tool, ping)
-        self.assertEqual(resolved[0].call_id, "call_1")
+        resolved = resolver.resolve(
+            [
+                ToolCall("status", {}, "call_1"),
+                ToolCall("ping", {}, "call_2"),
+            ]
+        )
+        self.assertIs(resolved[0].tool, status)
+        self.assertIs(resolved[1].tool, ping)
 
-    def test_resolve_message_does_not_wrap_parse_errors(self):
-        resolver = ToolCallResolver({})
-
-        with self.assertRaises(ToolCallParseError):
-            resolver.resolve_message('{"tool":')
+    def test_group_snapshot_rejects_duplicate_names(self):
+        with self.assertRaisesRegex(DuplicateToolNameError, "ping"):
+            ToolCallResolver.from_tool_groups(
+                [
+                    ToolGroup("first", [make_tool("ping")], "First tools"),
+                    ToolGroup(
+                        "second",
+                        [make_tool("ping", "http://other.test")],
+                        "Second tools",
+                    ),
+                ]
+            )
 
 
 if __name__ == "__main__":

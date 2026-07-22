@@ -35,7 +35,7 @@ def make_call(
     name: str = "search",
     arguments: dict | None = None,
     *,
-    call_id: str | None = "call_1",
+    call_id: str = "call_1",
     server_url: str = "https://mcp.example.com/mcp",
     input_schema: dict | None = None,
 ) -> ResolvedToolCall:

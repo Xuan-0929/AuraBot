@@ -1,4 +1,12 @@
-from .Harness import *
+from ...LLMClient import LLMClient, Message
+from ...tools.core.ToolCallEntity import (
+    ToolExecutionResult,
+    ToolProtocolResponse,
+)
+from ...tools.core.ToolCallProtocol import TOOL_PROTOCOL_INSTRUCTIONS
+from ..Task import Task
+from .Harness import Harness
+from .ToolProtocolAdapter import HarnessToolProtocolAdapter
 from .prompts import system_prompt_ReAct
 from .utils.formatter import _format_optional
 
@@ -24,8 +32,36 @@ class ReActHarness(Harness):
     here. Construction already follows the common Harness contract.
     """
 
+    def __init__(
+        self,
+        *,
+        task: Task,
+        llm_client: LLMClient,
+        tool_protocol_adapter: HarnessToolProtocolAdapter | None = None,
+    ):
+        super().__init__(task=task, llm_client=llm_client)
+        self._tool_protocol_adapter = (
+            tool_protocol_adapter or HarnessToolProtocolAdapter()
+        )
+
+    @property
+    def tool_protocol_adapter(self) -> HarnessToolProtocolAdapter:
+        return self._tool_protocol_adapter
+
+    def parse_assistant_message(self, message: Message) -> ToolProtocolResponse:
+        """Parse one ordinary assistant text message without executing tools."""
+
+        return self._tool_protocol_adapter.parse_assistant_message(message)
+
+    def build_tool_observation_message(
+        self,
+        results: list[ToolExecutionResult],
+    ) -> Message:
+        """Build the user-role runtime message used by a future agent loop."""
+
+        return self._tool_protocol_adapter.build_observation_message(results)
+
     async def run(self) -> object:
-        
         raise NotImplementedError("ReAct agent loop is not implemented yet")
 
     async def _create_system_prompt(self) -> str:
@@ -44,4 +80,5 @@ class ReActHarness(Harness):
             constraints=_format_optional(task.constraints),
             skill_groups=skill_groups or "None provided.",
             tool_groups=tool_groups or "None provided.",
+            tool_protocol=TOOL_PROTOCOL_INSTRUCTIONS,
         ).strip()

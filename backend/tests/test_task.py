@@ -107,7 +107,9 @@ class TaskTests(unittest.TestCase):
         self.assertEqual(task.tool_groups, (empty_group,))
         self.assertEqual(task.tool_call_resolver.resolve([]), [])
         with self.assertRaises(ToolNotAuthorizedError):
-            task.tool_call_resolver.resolve([ToolCall("missing", {})])
+            task.tool_call_resolver.resolve(
+                [ToolCall("missing", {}, "call_1")]
+            )
 
     def test_update_tool_groups_replaces_resolver_and_permissions_together(self):
         read = Tool(
@@ -122,17 +124,8 @@ class TaskTests(unittest.TestCase):
         task.update_tool_groups([ToolGroup("files", [read], "File tools")])
 
         self.assertIsNot(task.tool_call_resolver, old_resolver)
-        resolved = task.tool_call_resolver.resolve_message(
-            {
-                "role": "assistant",
-                "content": None,
-                "tool_calls": [
-                    {
-                        "type": "function",
-                        "function": {"name": "read", "arguments": "{}"},
-                    }
-                ],
-            }
+        resolved = task.tool_call_resolver.resolve(
+            [ToolCall("read", {}, "call_1")]
         )
         self.assertIs(resolved[0].tool, read)
 
@@ -161,9 +154,11 @@ class TaskTests(unittest.TestCase):
         task.update_tool_groups([ToolGroup("writers", [write], "Write tools")])
 
         with self.assertRaises(ToolNotAuthorizedError):
-            task.tool_call_resolver.resolve([ToolCall("read", {})])
+            task.tool_call_resolver.resolve([ToolCall("read", {}, "call_1")])
         self.assertIs(
-            task.tool_call_resolver.resolve([ToolCall("write", {})])[0].tool,
+            task.tool_call_resolver.resolve(
+                [ToolCall("write", {}, "call_2")]
+            )[0].tool,
             write,
         )
 
@@ -221,7 +216,9 @@ class TaskTests(unittest.TestCase):
         self.assertIs(task.tool_groups, old_groups)
         self.assertIs(task.tool_call_resolver, old_resolver)
         self.assertIs(
-            task.tool_call_resolver.resolve([ToolCall("read", {})])[0].tool,
+            task.tool_call_resolver.resolve(
+                [ToolCall("read", {}, "call_1")]
+            )[0].tool,
             read,
         )
 

@@ -166,12 +166,13 @@ class LLMClient:
         content = message.get("content")
         tool_calls = message.get("tool_calls")
 
-        has_content = isinstance(content, str) and bool(content.strip())
-        has_tool_calls = isinstance(tool_calls, list) and bool(tool_calls)
-
-        if not has_content and not has_tool_calls:
+        if tool_calls is not None:
             raise ValueError(
-                "OpenAI-compatible response did not include content or tool calls"
+                "Native tool_calls are not supported; return the text protocol"
+            )
+        if not isinstance(content, str) or not content.strip():
+            raise ValueError(
+                "OpenAI-compatible response did not include text content"
             )
 
         return message

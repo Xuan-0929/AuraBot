@@ -271,10 +271,10 @@ class LLMClientTests(unittest.IsolatedAsyncioTestCase):
         client = make_client(handler)
         self.addAsyncCleanup(client.aclose)
 
-        with self.assertRaisesRegex(ValueError, "content or tool calls"):
+        with self.assertRaisesRegex(ValueError, "text content"):
             await client.invoke([{"role": "user", "content": "hello"}])
 
-    async def test_invoke_preserves_multiple_tool_calls(self):
+    async def test_invoke_rejects_native_tool_calls(self):
         tool_calls = [
             {
                 "id": "call_1",
@@ -307,16 +307,39 @@ class LLMClientTests(unittest.IsolatedAsyncioTestCase):
         client = make_client(handler)
         self.addAsyncCleanup(client.aclose)
 
-        result = await client.invoke([{"role": "user", "content": "go"}])
+        with self.assertRaisesRegex(ValueError, "Native tool_calls"):
+            await client.invoke([{"role": "user", "content": "go"}])
 
-        self.assertEqual(
-            result,
-            {
-                "role": "assistant",
-                "content": None,
-                "tool_calls": tool_calls,
-            },
-        )
+    async def test_invoke_rejects_native_tool_calls_even_with_text(self):
+        async def handler(request: httpx.Request) -> httpx.Response:
+            return httpx.Response(
+                200,
+                json={
+                    "choices": [
+                        {
+                            "message": {
+                                "role": "assistant",
+                                "content": '{"type":"final","content":"done"}',
+                                "tool_calls": [
+                                    {
+                                        "type": "function",
+                                        "function": {
+                                            "name": "ping",
+                                            "arguments": "{}",
+                                        },
+                                    }
+                                ],
+                            }
+                        }
+                    ]
+                },
+            )
+
+        client = make_client(handler)
+        self.addAsyncCleanup(client.aclose)
+
+        with self.assertRaisesRegex(ValueError, "Native tool_calls"):
+            await client.invoke([{"role": "user", "content": "go"}])
 
     async def test_raises_when_streaming_response_has_no_content(self):
         async def handler(request: httpx.Request) -> httpx.Response:

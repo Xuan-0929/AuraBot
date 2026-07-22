@@ -9,7 +9,7 @@ ports:
   backend_gateway: 6401
   
 
-local_mcp_server: "localhost:6410"
+local_mcp_server: "http://127.0.0.1:6410/mcp"
 
 
 

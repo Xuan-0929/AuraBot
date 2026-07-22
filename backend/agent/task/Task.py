@@ -1,10 +1,8 @@
 from collections.abc import Sequence
 
 from ..skills.SkillGroup import SkillGroup
-from ..tools.Tool import Tool
 from ..tools.ToolGroup import ToolGroup
 from ..tools.core.ToolCallResolver import ToolCallResolver
-from ..tools.core.ToolExceptions import DuplicateToolNameError
 
 
 """
@@ -87,23 +85,7 @@ class Task:
         """Atomically replace the task's authorized groups and resolver."""
 
         snapshot = tuple(tool_groups)
-        tools_by_name: dict[str, Tool] = {}
-        group_by_tool_name: dict[str, str] = {}
-
-        for group in snapshot:
-            for tool in group.tools:
-                existing = tools_by_name.get(tool.name)
-                if existing is not None:
-                    raise DuplicateToolNameError(
-                        f"tool {tool.name!r} is exposed by both "
-                        f"ToolGroup {group_by_tool_name[tool.name]!r} "
-                        f"({existing.server_url!r}) and ToolGroup "
-                        f"{group.name!r} ({tool.server_url!r})"
-                    )
-                tools_by_name[tool.name] = tool
-                group_by_tool_name[tool.name] = group.name
-
-        resolver = ToolCallResolver(tools_by_name)
+        resolver = ToolCallResolver.from_tool_groups(snapshot)
         self._tool_groups = snapshot
         self._tool_call_resolver = resolver
 

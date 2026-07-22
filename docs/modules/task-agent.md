@@ -170,6 +170,26 @@ v0.2 不支持“让 Agent 自主工作数小时直到 token 耗尽”的超长�
 - 风险限制和停止条件。
 - 最终结果格式。
 
+### 通用工具协议边界
+
+所有需要调用工具的 Harness 复用 `agent/tools` 的文本协议、权限解析、MCP Gateway 和
+结果编码。`agent/tools` 不依赖 Task、Harness、LLM message role 或事件存储；Harness
+只负责把 assistant 文本交给协议层，并把 `tool_observation` 作为 `user` role 运行时消息
+写回上下文。
+
+模型只能返回以下两种严格 JSON 信封，不能使用原生 `tool_calls`：
+
+```json
+{"type":"tool_calls","calls":[{"name":"tool_name","arguments":{}}]}
+```
+
+```json
+{"type":"final","content":"final response"}
+```
+
+调用 ID 由协议层的进程级计数器生成，模型不创建 ID。多调用按声明顺序执行。Task/Event
+记录由 Harness 负责，并以 `task_id` 和 `call_id` 关联，不写入 Tool 注册表。
+
 ## 复杂任务执行模式
 
 复杂任务使用 **Plan-and-Execute + checkpoint**。
