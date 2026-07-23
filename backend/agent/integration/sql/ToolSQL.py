@@ -36,6 +36,7 @@ class ToolSQL:
             output_schema=parse_optional_schema_json(
                 row["output_schema_json"]
             ),
+            adaptor_name=row["adaptor_name"],
         )
 
     @staticmethod
@@ -65,6 +66,19 @@ class ToolSQL:
         return int(row["id"]), int(row["server_id"])
 
     @staticmethod
+    def _get_adaptor_id(
+        connection: sqlite3.Connection,
+        adaptor_name: str,
+    ) -> int | None:
+        row = connection.execute(
+            "SELECT id FROM adaptor WHERE name = ?",
+            (adaptor_name,),
+        ).fetchone()
+        if row is None:
+            return None
+        return int(row["id"])
+
+    @staticmethod
     def insert_tool_metadata(
         name: str,
         description: str,
@@ -72,6 +86,7 @@ class ToolSQL:
         output_schema: dict | None,
         group_name: str,
         server_url: str,
+        adaptor_name: str | None = None,
     ) -> int | None:
         """
         写入一条Tool元数据。
@@ -101,6 +116,15 @@ class ToolSQL:
                 if server_id != group_server_id:
                     return None
 
+                adaptor_id = None
+                if adaptor_name is not None:
+                    adaptor_id = ToolSQL._get_adaptor_id(
+                        connection,
+                        adaptor_name,
+                    )
+                    if adaptor_id is None:
+                        return None
+
                 cursor = connection.execute(
                     """
                     INSERT INTO tool (
@@ -108,16 +132,18 @@ class ToolSQL:
                         group_id,
                         name,
                         description,
+                        adaptor_id,
                         input_schema_json,
                         output_schema_json
                     )
-                    VALUES (?, ?, ?, ?, ?, ?)
+                    VALUES (?, ?, ?, ?, ?, ?, ?)
                     """,
                     (
                         server_id,
                         group_id,
                         name,
                         description,
+                        adaptor_id,
                         input_schema_json,
                         output_schema_json,
                     ),
@@ -159,6 +185,7 @@ class ToolSQL:
         input_schema: dict | None = None,
         output_schema: dict | None | _Unset = _UNSET,
         new_group_name: str | None = None,
+        adaptor_name: str | None | _Unset = _UNSET,
     ) -> bool:
         """
         更新给定Tool元数据。
@@ -220,6 +247,17 @@ class ToolSQL:
                         return False
                     updates.append("group_id = ?")
                     values.append(new_group_id)
+                if not isinstance(adaptor_name, _Unset):
+                    adaptor_id = None
+                    if adaptor_name is not None:
+                        adaptor_id = ToolSQL._get_adaptor_id(
+                            connection,
+                            adaptor_name,
+                        )
+                        if adaptor_id is None:
+                            return False
+                    updates.append("adaptor_id = ?")
+                    values.append(adaptor_id)
 
                 if not updates:
                     return True
@@ -246,9 +284,11 @@ class ToolSQL:
                     tool.description,
                     tool.input_schema_json,
                     tool.output_schema_json,
+                    adaptor.name AS adaptor_name,
                     mcp_server.url AS server_url
                 FROM tool
                 JOIN mcp_server ON mcp_server.id = tool.server_id
+                LEFT JOIN adaptor ON adaptor.id = tool.adaptor_id
                 WHERE mcp_server.url = ?
                   AND tool.name = ?
                 """,
@@ -269,9 +309,11 @@ class ToolSQL:
                     tool.description,
                     tool.input_schema_json,
                     tool.output_schema_json,
+                    adaptor.name AS adaptor_name,
                     mcp_server.url AS server_url
                 FROM tool
                 JOIN mcp_server ON mcp_server.id = tool.server_id
+                LEFT JOIN adaptor ON adaptor.id = tool.adaptor_id
                 WHERE tool.id = ?
                 """,
                 (tool_id,),
@@ -292,10 +334,12 @@ class ToolSQL:
                     tool.description,
                     tool.input_schema_json,
                     tool.output_schema_json,
+                    adaptor.name AS adaptor_name,
                     mcp_server.url AS server_url
                 FROM tool
                 JOIN tool_group ON tool_group.id = tool.group_id
                 JOIN mcp_server ON mcp_server.id = tool.server_id
+                LEFT JOIN adaptor ON adaptor.id = tool.adaptor_id
                 WHERE tool_group.name = ?
                   AND tool.server_id = tool_group.server_id
                 ORDER BY tool.id
@@ -319,9 +363,11 @@ class ToolSQL:
                     tool.description,
                     tool.input_schema_json,
                     tool.output_schema_json,
+                    adaptor.name AS adaptor_name,
                     mcp_server.url AS server_url
                 FROM tool
                 JOIN mcp_server ON mcp_server.id = tool.server_id
+                LEFT JOIN adaptor ON adaptor.id = tool.adaptor_id
                 WHERE tool.name = ?
                 ORDER BY tool.id
                 """,
@@ -346,9 +392,11 @@ class ToolSQL:
                     tool.description,
                     tool.input_schema_json,
                     tool.output_schema_json,
+                    adaptor.name AS adaptor_name,
                     mcp_server.url AS server_url
                 FROM tool
                 JOIN mcp_server ON mcp_server.id = tool.server_id
+                LEFT JOIN adaptor ON adaptor.id = tool.adaptor_id
                 WHERE mcp_server.url = ?
                 ORDER BY tool.id
                 """,

@@ -48,6 +48,7 @@ class ToolGroupSQL:
                         output_schema=parse_optional_schema_json(
                             row["tool_output_schema_json"]
                         ),
+                        adaptor_name=row["tool_adaptor_name"],
                     )
                 )
 
@@ -241,12 +242,14 @@ class ToolGroupSQL:
                     tool.description AS tool_description,
                     tool.input_schema_json AS tool_input_schema_json,
                     tool.output_schema_json AS tool_output_schema_json,
+                    adaptor.name AS tool_adaptor_name,
                     mcp_server.url AS server_url
                 FROM tool_group
                 JOIN mcp_server ON mcp_server.id = tool_group.server_id
                 LEFT JOIN tool
                     ON tool.group_id = tool_group.id
                    AND tool.server_id = tool_group.server_id
+                LEFT JOIN adaptor ON adaptor.id = tool.adaptor_id
                 WHERE tool_group.name = ?
                 ORDER BY tool.id
                 """,
@@ -287,12 +290,14 @@ class ToolGroupSQL:
                     tool.description AS tool_description,
                     tool.input_schema_json AS tool_input_schema_json,
                     tool.output_schema_json AS tool_output_schema_json,
+                    adaptor.name AS tool_adaptor_name,
                     mcp_server.url AS server_url
                 FROM tool_group
                 JOIN mcp_server ON mcp_server.id = tool_group.server_id
                 LEFT JOIN tool
                     ON tool.group_id = tool_group.id
                    AND tool.server_id = tool_group.server_id
+                LEFT JOIN adaptor ON adaptor.id = tool.adaptor_id
                 WHERE tool_group.id = ?
                 ORDER BY tool.id
                 """,
@@ -332,12 +337,14 @@ class ToolGroupSQL:
                     tool.description AS tool_description,
                     tool.input_schema_json AS tool_input_schema_json,
                     tool.output_schema_json AS tool_output_schema_json,
+                    adaptor.name AS tool_adaptor_name,
                     mcp_server.url AS server_url
                 FROM tool_group
                 JOIN mcp_server ON mcp_server.id = tool_group.server_id
                 LEFT JOIN tool
                     ON tool.group_id = tool_group.id
                    AND tool.server_id = tool_group.server_id
+                LEFT JOIN adaptor ON adaptor.id = tool.adaptor_id
                 ORDER BY tool_group.id, tool.id
                 """
             ).fetchall()
@@ -378,12 +385,14 @@ class ToolGroupSQL:
                     tool.description AS tool_description,
                     tool.input_schema_json AS tool_input_schema_json,
                     tool.output_schema_json AS tool_output_schema_json,
+                    adaptor.name AS tool_adaptor_name,
                     mcp_server.url AS server_url
                 FROM tool_group
                 JOIN mcp_server ON mcp_server.id = tool_group.server_id
                 LEFT JOIN tool
                     ON tool.group_id = tool_group.id
                    AND tool.server_id = tool_group.server_id
+                LEFT JOIN adaptor ON adaptor.id = tool.adaptor_id
                 WHERE mcp_server.url = ?
                 ORDER BY tool_group.id, tool.id
                 """,

@@ -9,6 +9,7 @@ class Tool:
         server_url: str | None = None,
         input_schema: dict | None = None,
         output_schema: dict | None = None,
+        adaptor_name: str | None = None,
     ):
         self.name = name
         self.description = description
@@ -21,6 +22,16 @@ class Tool:
             raise TypeError("output_schema must be a dict or None")
         self.input_schema = input_schema
         self.output_schema = output_schema
+
+        if adaptor_name is not None and (
+            not isinstance(adaptor_name, str)
+            or not adaptor_name
+            or adaptor_name != adaptor_name.strip()
+        ):
+            raise ValueError(
+                "adaptor_name must be a non-empty trimmed string or None"
+            )
+        self.adaptor_name = adaptor_name
 
         if server_url is not None:
             self.server_url = server_url

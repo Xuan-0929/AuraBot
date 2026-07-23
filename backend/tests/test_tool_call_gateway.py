@@ -1,4 +1,6 @@
+import tempfile
 import unittest
+from pathlib import Path
 
 from mcp.types import CallToolResult, ImageContent, TextContent
 
@@ -9,6 +11,9 @@ from backend.agent.integration.mcp import (
     MCPProtocolError,
     MCPTimeoutError,
     MCPToolCallError,
+)
+from backend.agent.task.harness.adaptors.FileSystemAdaptor import (
+    FileSystemAdaptor,
 )
 from backend.agent.tools.Tool import Tool
 from backend.agent.tools.core.ToolCallEntity import (
@@ -59,6 +64,58 @@ def make_call(
 
 
 class ToolCallGatewayTests(unittest.IsolatedAsyncioTestCase):
+    async def test_accepts_filesystem_adapted_bash_arguments(self):
+        with tempfile.TemporaryDirectory() as directory:
+            workdir = Path(directory).resolve()
+            tool = Tool(
+                "bash",
+                "Run Bash",
+                "https://mcp.example.com/mcp",
+                input_schema={
+                    "type": "object",
+                    "properties": {
+                        "statement": {
+                            "type": "string",
+                            "minLength": 1,
+                        },
+                        "PATH": {
+                            "type": "string",
+                            "minLength": 1,
+                        },
+                    },
+                    "required": ["statement", "PATH"],
+                    "additionalProperties": False,
+                },
+                adaptor_name="FileSystemAdaptor",
+            )
+            call = ResolvedToolCall(
+                tool=tool,
+                arguments={"statement": "pwd", "PATH": "."},
+                call_id="call_bash",
+            )
+            adapted = FileSystemAdaptor(str(workdir)).adapt(call)
+            client = FakeMCPClient(
+                [
+                    CallToolResult(
+                        content=[TextContent(type="text", text=str(workdir))],
+                        structuredContent={
+                            "cwd": str(workdir),
+                            "stdout": str(workdir),
+                        },
+                        isError=False,
+                    )
+                ]
+            )
+            gateway = ToolCallGateway(client)  # type: ignore[arg-type]
+
+            result = await gateway.execute(adapted)
+
+        self.assertFalse(result.is_error)
+        self.assertEqual(
+            client.requests[0][2],
+            {"statement": "pwd", "PATH": str(workdir)},
+        )
+
     async def test_executes_and_normalizes_mcp_result(self):
         mcp_result = CallToolResult(
             content=[

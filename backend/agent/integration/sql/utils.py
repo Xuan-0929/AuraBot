@@ -58,6 +58,15 @@ SCHEMA_STATEMENTS = (
     )
     """,
     """
+    CREATE TABLE IF NOT EXISTS adaptor (
+        id INTEGER PRIMARY KEY AUTOINCREMENT,
+        name TEXT NOT NULL UNIQUE,
+        description TEXT,
+        created_at TEXT NOT NULL DEFAULT CURRENT_TIMESTAMP,
+        updated_at TEXT NOT NULL DEFAULT CURRENT_TIMESTAMP
+    )
+    """,
+    """
     CREATE TABLE IF NOT EXISTS tool_group (
         id INTEGER PRIMARY KEY AUTOINCREMENT,
         server_id INTEGER NOT NULL,
@@ -87,6 +96,7 @@ SCHEMA_STATEMENTS = (
         group_id INTEGER NOT NULL,
         name TEXT NOT NULL,
         description TEXT NOT NULL,
+        adaptor_id INTEGER,
         input_schema_json TEXT NOT NULL
             CHECK (
                 json_valid(input_schema_json)
@@ -113,6 +123,11 @@ SCHEMA_STATEMENTS = (
             ON UPDATE CASCADE
             ON DELETE RESTRICT,
 
+        FOREIGN KEY (adaptor_id)
+            REFERENCES adaptor(id)
+            ON UPDATE CASCADE
+            ON DELETE RESTRICT,
+
         UNIQUE (server_id, name)
     )
     """,
@@ -125,6 +140,11 @@ SCHEMA_STATEMENTS = (
     ON tool(group_id)
     """,
 )
+
+TOOL_ADAPTOR_INDEX_STATEMENT = """
+CREATE INDEX IF NOT EXISTS idx_tool_adaptor_id
+ON tool(adaptor_id)
+"""
 
 
 class SchemaInitializationError(RuntimeError):
@@ -210,6 +230,8 @@ def ensure_schema(connection: sqlite3.Connection) -> None:
         connection.execute("BEGIN IMMEDIATE")
         for statement in SCHEMA_STATEMENTS:
             connection.execute(statement)
+        _ensure_tool_adaptor_column(connection)
+        connection.execute(TOOL_ADAPTOR_INDEX_STATEMENT)
 
         violations = connection.execute("PRAGMA foreign_key_check").fetchall()
         if violations:
@@ -222,3 +244,24 @@ def ensure_schema(connection: sqlite3.Connection) -> None:
     except Exception:
         connection.rollback()
         raise
+
+
+def _ensure_tool_adaptor_column(connection: sqlite3.Connection) -> None:
+    """Add the nullable Tool-to-Adaptor foreign key to legacy databases."""
+
+    columns = {
+        row["name"] if isinstance(row, sqlite3.Row) else row[1]
+        for row in connection.execute("PRAGMA table_info(tool)").fetchall()
+    }
+    if "adaptor_id" in columns:
+        return
+
+    connection.execute(
+        """
+        ALTER TABLE tool
+        ADD COLUMN adaptor_id INTEGER
+            REFERENCES adaptor(id)
+            ON UPDATE CASCADE
+            ON DELETE RESTRICT
+        """
+    )

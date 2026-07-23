@@ -46,8 +46,8 @@ def initialize_database(
 
     Calling this function repeatedly against the same database is safe. Existing
     tables, indexes, and rows are preserved. The function does not seed native
-    records because no canonical native Server, ToolGroup, Tool, or Skill rows
-    are currently defined by the schema document.
+    records because native Server, ToolGroup, Tool, Adaptor, and Skill bindings
+    are registered explicitly by their owning installation flow.
     """
 
     resolved_path = _resolve_database_path(database_path)

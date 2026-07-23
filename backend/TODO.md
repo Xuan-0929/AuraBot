@@ -118,6 +118,7 @@ description: str
 server_url: str
 input_schema: dict
 output_schema: dict | None
+adaptor_name: str | None
 ```
 
 当前 `ToolGroup` 已持有：
@@ -130,6 +131,8 @@ tools: list[Tool]
 
 - [x] 给运行时 Tool 增加 `input_schema: dict`。
 - [x] 给运行时 Tool 增加 `output_schema: dict | None`。
+- [x] 给运行时 Tool 增加可选 `adaptor_name: str | None`，供 Harness 在权限解析后选择
+  Task-local Adaptor。
 - [x] SQL 查询从 JSON 字段恢复 schema 并构造完整 Tool。
 - [x] `load_intro()` 使用真实 input/output schema，删除硬编码的 `query: string`。
 - [x] schema JSON/XML 的序列化、解析和格式化集中在

@@ -23,7 +23,7 @@ class SkillTests(unittest.TestCase):
             skill = Skill("example", path=skill_path)
 
             self.assertEqual(
-                skill.load(),
+                skill.load_content(),
                 "Use this skill body.\nKeep all body lines.\n",
             )
 

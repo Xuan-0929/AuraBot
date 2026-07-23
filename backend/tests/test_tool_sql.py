@@ -7,6 +7,7 @@ from pathlib import Path
 from unittest.mock import patch
 
 from backend.agent.integration.sql import utils
+from backend.agent.integration.sql.AdaptorSQL import AdaptorSQL
 from backend.agent.integration.sql.MCPServerSQL import MCPServerSQL
 from backend.agent.integration.sql.ToolGroupSQL import ToolGroupSQL
 from backend.agent.integration.sql.ToolSQL import ToolSQL
@@ -133,6 +134,112 @@ class ToolGroupSQLTests(unittest.TestCase):
 
 
 class ToolSQLTests(unittest.TestCase):
+    def test_tool_adaptor_binding_is_loaded_updated_and_cleared(self):
+        with temporary_agent_database():
+            ToolGroupSQL.insert_tool_group_metadata(
+                "filesystem",
+                "localhost:6410",
+                "Filesystem tools",
+            )
+            AdaptorSQL.insert_adaptor_metadata(
+                "FileSystemAdaptor",
+                "Filesystem paths",
+            )
+            AdaptorSQL.insert_adaptor_metadata(
+                "ReplacementAdaptor",
+                "Replacement",
+            )
+
+            tool_id = ToolSQL.insert_tool_metadata(
+                "read_file",
+                "Read a file",
+                {"type": "object"},
+                None,
+                "filesystem",
+                "localhost:6410",
+                adaptor_name="FileSystemAdaptor",
+            )
+            self.assertIsInstance(tool_id, int)
+            self.assertIsNone(
+                ToolSQL.insert_tool_metadata(
+                    "missing_adaptor",
+                    "Missing adaptor",
+                    {"type": "object"},
+                    None,
+                    "filesystem",
+                    "localhost:6410",
+                    adaptor_name="UnknownAdaptor",
+                )
+            )
+
+            loaded = ToolSQL.get_tool("localhost:6410", "read_file")
+            self.assertEqual(loaded.adaptor_name, "FileSystemAdaptor")
+            self.assertEqual(
+                ToolSQL.get_tool_by_id(tool_id).adaptor_name,
+                "FileSystemAdaptor",
+            )
+            self.assertEqual(
+                ToolSQL.list_tools("filesystem")[0][0].adaptor_name,
+                "FileSystemAdaptor",
+            )
+            self.assertEqual(
+                ToolSQL.list_tools_by_name("read_file")[0][0].adaptor_name,
+                "FileSystemAdaptor",
+            )
+            self.assertEqual(
+                ToolSQL.list_tools_by_server("localhost:6410")[0][0].adaptor_name,
+                "FileSystemAdaptor",
+            )
+            self.assertEqual(
+                ToolGroupSQL.get_tool_group(
+                    "filesystem"
+                ).tools[0].adaptor_name,
+                "FileSystemAdaptor",
+            )
+
+            self.assertTrue(
+                ToolSQL.update_tool_metadata(
+                    "localhost:6410",
+                    "read_file",
+                    adaptor_name="ReplacementAdaptor",
+                )
+            )
+            self.assertEqual(
+                ToolSQL.get_tool(
+                    "localhost:6410",
+                    "read_file",
+                ).adaptor_name,
+                "ReplacementAdaptor",
+            )
+            self.assertFalse(
+                ToolSQL.update_tool_metadata(
+                    "localhost:6410",
+                    "read_file",
+                    adaptor_name="UnknownAdaptor",
+                )
+            )
+            self.assertEqual(
+                ToolSQL.get_tool(
+                    "localhost:6410",
+                    "read_file",
+                ).adaptor_name,
+                "ReplacementAdaptor",
+            )
+
+            self.assertTrue(
+                ToolSQL.update_tool_metadata(
+                    "localhost:6410",
+                    "read_file",
+                    adaptor_name=None,
+                )
+            )
+            self.assertIsNone(
+                ToolSQL.get_tool(
+                    "localhost:6410",
+                    "read_file",
+                ).adaptor_name
+            )
+
     def test_tool_crud_enforces_server_group_ownership(self):
         with temporary_agent_database() as database_path:
             alpha_id = ToolGroupSQL.insert_tool_group_metadata(

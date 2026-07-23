@@ -102,6 +102,25 @@ class ToolDescriptionTests(unittest.TestCase):
                 output_schema=[],
             )
 
+    def test_tool_carries_optional_adaptor_name(self):
+        tool = Tool(
+            "read_file",
+            "Read a file",
+            server_url="localhost:6410",
+            input_schema=EMPTY_INPUT_SCHEMA,
+            adaptor_name="FileSystemAdaptor",
+        )
+
+        self.assertEqual(tool.adaptor_name, "FileSystemAdaptor")
+        with self.assertRaises(ValueError):
+            Tool(
+                "read_file",
+                "Read a file",
+                server_url="localhost:6410",
+                input_schema=EMPTY_INPUT_SCHEMA,
+                adaptor_name=" FileSystemAdaptor",
+            )
+
     def test_tool_load_intro_returns_complete_xml_function_schema(self):
         input_schema = {
             "type": "object",

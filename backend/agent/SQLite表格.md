@@ -75,13 +75,13 @@ ON skill(name);
 ```
 
 
-# MCP Server / ToolGroup / Tool
+# MCP Server / ToolGroup / Tool / Adaptor
 
 
 ## 系统关系
 
 
-Tool Server、ToolGroup 和 Tool 是三个不同层级：
+MCP Server、ToolGroup 和 Tool 是三个不同层级：
 
 ```text
 MCP Server
@@ -89,18 +89,28 @@ MCP Server
     └── Tool（一个 Group 可以包含多个 Tool）
 ```
 
+Tool 可以额外绑定一个 AuraBot Adaptor：
+
+```text
+Tool ── 0..1 Adaptor
+```
+
 AuraBot 自带一个原生 MCP Server。这个 Server 可以包含多个原生 ToolGroup，例如
 `filesystem`、`shell` 和 `web`。以后用户注册的外部 MCP Server 也可以拥有一个或多个
 非原生 ToolGroup。
 
-三者的职责分别是：
+各实体职责：
 
 - MCP Server 负责 Tool 的实现、连接和实际调用。
 - ToolGroup 负责组织 Tool，并作为 Main Agent 分配给 Task Agent 的运行时授权单位。
 - Tool 是最终暴露给 Agent 的可调用能力。
+- Adaptor 在 Tool Call 通过 Task 权限解析后、送入 ToolCallGateway 前转换参数。
 
 ToolGroup 不代表 MCP Server；`is_native` 也不表示 Server 类型。它只表示该
 ToolGroup 是否为 AuraBot 随项目提供的原生工具组。
+
+Adaptor 不是 MCP Server 返回的 Tool 元数据。数据库只保存稳定逻辑名称和 Tool 绑定；
+Python class、import path、Task 工作目录和 Task-local Adaptor 实例均不写入 SQLite。
 
 本设计规定一个 Tool 只属于一个 ToolGroup。一个 Tool 是否为项目原生 Tool，由它所属
 ToolGroup 的 `is_native` 决定，因此不在 `tool` 表重复保存 `is_native`。
@@ -157,6 +167,7 @@ MCP Server 的身份和 URL 保存在独立的 `mcp_server` 表中。ToolGroup �
 - INTEGER/主键/自增：Tool ID
 - INTEGER/外键/非空：所属 MCP Server ID
 - INTEGER/外键/非空：所属 ToolGroup ID
+- INTEGER/外键：绑定的 Adaptor ID；为空表示无需参数适配
 - TEXT/非空：MCP Server 返回的 Tool 名称；AuraBot 使用同一个名称暴露给 Agent
 - TEXT/非空：Tool 功能描述
 - TEXT/JSON/非空：MCP Tool 输入 JSON Schema
@@ -165,6 +176,7 @@ MCP Server 的身份和 URL 保存在独立的 `mcp_server` 表中。ToolGroup �
 约束：
 
 - 一个 Tool 只属于一个 ToolGroup。
+- 一个 Tool 最多绑定一个 Adaptor。
 - Tool 和它所属的 ToolGroup 必须属于同一个 MCP Server。
 - MCP Tool 名称只要求在同一个 MCP Server 内唯一，因此使用
   `UNIQUE (server_id, name)`，不要求 `name` 全局唯一。
@@ -176,8 +188,26 @@ MCP Server 的身份和 URL 保存在独立的 `mcp_server` 表中。ToolGroup �
 - Runtime 根据当前 Task 的授权 ToolGroup，把 Agent 返回的 `name` 唯一解析为
   `server_id + name`，再路由到对应 MCP session 执行 `tools/call`。
 - `description`、`input_schema_json` 和 `output_schema_json` 是 MCP Server Tool 定义的
-  本地缓存；`group_id` 是 AuraBot 自有配置，刷新 Tool 定义时不得覆盖。
+  本地缓存；`group_id` 和 `adaptor_id` 是 AuraBot 自有配置，刷新 Tool 定义时不得
+  覆盖。
 - Agent 只能调用所属 ToolGroup 已由当前 Task 获得授权的 Tool。
+
+
+## Adaptor 元信息
+
+
+- INTEGER/主键/自增：Adaptor ID
+- TEXT/唯一/非空：Adaptor 稳定逻辑名称，例如 `FileSystemAdaptor`
+- TEXT：Adaptor 功能描述
+
+约束：
+
+- Adaptor 名称在 AuraBot 内全局唯一。
+- 名称只用于后端显式注册表查找，不是可导入的 Python module path。
+- 仍被 Tool 引用的 Adaptor 不能删除。
+- Adaptor 表不保存 Python class、构造参数、Task 工作目录或运行时实例。
+- 初始化器不自动创建 Adaptor 或猜测 Tool 绑定；安装流程通过 AdaptorSQL 和 ToolSQL
+  显式注册。
 
 
 ## Tool 字段取舍
@@ -211,7 +241,7 @@ MCP Tool 可以携带更多可选元信息，但当前 AuraBot 运行时不使�
 4. 完整获取并校验成功后，开启一个短 SQLite 事务。
 5. 使用 `(server_id, name)` 插入或更新本次返回的 Tool。
 6. 更新 MCP 管理的 `description`、`input_schema_json` 和 `output_schema_json`。
-7. 保留 AuraBot 管理的 `group_id`。
+7. 保留 AuraBot 管理的 `group_id` 和 `adaptor_id`。
 8. 删除该 `server_id` 下本次成功同步结果中已经不存在的 Tool。
 9. 提交事务。
 
@@ -235,6 +265,14 @@ CREATE TABLE IF NOT EXISTS mcp_server (
     id INTEGER PRIMARY KEY AUTOINCREMENT,
     name TEXT NOT NULL UNIQUE,
     url TEXT NOT NULL UNIQUE,
+    description TEXT,
+    created_at TEXT NOT NULL DEFAULT CURRENT_TIMESTAMP,
+    updated_at TEXT NOT NULL DEFAULT CURRENT_TIMESTAMP
+);
+
+CREATE TABLE IF NOT EXISTS adaptor (
+    id INTEGER PRIMARY KEY AUTOINCREMENT,
+    name TEXT NOT NULL UNIQUE,
     description TEXT,
     created_at TEXT NOT NULL DEFAULT CURRENT_TIMESTAMP,
     updated_at TEXT NOT NULL DEFAULT CURRENT_TIMESTAMP
@@ -268,6 +306,7 @@ CREATE TABLE IF NOT EXISTS tool (
     group_id INTEGER NOT NULL,
     name TEXT NOT NULL,
     description TEXT NOT NULL,
+    adaptor_id INTEGER,
     input_schema_json TEXT NOT NULL
         CHECK (
             json_valid(input_schema_json)
@@ -294,6 +333,11 @@ CREATE TABLE IF NOT EXISTS tool (
         ON UPDATE CASCADE
         ON DELETE RESTRICT,
 
+    FOREIGN KEY (adaptor_id)
+        REFERENCES adaptor(id)
+        ON UPDATE CASCADE
+        ON DELETE RESTRICT,
+
     UNIQUE (server_id, name)
 );
 
@@ -302,7 +346,14 @@ ON tool(server_id);
 
 CREATE INDEX IF NOT EXISTS idx_tool_group_id
 ON tool(group_id);
+
+CREATE INDEX IF NOT EXISTS idx_tool_adaptor_id
+ON tool(adaptor_id);
 ```
+
+旧数据库若已有不含 `adaptor_id` 的 `tool` 表，初始化器必须在同一事务中先执行一次
+`ALTER TABLE tool ADD COLUMN adaptor_id ...`，再创建 `idx_tool_adaptor_id`。初始化器通过
+`PRAGMA table_info(tool)` 判断字段是否已存在，重复执行不得重复加列或修改已有数据。
 
 
 ## 运行时授权查询
@@ -318,9 +369,11 @@ SELECT
     t.name,
     t.description,
     t.input_schema_json,
-    t.output_schema_json
+    t.output_schema_json,
+    a.name AS adaptor_name
 FROM tool AS t
 JOIN tool_group AS g ON g.id = t.group_id
+LEFT JOIN adaptor AS a ON a.id = t.adaptor_id
 WHERE t.group_id IN (/* 当前 Task 获得授权的 ToolGroup IDs */)
   AND t.server_id = g.server_id;
 ```
@@ -336,6 +389,7 @@ WHERE t.group_id IN (/* 当前 Task 获得授权的 ToolGroup IDs */)
 - API Key、Token、密码等 secret 明文。
 - MCP Server 子进程对象、MCP session 或网络连接对象。
 - Tool 背后的 Python、Bash、HTTP 或其他具体实现。
+- Adaptor 的 Python class、import path、构造参数和 Task-local 实例。
 - Tool Call 的运行中状态和完整 stdout/stderr。
 - Task Agent 获得的临时 ToolGroup 授权。
 

@@ -4,11 +4,20 @@ import unittest
 from backend.agent.LLMClient import ChatCompletionChoice
 from backend.agent.task.Task import Task, TaskType
 from backend.agent.task.harness.Harness import Harness
+from backend.agent.task.harness.adaptors.Adaptor import (
+    Adaptor,
+    AdaptorRouteError,
+)
+from backend.agent.task.harness.adaptors.FileSystemAdaptor import (
+    FileSystemAdaptor,
+)
 from backend.agent.task.harness.utils import build_common_prompt_values
 from backend.agent.tools.Tool import Tool
 from backend.agent.tools.ToolGroup import ToolGroup
 from backend.agent.tools.core.ToolCallEntity import (
     FinalResponse,
+    ResolvedToolCall,
+    ToolCall,
     ToolCallBatch,
     ToolExecutionResult,
 )
@@ -30,6 +39,15 @@ class ConcreteHarness(Harness):
 
     async def run(self) -> object:
         return "done"
+
+
+class RecordingAdaptor(Adaptor):
+    def __init__(self):
+        self.entities = []
+
+    def adapt(self, entity: ResolvedToolCall) -> ResolvedToolCall:
+        self.entities.append(entity)
+        return entity
 
 
 def make_task(*, tool_groups=None) -> Task:
@@ -58,6 +76,294 @@ class HarnessTests(unittest.TestCase):
         self.assertIs(harness.task, task)
         self.assertIs(harness.llm_client, llm_client)
         self.assertNotIn("_tool_protocol", harness.__dict__)
+        self.assertEqual(dict(harness.adaptors), {})
+
+    def test_resolves_before_running_routed_adaptor(self):
+        bash = Tool(
+            "bash",
+            "Run Bash",
+            "http://localhost:6410/mcp",
+            input_schema={"type": "object"},
+            adaptor_name="RecordingAdaptor",
+        )
+        recorder = RecordingAdaptor()
+        harness = ConcreteHarness(
+            task=make_task(
+                tool_groups=[ToolGroup("shell", [bash], "Shell tools")]
+            ),
+            llm_client=FakeLLMClient(),
+            adaptor_factories={
+                "RecordingAdaptor": lambda task: recorder,
+            },
+        )
+        harness.build_openai_tools()
+
+        resolved = harness.resolve_and_adapt_tool_calls(
+            [ToolCall("bash", {"PATH": "."}, "call_1")]
+        )
+
+        self.assertIs(resolved[0].tool, bash)
+        self.assertIs(recorder.entities[0], resolved[0])
+        self.assertIsInstance(recorder.entities[0], ResolvedToolCall)
+
+    def test_default_filesystem_adaptor_runs_after_resolver(self):
+        bash = Tool(
+            "bash",
+            "Run Bash",
+            "http://localhost:6410/mcp",
+            input_schema={"type": "object"},
+            adaptor_name="FileSystemAdaptor",
+        )
+        harness = ConcreteHarness(
+            task=make_task(
+                tool_groups=[ToolGroup("shell", [bash], "Shell tools")]
+            ),
+            llm_client=FakeLLMClient(),
+        )
+        harness.build_openai_tools()
+
+        resolved = harness.resolve_and_adapt_tool_calls(
+            [ToolCall("bash", {"PATH": "backend"}, "call_1")]
+        )
+
+        self.assertIs(resolved[0].tool, bash)
+        self.assertEqual(resolved[0].arguments["PATH"], "/workspace/backend")
+        self.assertIsInstance(
+            harness.adaptors["FileSystemAdaptor"],
+            FileSystemAdaptor,
+        )
+
+    def test_requires_tool_build_before_any_resolution_batch(self):
+        ping = Tool(
+            "ping",
+            "Return pong",
+            "http://localhost:6410/mcp",
+            input_schema=EMPTY_INPUT_SCHEMA,
+        )
+        harness = ConcreteHarness(
+            task=make_task(
+                tool_groups=[ToolGroup("utilities", [ping], "Utilities")]
+            ),
+            llm_client=FakeLLMClient(),
+        )
+
+        with self.assertRaisesRegex(
+            AdaptorRouteError,
+            "build_openai_tools",
+        ):
+            harness.resolve_and_adapt_tool_calls(
+                [ToolCall("ping", {}, "call_1")]
+            )
+
+    def test_mixed_batch_adapts_only_bound_tools(self):
+        read = Tool(
+            "read_file",
+            "Read a file",
+            "http://localhost:6410/mcp",
+            input_schema={"type": "object"},
+            adaptor_name="FileSystemAdaptor",
+        )
+        ping = Tool(
+            "ping",
+            "Return pong",
+            "http://localhost:6410/mcp",
+            input_schema=EMPTY_INPUT_SCHEMA,
+        )
+        harness = ConcreteHarness(
+            task=make_task(
+                tool_groups=[
+                    ToolGroup("mixed", [read, ping], "Mixed tools")
+                ]
+            ),
+            llm_client=FakeLLMClient(),
+        )
+        harness.build_openai_tools()
+
+        resolved = harness.resolve_and_adapt_tool_calls(
+            [
+                ToolCall("read_file", {"path": "a.txt"}, "call_1"),
+                ToolCall("ping", {}, "call_2"),
+            ]
+        )
+
+        self.assertEqual(resolved[0].arguments["path"], "/workspace/a.txt")
+        self.assertEqual(resolved[1].arguments, {})
+
+    def test_build_rejects_unknown_or_invalid_adaptor_factory(self):
+        tool = Tool(
+            "ping",
+            "Return pong",
+            "http://localhost:6410/mcp",
+            input_schema=EMPTY_INPUT_SCHEMA,
+            adaptor_name="UnknownAdaptor",
+        )
+        task = make_task(
+            tool_groups=[ToolGroup("utilities", [tool], "Utilities")]
+        )
+
+        with self.assertRaises(AdaptorRouteError):
+            ConcreteHarness(
+                task=task,
+                llm_client=FakeLLMClient(),
+            ).build_openai_tools()
+
+        with self.assertRaisesRegex(TypeError, "must return Adaptor"):
+            ConcreteHarness(
+                task=task,
+                llm_client=FakeLLMClient(),
+                adaptor_factories={"UnknownAdaptor": lambda task: object()},
+            ).build_openai_tools()
+
+    def test_repeated_build_replaces_instead_of_accumulating_adaptors(self):
+        calls = []
+        read = Tool(
+            "read_file",
+            "Read a file",
+            "http://localhost:6410/mcp",
+            input_schema={"type": "object"},
+            adaptor_name="FileSystemAdaptor",
+        )
+        harness = ConcreteHarness(
+            task=make_task(
+                tool_groups=[ToolGroup("files", [read], "File tools")]
+            ),
+            llm_client=FakeLLMClient(),
+            adaptor_factories={
+                "FileSystemAdaptor": lambda task: calls.append(task)
+                or FileSystemAdaptor(task.workdir)
+            },
+        )
+
+        harness.build_openai_tools()
+        first = harness.adaptors["FileSystemAdaptor"]
+        harness.build_openai_tools()
+
+        self.assertEqual(calls, [harness.task, harness.task])
+        self.assertEqual(tuple(harness.adaptors), ("FileSystemAdaptor",))
+        self.assertIsNot(
+            harness.adaptors["FileSystemAdaptor"],
+            first,
+        )
+
+    def test_multiple_tools_share_one_adaptor_instance(self):
+        factory_calls = []
+        tools = [
+            Tool(
+                name,
+                f"{name} tool",
+                "http://localhost:6410/mcp",
+                input_schema={"type": "object"},
+                adaptor_name="FileSystemAdaptor",
+            )
+            for name in ("read_file", "edit_file")
+        ]
+        harness = ConcreteHarness(
+            task=make_task(
+                tool_groups=[ToolGroup("files", tools, "File tools")]
+            ),
+            llm_client=FakeLLMClient(),
+            adaptor_factories={
+                "FileSystemAdaptor": lambda task: factory_calls.append(task)
+                or FileSystemAdaptor(task.workdir)
+            },
+        )
+
+        harness.build_openai_tools()
+
+        self.assertEqual(factory_calls, [harness.task])
+        self.assertEqual(tuple(harness.adaptors), ("FileSystemAdaptor",))
+
+    def test_failed_rebuild_preserves_previously_built_adaptors(self):
+        read = Tool(
+            "read_file",
+            "Read a file",
+            "http://localhost:6410/mcp",
+            input_schema={"type": "object"},
+            adaptor_name="FileSystemAdaptor",
+        )
+        task = make_task(
+            tool_groups=[ToolGroup("files", [read], "File tools")]
+        )
+        harness = ConcreteHarness(
+            task=task,
+            llm_client=FakeLLMClient(),
+        )
+        harness.build_openai_tools()
+        original = harness.adaptors["FileSystemAdaptor"]
+        task.update_tool_groups(
+            [
+                ToolGroup(
+                    "unknown",
+                    [
+                        Tool(
+                            "unknown",
+                            "Unknown tool",
+                            "http://localhost:6410/mcp",
+                            input_schema=EMPTY_INPUT_SCHEMA,
+                            adaptor_name="UnknownAdaptor",
+                        )
+                    ],
+                    "Unknown tools",
+                )
+            ]
+        )
+
+        with self.assertRaises(AdaptorRouteError):
+            harness.build_openai_tools()
+
+        self.assertIs(
+            harness.adaptors["FileSystemAdaptor"],
+            original,
+        )
+
+    def test_tool_group_update_requires_and_supports_route_rebuild(self):
+        ping = Tool(
+            "ping",
+            "Return pong",
+            "http://localhost:6410/mcp",
+            input_schema=EMPTY_INPUT_SCHEMA,
+        )
+        read = Tool(
+            "read_file",
+            "Read a file",
+            "http://localhost:6410/mcp",
+            input_schema={"type": "object"},
+            adaptor_name="FileSystemAdaptor",
+        )
+        task = make_task(
+            tool_groups=[ToolGroup("utilities", [ping], "Utilities")]
+        )
+        harness = ConcreteHarness(
+            task=task,
+            llm_client=FakeLLMClient(),
+        )
+        initial_definitions = harness.build_openai_tools()
+
+        task.update_tool_groups(
+            [ToolGroup("filesystem", [read], "Filesystem tools")]
+        )
+        with self.assertRaisesRegex(
+            AdaptorRouteError,
+            "rebuild routes",
+        ):
+            harness.resolve_and_adapt_tool_calls(
+                [ToolCall("read_file", {"path": "a.txt"}, "call_1")]
+            )
+
+        rebuilt_definitions = harness.build_openai_tools()
+        resolved = harness.resolve_and_adapt_tool_calls(
+            [ToolCall("read_file", {"path": "a.txt"}, "call_2")]
+        )
+
+        self.assertEqual(
+            initial_definitions[0]["function"]["name"],
+            "ping",
+        )
+        self.assertEqual(
+            rebuilt_definitions[0]["function"]["name"],
+            "read_file",
+        )
+        self.assertEqual(resolved[0].arguments["path"], "/workspace/a.txt")
 
     def test_builds_system_and_user_prompts_via_base_contract(self):
         harness = ConcreteHarness(
@@ -95,6 +401,7 @@ class HarnessTests(unittest.TestCase):
             definitions[0]["function"]["parameters"],
             EMPTY_INPUT_SCHEMA,
         )
+        self.assertEqual(dict(harness.adaptors), {})
 
     def test_parses_native_completion_for_every_harness(self):
         harness = ConcreteHarness(
