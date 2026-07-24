@@ -4,6 +4,9 @@ from backend.agent.task.harness.Harness import Harness
 from backend.agent.task.harness.HarnessFactory import HarnessFactory
 from backend.agent.task.harness.PlanAndSolveHarness import PlanAndSolveHarness
 from backend.agent.task.harness.ReActHarness import ReActHarness
+from backend.agent.task.harness.adaptors.AdaptorRegistry import (
+    AdaptorRegistry,
+)
 from backend.agent.task.Task import Task, TaskType
 
 
@@ -64,6 +67,27 @@ class HarnessFactoryTests(unittest.TestCase):
 
         self.assertIsNot(first, second)
         self.assertIs(first.llm_client, second.llm_client)
+        self.assertIs(first.adaptor_registry, second.adaptor_registry)
+        self.assertIsNot(
+            first.tool_call_gateway,
+            second.tool_call_gateway,
+        )
+
+    def test_injects_registry_and_builds_gateway_for_each_task(self):
+        registry = AdaptorRegistry()
+        gateway_calls = []
+        factory = HarnessFactory(
+            llm_client=self.llm_client,
+            adaptor_registry=registry,
+            tool_call_gateway_factory=lambda task: gateway_calls.append(task)
+            or object(),
+        )
+        task = make_task(30, TaskType.ReAct)
+
+        harness = factory.create(task)
+
+        self.assertIs(harness.adaptor_registry, registry)
+        self.assertEqual(gateway_calls, [task])
 
     def test_goal_is_unsupported_until_registered(self):
         task = make_task(4, TaskType.Goal)

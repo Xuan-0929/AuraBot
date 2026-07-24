@@ -89,17 +89,17 @@ class Task:
         self._tool_groups = snapshot
         self._tool_call_resolver = resolver
 
+    def set_pending(self) -> None:
+        self.current_state = TaskState.Pending
 
-    def set_completed(self):
+    def set_running(self) -> None:
+        self.current_state = TaskState.Running
+
+    def set_completed(self) -> None:
         self.current_state = TaskState.Completed
-        pass
 
-
-    def set_failed(self):
+    def set_failed(self) -> None:
         self.current_state = TaskState.Failed
-        pass
 
-
-    def set_interrupted(self):
+    def set_interrupted(self) -> None:
         self.current_state = TaskState.Interrupted
-        pass

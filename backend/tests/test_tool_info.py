@@ -102,23 +102,47 @@ class ToolDescriptionTests(unittest.TestCase):
                 output_schema=[],
             )
 
-    def test_tool_carries_optional_adaptor_name(self):
+    def test_tool_carries_ordered_immutable_adaptor_names(self):
+        adaptor_names = ["FirstAdaptor", "SecondAdaptor"]
         tool = Tool(
             "read_file",
             "Read a file",
             server_url="localhost:6410",
             input_schema=EMPTY_INPUT_SCHEMA,
-            adaptor_name="FileSystemAdaptor",
+            adaptor_names=adaptor_names,
         )
+        adaptor_names.append("LaterAdaptor")
 
-        self.assertEqual(tool.adaptor_name, "FileSystemAdaptor")
+        self.assertEqual(
+            tool.adaptor_names,
+            ("FirstAdaptor", "SecondAdaptor"),
+        )
+        self.assertIsInstance(tool.adaptor_names, tuple)
+
+    def test_tool_rejects_invalid_adaptor_descriptions(self):
         with self.assertRaises(ValueError):
             Tool(
                 "read_file",
                 "Read a file",
                 server_url="localhost:6410",
                 input_schema=EMPTY_INPUT_SCHEMA,
-                adaptor_name=" FileSystemAdaptor",
+                adaptor_names=(" FileSystemAdaptor",),
+            )
+        with self.assertRaises(ValueError):
+            Tool(
+                "read_file",
+                "Read a file",
+                server_url="localhost:6410",
+                input_schema=EMPTY_INPUT_SCHEMA,
+                adaptor_names=("SameAdaptor", "SameAdaptor"),
+            )
+        with self.assertRaises(TypeError):
+            Tool(
+                "read_file",
+                "Read a file",
+                server_url="localhost:6410",
+                input_schema=EMPTY_INPUT_SCHEMA,
+                adaptor_names="FileSystemAdaptor",
             )
 
     def test_tool_load_intro_returns_complete_xml_function_schema(self):

@@ -173,28 +173,33 @@ class ToolSQLTests(unittest.TestCase):
             )
 
             loaded = ToolSQL.get_tool("localhost:6410", "read_file")
-            self.assertEqual(loaded.adaptor_name, "FileSystemAdaptor")
             self.assertEqual(
-                ToolSQL.get_tool_by_id(tool_id).adaptor_name,
-                "FileSystemAdaptor",
+                loaded.adaptor_names,
+                ("FileSystemAdaptor",),
             )
             self.assertEqual(
-                ToolSQL.list_tools("filesystem")[0][0].adaptor_name,
-                "FileSystemAdaptor",
+                ToolSQL.get_tool_by_id(tool_id).adaptor_names,
+                ("FileSystemAdaptor",),
             )
             self.assertEqual(
-                ToolSQL.list_tools_by_name("read_file")[0][0].adaptor_name,
-                "FileSystemAdaptor",
+                ToolSQL.list_tools("filesystem")[0][0].adaptor_names,
+                ("FileSystemAdaptor",),
             )
             self.assertEqual(
-                ToolSQL.list_tools_by_server("localhost:6410")[0][0].adaptor_name,
-                "FileSystemAdaptor",
+                ToolSQL.list_tools_by_name("read_file")[0][0].adaptor_names,
+                ("FileSystemAdaptor",),
+            )
+            self.assertEqual(
+                ToolSQL.list_tools_by_server(
+                    "localhost:6410"
+                )[0][0].adaptor_names,
+                ("FileSystemAdaptor",),
             )
             self.assertEqual(
                 ToolGroupSQL.get_tool_group(
                     "filesystem"
-                ).tools[0].adaptor_name,
-                "FileSystemAdaptor",
+                ).tools[0].adaptor_names,
+                ("FileSystemAdaptor",),
             )
 
             self.assertTrue(
@@ -208,8 +213,8 @@ class ToolSQLTests(unittest.TestCase):
                 ToolSQL.get_tool(
                     "localhost:6410",
                     "read_file",
-                ).adaptor_name,
-                "ReplacementAdaptor",
+                ).adaptor_names,
+                ("ReplacementAdaptor",),
             )
             self.assertFalse(
                 ToolSQL.update_tool_metadata(
@@ -222,8 +227,8 @@ class ToolSQLTests(unittest.TestCase):
                 ToolSQL.get_tool(
                     "localhost:6410",
                     "read_file",
-                ).adaptor_name,
-                "ReplacementAdaptor",
+                ).adaptor_names,
+                ("ReplacementAdaptor",),
             )
 
             self.assertTrue(
@@ -233,11 +238,12 @@ class ToolSQLTests(unittest.TestCase):
                     adaptor_name=None,
                 )
             )
-            self.assertIsNone(
+            self.assertEqual(
                 ToolSQL.get_tool(
                     "localhost:6410",
                     "read_file",
-                ).adaptor_name
+                ).adaptor_names,
+                (),
             )
 
     def test_tool_crud_enforces_server_group_ownership(self):

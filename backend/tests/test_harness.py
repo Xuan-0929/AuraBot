@@ -8,6 +8,9 @@ from backend.agent.task.harness.adaptors.Adaptor import (
     Adaptor,
     AdaptorRouteError,
 )
+from backend.agent.task.harness.adaptors.AdaptorRegistry import (
+    AdaptorRegistry,
+)
 from backend.agent.task.harness.adaptors.FileSystemAdaptor import (
     FileSystemAdaptor,
 )
@@ -50,6 +53,20 @@ class RecordingAdaptor(Adaptor):
         return entity
 
 
+class AppendingAdaptor(Adaptor):
+    def __init__(self, value: str):
+        self.value = value
+
+    def adapt(self, entity: ResolvedToolCall) -> ResolvedToolCall:
+        arguments = dict(entity.arguments)
+        arguments["trace"] = [*arguments.get("trace", []), self.value]
+        return ResolvedToolCall(
+            tool=entity.tool,
+            arguments=arguments,
+            call_id=entity.call_id,
+        )
+
+
 def make_task(*, tool_groups=None) -> Task:
     return Task(
         task_id=1,
@@ -78,13 +95,26 @@ class HarnessTests(unittest.TestCase):
         self.assertNotIn("_tool_protocol", harness.__dict__)
         self.assertEqual(dict(harness.adaptors), {})
 
+    def test_base_owns_injected_gateway_and_adaptor_registry(self):
+        gateway = object()
+        registry = AdaptorRegistry()
+        harness = ConcreteHarness(
+            task=make_task(),
+            llm_client=FakeLLMClient(),
+            tool_call_gateway=gateway,  # type: ignore[arg-type]
+            adaptor_registry=registry,
+        )
+
+        self.assertIs(harness.tool_call_gateway, gateway)
+        self.assertIs(harness.adaptor_registry, registry)
+
     def test_resolves_before_running_routed_adaptor(self):
         bash = Tool(
             "bash",
             "Run Bash",
             "http://localhost:6410/mcp",
             input_schema={"type": "object"},
-            adaptor_name="RecordingAdaptor",
+            adaptor_names=("RecordingAdaptor",),
         )
         recorder = RecordingAdaptor()
         harness = ConcreteHarness(
@@ -92,9 +122,9 @@ class HarnessTests(unittest.TestCase):
                 tool_groups=[ToolGroup("shell", [bash], "Shell tools")]
             ),
             llm_client=FakeLLMClient(),
-            adaptor_factories={
-                "RecordingAdaptor": lambda task: recorder,
-            },
+            adaptor_registry=AdaptorRegistry(
+                {"RecordingAdaptor": lambda task: recorder}
+            ),
         )
         harness.build_openai_tools()
 
@@ -112,7 +142,7 @@ class HarnessTests(unittest.TestCase):
             "Run Bash",
             "http://localhost:6410/mcp",
             input_schema={"type": "object"},
-            adaptor_name="FileSystemAdaptor",
+            adaptor_names=("FileSystemAdaptor",),
         )
         harness = ConcreteHarness(
             task=make_task(
@@ -161,7 +191,7 @@ class HarnessTests(unittest.TestCase):
             "Read a file",
             "http://localhost:6410/mcp",
             input_schema={"type": "object"},
-            adaptor_name="FileSystemAdaptor",
+            adaptor_names=("FileSystemAdaptor",),
         )
         ping = Tool(
             "ping",
@@ -189,13 +219,44 @@ class HarnessTests(unittest.TestCase):
         self.assertEqual(resolved[0].arguments["path"], "/workspace/a.txt")
         self.assertEqual(resolved[1].arguments, {})
 
+    def test_applies_each_tools_adaptors_in_declared_order(self):
+        tool = Tool(
+            "trace",
+            "Trace Adaptor order",
+            "http://localhost:6410/mcp",
+            input_schema={"type": "object"},
+            adaptor_names=("FirstAdaptor", "SecondAdaptor"),
+        )
+        harness = ConcreteHarness(
+            task=make_task(
+                tool_groups=[ToolGroup("trace", [tool], "Trace tools")]
+            ),
+            llm_client=FakeLLMClient(),
+            adaptor_registry=AdaptorRegistry(
+                {
+                    "FirstAdaptor": lambda task: AppendingAdaptor("first"),
+                    "SecondAdaptor": lambda task: AppendingAdaptor("second"),
+                }
+            ),
+        )
+        harness.build_openai_tools()
+
+        resolved = harness.resolve_and_adapt_tool_calls(
+            [ToolCall("trace", {}, "call_1")]
+        )
+
+        self.assertEqual(
+            resolved[0].arguments["trace"],
+            ["first", "second"],
+        )
+
     def test_build_rejects_unknown_or_invalid_adaptor_factory(self):
         tool = Tool(
             "ping",
             "Return pong",
             "http://localhost:6410/mcp",
             input_schema=EMPTY_INPUT_SCHEMA,
-            adaptor_name="UnknownAdaptor",
+            adaptor_names=("UnknownAdaptor",),
         )
         task = make_task(
             tool_groups=[ToolGroup("utilities", [tool], "Utilities")]
@@ -211,7 +272,9 @@ class HarnessTests(unittest.TestCase):
             ConcreteHarness(
                 task=task,
                 llm_client=FakeLLMClient(),
-                adaptor_factories={"UnknownAdaptor": lambda task: object()},
+                adaptor_registry=AdaptorRegistry(
+                    {"UnknownAdaptor": lambda task: object()}
+                ),
             ).build_openai_tools()
 
     def test_repeated_build_replaces_instead_of_accumulating_adaptors(self):
@@ -221,17 +284,19 @@ class HarnessTests(unittest.TestCase):
             "Read a file",
             "http://localhost:6410/mcp",
             input_schema={"type": "object"},
-            adaptor_name="FileSystemAdaptor",
+            adaptor_names=("FileSystemAdaptor",),
         )
         harness = ConcreteHarness(
             task=make_task(
                 tool_groups=[ToolGroup("files", [read], "File tools")]
             ),
             llm_client=FakeLLMClient(),
-            adaptor_factories={
-                "FileSystemAdaptor": lambda task: calls.append(task)
-                or FileSystemAdaptor(task.workdir)
-            },
+            adaptor_registry=AdaptorRegistry(
+                {
+                    "FileSystemAdaptor": lambda task: calls.append(task)
+                    or FileSystemAdaptor(task.workdir)
+                }
+            ),
         )
 
         harness.build_openai_tools()
@@ -253,7 +318,7 @@ class HarnessTests(unittest.TestCase):
                 f"{name} tool",
                 "http://localhost:6410/mcp",
                 input_schema={"type": "object"},
-                adaptor_name="FileSystemAdaptor",
+                adaptor_names=("FileSystemAdaptor",),
             )
             for name in ("read_file", "edit_file")
         ]
@@ -262,10 +327,12 @@ class HarnessTests(unittest.TestCase):
                 tool_groups=[ToolGroup("files", tools, "File tools")]
             ),
             llm_client=FakeLLMClient(),
-            adaptor_factories={
-                "FileSystemAdaptor": lambda task: factory_calls.append(task)
-                or FileSystemAdaptor(task.workdir)
-            },
+            adaptor_registry=AdaptorRegistry(
+                {
+                    "FileSystemAdaptor": lambda task: factory_calls.append(task)
+                    or FileSystemAdaptor(task.workdir)
+                }
+            ),
         )
 
         harness.build_openai_tools()
@@ -279,7 +346,7 @@ class HarnessTests(unittest.TestCase):
             "Read a file",
             "http://localhost:6410/mcp",
             input_schema={"type": "object"},
-            adaptor_name="FileSystemAdaptor",
+            adaptor_names=("FileSystemAdaptor",),
         )
         task = make_task(
             tool_groups=[ToolGroup("files", [read], "File tools")]
@@ -300,7 +367,7 @@ class HarnessTests(unittest.TestCase):
                             "Unknown tool",
                             "http://localhost:6410/mcp",
                             input_schema=EMPTY_INPUT_SCHEMA,
-                            adaptor_name="UnknownAdaptor",
+                            adaptor_names=("UnknownAdaptor",),
                         )
                     ],
                     "Unknown tools",
@@ -328,7 +395,7 @@ class HarnessTests(unittest.TestCase):
             "Read a file",
             "http://localhost:6410/mcp",
             input_schema={"type": "object"},
-            adaptor_name="FileSystemAdaptor",
+            adaptor_names=("FileSystemAdaptor",),
         )
         task = make_task(
             tool_groups=[ToolGroup("utilities", [ping], "Utilities")]

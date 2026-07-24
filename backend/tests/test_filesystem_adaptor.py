@@ -25,7 +25,7 @@ def make_call(
             f"{tool_name} tool",
             "http://localhost:6410/mcp",
             input_schema={"type": "object"},
-            adaptor_name="FileSystemAdaptor",
+            adaptor_names=("FileSystemAdaptor",),
         ),
         arguments=arguments,
         call_id="call_1",

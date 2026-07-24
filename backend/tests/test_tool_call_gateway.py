@@ -86,7 +86,7 @@ class ToolCallGatewayTests(unittest.IsolatedAsyncioTestCase):
                     "required": ["statement", "PATH"],
                     "additionalProperties": False,
                 },
-                adaptor_name="FileSystemAdaptor",
+                adaptor_names=("FileSystemAdaptor",),
             )
             call = ResolvedToolCall(
                 tool=tool,

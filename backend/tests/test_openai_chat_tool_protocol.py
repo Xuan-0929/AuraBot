@@ -156,6 +156,27 @@ class OpenAIChatToolProtocolTests(unittest.TestCase):
             [("provider_a", "first"), ("provider_b", "second")],
         )
 
+    def test_accepts_non_negative_provider_index_extension(self):
+        indexed_call = native_call(
+            "call_provider_1",
+            "read_file",
+            '{"path":"a.txt"}',
+        )
+        indexed_call["index"] = 0
+
+        response = OpenAIChatToolProtocol.parse_completion(
+            {
+                "role": "assistant",
+                "content": None,
+                "reasoning_content": "I need to inspect the file.",
+                "tool_calls": [indexed_call],
+            },
+            "tool_calls",
+        )
+
+        self.assertIsInstance(response, ToolCallBatch)
+        self.assertEqual(response.calls[0].call_id, "call_provider_1")
+
     def test_rejects_finish_reason_message_mismatches(self):
         cases = [
             (
@@ -228,6 +249,20 @@ class OpenAIChatToolProtocolTests(unittest.TestCase):
                     "function": {"name": "search", "arguments": {}},
                 },
                 "invalid_arguments",
+            ),
+            (
+                {
+                    **native_call("call_1", "search"),
+                    "index": -1,
+                },
+                "invalid_call",
+            ),
+            (
+                {
+                    **native_call("call_1", "search"),
+                    "provider_extension": True,
+                },
+                "invalid_call",
             ),
         ]
 

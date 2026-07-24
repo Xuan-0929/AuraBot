@@ -188,10 +188,24 @@ class OpenAIChatToolProtocol:
                 "invalid_call",
                 f"{location} must be an object",
             )
-        if set(raw_call) != {"id", "type", "function"}:
+        required_fields = {"id", "type", "function"}
+        allowed_fields = required_fields | {"index"}
+        if (
+            not required_fields.issubset(raw_call)
+            or not set(raw_call).issubset(allowed_fields)
+        ):
             raise ToolCallParseError(
                 "invalid_call",
-                f"{location} must contain exactly id, type, and function",
+                f"{location} must contain id, type, and function, with only "
+                "the optional provider index field",
+            )
+        provider_index = raw_call.get("index")
+        if provider_index is not None and (
+            type(provider_index) is not int or provider_index < 0
+        ):
+            raise ToolCallParseError(
+                "invalid_call",
+                f"{location} has an invalid provider index",
             )
 
         call_id = raw_call["id"]

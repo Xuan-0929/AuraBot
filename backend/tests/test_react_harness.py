@@ -3,20 +3,127 @@ import unittest
 from pathlib import Path
 from string import Formatter
 
+from backend.agent.LLMClient import ChatCompletionChoice
 from backend.agent.skills.Skill import Skill
 from backend.agent.skills.SkillGroup import SkillGroup
-from backend.agent.task.Task import Task, TaskType
-from backend.agent.task.harness.ReActHarness import ReActHarness
+from backend.agent.task.Task import Task, TaskState, TaskType
+from backend.agent.task.harness.Harness import Harness
+from backend.agent.task.harness.ReActHarness import (
+    ReActHarness,
+    ReActLimitError,
+)
 from backend.agent.task.harness.prompts import system_prompt_ReAct
 from backend.agent.tools.Tool import Tool
 from backend.agent.tools.ToolGroup import ToolGroup
+from backend.agent.tools.core.ToolCallEntity import ToolExecutionResult
 
 
 EMPTY_INPUT_SCHEMA = {"type": "object", "properties": {}}
 
 
 class FakeLLMClient:
-    pass
+    def __init__(
+        self,
+        choices: list[ChatCompletionChoice] | None = None,
+        error: Exception | None = None,
+    ):
+        self.choices = list(choices or [])
+        self.error = error
+        self.requests: list[dict] = []
+        self.message_list_ids: list[int] = []
+
+    async def invoke(self, messages, *, tools=None, tool_choice=None):
+        self.message_list_ids.append(id(messages))
+        self.requests.append(
+            {
+                "messages": [dict(message) for message in messages],
+                "tools": tools,
+                "tool_choice": tool_choice,
+            }
+        )
+        if self.error is not None:
+            raise self.error
+        return self.choices.pop(0)
+
+
+class FakeToolCallGateway:
+    def __init__(
+        self,
+        results: list[list[ToolExecutionResult]] | None = None,
+    ):
+        self.results = list(results or [])
+        self.batches = []
+
+    async def execute_many(self, calls):
+        self.batches.append(list(calls))
+        return self.results.pop(0)
+
+
+class RecordingTask(Task):
+    def __init__(self, *args, **kwargs):
+        super().__init__(*args, **kwargs)
+        self.state_history = [self.state]
+
+    def set_pending(self) -> None:
+        super().set_pending()
+        self.state_history.append(self.state)
+
+    def set_running(self) -> None:
+        super().set_running()
+        self.state_history.append(self.state)
+
+    def set_completed(self) -> None:
+        super().set_completed()
+        self.state_history.append(self.state)
+
+    def set_failed(self) -> None:
+        super().set_failed()
+        self.state_history.append(self.state)
+
+
+def final_choice(content: str = "Task completed.") -> ChatCompletionChoice:
+    return ChatCompletionChoice(
+        message={"role": "assistant", "content": content},
+        finish_reason="stop",
+    )
+
+
+def tool_choice(
+    *,
+    name: str = "read_file",
+    arguments: str = '{"path":"example.py"}',
+    call_id: str = "call_1",
+) -> ChatCompletionChoice:
+    return ChatCompletionChoice(
+        message={
+            "role": "assistant",
+            "content": None,
+            "tool_calls": [
+                {
+                    "id": call_id,
+                    "type": "function",
+                    "function": {
+                        "name": name,
+                        "arguments": arguments,
+                    },
+                }
+            ],
+        },
+        finish_reason="tool_calls",
+    )
+
+
+def make_task(**overrides) -> RecordingTask:
+    values = {
+        "task_id": 1,
+        "task_title": "Fix example",
+        "parent_session_id": "main-session",
+        "task_type": TaskType.ReAct,
+        "task_prompt": "Fix example.py and verify it.",
+        "workdir": "/workspace",
+    }
+    values.update(overrides)
+    return RecordingTask(**values)
 
 
 class ReActPromptTemplateTests(unittest.TestCase):
@@ -120,6 +227,169 @@ class ReActHarnessTests(unittest.TestCase):
 
         self.assertTrue(common_methods.isdisjoint(ReActHarness.__dict__))
         self.assertIn("build_system_prompt", ReActHarness.__dict__)
+        self.assertNotIn("__init__", ReActHarness.__dict__)
+        self.assertIs(ReActHarness.__init__, Harness.__init__)
+
+
+class ReActHarnessRunTests(unittest.IsolatedAsyncioTestCase):
+    async def test_runs_to_completion_and_keeps_context_on_task(self):
+        task = make_task()
+        original_messages = task.messages
+        llm_client = FakeLLMClient([final_choice("All checks passed.")])
+        harness = ReActHarness(
+            task=task,
+            llm_client=llm_client,  # type: ignore[arg-type]
+            tool_call_gateway=FakeToolCallGateway(),  # type: ignore[arg-type]
+        )
+
+        result = await harness.run()
+
+        self.assertEqual(result, "All checks passed.")
+        self.assertIs(task.messages, original_messages)
+        self.assertEqual(
+            [message["role"] for message in task.messages],
+            ["system", "user", "assistant"],
+        )
+        self.assertEqual(task.messages[1]["content"], task.task_prompt)
+        self.assertEqual(
+            task.state_history,
+            [
+                TaskState.Initializing,
+                TaskState.Pending,
+                TaskState.Running,
+                TaskState.Completed,
+            ],
+        )
+        self.assertEqual(llm_client.message_list_ids, [id(task.messages)])
+        self.assertIsNone(llm_client.requests[0]["tools"])
+        self.assertIsNone(llm_client.requests[0]["tool_choice"])
+
+    async def test_observes_tool_result_then_asks_model_again(self):
+        with tempfile.TemporaryDirectory() as directory:
+            read_file = Tool(
+                "read_file",
+                "Read one file",
+                "http://127.0.0.1:6410/mcp",
+                input_schema={
+                    "type": "object",
+                    "properties": {"path": {"type": "string"}},
+                    "required": ["path"],
+                    "additionalProperties": False,
+                },
+                adaptor_names=("FileSystemAdaptor",),
+            )
+            task = make_task(
+                workdir=directory,
+                tool_groups=[
+                    ToolGroup("FileSystem", [read_file], "File tools")
+                ],
+            )
+            llm_client = FakeLLMClient(
+                [tool_choice(), final_choice("File inspected and fixed.")]
+            )
+            gateway = FakeToolCallGateway(
+                [
+                    [
+                        ToolExecutionResult(
+                            tool_name="read_file",
+                            call_id="call_1",
+                            content=[
+                                {"type": "text", "text": "def answer(): ..."}
+                            ],
+                            structured_content={
+                                "content": "def answer(): ..."
+                            },
+                            is_error=False,
+                        )
+                    ]
+                ]
+            )
+            harness = ReActHarness(
+                task=task,
+                llm_client=llm_client,  # type: ignore[arg-type]
+                tool_call_gateway=gateway,  # type: ignore[arg-type]
+            )
+
+            result = await harness.run()
+
+        self.assertEqual(result, "File inspected and fixed.")
+        self.assertEqual(len(gateway.batches), 1)
+        self.assertEqual(
+            gateway.batches[0][0].arguments["path"],
+            str((Path(directory) / "example.py").resolve()),
+        )
+        self.assertEqual(
+            [message["role"] for message in task.messages],
+            ["system", "user", "assistant", "tool", "assistant"],
+        )
+        self.assertEqual(
+            llm_client.requests[1]["messages"][-1]["tool_call_id"],
+            "call_1",
+        )
+        self.assertIsNotNone(llm_client.requests[0]["tools"])
+        self.assertEqual(llm_client.requests[0]["tool_choice"], "auto")
+        self.assertEqual(task.state, TaskState.Completed)
+
+    async def test_marks_task_failed_and_reraises_model_error(self):
+        task = make_task()
+        harness = ReActHarness(
+            task=task,
+            llm_client=FakeLLMClient(  # type: ignore[arg-type]
+                error=RuntimeError("model offline")
+            ),
+            tool_call_gateway=FakeToolCallGateway(),  # type: ignore[arg-type]
+        )
+
+        with self.assertRaisesRegex(RuntimeError, "model offline"):
+            await harness.run()
+
+        self.assertEqual(
+            task.state_history,
+            [
+                TaskState.Initializing,
+                TaskState.Pending,
+                TaskState.Running,
+                TaskState.Failed,
+            ],
+        )
+
+    async def test_marks_task_failed_when_tool_call_limit_is_exceeded(self):
+        read_file = Tool(
+            "read_file",
+            "Read one file",
+            "http://127.0.0.1:6410/mcp",
+            input_schema={"type": "object"},
+        )
+        task = make_task(
+            tool_groups=[ToolGroup("FileSystem", [read_file], "File tools")]
+        )
+        gateway = FakeToolCallGateway()
+        harness = ReActHarness(
+            task=task,
+            llm_client=FakeLLMClient([tool_choice()]),  # type: ignore[arg-type]
+            tool_call_gateway=gateway,  # type: ignore[arg-type]
+        )
+        harness.MAX_TOOL_CALLS = 0
+
+        with self.assertRaisesRegex(ReActLimitError, "tool-call limit"):
+            await harness.run()
+
+        self.assertEqual(task.state, TaskState.Failed)
+        self.assertEqual(gateway.batches, [])
+
+    async def test_rejects_second_run_without_rewriting_terminal_state(self):
+        task = make_task()
+        harness = ReActHarness(
+            task=task,
+            llm_client=FakeLLMClient([final_choice()]),  # type: ignore[arg-type]
+            tool_call_gateway=FakeToolCallGateway(),  # type: ignore[arg-type]
+        )
+        await harness.run()
+
+        with self.assertRaisesRegex(RuntimeError, "new Task"):
+            await harness.run()
+
+        self.assertEqual(task.state, TaskState.Completed)
 
 
 if __name__ == "__main__":

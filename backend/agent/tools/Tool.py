@@ -1,7 +1,11 @@
+from collections.abc import Sequence
+
 from .utils.formatter import format_tool_intro
 
 
 class Tool:
+    """MCP Tool metadata with an ordered immutable Adaptor pipeline."""
+
     def __init__(
         self,
         name: str,
@@ -9,7 +13,7 @@ class Tool:
         server_url: str | None = None,
         input_schema: dict | None = None,
         output_schema: dict | None = None,
-        adaptor_name: str | None = None,
+        adaptor_names: Sequence[str] | None = None,
     ):
         self.name = name
         self.description = description
@@ -23,15 +27,26 @@ class Tool:
         self.input_schema = input_schema
         self.output_schema = output_schema
 
-        if adaptor_name is not None and (
+        if adaptor_names is not None and (
+            isinstance(adaptor_names, (str, bytes))
+            or not isinstance(adaptor_names, Sequence)
+        ):
+            raise TypeError(
+                "adaptor_names must be a sequence of names or None"
+            )
+        snapshot = tuple(adaptor_names or ())
+        if any(
             not isinstance(adaptor_name, str)
             or not adaptor_name
             or adaptor_name != adaptor_name.strip()
+            for adaptor_name in snapshot
         ):
             raise ValueError(
-                "adaptor_name must be a non-empty trimmed string or None"
+                "adaptor_names must contain only non-empty trimmed strings"
             )
-        self.adaptor_name = adaptor_name
+        if len(set(snapshot)) != len(snapshot):
+            raise ValueError("adaptor_names must not contain duplicates")
+        self.adaptor_names = snapshot
 
         if server_url is not None:
             self.server_url = server_url

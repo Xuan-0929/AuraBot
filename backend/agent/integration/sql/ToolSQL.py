@@ -28,6 +28,7 @@ class ToolSQL:
 
     @staticmethod
     def _tool_from_row(row: sqlite3.Row) -> Tool:
+        adaptor_name = row["adaptor_name"]
         return Tool(
             name=row["name"],
             description=row["description"],
@@ -36,7 +37,7 @@ class ToolSQL:
             output_schema=parse_optional_schema_json(
                 row["output_schema_json"]
             ),
-            adaptor_name=row["adaptor_name"],
+            adaptor_names=(adaptor_name,) if adaptor_name is not None else (),
         )
 
     @staticmethod

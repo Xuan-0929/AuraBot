@@ -129,7 +129,7 @@ async def verify_gateway(
         description="Read UTF-8 file",
         server_url=server_url,
         input_schema=read_input_schema,
-        adaptor_name="FileSystemAdaptor",
+        adaptor_names=("FileSystemAdaptor",),
     )
     unresolved = ResolvedToolCall(
         tool=tool,

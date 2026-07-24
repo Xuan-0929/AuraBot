@@ -1,13 +1,16 @@
 import inspect
-from collections.abc import Mapping
+from collections.abc import Callable, Mapping
 
 from ...LLMClient import LLMClient
+from ...tools.core.ToolCallGateway import ToolCallGateway
 from .Harness import Harness
 from .PlanAndSolveHarness import PlanAndSolveHarness
 from .ReActHarness import ReActHarness
+from .adaptors.AdaptorRegistry import AdaptorRegistry
 from ..Task import Task, TaskType
 
 HarnessType = type[Harness]
+ToolCallGatewayFactory = Callable[[Task], ToolCallGateway]
 
 
 class HarnessFactory:
@@ -23,8 +26,21 @@ class HarnessFactory:
         *,
         llm_client: LLMClient,
         harness_types: Mapping[TaskType, HarnessType] | None = None,
+        adaptor_registry: AdaptorRegistry | None = None,
+        tool_call_gateway_factory: ToolCallGatewayFactory | None = None,
     ):
         self._llm_client = llm_client
+        self._adaptor_registry = (
+            adaptor_registry
+            if adaptor_registry is not None
+            else AdaptorRegistry()
+        )
+        if (
+            tool_call_gateway_factory is not None
+            and not callable(tool_call_gateway_factory)
+        ):
+            raise TypeError("tool_call_gateway_factory must be callable")
+        self._tool_call_gateway_factory = tool_call_gateway_factory
         self._harness_types = dict(
             self.DEFAULT_HARNESS_TYPES if harness_types is None else harness_types
         )
@@ -35,6 +51,10 @@ class HarnessFactory:
     @property
     def llm_client(self) -> LLMClient:
         return self._llm_client
+
+    @property
+    def adaptor_registry(self) -> AdaptorRegistry:
+        return self._adaptor_registry
 
     def create(self, task: Task) -> Harness:
         """Construct a harness without performing async initialization."""
@@ -51,9 +71,16 @@ class HarnessFactory:
                 f"No harness registered for task type: {task.task_type.value}"
             ) from exc
 
+        tool_call_gateway = (
+            self._tool_call_gateway_factory(task)
+            if self._tool_call_gateway_factory is not None
+            else None
+        )
         return harness_type(
             task=task,
             llm_client=self._llm_client,
+            tool_call_gateway=tool_call_gateway,
+            adaptor_registry=self._adaptor_registry,
         )
 
     def register(
@@ -87,3 +114,9 @@ class HarnessFactory:
             raise TypeError("harness_type must inherit from Harness")
         if inspect.isabstract(harness_type):
             raise TypeError("harness_type must be a concrete Harness")
+
+__all__ = [
+    "HarnessFactory",
+    "HarnessType",
+    "ToolCallGatewayFactory",
+]

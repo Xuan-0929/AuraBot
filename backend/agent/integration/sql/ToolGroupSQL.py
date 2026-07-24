@@ -37,6 +37,7 @@ class ToolGroupSQL:
                 )
 
             if row["tool_id"] is not None:
+                adaptor_name = row["tool_adaptor_name"]
                 grouped[group_id][2].append(
                     Tool(
                         row["tool_name"],
@@ -48,7 +49,11 @@ class ToolGroupSQL:
                         output_schema=parse_optional_schema_json(
                             row["tool_output_schema_json"]
                         ),
-                        adaptor_name=row["tool_adaptor_name"],
+                        adaptor_names=(
+                            (adaptor_name,)
+                            if adaptor_name is not None
+                            else ()
+                        ),
                     )
                 )
 
