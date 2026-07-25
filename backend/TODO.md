@@ -2,6 +2,8 @@
 
 1. Plan and Solve Harness.
 
+- 完成完整运行协议，采取统一标准完成task，tool，skill对象的构造。
+
 2. 核对和优化Memory。
 
 3. 设计chat 和 connector的协议

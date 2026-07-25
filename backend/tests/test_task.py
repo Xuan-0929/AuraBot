@@ -22,6 +22,12 @@ class TaskTypeTests(unittest.TestCase):
 
 
 class TaskTests(unittest.TestCase):
+    def test_task_has_no_plan_or_goal_specialization(self):
+        for task_type in (TaskType.ReAct, TaskType.PlanAndSolve, TaskType.Goal):
+            task = Task(1, "Task", "session", task_type, "Work")
+            self.assertFalse(hasattr(task, "plan"))
+            self.assertFalse(hasattr(task, "goal"))
+
     def test_state_cas_does_not_encode_one_harness_state_graph(self):
         task = Task(
             1,

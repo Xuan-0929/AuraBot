@@ -8,6 +8,7 @@ from types import MappingProxyType
 from ...Task import Task
 from .Adaptor import Adaptor, AdaptorRouteError
 from .FileSystemAdaptor import FileSystemAdaptor
+from .PlanContextAdaptor import PlanContextAdaptor
 
 
 AdaptorFactory = Callable[[Task], Adaptor]
@@ -18,6 +19,7 @@ class AdaptorRegistry:
 
     DEFAULT_FACTORIES: Mapping[str, AdaptorFactory] = {
         "FileSystemAdaptor": lambda task: FileSystemAdaptor(task.workdir),
+        "PlanContextAdaptor": lambda task: PlanContextAdaptor(task),
     }
 
     def __init__(

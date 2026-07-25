@@ -1,4 +1,5 @@
 import unittest
+from unittest.mock import patch
 
 from backend.agent.task.harness.Harness import Harness
 from backend.agent.task.harness.HarnessFactory import HarnessFactory
@@ -15,6 +16,9 @@ class FakeLLMClient:
 
 
 class GoalHarness(Harness):
+    def inject_tool_group(self) -> None:
+        self._inject_required_tool_groups(())
+
     def build_system_prompt(self) -> str:
         return "Goal"
 
@@ -38,6 +42,14 @@ def make_task(task_id: int, task_type: TaskType) -> Task:
 
 class HarnessFactoryTests(unittest.TestCase):
     def setUp(self):
+        config_patcher = patch(
+            "backend.config.get_config",
+            return_value={
+                "local_mcp_server": "http://127.0.0.1:6410/mcp"
+            },
+        )
+        config_patcher.start()
+        self.addCleanup(config_patcher.stop)
         self.llm_client = FakeLLMClient()
         self.factory = HarnessFactory(llm_client=self.llm_client)
 
@@ -49,6 +61,7 @@ class HarnessFactoryTests(unittest.TestCase):
         self.assertIsInstance(harness, ReActHarness)
         self.assertIs(harness.task, task)
         self.assertIs(harness.llm_client, self.llm_client)
+        self.assertEqual(task.tool_groups, ())
 
     def test_creates_plan_harness_for_plan_and_solve_task(self):
         task = make_task(2, TaskType.PlanAndSolve)
@@ -58,6 +71,7 @@ class HarnessFactoryTests(unittest.TestCase):
         self.assertIsInstance(harness, PlanAndSolveHarness)
         self.assertIs(harness.task, task)
         self.assertIs(harness.llm_client, self.llm_client)
+        self.assertEqual(task.tool_groups[0].name, "Plan")
 
     def test_each_creation_returns_an_isolated_harness(self):
         task = make_task(3, TaskType.ReAct)

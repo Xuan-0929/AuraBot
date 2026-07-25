@@ -54,7 +54,7 @@ class FakeSession:
         self.initialized = False
         self.closed = False
         self.list_cursors: list[str | None] = []
-        self.call_requests: list[tuple[str, dict]] = []
+        self.call_requests: list[tuple[str, dict, dict | None]] = []
 
     async def __aenter__(self):
         return self
@@ -73,8 +73,8 @@ class FakeSession:
             raise self.list_error
         return self.pages.pop(0)
 
-    async def call_tool(self, name, arguments=None):
-        self.call_requests.append((name, arguments))
+    async def call_tool(self, name, arguments=None, *, meta=None):
+        self.call_requests.append((name, arguments, meta))
         if self.call_delay:
             await asyncio.sleep(self.call_delay)
         if self.call_error is not None:
@@ -122,13 +122,20 @@ class MCPClientTests(unittest.IsolatedAsyncioTestCase):
                 "https://mcp.example.com/mcp",
                 "search",
                 {"query": "AuraBot"},
+                meta={"aurabot": {"task_name": "Task"}},
             )
 
         self.assertIs(actual, result)
         self.assertTrue(session.initialized)
         self.assertEqual(
             session.call_requests,
-            [("search", {"query": "AuraBot"})],
+            [
+                (
+                    "search",
+                    {"query": "AuraBot"},
+                    {"aurabot": {"task_name": "Task"}},
+                )
+            ],
         )
         self.assertTrue(session.closed)
         self.assertTrue(transport.closed)
@@ -197,6 +204,16 @@ class MCPClientTests(unittest.IsolatedAsyncioTestCase):
                             arguments,
                         )
 
+        transport_factory.assert_not_called()
+
+        with patched_sdk(session) as (_, transport_factory):
+            with self.assertRaises(TypeError):
+                await client.call_tool(
+                    "https://example.com/mcp",
+                    "search",
+                    {},
+                    meta=[],
+                )
         transport_factory.assert_not_called()
 
     async def test_maps_connection_and_initialization_failures(self):

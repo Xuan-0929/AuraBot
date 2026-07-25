@@ -1,3 +1,4 @@
+import asyncio
 import unittest
 from concurrent.futures import ThreadPoolExecutor
 
@@ -8,146 +9,88 @@ from backend.agent.task.TaskEntity import (
     TaskType,
 )
 from backend.agent.task.TaskManager import TaskManager
+from backend.agent.task.harness.ReActHarness import ReActHarness
 
 
-class TaskManagerSingletonTests(unittest.TestCase):
-    def setUp(self):
-        if hasattr(TaskManager, "_instance"):
-            TaskManager._instance = None
-
-    def test_task_manager_returns_the_same_instance(self):
-        first = TaskManager()
-        second = TaskManager()
-
-        self.assertIs(second, first)
-
-    def test_task_manager_initializes_only_once(self):
-        first = TaskManager()
-        first.create_task("task-1", "reminder", {"message": "standup"})
-
-        second = TaskManager()
-
-        self.assertEqual(
-            second.list_tasks(),
-            [
-                {
-                    "id": "task-1",
-                    "type": "reminder",
-                    "data": {"message": "standup"},
-                }
-            ],
-        )
+class FakeLLMClient:
+    pass
 
 
-class TaskManagerControlTests(unittest.TestCase):
+def make_runtime(
+    *,
+    task_id: int = 1,
+    task_title: str = "Inspect repository",
+    state: TaskState = TaskState.Thinking,
+) -> ReActHarness:
+    task = Task(
+        task_id=task_id,
+        task_title=task_title,
+        parent_session_id="main-session",
+        task_type=TaskType.ReAct,
+        task_prompt="Inspect the repository.",
+    )
+    task.current_state = state
+    return ReActHarness(task=task, llm_client=FakeLLMClient())
+
+
+class TaskManagerTests(unittest.TestCase):
     def setUp(self):
         TaskManager._instance = None
         self.manager = TaskManager()
 
-    def make_task(
-        self,
-        *,
-        task_id: int = 1,
-        task_title: str = "Inspect repository",
-        state: TaskState = TaskState.Thinking,
-    ) -> Task:
-        task = Task(
-            task_id=task_id,
-            task_title=task_title,
-            parent_session_id="main-session",
-            task_type=TaskType.ReAct,
-            task_prompt="Inspect the repository.",
+    def tearDown(self):
+        self.manager.shutdown()
+        TaskManager._instance = None
+
+    def test_singleton_and_runtime_indexes(self):
+        runtime = make_runtime()
+        self.manager.register_runtime(runtime)
+
+        self.assertIs(TaskManager(), self.manager)
+        self.assertIs(
+            self.manager.get_runtime(runtime.task.task_title),
+            runtime,
         )
-        task.current_state = state
-        self.manager._tasks[str(task_id)] = task
-        return task
+        self.assertEqual(self.manager.list_runtimes(), (runtime,))
 
-    def test_peek_returns_a_read_only_task_snapshot(self):
-        task = self.make_task()
-        task.checkpoint = "Read configuration"
+    def test_registration_rejects_duplicate_id_and_name(self):
+        first = make_runtime()
+        self.manager.register_runtime(first)
 
-        result = self.manager.peek_task(task.task_title)
+        with self.assertRaisesRegex(ValueError, "ID"):
+            self.manager.register_runtime(
+                make_runtime(task_id=1, task_title="Other")
+            )
+        with self.assertRaisesRegex(ValueError, "name"):
+            self.manager.register_runtime(
+                make_runtime(task_id=2, task_title=first.task.task_title)
+            )
+        with self.assertRaises(TypeError):
+            self.manager.register_runtime(object())
+
+    def test_peek_reads_task_through_harness(self):
+        runtime = make_runtime()
+        runtime.task.checkpoint = "Read configuration"
+        self.manager.register_runtime(runtime)
+
+        result = self.manager.peek_task(runtime.task.task_title)
 
         self.assertTrue(result.found)
-        self.assertEqual(result.task_id, task.task_id)
+        self.assertEqual(result.task_id, runtime.task.task_id)
         self.assertIs(result.task_type, TaskType.ReAct)
         self.assertIs(result.state, TaskState.Thinking)
         self.assertEqual(result.checkpoint, "Read configuration")
-
-    def test_peek_reports_a_missing_task(self):
-        result = self.manager.peek_task("missing")
-
-        self.assertFalse(result.found)
-        self.assertIsNone(result.task_id)
-        self.assertIsNone(result.state)
+        self.assertFalse(self.manager.peek_task("missing").found)
 
     def test_interrupt_atomically_changes_an_active_task(self):
-        task = self.make_task()
-
-        result = self.manager.interrupt_task(task.task_title)
-
-        self.assertIs(result.outcome, InterruptTaskOutcome.Interrupted)
-        self.assertIs(result.previous_state, TaskState.Thinking)
-        self.assertIs(result.state, TaskState.Interrupted)
-        self.assertIs(task.state, TaskState.Interrupted)
-
-    def test_interrupt_is_idempotent(self):
-        task = self.make_task(state=TaskState.Interrupted)
-
-        result = self.manager.interrupt_task(task.task_title)
-
-        self.assertIs(result.outcome, InterruptTaskOutcome.AlreadyInterrupted)
-        self.assertIs(result.state, TaskState.Interrupted)
-
-    def test_interrupt_is_deferred_during_atomic_initialization(self):
-        task = self.make_task(state=TaskState.Initializing)
-
-        result = self.manager.interrupt_task(task.task_title)
-
-        self.assertIs(result.outcome, InterruptTaskOutcome.Deferred)
-        self.assertIs(result.previous_state, TaskState.Initializing)
-        self.assertIs(result.state, TaskState.Initializing)
-        self.assertFalse(
-            task.compare_and_set_state(
-                TaskState.Initializing,
-                TaskState.Thinking,
-            )
-        )
-        self.assertIs(task.state, TaskState.Interrupted)
-
-    def test_interrupt_does_not_overwrite_a_settled_task(self):
-        for index, state in enumerate(
-            (TaskState.Completed, TaskState.Failed),
-            start=1,
-        ):
-            task = self.make_task(
-                task_id=index,
-                task_title=f"settled-{index}",
-                state=state,
-            )
-
-            result = self.manager.interrupt_task(task.task_title)
-
-            self.assertIs(result.outcome, InterruptTaskOutcome.AlreadySettled)
-            self.assertIs(result.previous_state, state)
-            self.assertIs(result.state, state)
-            self.assertIs(task.state, state)
-
-    def test_interrupt_reports_a_missing_task(self):
-        result = self.manager.interrupt_task("missing")
-
-        self.assertIs(result.outcome, InterruptTaskOutcome.NotFound)
-        self.assertIsNone(result.task_id)
-        self.assertIsNone(result.state)
-
-    def test_concurrent_interrupts_have_one_state_change(self):
-        task = self.make_task()
+        runtime = make_runtime()
+        self.manager.register_runtime(runtime)
 
         with ThreadPoolExecutor(max_workers=4) as executor:
             results = list(
                 executor.map(
                     self.manager.interrupt_task,
-                    [task.task_title] * 4,
+                    [runtime.task.task_title] * 4,
                 )
             )
 
@@ -157,32 +100,109 @@ class TaskManagerControlTests(unittest.TestCase):
             outcomes.count(InterruptTaskOutcome.AlreadyInterrupted),
             3,
         )
+        self.assertIs(runtime.task.state, TaskState.Interrupted)
 
-    def test_late_harness_result_cannot_overwrite_interrupt(self):
-        task = self.make_task()
+    def test_interrupt_deferred_settled_and_missing_outcomes(self):
+        initializing = make_runtime(state=TaskState.Initializing)
+        self.manager.register_runtime(initializing)
+        deferred = self.manager.interrupt_task(initializing.task.task_title)
+        self.assertIs(deferred.outcome, InterruptTaskOutcome.Deferred)
 
-        self.manager.interrupt_task(task.task_title)
-        task.compare_and_set_state(
-            TaskState.Thinking,
-            TaskState.Completed,
+        self.manager.shutdown()
+        settled = make_runtime(
+            task_id=2,
+            task_title="settled",
+            state=TaskState.Completed,
         )
-        task.compare_and_set_state(
-            TaskState.Thinking,
-            TaskState.Failed,
+        self.manager.register_runtime(settled)
+        result = self.manager.interrupt_task("settled")
+        self.assertIs(result.outcome, InterruptTaskOutcome.AlreadySettled)
+        self.assertIs(
+            self.manager.interrupt_task("missing").outcome,
+            InterruptTaskOutcome.NotFound,
         )
 
-        self.assertIs(task.state, TaskState.Interrupted)
+    def test_context_removes_nonterminal_runtime_on_normal_or_error_exit(self):
+        normal = make_runtime()
+        with self.manager.runtime(normal):
+            self.assertIsNotNone(self.manager.get_runtime(normal.task.task_title))
+        self.assertIsNone(self.manager.get_runtime(normal.task.task_title))
 
-    def test_lookup_ignores_legacy_dictionary_entries(self):
-        self.manager.create_task(
-            "legacy",
-            "reminder",
-            {"task_title": "Inspect repository"},
+        failing = make_runtime(task_id=2, task_title="failing")
+        with self.assertRaisesRegex(RuntimeError, "boom"):
+            with self.manager.runtime(failing):
+                raise RuntimeError("boom")
+        self.assertIsNone(self.manager.get_runtime("failing"))
+
+    def test_clear_only_removes_terminal_runtime(self):
+        active = make_runtime()
+        self.manager.register_runtime(active)
+        self.assertFalse(self.manager.clear_task(active.task.task_title))
+
+        active.task.current_state = TaskState.Failed
+        self.assertTrue(self.manager.clear_task(active.task.task_title))
+        self.assertFalse(self.manager.clear_task(active.task.task_title))
+
+    def test_old_expiry_callback_cannot_remove_new_runtime(self):
+        old = make_runtime(state=TaskState.Completed)
+        self.manager.register_runtime(old)
+        self.assertTrue(self.manager.clear_task(old.task.task_title))
+        replacement = make_runtime(task_id=2)
+        self.manager.register_runtime(replacement)
+
+        self.manager._expire_runtime(replacement.task.task_title, old)
+
+        self.assertIs(
+            self.manager.get_runtime(replacement.task.task_title),
+            replacement,
         )
 
-        result = self.manager.peek_task("Inspect repository")
 
-        self.assertFalse(result.found)
+class TaskManagerRetentionTests(unittest.IsolatedAsyncioTestCase):
+    async def asyncSetUp(self):
+        TaskManager._instance = None
+        self.manager = TaskManager(retention_seconds=0.01)
+        self.manager.bind_event_loop(asyncio.get_running_loop())
+
+    async def asyncTearDown(self):
+        self.manager.shutdown()
+        TaskManager._instance = None
+
+    async def test_all_terminal_states_are_retained_then_expire(self):
+        for index, state in enumerate(
+            (
+                TaskState.Completed,
+                TaskState.Failed,
+                TaskState.Interrupted,
+            ),
+            start=1,
+        ):
+            runtime = make_runtime(
+                task_id=index,
+                task_title=f"terminal-{index}",
+                state=state,
+            )
+            with self.manager.runtime(runtime):
+                pass
+            self.assertIs(
+                self.manager.get_runtime(runtime.task.task_title),
+                runtime,
+            )
+
+        await asyncio.sleep(0.03)
+        self.assertEqual(self.manager.list_runtimes(), ())
+
+    async def test_shutdown_cancels_timers_and_clears_runtimes(self):
+        runtime = make_runtime(state=TaskState.Completed)
+        with self.manager.runtime(runtime):
+            pass
+        await asyncio.sleep(0)
+        self.assertTrue(self.manager._cleanup_handles)
+
+        self.manager.shutdown()
+
+        self.assertEqual(self.manager.list_runtimes(), ())
+        self.assertEqual(self.manager._cleanup_handles, {})
 
 
 if __name__ == "__main__":

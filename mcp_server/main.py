@@ -9,7 +9,7 @@ from urllib.parse import urlsplit
 
 import yaml
 
-from FileSystem.server import create_server
+from server import create_server
 
 
 PROJECT_ROOT = Path(__file__).resolve().parent.parent
@@ -56,6 +56,32 @@ def load_endpoint(config_path: Path) -> Endpoint:
     return Endpoint(host=parsed.hostname, port=port, path=_normalize_path(path))
 
 
+def load_backend_port(config_path: Path) -> int:
+    """Load the loopback backend gateway port used only by Plan proxy handlers."""
+
+    try:
+        loaded = yaml.safe_load(config_path.read_text(encoding="utf-8"))
+    except (OSError, UnicodeError, yaml.YAMLError) as exc:
+        raise ValueError(
+            f"Unable to read backend configuration: {config_path}"
+        ) from exc
+    ports = loaded.get("ports") if isinstance(loaded, dict) else None
+    backend_port = (
+        ports.get("backend_gateway")
+        if isinstance(ports, dict)
+        else None
+    )
+    if (
+        not isinstance(backend_port, int)
+        or isinstance(backend_port, bool)
+        or not 1 <= backend_port <= 65535
+    ):
+        raise ValueError(
+            "ports.backend_gateway must be an integer between 1 and 65535."
+        )
+    return backend_port
+
+
 def _normalize_path(path: str) -> str:
     if not path:
         raise ValueError("MCP path must be non-empty.")
@@ -81,7 +107,9 @@ def parse_args() -> argparse.Namespace:
 
 def main() -> None:
     args = parse_args()
-    endpoint = load_endpoint(args.config.resolve())
+    config_path = args.config.resolve()
+    endpoint = load_endpoint(config_path)
+    backend_port = load_backend_port(config_path)
     host = args.host or endpoint.host
     port = args.port if args.port is not None else endpoint.port
     path = _normalize_path(args.path) if args.path else endpoint.path
@@ -93,6 +121,7 @@ def main() -> None:
         host=host,
         port=port,
         streamable_http_path=path,
+        backend_port=backend_port,
         log_level=args.log_level,
     )
     server.run(transport="streamable-http")

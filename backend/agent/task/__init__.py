@@ -6,7 +6,8 @@ from .harness.Harness import (
 from .harness.HarnessFactory import HarnessFactory
 from .harness.PlanAndSolveHarness import PlanAndSolveHarness
 from .harness.ReActHarness import ReActHarness
-from .Task import Task
+from .Task import Task, TaskInactiveError
+from .TaskManager import TaskManager
 from .TaskEntity import (
     InterruptTaskOutcome,
     InterruptTaskResult,
@@ -26,6 +27,8 @@ __all__ = [
     "PlanAndSolveHarness",
     "ReActHarness",
     "Task",
+    "TaskInactiveError",
+    "TaskManager",
     "TaskState",
     "TaskType",
 ]

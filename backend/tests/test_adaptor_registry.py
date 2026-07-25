@@ -11,6 +11,9 @@ from backend.agent.task.harness.adaptors.AdaptorRegistry import (
 from backend.agent.task.harness.adaptors.FileSystemAdaptor import (
     FileSystemAdaptor,
 )
+from backend.agent.task.harness.adaptors.PlanContextAdaptor import (
+    PlanContextAdaptor,
+)
 
 
 class RecordingAdaptor(Adaptor):
@@ -78,6 +81,14 @@ class AdaptorRegistryTests(unittest.TestCase):
 
         self.assertIsInstance(adaptor, FileSystemAdaptor)
         self.assertEqual(adaptor.current_directory, "/workspace/1")
+
+    def test_default_registry_builds_task_local_plan_context_adaptor(self):
+        adaptor = AdaptorRegistry().create(
+            "PlanContextAdaptor",
+            make_task(),
+        )
+
+        self.assertIsInstance(adaptor, PlanContextAdaptor)
 
     def test_rejects_unknown_or_invalid_factories(self):
         with self.assertRaisesRegex(AdaptorRouteError, "registered"):

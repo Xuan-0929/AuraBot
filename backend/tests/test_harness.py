@@ -38,6 +38,9 @@ class FakeLLMClient:
 
 
 class ConcreteHarness(Harness):
+    def inject_tool_group(self) -> None:
+        self._inject_required_tool_groups(())
+
     def build_system_prompt(self) -> str:
         return (
             "workdir={workdir}\nconstraints={constraints}\n"

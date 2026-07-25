@@ -79,6 +79,7 @@ class FileSystemAdaptor(Adaptor):
             tool=entity.tool,
             arguments=arguments,
             call_id=entity.call_id,
+            mcp_meta=dict(entity.mcp_meta),
         )
 
     def build_path(self, path: str) -> str:

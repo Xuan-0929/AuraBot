@@ -1,0 +1,74 @@
+import unittest
+from dataclasses import FrozenInstanceError
+
+from backend.agent.task.harness.Plan import (
+    PlanOperationError,
+    PlanStep,
+    PlanStepDefinition,
+    build_snapshot,
+    validate_plan_definition,
+)
+
+
+def step(step_id: str) -> PlanStepDefinition:
+    return PlanStepDefinition(
+        id=step_id,
+        title=f"Title {step_id}",
+        description=f"Do {step_id}",
+        expected_output=f"Output {step_id}",
+    )
+
+
+class PlanDomainTests(unittest.TestCase):
+    def test_protocol_entities_are_frozen_and_steps_are_tuples(self):
+        snapshot = build_snapshot(
+            "Goal",
+            (
+                PlanStep(
+                    id="s1",
+                    title="Title s1",
+                    description="Do s1",
+                    expected_output="Output s1",
+                    status="pending",
+                    completion_summary=None,
+                ),
+            ),
+        )
+
+        self.assertIsInstance(snapshot.steps, tuple)
+        with self.assertRaises(FrozenInstanceError):
+            snapshot.goal = "Changed"
+        with self.assertRaises(FrozenInstanceError):
+            snapshot.steps[0].status = "completed"
+
+    def test_definition_validation_rejects_invalid_counts_ids_and_duplicates(self):
+        invalid_cases = (
+            ("Goal", ()),
+            ("Goal", tuple(step(f"s{index}") for index in range(31))),
+            ("Goal", (step("bad id"),)),
+            ("Goal", (step("duplicate"), step("duplicate"))),
+        )
+        for goal, steps in invalid_cases:
+            with self.subTest(goal=goal, count=len(steps)):
+                with self.assertRaises(PlanOperationError) as raised:
+                    validate_plan_definition(goal, steps)
+                self.assertEqual(raised.exception.code, "invalid_plan")
+
+    def test_snapshot_rejects_non_prefix_completion(self):
+        with self.assertRaises(PlanOperationError) as raised:
+            build_snapshot(
+                "Goal",
+                (
+                    PlanStep(
+                        "s1", "One", "Do one", "One done", "pending", None
+                    ),
+                    PlanStep(
+                        "s2", "Two", "Do two", "Two done", "completed", "done"
+                    ),
+                ),
+            )
+        self.assertEqual(raised.exception.code, "invalid_plan")
+
+
+if __name__ == "__main__":
+    unittest.main()

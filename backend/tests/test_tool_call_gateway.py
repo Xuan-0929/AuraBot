@@ -26,10 +26,17 @@ from backend.agent.tools.core.ToolCallGateway import ToolCallGateway
 class FakeMCPClient:
     def __init__(self, outcomes: list[object] | None = None):
         self.outcomes = list(outcomes or [])
-        self.requests: list[tuple[str, str, dict]] = []
+        self.requests: list[tuple[str, str, dict, dict | None]] = []
 
-    async def call_tool(self, server_url, tool_name, arguments):
-        self.requests.append((server_url, tool_name, arguments))
+    async def call_tool(
+        self,
+        server_url,
+        tool_name,
+        arguments,
+        *,
+        meta=None,
+    ):
+        self.requests.append((server_url, tool_name, arguments, meta))
         outcome = self.outcomes.pop(0)
         if isinstance(outcome, BaseException):
             raise outcome
@@ -158,6 +165,34 @@ class ToolCallGatewayTests(unittest.IsolatedAsyncioTestCase):
                     "https://mcp.example.com/mcp",
                     "search",
                     {"query": "AuraBot"},
+                    None,
+                )
+            ],
+        )
+
+    async def test_forwards_mcp_metadata_separately_from_arguments(self):
+        client = FakeMCPClient(
+            [CallToolResult(content=[], structuredContent={}, isError=False)]
+        )
+        gateway = ToolCallGateway(client)  # type: ignore[arg-type]
+        call = make_call()
+        call = ResolvedToolCall(
+            tool=call.tool,
+            arguments=call.arguments,
+            call_id=call.call_id,
+            mcp_meta={"aurabot": {"task_name": "Task"}},
+        )
+
+        await gateway.execute(call)
+
+        self.assertEqual(
+            client.requests,
+            [
+                (
+                    "https://mcp.example.com/mcp",
+                    "search",
+                    {"query": "AuraBot"},
+                    {"aurabot": {"task_name": "Task"}},
                 )
             ],
         )

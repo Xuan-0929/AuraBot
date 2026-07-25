@@ -77,12 +77,13 @@ class HarnessFactory:
             if self._tool_call_gateway_factory is not None
             else None
         )
-        return harness_type(
+        harness = harness_type(
             task=task,
             llm_client=self._llm_client,
             tool_call_gateway=tool_call_gateway,
             adaptor_registry=self._adaptor_registry,
         )
+        return harness
 
     def register(
         self,

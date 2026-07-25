@@ -1,6 +1,6 @@
 """Harness-neutral entities for parsing and executing tool calls."""
 
-from dataclasses import dataclass
+from dataclasses import dataclass, field
 from typing import Any, Literal, TypeAlias
 
 from ..Tool import Tool
@@ -39,6 +39,7 @@ class ResolvedToolCall:
     tool: Tool
     arguments: dict[str, Any]
     call_id: str
+    mcp_meta: dict[str, Any] = field(default_factory=dict)
 
 
 ToolExecutionErrorCode = Literal[

@@ -6,6 +6,8 @@ from typing import Any
 
 from ...LLMClient import ChatCompletionChoice, LLMClient, Message
 from ...integration.mcp import MCPClient
+from ...tools.Tool import Tool
+from ...tools.ToolGroup import ToolGroup
 from ...tools.core.OpenAIChatToolProtocol import OpenAIChatToolProtocol
 from ...tools.core.ToolCallEntity import (
     ResolvedToolCall,
@@ -57,6 +59,7 @@ class Harness(ABC):
         self._adaptor_pipelines: dict[str, tuple[Adaptor, ...]] = {}
         self._adaptor_routes_built = False
         self._built_tool_groups: object | None = None
+        self.inject_tool_group()
 
     @property
     def task(self) -> Task:
@@ -86,6 +89,98 @@ class Harness(ABC):
 
         raise NotImplementedError(
             "Harness subclasses must implement build_system_prompt()"
+        )
+
+    @abstractmethod
+    def inject_tool_group(self) -> None:
+        """Install ToolGroups required by this concrete Harness algorithm."""
+
+        raise NotImplementedError(
+            "Harness subclasses must implement inject_tool_group()"
+        )
+
+    def _inject_required_tool_groups(
+        self,
+        required_tool_groups: Sequence[ToolGroup],
+    ) -> None:
+        """Atomically prepend canonical Harness-required ToolGroups."""
+
+        required = tuple(required_tool_groups)
+        if any(not isinstance(group, ToolGroup) for group in required):
+            raise TypeError("required_tool_groups must contain ToolGroup values")
+
+        required_names = tuple(group.name for group in required)
+        if len(set(required_names)) != len(required_names):
+            raise ValueError(
+                "required ToolGroups must have unique group names"
+            )
+
+        installed_required: list[ToolGroup] = []
+        matched_group_ids: set[int] = set()
+        for canonical_group in required:
+            matching_groups = tuple(
+                group
+                for group in self.task.tool_groups
+                if group.name == canonical_group.name
+            )
+            if len(matching_groups) > 1:
+                raise ValueError(
+                    "multiple ToolGroups use reserved name "
+                    f"{canonical_group.name!r}"
+                )
+            if matching_groups:
+                existing = matching_groups[0]
+                if not self._tool_groups_equal(existing, canonical_group):
+                    raise ValueError(
+                        f"ToolGroup {canonical_group.name!r} conflicts with "
+                        "the canonical required ToolGroup"
+                    )
+                installed_required.append(existing)
+                matched_group_ids.add(id(existing))
+            else:
+                installed_required.append(canonical_group)
+
+        ordinary_groups = tuple(
+            group
+            for group in self.task.tool_groups
+            if id(group) not in matched_group_ids
+        )
+        candidate = (*installed_required, *ordinary_groups)
+        if (
+            len(candidate) == len(self.task.tool_groups)
+            and all(
+                candidate_group is existing_group
+                for candidate_group, existing_group in zip(
+                    candidate,
+                    self.task.tool_groups,
+                )
+            )
+        ):
+            return
+
+        self.task.update_tool_groups(candidate)
+
+    @staticmethod
+    def _tool_groups_equal(left: ToolGroup, right: ToolGroup) -> bool:
+        return (
+            left.name == right.name
+            and left.description == right.description
+            and len(left.tools) == len(right.tools)
+            and all(
+                Harness._tools_equal(left_tool, right_tool)
+                for left_tool, right_tool in zip(left.tools, right.tools)
+            )
+        )
+
+    @staticmethod
+    def _tools_equal(left: Tool, right: Tool) -> bool:
+        return (
+            left.name == right.name
+            and left.description == right.description
+            and left.server_url == right.server_url
+            and left.input_schema == right.input_schema
+            and left.output_schema == right.output_schema
+            and left.adaptor_names == right.adaptor_names
         )
 
     def build_user_prompt(self) -> str:

@@ -69,13 +69,24 @@ class RawMCPClient:
         self,
         name: str,
         arguments: dict[str, Any],
+        *,
+        meta: dict[str, Any] | None = None,
+        expect_error: bool = False,
     ) -> dict[str, Any]:
+        params: dict[str, Any] = {
+            "name": name,
+            "arguments": arguments,
+        }
+        if meta is not None:
+            params["_meta"] = meta
         result = await self.request(
             "tools/call",
-            {"name": name, "arguments": arguments},
+            params,
         )
-        if result.get("isError"):
+        if result.get("isError") and not expect_error:
             raise AssertionError(f"{name} returned Tool error: {result!r}")
+        if expect_error and not result.get("isError"):
+            raise AssertionError(f"{name} unexpectedly succeeded: {result!r}")
         structured = result.get("structuredContent")
         if not isinstance(structured, dict):
             raise AssertionError(f"{name} omitted structuredContent")
@@ -210,7 +221,17 @@ async def run_smoke_test() -> None:
                 "create_file",
                 "edit_file",
                 "bash",
+                "create_plan",
+                "read_plan",
+                "update_plan",
+                "plan_step_complete",
             ]
+            invalid_context = await raw.call_tool(
+                "read_plan",
+                {},
+                expect_error=True,
+            )
+            assert invalid_context["error"]["code"] == "invalid_task_context"
             read_schema = next(
                 tool["inputSchema"]
                 for tool in tools
@@ -328,7 +349,8 @@ async def run_smoke_test() -> None:
     assert not removed_path.exists(), f"Temporary workspace was not removed: {removed_path}"
     print(
         "PASS: raw HTTP MCP and ToolCallGateway created, edited, read, "
-        "verified, and cleaned the temporary file."
+        "verified all 12 native tools, rejected missing Plan metadata, and "
+        "cleaned the temporary file."
     )
 
 

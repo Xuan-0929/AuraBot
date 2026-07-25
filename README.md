@@ -60,6 +60,7 @@ Install dependencies:
 
 ```bash
 uv sync --project backend --locked
+uv sync --project mcp_server --locked
 cd frontend
 npm install
 ```
@@ -102,6 +103,23 @@ npm run test:backend
 
 The Python backend entry point is `backend/main.py`, loaded by Uvicorn as
 `backend.main:app`.
+
+The native MCP runtime is a separate process. For focused Plan runtime
+development, start the backend and the aggregated FileSystem + Plan MCP server
+in separate terminals from the repository root:
+
+```bash
+uv run --project backend uvicorn backend.main:app \
+  --host 127.0.0.1 --port 6401 --app-dir .
+
+uv run --project mcp_server python mcp_server/main.py
+```
+
+The MCP endpoint comes from `local_mcp_server` (normally
+`http://127.0.0.1:6410/mcp`) and exposes 12 project-native tools: eight
+FileSystem tools followed by four Plan tools. The backend does not launch or
+stop the MCP process. Plan calls travel through the MCP protocol even though
+their state is ultimately updated in the backend process.
 
 Before importing the API routes, the entry point loads the repository-root
 `config.yaml` into the process-wide `backend.config.config` singleton. Copy

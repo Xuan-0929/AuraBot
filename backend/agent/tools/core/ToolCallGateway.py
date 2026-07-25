@@ -45,6 +45,7 @@ class ToolCallGateway:
                 call.tool.server_url,
                 call.tool.name,
                 call.arguments,
+                meta=call.mcp_meta or None,
             )
         except MCPConnectionError:
             return _error_result(

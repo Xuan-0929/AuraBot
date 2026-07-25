@@ -18,6 +18,8 @@ from backend.agent.tools.core.ToolCallEntity import ResolvedToolCall
 def make_call(
     tool_name: str,
     arguments: dict,
+    *,
+    meta: dict | None = None,
 ) -> ResolvedToolCall:
     return ResolvedToolCall(
         tool=Tool(
@@ -29,6 +31,7 @@ def make_call(
         ),
         arguments=arguments,
         call_id="call_1",
+        mcp_meta=meta or {},
     )
 
 
@@ -76,6 +79,17 @@ class FileSystemAdaptorTests(unittest.TestCase):
                     entity.arguments[path_field],
                     "backend/tests",
                 )
+
+    def test_preserves_existing_mcp_metadata(self):
+        entity = make_call(
+            "read_file",
+            {"path": "file.txt"},
+            meta={"aurabot": {"task_name": "Task"}},
+        )
+
+        adapted = self.adaptor.adapt(entity)
+
+        self.assertEqual(adapted.mcp_meta, entity.mcp_meta)
 
     def test_absolute_child_and_current_directory_are_allowed(self):
         child = self.current_directory / "backend"

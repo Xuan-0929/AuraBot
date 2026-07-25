@@ -32,6 +32,7 @@ def validate_server_url(server_url: str) -> None:
 def validate_tool_call(
     tool_name: str,
     arguments: dict[str, Any],
+    meta: dict[str, Any] | None = None,
 ) -> None:
     if (
         not isinstance(tool_name, str)
@@ -41,3 +42,5 @@ def validate_tool_call(
         raise ValueError("tool_name must be a non-empty string")
     if not isinstance(arguments, dict):
         raise TypeError("arguments must be a dict")
+    if meta is not None and not isinstance(meta, dict):
+        raise TypeError("meta must be a dict or None")

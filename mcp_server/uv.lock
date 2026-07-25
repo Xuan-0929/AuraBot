@@ -45,6 +45,7 @@ version = "0.1.0"
 source = { virtual = "." }
 dependencies = [
     { name = "bashlex" },
+    { name = "httpx" },
     { name = "jsonschema" },
     { name = "mcp" },
     { name = "pyyaml" },
@@ -52,7 +53,6 @@ dependencies = [
 
 [package.dev-dependencies]
 dev = [
-    { name = "httpx" },
     { name = "pytest" },
     { name = "pytest-asyncio" },
 ]
@@ -60,6 +60,7 @@ dev = [
 [package.metadata]
 requires-dist = [
     { name = "bashlex", specifier = ">=0.18,<1" },
+    { name = "httpx", specifier = ">=0.27" },
     { name = "jsonschema", specifier = ">=4.23" },
     { name = "mcp", specifier = ">=1.28.1,<2" },
     { name = "pyyaml", specifier = ">=6.0" },
@@ -67,7 +68,6 @@ requires-dist = [
 
 [package.metadata.requires-dev]
 dev = [
-    { name = "httpx", specifier = ">=0.27" },
     { name = "pytest", specifier = ">=8.3" },
     { name = "pytest-asyncio", specifier = ">=0.24" },
 ]

@@ -43,10 +43,12 @@ class MCPClient:
         server_url: str,
         tool_name: str,
         arguments: dict[str, Any],
+        *,
+        meta: dict[str, Any] | None = None,
     ) -> CallToolResult:
         """Initialize one session and forward one tools/call request."""
         validate_server_url(server_url)
-        validate_tool_call(tool_name, arguments)
+        validate_tool_call(tool_name, arguments, meta)
 
         try:
             async with asyncio.timeout(self._timeout_seconds):
@@ -55,6 +57,7 @@ class MCPClient:
                         return await session.call_tool(
                             tool_name,
                             arguments=arguments,
+                            meta=meta,
                         )
                     except Exception as exc:
                         raise MCPToolCallError("MCP tools/call failed") from exc

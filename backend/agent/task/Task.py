@@ -1,6 +1,8 @@
 import asyncio
 from collections.abc import Collection, Sequence
+from contextlib import contextmanager
 from threading import RLock
+from typing import Iterator
 
 from ..skills.SkillGroup import SkillGroup
 from ..tools.ToolGroup import ToolGroup
@@ -34,22 +36,14 @@ class Task:
         self._tool_call_resolver: ToolCallResolver
         self.update_tool_groups(tool_groups or ())
 
-        self.messages = []
-        self.checkpoint : str = None
-
-        self.timeout_ms = timeout_ms
-
-        if self.task_type == TaskType.PlanAndSolve:
-            self.plan : str = None
-        elif self.task_type == TaskType.Goal:
-            self.goal : str = None
-
-
         self._state_lock = RLock()
         self._interrupt_requested = False
         self._runner: asyncio.Task[object] | None = None
         self.current_state : TaskState = TaskState.Initializing
-    
+
+        self.messages = []
+        self.checkpoint : str = None
+        self.timeout_ms = timeout_ms
 
     @property
     def state(self) -> TaskState:
@@ -100,6 +94,21 @@ class Task:
             self.current_state = target
             return True
 
+    @contextmanager
+    def active_state_guard(self) -> Iterator[TaskState]:
+        """Hold the Task state lock while an owner mutates related runtime state."""
+
+        with self._state_lock:
+            if self.current_state in {
+                TaskState.Completed,
+                TaskState.Failed,
+                TaskState.Interrupted,
+            }:
+                raise TaskInactiveError(
+                    f"Task is not active: {self.current_state.value}"
+                )
+            yield self.current_state
+
     def interrupt(self) -> tuple[TaskState, TaskState, bool]:
         """Atomically apply an external interrupt when the task is active."""
 
@@ -142,3 +151,10 @@ class Task:
             return asyncio.current_task()
         except RuntimeError:
             return None
+
+
+class TaskInactiveError(RuntimeError):
+    """Raised by the generic state guard after a Task reaches a terminal state."""
+
+
+__all__ = ["Task", "TaskInactiveError"]

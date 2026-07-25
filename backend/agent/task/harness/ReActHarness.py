@@ -22,6 +22,11 @@ class ReActHarness(Harness):
     MAX_REACT_ROUNDS = 20
     MAX_TOOL_CALLS = 15
 
+    def inject_tool_group(self) -> None:
+        """ReAct currently requires no additional native ToolGroup."""
+
+        self._inject_required_tool_groups(())
+
     def build_system_prompt(self) -> str:
         """Build the ReAct system prompt with the native format API."""
 
