@@ -452,6 +452,15 @@ class SQLiteShortTermStore:
                         "Persisted short-term breakpoint "
                         f"{breakpoint_row['id']!r} has no matching messages"
                     )
+                final_message_sequence = message_rows[-1]["sequence"]
+                if final_message_sequence != breakpoint_row["message_sequence"]:
+                    raise RuntimeError(
+                        "Persisted short-term breakpoint "
+                        f"{breakpoint_row['id']!r} has an inconsistent breakpoint "
+                        "boundary: expected final message sequence "
+                        f"{breakpoint_row['message_sequence']}, found "
+                        f"{final_message_sequence}"
+                    )
 
                 segment_id = f"segment_{uuid4().hex}"
                 created_at = _now_iso()

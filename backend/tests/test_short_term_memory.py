@@ -4,6 +4,7 @@ import json
 from pathlib import Path
 import sqlite3
 import tempfile
+from threading import Barrier, Lock, Thread
 from typing import get_type_hints
 import unittest
 
@@ -27,6 +28,39 @@ class SQLiteShortTermStoreTests(unittest.TestCase):
     def tearDown(self):
         self.store.close()
         self.tmpdir.cleanup()
+
+    def _durable_short_term_state(self):
+        with closing(sqlite3.connect(self.path)) as connection:
+            messages = connection.execute(
+                """
+                select
+                  id, sequence, profile_id, source_type,
+                  role, content, source_id, created_at
+                from short_term_messages
+                order by sequence
+                """
+            ).fetchall()
+            breakpoints = connection.execute(
+                """
+                select
+                  id, profile_id, source_type, message_sequence,
+                  topic, reason, created_at
+                from short_term_breakpoints
+                order by id
+                """
+            ).fetchall()
+            segments = connection.execute(
+                """
+                select
+                  id, profile_id, source_type, breakpoint_id,
+                  state, payload_json, result_json, attempt_count,
+                  last_error, lease_owner, lease_expires_at,
+                  created_at, updated_at, completed_at
+                from short_term_segments
+                order by id
+                """
+            ).fetchall()
+        return messages, breakpoints, segments
 
     def test_messages_and_breakpoints_survive_close_and_reopen(self):
         self.store.append_message(
@@ -491,7 +525,85 @@ class SQLiteShortTermStoreTests(unittest.TestCase):
         payload = json.loads(payload_json)
 
         self.assertIn("保留原文", payload_json)
-        self.assertEqual(payload, request.to_dict())
+        self.assertEqual(
+            set(payload),
+            {
+                "segment_id",
+                "profile_id",
+                "source_type",
+                "breakpoint_id",
+                "topic",
+                "reason",
+                "messages",
+                "content",
+                "message_count",
+                "state",
+                "attempt_count",
+                "created_at",
+                "lease_expires_at",
+                "handoff",
+            },
+        )
+        self.assertIsInstance(payload["messages"], list)
+        self.assertEqual(len(payload["messages"]), 2)
+        self.assertEqual(
+            set(payload["messages"][0]),
+            {"id", "sequence", "role", "content", "source_id", "created_at"},
+        )
+        self.assertEqual(
+            payload["messages"],
+            [
+                {
+                    "id": messages[0].id,
+                    "sequence": messages[0].sequence,
+                    "role": "user",
+                    "content": "保留原文",
+                    "source_id": None,
+                    "created_at": messages[0].created_at,
+                },
+                {
+                    "id": messages[1].id,
+                    "sequence": messages[1].sequence,
+                    "role": "assistant",
+                    "content": "with source",
+                    "source_id": "source-2",
+                    "created_at": messages[1].created_at,
+                },
+            ],
+        )
+        self.assertEqual(payload["segment_id"], request.segment_id)
+        self.assertEqual(payload["profile_id"], "profile-1")
+        self.assertEqual(payload["source_type"], "chat")
+        self.assertEqual(payload["breakpoint_id"], breakpoint.id)
+        self.assertIsNone(payload["topic"])
+        self.assertIsNone(payload["reason"])
+        self.assertEqual(
+            payload["content"],
+            "user: 保留原文\nassistant: with source",
+        )
+        self.assertEqual(payload["message_count"], 2)
+        self.assertEqual(payload["state"], "pending")
+        self.assertEqual(payload["attempt_count"], 0)
+        self.assertEqual(payload["created_at"], request.created_at)
+        self.assertIsNone(payload["lease_expires_at"])
+        self.assertEqual(payload["handoff"], "chat_agent_summary_required")
+
+        reconstructed = SummaryRequest(
+            segment_id=payload["segment_id"],
+            profile_id=payload["profile_id"],
+            source_type=payload["source_type"],
+            breakpoint_id=payload["breakpoint_id"],
+            topic=payload["topic"],
+            reason=payload["reason"],
+            messages=tuple(
+                ShortTermMessage(**message) for message in payload["messages"]
+            ),
+            state=SegmentState(payload["state"]),
+            attempt_count=payload["attempt_count"],
+            created_at=payload["created_at"],
+            lease_expires_at=payload["lease_expires_at"],
+        )
+        self.assertEqual(reconstructed, request)
         self.assertEqual(row["profile_id"], "profile-1")
         self.assertEqual(row["source_type"], "chat")
         self.assertEqual(row["breakpoint_id"], breakpoint.id)
@@ -615,6 +727,236 @@ class SQLiteShortTermStoreTests(unittest.TestCase):
                 (breakpoint.id,),
             ).fetchone()[0]
         self.assertEqual(segment_count, 1)
+
+    def test_prepare_rejects_future_breakpoint_boundary_without_changes(self):
+        self.store.append_message(
+            profile_id="profile-1",
+            source_type="chat",
+            role="user",
+            content="must remain active",
+            source_id=None,
+        )
+        breakpoint = self.store.add_breakpoint(
+            profile_id="profile-1",
+            source_type="chat",
+            topic="future-boundary",
+            reason=None,
+        )
+        with closing(sqlite3.connect(self.path)) as connection, connection:
+            connection.execute(
+                """
+                update short_term_breakpoints
+                set message_sequence = ?
+                where id = ?
+                """,
+                (999, breakpoint.id),
+            )
+        before = self._durable_short_term_state()
+
+        with self.assertRaisesRegex(
+            RuntimeError,
+            "inconsistent breakpoint boundary",
+        ):
+            self.store.prepare_oldest_segment(
+                profile_id="profile-1",
+                source_type="chat",
+            )
+
+        after = self._durable_short_term_state()
+        self.assertEqual(after, before)
+        self.assertEqual(len(after[0]), 1)
+        self.assertEqual(len(after[1]), 1)
+        self.assertEqual(len(after[2]), 0)
+
+    def test_prepare_rejects_cross_stream_breakpoint_boundary_without_changes(self):
+        self.store.append_message(
+            profile_id="profile-1",
+            source_type="chat",
+            role="user",
+            content="target stream",
+            source_id=None,
+        )
+        breakpoint = self.store.add_breakpoint(
+            profile_id="profile-1",
+            source_type="chat",
+            topic="cross-stream-boundary",
+            reason=None,
+        )
+        other_stream_message = self.store.append_message(
+            profile_id="profile-2",
+            source_type="chat",
+            role="user",
+            content="other stream",
+            source_id=None,
+        )
+        with closing(sqlite3.connect(self.path)) as connection, connection:
+            connection.execute(
+                """
+                update short_term_breakpoints
+                set message_sequence = ?
+                where id = ?
+                """,
+                (other_stream_message.sequence, breakpoint.id),
+            )
+        before = self._durable_short_term_state()
+
+        with self.assertRaisesRegex(
+            RuntimeError,
+            "inconsistent breakpoint boundary",
+        ):
+            self.store.prepare_oldest_segment(
+                profile_id="profile-1",
+                source_type="chat",
+            )
+
+        after = self._durable_short_term_state()
+        self.assertEqual(after, before)
+        self.assertEqual(len(after[0]), 2)
+        self.assertEqual(len(after[1]), 1)
+        self.assertEqual(len(after[2]), 0)
+
+    def test_two_stores_prepare_one_segment_exactly_once(self):
+        message = self.store.append_message(
+            profile_id="profile-1",
+            source_type="chat",
+            role="user",
+            content="prepare once",
+            source_id=None,
+        )
+        breakpoint = self.store.add_breakpoint(
+            profile_id="profile-1",
+            source_type="chat",
+            topic="concurrent",
+            reason=None,
+        )
+        competing_store = SQLiteShortTermStore(self.path)
+        self.addCleanup(competing_store.close)
+        barrier = Barrier(3)
+        result_lock = Lock()
+        results = []
+        errors = []
+
+        def prepare(store):
+            try:
+                barrier.wait(timeout=5)
+                result = store.prepare_oldest_segment(
+                    profile_id="profile-1",
+                    source_type="chat",
+                )
+                with result_lock:
+                    results.append(result)
+            except Exception as error:
+                with result_lock:
+                    errors.append(error)
+
+        threads = [
+            Thread(target=prepare, args=(store,))
+            for store in (self.store, competing_store)
+        ]
+        for thread in threads:
+            thread.start()
+        barrier.wait(timeout=5)
+        for thread in threads:
+            thread.join(timeout=5)
+
+        self.assertFalse(any(thread.is_alive() for thread in threads))
+        self.assertEqual(errors, [])
+        self.assertEqual(len(results), 2)
+        prepared = [result for result in results if result is not None]
+        self.assertEqual(len(prepared), 1)
+        self.assertEqual(prepared[0].messages, (message,))
+        self.assertEqual(prepared[0].breakpoint_id, breakpoint.id)
+        self.assertEqual(sum(result is None for result in results), 1)
+
+        durable_messages, durable_breakpoints, durable_segments = (
+            self._durable_short_term_state()
+        )
+        self.assertEqual(durable_messages, [])
+        self.assertEqual(durable_breakpoints, [])
+        self.assertEqual(len(durable_segments), 1)
+        self.assertEqual(durable_segments[0][3], breakpoint.id)
+
+    def test_message_delete_failure_rolls_back_prepared_segment(self):
+        self.store.append_message(
+            profile_id="profile-1",
+            source_type="chat",
+            role="user",
+            content="message delete rollback",
+            source_id=None,
+        )
+        self.store.add_breakpoint(
+            profile_id="profile-1",
+            source_type="chat",
+            topic="rollback",
+            reason=None,
+        )
+        with closing(sqlite3.connect(self.path)) as connection, connection:
+            connection.execute(
+                """
+                create trigger abort_short_term_message_delete
+                before delete on short_term_messages
+                begin
+                  select raise(abort, 'message delete blocked');
+                end
+                """
+            )
+        before = self._durable_short_term_state()
+
+        with self.assertRaisesRegex(
+            sqlite3.IntegrityError,
+            "message delete blocked",
+        ):
+            self.store.prepare_oldest_segment(
+                profile_id="profile-1",
+                source_type="chat",
+            )
+
+        after = self._durable_short_term_state()
+        self.assertEqual(after, before)
+        self.assertEqual(len(after[0]), 1)
+        self.assertEqual(len(after[1]), 1)
+        self.assertEqual(len(after[2]), 0)
+
+    def test_breakpoint_delete_failure_restores_messages_and_segment(self):
+        self.store.append_message(
+            profile_id="profile-1",
+            source_type="chat",
+            role="user",
+            content="breakpoint delete rollback",
+            source_id=None,
+        )
+        self.store.add_breakpoint(
+            profile_id="profile-1",
+            source_type="chat",
+            topic="rollback",
+            reason=None,
+        )
+        with closing(sqlite3.connect(self.path)) as connection, connection:
+            connection.execute(
+                """
+                create trigger abort_short_term_breakpoint_delete
+                before delete on short_term_breakpoints
+                begin
+                  select raise(abort, 'breakpoint delete blocked');
+                end
+                """
+            )
+        before = self._durable_short_term_state()
+
+        with self.assertRaisesRegex(
+            sqlite3.IntegrityError,
+            "breakpoint delete blocked",
+        ):
+            self.store.prepare_oldest_segment(
+                profile_id="profile-1",
+                source_type="chat",
+            )
+
+        after = self._durable_short_term_state()
+        self.assertEqual(after, before)
+        self.assertEqual(len(after[0]), 1)
+        self.assertEqual(len(after[1]), 1)
+        self.assertEqual(len(after[2]), 0)
 
     def test_rejects_unsupported_schema_version_without_rewriting_it(self):
         self._replace_schema_version("99")
