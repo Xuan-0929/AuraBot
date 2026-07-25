@@ -25,8 +25,15 @@ from .retrieval.relations import expand_relation_candidates
 from .retrieval.seeds import EntitySeedRetriever, FtsSeedRetriever, VectorSeedRetriever
 from .retrieval.trace import build_recall_trace
 from .service import MemoryService
-from .short_term import ShortTermMemoryBuffer
+from .short_term import (
+    SegmentState,
+    ShortTermMemoryBuffer,
+    ShortTermPolicy,
+    ShortTermStateError,
+    SummaryRequest,
+)
 from .stores.qdrant import QdrantLocalVectorStore
+from .stores.short_term_sqlite import SQLiteShortTermStore
 from .stores.sqlite import SQLiteMemoryStore
 from .types import DEFAULT_COLLECTION_NAME, DEFAULT_VECTOR_DIMENSION, EmbeddingProvider, VectorStore
 from .validators import validate_memory_candidate
@@ -49,10 +56,15 @@ __all__ = [
     "RecallRequest",
     "RememberRequest",
     "RuleBasedMemoryReranker",
+    "SegmentState",
     "SQLiteMemoryStore",
+    "SQLiteShortTermStore",
     "StaticExtractionModel",
     "StructuredMemoryExtractor",
     "ShortTermMemoryBuffer",
+    "ShortTermPolicy",
+    "ShortTermStateError",
+    "SummaryRequest",
     "VectorStore",
     "VectorSeedRetriever",
     "build_recall_trace",
