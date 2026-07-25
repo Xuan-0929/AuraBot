@@ -1,3 +1,4 @@
+import asyncio
 import tempfile
 import unittest
 from pathlib import Path
@@ -10,6 +11,7 @@ from backend.agent.task.Task import Task, TaskState, TaskType
 from backend.agent.task.harness.Harness import Harness
 from backend.agent.task.harness.ReActHarness import (
     ReActHarness,
+    ReActInterruptedError,
     ReActLimitError,
 )
 from backend.agent.task.harness.prompts import system_prompt_ReAct
@@ -64,21 +66,12 @@ class RecordingTask(Task):
         super().__init__(*args, **kwargs)
         self.state_history = [self.state]
 
-    def set_pending(self) -> None:
-        super().set_pending()
-        self.state_history.append(self.state)
-
-    def set_running(self) -> None:
-        super().set_running()
-        self.state_history.append(self.state)
-
-    def set_completed(self) -> None:
-        super().set_completed()
-        self.state_history.append(self.state)
-
-    def set_failed(self) -> None:
-        super().set_failed()
-        self.state_history.append(self.state)
+    def compare_and_set_state(self, expected, target) -> bool:
+        previous_state = self.state
+        transitioned = super().compare_and_set_state(expected, target)
+        if self.state is not previous_state:
+            self.state_history.append(self.state)
+        return transitioned
 
 
 def final_choice(content: str = "Task completed.") -> ChatCompletionChoice:
@@ -255,8 +248,8 @@ class ReActHarnessRunTests(unittest.IsolatedAsyncioTestCase):
             task.state_history,
             [
                 TaskState.Initializing,
-                TaskState.Pending,
-                TaskState.Running,
+                TaskState.Thinking,
+                TaskState.Pushing,
                 TaskState.Completed,
             ],
         )
@@ -323,6 +316,17 @@ class ReActHarnessRunTests(unittest.IsolatedAsyncioTestCase):
             ["system", "user", "assistant", "tool", "assistant"],
         )
         self.assertEqual(
+            task.state_history,
+            [
+                TaskState.Initializing,
+                TaskState.Thinking,
+                TaskState.Pushing,
+                TaskState.Thinking,
+                TaskState.Pushing,
+                TaskState.Completed,
+            ],
+        )
+        self.assertEqual(
             llm_client.requests[1]["messages"][-1]["tool_call_id"],
             "call_1",
         )
@@ -347,8 +351,7 @@ class ReActHarnessRunTests(unittest.IsolatedAsyncioTestCase):
             task.state_history,
             [
                 TaskState.Initializing,
-                TaskState.Pending,
-                TaskState.Running,
+                TaskState.Thinking,
                 TaskState.Failed,
             ],
         )
@@ -390,6 +393,97 @@ class ReActHarnessRunTests(unittest.IsolatedAsyncioTestCase):
             await harness.run()
 
         self.assertEqual(task.state, TaskState.Completed)
+
+    async def test_discards_a_model_response_after_external_interrupt(self):
+        model_started = asyncio.Event()
+        release_model = asyncio.Event()
+
+        class BlockingLLMClient(FakeLLMClient):
+            async def invoke(self, messages, *, tools=None, tool_choice=None):
+                model_started.set()
+                await release_model.wait()
+                return final_choice("Late response")
+
+        task = make_task()
+        harness = ReActHarness(
+            task=task,
+            llm_client=BlockingLLMClient(),  # type: ignore[arg-type]
+            tool_call_gateway=FakeToolCallGateway(),  # type: ignore[arg-type]
+        )
+        run = asyncio.create_task(harness.run())
+        await model_started.wait()
+
+        self.assertIs(task.state, TaskState.Thinking)
+        task.interrupt()
+        release_model.set()
+
+        with self.assertRaises(ReActInterruptedError):
+            await run
+
+        self.assertIs(task.state, TaskState.Interrupted)
+        self.assertEqual(
+            [message["role"] for message in task.messages],
+            ["system", "user"],
+        )
+
+    async def test_defers_interrupt_until_atomic_initialization_finishes(self):
+        task = make_task()
+        task.interrupt()
+        harness = ReActHarness(
+            task=task,
+            llm_client=FakeLLMClient([final_choice()]),  # type: ignore[arg-type]
+            tool_call_gateway=FakeToolCallGateway(),  # type: ignore[arg-type]
+        )
+
+        with self.assertRaises(ReActInterruptedError):
+            await harness.run()
+
+        self.assertIs(task.state, TaskState.Interrupted)
+        self.assertEqual(
+            [message["role"] for message in task.messages],
+            ["system", "user"],
+        )
+
+    async def test_cancels_an_in_flight_tool_batch_when_interrupted(self):
+        gateway_started = asyncio.Event()
+
+        class BlockingToolCallGateway(FakeToolCallGateway):
+            async def execute_many(self, calls):
+                self.batches.append(list(calls))
+                gateway_started.set()
+                await asyncio.Event().wait()
+
+        read_file = Tool(
+            "read_file",
+            "Read one file",
+            "http://127.0.0.1:6410/mcp",
+            input_schema={"type": "object"},
+        )
+        task = make_task(
+            tool_groups=[
+                ToolGroup("FileSystem", [read_file], "File tools")
+            ]
+        )
+        gateway = BlockingToolCallGateway()
+        harness = ReActHarness(
+            task=task,
+            llm_client=FakeLLMClient([tool_choice()]),  # type: ignore[arg-type]
+            tool_call_gateway=gateway,  # type: ignore[arg-type]
+        )
+        run = asyncio.create_task(harness.run())
+        await gateway_started.wait()
+
+        self.assertIs(task.state, TaskState.Pushing)
+        task.interrupt()
+
+        with self.assertRaises(ReActInterruptedError):
+            await run
+
+        self.assertIs(task.state, TaskState.Interrupted)
+        self.assertEqual(
+            [message["role"] for message in task.messages],
+            ["system", "user", "assistant"],
+        )
 
 
 if __name__ == "__main__":

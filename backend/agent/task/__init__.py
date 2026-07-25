@@ -2,11 +2,21 @@ from .harness.Harness import Harness
 from .harness.HarnessFactory import HarnessFactory
 from .harness.PlanAndSolveHarness import PlanAndSolveHarness
 from .harness.ReActHarness import ReActHarness
-from .Task import Task, TaskState, TaskType
+from .Task import Task
+from .TaskEntity import (
+    InterruptTaskOutcome,
+    InterruptTaskResult,
+    PeekTaskResult,
+    TaskState,
+    TaskType,
+)
 
 __all__ = [
     "Harness",
     "HarnessFactory",
+    "InterruptTaskOutcome",
+    "InterruptTaskResult",
+    "PeekTaskResult",
     "PlanAndSolveHarness",
     "ReActHarness",
     "Task",

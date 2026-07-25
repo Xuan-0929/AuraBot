@@ -2,7 +2,7 @@ import asyncio
 
 from ...LLMClient import OpenAITool
 from ...tools.core.ToolCallEntity import FinalResponse, ToolCallBatch
-from ..Task import TaskState
+from ..TaskEntity import TaskState
 from .Harness import Harness
 from .prompts import system_prompt_ReAct
 from .utils import build_common_prompt_values
@@ -10,6 +10,10 @@ from .utils import build_common_prompt_values
 
 class ReActLimitError(RuntimeError):
     """Raised when the basic ReAct loop exhausts an execution limit."""
+
+
+class ReActInterruptedError(asyncio.CancelledError):
+    """Raised when an external interrupt wins a Task state transition."""
 
 
 class ReActHarness(Harness):
@@ -35,19 +39,39 @@ class ReActHarness(Harness):
         if self.task.state is not TaskState.Initializing:
             raise RuntimeError("ReActHarness.run() can only execute a new Task")
 
+        runner = asyncio.current_task()
+        if runner is None or not self.task.bind_runner(runner):
+            raise RuntimeError("ReAct Task already has an active Harness")
+
         try:
             openai_tools = self.build_openai_tools()
             self._initialize_context()
-            self.task.set_pending()
-            self.task.set_running()
+            self._transition(
+                TaskState.Initializing,
+                TaskState.Thinking,
+            )
 
             async with asyncio.timeout(self.task.timeout_ms / 1000):
                 result = await self._run_react_loop(openai_tools)
+        except asyncio.CancelledError as exc:
+            self.task.interrupt()
+            if isinstance(exc, ReActInterruptedError):
+                raise
+            raise ReActInterruptedError from exc
         except Exception:
-            self.task.set_failed()
+            self.task.compare_and_set_state(
+                {
+                    TaskState.Initializing,
+                    TaskState.Thinking,
+                    TaskState.Pushing,
+                    TaskState.Waiting,
+                },
+                TaskState.Failed,
+            )
             raise
+        finally:
+            self.task.unbind_runner(runner)
 
-        self.task.set_completed()
         return result
 
     def _initialize_context(self) -> None:
@@ -65,15 +89,24 @@ class ReActHarness(Harness):
         tool_call_count = 0
 
         for _ in range(self.MAX_REACT_ROUNDS):
+            self._require_state(TaskState.Thinking)
             choice = await self.llm_client.invoke(
                 self.task.messages,
                 tools=openai_tools or None,
                 tool_choice="auto" if openai_tools else None,
             )
+            self._transition(
+                TaskState.Thinking,
+                TaskState.Pushing,
+            )
             self.task.messages.append(dict(choice.message))
             response = self.parse_completion(choice)
 
             if isinstance(response, FinalResponse):
+                self._transition(
+                    TaskState.Pushing,
+                    TaskState.Completed,
+                )
                 return response.content
             if not isinstance(response, ToolCallBatch):
                 raise TypeError("unsupported ReAct model response")
@@ -87,13 +120,46 @@ class ReActHarness(Harness):
 
             resolved_calls = self.resolve_and_adapt_tool_calls(response.calls)
             results = await self.tool_call_gateway.execute_many(resolved_calls)
+            self._require_state(TaskState.Pushing)
             self.task.messages.extend(
                 self.build_tool_result_messages(results)
+            )
+            self._transition(
+                TaskState.Pushing,
+                TaskState.Thinking,
             )
 
         raise ReActLimitError(
             f"ReAct round limit exceeded ({self.MAX_REACT_ROUNDS})"
         )
 
+    def _require_state(self, expected: TaskState) -> None:
+        if self.task.state is expected:
+            return
+        if self.task.state is TaskState.Interrupted:
+            raise ReActInterruptedError
+        raise RuntimeError(
+            f"ReAct Task must be {expected.value}, "
+            f"got {self.task.state.value}"
+        )
 
-__all__ = ["ReActHarness", "ReActLimitError"]
+    def _transition(
+        self,
+        expected: TaskState,
+        target: TaskState,
+    ) -> None:
+        if self.task.compare_and_set_state(expected, target):
+            return
+        if self.task.state is TaskState.Interrupted:
+            raise ReActInterruptedError
+        raise RuntimeError(
+            f"ReAct Task could not transition to {target.value} "
+            f"from {self.task.state.value}; expected {expected.value}"
+        )
+
+
+__all__ = [
+    "ReActHarness",
+    "ReActInterruptedError",
+    "ReActLimitError",
+]

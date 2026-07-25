@@ -1,33 +1,16 @@
-from collections.abc import Sequence
+import asyncio
+from collections.abc import Collection, Sequence
+from threading import RLock
 
 from ..skills.SkillGroup import SkillGroup
 from ..tools.ToolGroup import ToolGroup
 from ..tools.core.ToolCallResolver import ToolCallResolver
 
+from .TaskEntity import TaskState, TaskType
 
 """
 定义任务本体
 """
-
-from enum import Enum
-
-
-class TaskType(Enum):
-    ReAct = "ReAct"
-    PlanAndSolve = "PlanAndSolve"
-    Goal = "Goal" #这一版不做它
-
-class TaskState(Enum):
-    Initializing = "Initializing" #任务正在初始化中
-    Pending = "Pending" #任务已经初始化，但是还没有执行
-    Planning = "Planning" #仅P&S任务
-    Running = "Running" #正在调用工具
-    Concluding = "Concluding" #整理这一阶段的产物中
-    Waiting = "Waiting" #等待主Agent的下一步指令或者用户输入
-    Completed = "Completed" #完成了
-    Failed = "Failed" #失败了
-    Interrupted = "Interrupted" #被打断
-
 
 
 class Task:
@@ -62,12 +45,16 @@ class Task:
             self.goal : str = None
 
 
+        self._state_lock = RLock()
+        self._interrupt_requested = False
+        self._runner: asyncio.Task[object] | None = None
         self.current_state : TaskState = TaskState.Initializing
     
 
     @property
     def state(self) -> TaskState:
-        return self.current_state
+        with self._state_lock:
+            return self.current_state
 
     @property
     def tool_groups(self) -> tuple[ToolGroup, ...]:
@@ -89,17 +76,69 @@ class Task:
         self._tool_groups = snapshot
         self._tool_call_resolver = resolver
 
-    def set_pending(self) -> None:
-        self.current_state = TaskState.Pending
+    def compare_and_set_state(
+        self,
+        expected: TaskState | Collection[TaskState],
+        target: TaskState,
+    ) -> bool:
+        """Atomically set state when it still matches a Harness expectation."""
 
-    def set_running(self) -> None:
-        self.current_state = TaskState.Running
+        expected_states = (
+            {expected}
+            if isinstance(expected, TaskState)
+            else set(expected)
+        )
+        with self._state_lock:
+            if self.current_state not in expected_states:
+                return False
+            if (
+                self.current_state is TaskState.Initializing
+                and self._interrupt_requested
+            ):
+                self.current_state = TaskState.Interrupted
+                return False
+            self.current_state = target
+            return True
 
-    def set_completed(self) -> None:
-        self.current_state = TaskState.Completed
+    def interrupt(self) -> tuple[TaskState, TaskState, bool]:
+        """Atomically apply an external interrupt when the task is active."""
 
-    def set_failed(self) -> None:
-        self.current_state = TaskState.Failed
+        runner: asyncio.Task[object] | None = None
+        with self._state_lock:
+            previous_state = self.current_state
+            if previous_state is TaskState.Initializing:
+                self._interrupt_requested = True
+                return previous_state, self.current_state, True
+            if previous_state not in {
+                TaskState.Completed,
+                TaskState.Failed,
+                TaskState.Interrupted,
+            }:
+                self.current_state = TaskState.Interrupted
+                runner = self._runner
+            current_state = self.current_state
 
-    def set_interrupted(self) -> None:
-        self.current_state = TaskState.Interrupted
+        if runner is not None and runner is not self._current_asyncio_task():
+            runner.get_loop().call_soon_threadsafe(runner.cancel)
+        return previous_state, current_state, False
+
+    def bind_runner(self, runner: asyncio.Task[object]) -> bool:
+        """Bind the one asyncio runner allowed to execute this Task."""
+
+        with self._state_lock:
+            if self._runner is not None:
+                return False
+            self._runner = runner
+            return True
+
+    def unbind_runner(self, runner: asyncio.Task[object]) -> None:
+        with self._state_lock:
+            if self._runner is runner:
+                self._runner = None
+
+    @staticmethod
+    def _current_asyncio_task() -> asyncio.Task[object] | None:
+        try:
+            return asyncio.current_task()
+        except RuntimeError:
+            return None

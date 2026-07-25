@@ -7,7 +7,8 @@ from .Harness import Harness
 from .PlanAndSolveHarness import PlanAndSolveHarness
 from .ReActHarness import ReActHarness
 from .adaptors.AdaptorRegistry import AdaptorRegistry
-from ..Task import Task, TaskType
+from ..Task import Task
+from ..TaskEntity import TaskType
 
 HarnessType = type[Harness]
 ToolCallGatewayFactory = Callable[[Task], ToolCallGateway]

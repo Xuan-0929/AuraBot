@@ -1,7 +1,8 @@
 import unittest
+from concurrent.futures import ThreadPoolExecutor
 
 from backend.agent.skills.SkillGroup import SkillGroup
-from backend.agent.task.Task import Task, TaskType
+from backend.agent.task.Task import Task, TaskState, TaskType
 from backend.agent.tools.Tool import Tool
 from backend.agent.tools.ToolGroup import ToolGroup
 from backend.agent.tools.core.ToolCallEntity import ToolCall
@@ -21,6 +22,49 @@ class TaskTypeTests(unittest.TestCase):
 
 
 class TaskTests(unittest.TestCase):
+    def test_state_cas_does_not_encode_one_harness_state_graph(self):
+        task = Task(
+            1,
+            "Plan",
+            "session-1",
+            TaskType.PlanAndSolve,
+            "Plan and build.",
+        )
+
+        transitioned = task.compare_and_set_state(
+            TaskState.Initializing,
+            TaskState.Planning,
+        )
+
+        self.assertTrue(transitioned)
+        self.assertIs(task.state, TaskState.Planning)
+
+    def test_state_cas_allows_only_one_concurrent_writer(self):
+        task = Task(
+            1,
+            "Concurrent",
+            "session-1",
+            TaskType.ReAct,
+            "Run once.",
+        )
+
+        with ThreadPoolExecutor(max_workers=2) as executor:
+            results = list(
+                executor.map(
+                    lambda target: task.compare_and_set_state(
+                        TaskState.Initializing,
+                        target,
+                    ),
+                    (TaskState.Thinking, TaskState.Planning),
+                )
+            )
+
+        self.assertEqual(results.count(True), 1)
+        self.assertIn(
+            task.state,
+            {TaskState.Thinking, TaskState.Planning},
+        )
+
     def test_constructor_accepts_multiple_skill_and_tool_groups(self):
         skill_groups = [
             SkillGroup("research", []),
