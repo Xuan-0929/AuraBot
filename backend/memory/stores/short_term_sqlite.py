@@ -1,5 +1,6 @@
 from __future__ import annotations
 
+import hashlib
 import json
 import sqlite3
 import threading
@@ -265,7 +266,7 @@ class SQLiteShortTermStore:
         _require_nonblank("profile_id", profile_id)
         _require_nonblank("source_type", source_type)
         path = Path(legacy_path)
-        marker_key = f"legacy_json_imported:{profile_id}:{source_type}"
+        marker_key = _legacy_snapshot_marker_key(profile_id, source_type)
 
         with self._lock:
             connection = self._get_connection()
@@ -381,7 +382,15 @@ class SQLiteShortTermStore:
                         insert into short_term_schema_info(key, value, updated_at)
                         values (?, ?, ?)
                         """,
-                        (marker_key, "1", _now_iso()),
+                        (
+                            marker_key,
+                            _legacy_snapshot_marker_value(
+                                profile_id,
+                                source_type,
+                                path,
+                            ),
+                            _now_iso(),
+                        ),
                     )
             except sqlite3.IntegrityError as error:
                 raise ValueError(
@@ -1327,6 +1336,36 @@ def _load_legacy_snapshot(
         message_count=len(messages),
     )
     return messages, breakpoints
+
+
+def _legacy_snapshot_marker_key(
+    profile_id: str,
+    source_type: str,
+) -> str:
+    canonical_scope = json.dumps(
+        [profile_id, source_type],
+        ensure_ascii=False,
+        separators=(",", ":"),
+    )
+    digest = hashlib.sha256(canonical_scope.encode("utf-8")).hexdigest()
+    return f"legacy_json_imported:{digest}"
+
+
+def _legacy_snapshot_marker_value(
+    profile_id: str,
+    source_type: str,
+    legacy_path: Path,
+) -> str:
+    return json.dumps(
+        {
+            "legacy_filename": legacy_path.name,
+            "profile_id": profile_id,
+            "source_type": source_type,
+        },
+        ensure_ascii=False,
+        sort_keys=True,
+        separators=(",", ":"),
+    )
 
 
 def _validate_legacy_message(

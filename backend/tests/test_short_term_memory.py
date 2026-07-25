@@ -1,5 +1,6 @@
 from contextlib import closing
 from dataclasses import FrozenInstanceError
+import hashlib
 import json
 from pathlib import Path
 import sqlite3
@@ -3598,10 +3599,17 @@ class LegacyShortTermJsonMigrationTests(unittest.TestCase):
         self.stores.append(store)
         return store
 
-    def _marker_value(self):
-        marker_key = (
-            f"legacy_json_imported:{self.PROFILE_ID}:{self.SOURCE_TYPE}"
+    def _marker_value(self, *, profile_id=None, source_type=None):
+        profile_id = profile_id or self.PROFILE_ID
+        source_type = source_type or self.SOURCE_TYPE
+        canonical_scope = json.dumps(
+            [profile_id, source_type],
+            ensure_ascii=False,
+            separators=(",", ":"),
         )
+        marker_key = "legacy_json_imported:" + hashlib.sha256(
+            canonical_scope.encode("utf-8")
+        ).hexdigest()
         with closing(sqlite3.connect(self.sidecar_path)) as connection:
             row = connection.execute(
                 """
@@ -3733,6 +3741,97 @@ class LegacyShortTermJsonMigrationTests(unittest.TestCase):
         self.assertEqual(sorted(results), [(2, 1), (2, 1)])
         self.assertEqual(self._state_counts(), (2, 1, 0))
         self.assertIsNotNone(self._marker_value())
+
+    def test_marker_identity_isolates_collision_and_unicode_streams(self):
+        streams = [
+            ("a:b", "c", "collision-left"),
+            ("a", "b:c", "collision-right"),
+            ("用户::a/b|c", "来源:聊天/🚀|[]", "unicode-delimiters"),
+        ]
+        legacy_paths = []
+        store = self._store()
+
+        for index, (profile_id, source_type, content) in enumerate(streams):
+            legacy_path = Path(self.tmpdir.name) / f"legacy-{index}.json"
+            legacy_path.write_text(
+                json.dumps(
+                    {
+                        "profile_id": profile_id,
+                        "source_type": source_type,
+                        "messages": [
+                            {
+                                "role": "user",
+                                "content": content,
+                                "source_id": None,
+                                "created_at": "2026-07-24T10:00:00+08:00",
+                            }
+                        ],
+                        "breakpoints": [],
+                    },
+                    ensure_ascii=False,
+                ),
+                encoding="utf-8",
+            )
+            legacy_paths.append(legacy_path)
+
+            result = store.import_legacy_snapshot(
+                profile_id=profile_id,
+                source_type=source_type,
+                legacy_path=legacy_path,
+            )
+
+            self.assertTrue(result.imported)
+            self.assertEqual(result.reason, "imported")
+            self.assertEqual(
+                [
+                    message.content
+                    for message in store.list_messages(
+                        profile_id,
+                        source_type,
+                    )
+                ],
+                [content],
+            )
+
+        store.close()
+        reopened = self._store()
+        for legacy_path, (profile_id, source_type, content) in zip(
+            legacy_paths,
+            streams,
+            strict=True,
+        ):
+            legacy_path.write_text("not JSON", encoding="utf-8")
+
+            result = reopened.import_legacy_snapshot(
+                profile_id=profile_id,
+                source_type=source_type,
+                legacy_path=legacy_path,
+            )
+
+            self.assertFalse(result.imported)
+            self.assertEqual(result.reason, "already_imported")
+            self.assertEqual(
+                [
+                    message.content
+                    for message in reopened.list_messages(
+                        profile_id,
+                        source_type,
+                    )
+                ],
+                [content],
+            )
+            marker_value = self._marker_value(
+                profile_id=profile_id,
+                source_type=source_type,
+            )
+            self.assertEqual(
+                json.loads(marker_value),
+                {
+                    "legacy_filename": legacy_path.name,
+                    "profile_id": profile_id,
+                    "source_type": source_type,
+                },
+            )
 
     def test_invalid_top_level_snapshots_fail_without_partial_import(self):
         invalid_cases = {
