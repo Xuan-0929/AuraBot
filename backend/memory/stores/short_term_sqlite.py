@@ -5,10 +5,11 @@ import sqlite3
 import threading
 from contextlib import contextmanager
 from dataclasses import dataclass
-from datetime import UTC, datetime
+from datetime import UTC, datetime, timedelta
 from pathlib import Path
 from uuid import uuid4
 
+from ..short_term.errors import ShortTermStateError
 from ..short_term.models import (
     BufferStats,
     SegmentState,
@@ -531,6 +532,337 @@ class SQLiteShortTermStore:
 
         return request
 
+    def claim_next_segment(
+        self,
+        *,
+        profile_id: str,
+        source_type: str,
+        owner: str,
+        lease_seconds: int,
+        now: str | None = None,
+    ) -> SummaryRequest | None:
+        _require_nonblank("profile_id", profile_id)
+        _require_nonblank("source_type", source_type)
+        _require_nonblank("owner", owner)
+        _require_positive_int("lease_seconds", lease_seconds)
+        claimed_at = _parse_aware_iso_timestamp(now, field_name="now")
+        claimed_at_iso = claimed_at.isoformat()
+        lease_expires_at = (claimed_at + timedelta(seconds=lease_seconds)).isoformat()
+
+        with self._lock:
+            connection = self._get_connection()
+            with connection:
+                connection.execute("begin immediate")
+                connection.execute(
+                    """
+                    update short_term_segments
+                    set state = ?,
+                        lease_owner = null,
+                        lease_expires_at = null,
+                        updated_at = ?
+                    where profile_id = ?
+                      and source_type = ?
+                      and state = ?
+                      and lease_expires_at is not null
+                      and julianday(lease_expires_at) <= julianday(?)
+                    """,
+                    (
+                        SegmentState.PENDING.value,
+                        claimed_at_iso,
+                        profile_id,
+                        source_type,
+                        SegmentState.PROCESSING.value,
+                        claimed_at_iso,
+                    ),
+                )
+                row = connection.execute(
+                    """
+                    select *
+                    from short_term_segments
+                    where profile_id = ?
+                      and source_type = ?
+                      and state = ?
+                    order by created_at asc, id asc
+                    limit 1
+                    """,
+                    (
+                        profile_id,
+                        source_type,
+                        SegmentState.PENDING.value,
+                    ),
+                ).fetchone()
+                if row is None:
+                    return None
+
+                _summary_request_from_segment_row(row)
+                cursor = connection.execute(
+                    """
+                    update short_term_segments
+                    set state = ?,
+                        attempt_count = attempt_count + 1,
+                        lease_owner = ?,
+                        lease_expires_at = ?,
+                        updated_at = ?
+                    where id = ? and state = ?
+                    """,
+                    (
+                        SegmentState.PROCESSING.value,
+                        owner,
+                        lease_expires_at,
+                        claimed_at_iso,
+                        row["id"],
+                        SegmentState.PENDING.value,
+                    ),
+                )
+                if cursor.rowcount != 1:
+                    raise RuntimeError(
+                        f"Failed to claim short-term segment {row['id']!r}"
+                    )
+                updated_row = connection.execute(
+                    """
+                    select *
+                    from short_term_segments
+                    where id = ?
+                    """,
+                    (row["id"],),
+                ).fetchone()
+                request = _summary_request_from_segment_row(updated_row)
+
+        return request
+
+    def acknowledge_segment(
+        self,
+        *,
+        profile_id: str,
+        segment_id: str,
+        owner: str,
+        outcome: str,
+        episode_id: str | None,
+        memory_ids: list[str],
+        reason: str | None,
+    ) -> SummaryRequest:
+        _require_nonblank("profile_id", profile_id)
+        _require_nonblank("segment_id", segment_id)
+        _require_nonblank("owner", owner)
+        _require_nonblank("outcome", outcome)
+        _require_optional_string("episode_id", episode_id)
+        _require_optional_string("reason", reason)
+        if type(memory_ids) is not list:
+            raise TypeError("memory_ids must be a list of strings")
+        if not all(isinstance(memory_id, str) for memory_id in memory_ids):
+            raise TypeError("memory_ids must be a list of strings")
+
+        result_json = json.dumps(
+            {
+                "outcome": outcome,
+                "episode_id": episode_id,
+                "memory_ids": memory_ids,
+                "reason": reason,
+            },
+            ensure_ascii=False,
+            sort_keys=True,
+            separators=(",", ":"),
+        )
+
+        with self._lock:
+            connection = self._get_connection()
+            with connection:
+                connection.execute("begin immediate")
+                row = _get_exact_segment_row(
+                    connection,
+                    profile_id=profile_id,
+                    segment_id=segment_id,
+                )
+                if row["state"] == SegmentState.COMPLETED.value:
+                    request = _summary_request_from_segment_row(row)
+                else:
+                    _require_processing_owner(row, owner)
+                    completed_at = _now_iso()
+                    connection.execute(
+                        """
+                        update short_term_segments
+                        set state = ?,
+                            result_json = ?,
+                            last_error = null,
+                            lease_owner = null,
+                            lease_expires_at = null,
+                            updated_at = ?,
+                            completed_at = ?
+                        where id = ?
+                        """,
+                        (
+                            SegmentState.COMPLETED.value,
+                            result_json,
+                            completed_at,
+                            completed_at,
+                            segment_id,
+                        ),
+                    )
+                    updated_row = connection.execute(
+                        """
+                        select *
+                        from short_term_segments
+                        where id = ?
+                        """,
+                        (segment_id,),
+                    ).fetchone()
+                    request = _summary_request_from_segment_row(updated_row)
+
+        return request
+
+    def release_segment(
+        self,
+        *,
+        profile_id: str,
+        segment_id: str,
+        owner: str,
+        error: str,
+        max_attempts: int,
+    ) -> SummaryRequest:
+        _require_nonblank("profile_id", profile_id)
+        _require_nonblank("segment_id", segment_id)
+        _require_nonblank("owner", owner)
+        _require_nonblank("error", error)
+        _require_positive_int("max_attempts", max_attempts)
+
+        with self._lock:
+            connection = self._get_connection()
+            with connection:
+                connection.execute("begin immediate")
+                row = _get_exact_segment_row(
+                    connection,
+                    profile_id=profile_id,
+                    segment_id=segment_id,
+                )
+                _require_processing_owner(row, owner)
+                next_state = (
+                    SegmentState.FAILED
+                    if row["attempt_count"] >= max_attempts
+                    else SegmentState.PENDING
+                )
+                connection.execute(
+                    """
+                    update short_term_segments
+                    set state = ?,
+                        last_error = ?,
+                        lease_owner = null,
+                        lease_expires_at = null,
+                        updated_at = ?
+                    where id = ?
+                    """,
+                    (
+                        next_state.value,
+                        error,
+                        _now_iso(),
+                        segment_id,
+                    ),
+                )
+                updated_row = connection.execute(
+                    """
+                    select *
+                    from short_term_segments
+                    where id = ?
+                    """,
+                    (segment_id,),
+                ).fetchone()
+                request = _summary_request_from_segment_row(updated_row)
+
+        return request
+
+    def recover_expired_leases(
+        self,
+        *,
+        profile_id: str,
+        source_type: str,
+        now: str | None = None,
+    ) -> int:
+        _require_nonblank("profile_id", profile_id)
+        _require_nonblank("source_type", source_type)
+        recovered_at = _parse_aware_iso_timestamp(now, field_name="now").isoformat()
+
+        with self._lock:
+            connection = self._get_connection()
+            with connection:
+                connection.execute("begin immediate")
+                cursor = connection.execute(
+                    """
+                    update short_term_segments
+                    set state = ?,
+                        lease_owner = null,
+                        lease_expires_at = null,
+                        updated_at = ?
+                    where profile_id = ?
+                      and source_type = ?
+                      and state = ?
+                      and lease_expires_at is not null
+                      and julianday(lease_expires_at) <= julianday(?)
+                    """,
+                    (
+                        SegmentState.PENDING.value,
+                        recovered_at,
+                        profile_id,
+                        source_type,
+                        SegmentState.PROCESSING.value,
+                        recovered_at,
+                    ),
+                )
+                recovered_count = cursor.rowcount
+
+        return recovered_count
+
+    def requeue_failed_segment(
+        self,
+        *,
+        profile_id: str,
+        segment_id: str,
+    ) -> SummaryRequest:
+        _require_nonblank("profile_id", profile_id)
+        _require_nonblank("segment_id", segment_id)
+
+        with self._lock:
+            connection = self._get_connection()
+            with connection:
+                connection.execute("begin immediate")
+                row = _get_exact_segment_row(
+                    connection,
+                    profile_id=profile_id,
+                    segment_id=segment_id,
+                )
+                if row["state"] != SegmentState.FAILED.value:
+                    raise ShortTermStateError(
+                        f"Short-term segment {segment_id!r} is not failed"
+                    )
+                connection.execute(
+                    """
+                    update short_term_segments
+                    set state = ?,
+                        result_json = '{}',
+                        attempt_count = 0,
+                        last_error = null,
+                        lease_owner = null,
+                        lease_expires_at = null,
+                        updated_at = ?,
+                        completed_at = null
+                    where id = ?
+                    """,
+                    (
+                        SegmentState.PENDING.value,
+                        _now_iso(),
+                        segment_id,
+                    ),
+                )
+                updated_row = connection.execute(
+                    """
+                    select *
+                    from short_term_segments
+                    where id = ?
+                    """,
+                    (segment_id,),
+                ).fetchone()
+                request = _summary_request_from_segment_row(updated_row)
+
+        return request
+
     def _get_connection(self) -> sqlite3.Connection:
         if self._connection is None:
             raise RuntimeError("SQLiteShortTermStore is closed")
@@ -712,6 +1044,223 @@ class SQLiteShortTermStore:
 
         _validate_effective_segment_checks(connection)
         _validate_monotonic_message_sequence(connection)
+
+
+def _require_nonblank(field_name: str, value: object) -> None:
+    _require_string(field_name, value)
+    if not value.strip():
+        raise ValueError(f"{field_name} must not be blank")
+
+
+def _require_string(field_name: str, value: object) -> None:
+    if not isinstance(value, str):
+        raise TypeError(f"{field_name} must be a string")
+
+
+def _require_optional_string(field_name: str, value: object | None) -> None:
+    if value is not None and not isinstance(value, str):
+        raise TypeError(f"{field_name} must be a string or None")
+
+
+def _require_positive_int(field_name: str, value: object) -> None:
+    if type(value) is not int:
+        raise TypeError(f"{field_name} must be an integer")
+    if value <= 0:
+        raise ValueError(f"{field_name} must be positive")
+
+
+def _parse_aware_iso_timestamp(
+    value: str | None,
+    *,
+    field_name: str,
+) -> datetime:
+    if value is None:
+        return datetime.now(UTC)
+    if not isinstance(value, str) or not value.strip():
+        raise ValueError(f"{field_name} must be a timezone-aware ISO timestamp")
+    try:
+        parsed = datetime.fromisoformat(value)
+    except ValueError as error:
+        raise ValueError(
+            f"{field_name} must be a timezone-aware ISO timestamp"
+        ) from error
+    if parsed.tzinfo is None or parsed.utcoffset() is None:
+        raise ValueError(f"{field_name} must be a timezone-aware ISO timestamp")
+    return parsed.astimezone(UTC)
+
+
+def _get_exact_segment_row(
+    connection: sqlite3.Connection,
+    *,
+    profile_id: str,
+    segment_id: str,
+) -> sqlite3.Row:
+    row = connection.execute(
+        """
+        select *
+        from short_term_segments
+        where profile_id = ? and id = ?
+        """,
+        (profile_id, segment_id),
+    ).fetchone()
+    if row is None:
+        raise ShortTermStateError(
+            "Short-term segment is unavailable for the requested profile"
+        )
+    return row
+
+
+def _require_processing_owner(row: sqlite3.Row, owner: str) -> None:
+    if row["state"] != SegmentState.PROCESSING.value:
+        raise ShortTermStateError(
+            f"Short-term segment {row['id']!r} is not processing"
+        )
+    if row["lease_owner"] != owner:
+        raise ShortTermStateError(
+            f"Short-term segment {row['id']!r} is leased by another owner"
+        )
+
+
+def _summary_request_from_segment_row(row: sqlite3.Row) -> SummaryRequest:
+    segment_id = row["id"]
+    try:
+        payload = json.loads(row["payload_json"])
+        if not isinstance(payload, dict):
+            raise TypeError("payload must be an object")
+
+        required_fields = {
+            "segment_id",
+            "profile_id",
+            "source_type",
+            "breakpoint_id",
+            "topic",
+            "reason",
+            "messages",
+            "created_at",
+        }
+        missing_fields = sorted(required_fields - payload.keys())
+        if missing_fields:
+            raise ValueError(
+                "payload is missing required fields: "
+                + ", ".join(missing_fields)
+            )
+
+        for field_name in (
+            "segment_id",
+            "profile_id",
+            "source_type",
+            "breakpoint_id",
+            "created_at",
+        ):
+            _require_nonblank(f"payload.{field_name}", payload[field_name])
+        for field_name in ("topic", "reason"):
+            _require_optional_string(
+                f"payload.{field_name}",
+                payload[field_name],
+            )
+
+        identity_pairs = (
+            ("segment_id", "id"),
+            ("profile_id", "profile_id"),
+            ("source_type", "source_type"),
+            ("breakpoint_id", "breakpoint_id"),
+        )
+        for payload_field, row_field in identity_pairs:
+            if payload[payload_field] != row[row_field]:
+                raise ValueError(
+                    f"payload.{payload_field} does not match its row column"
+                )
+
+        message_payloads = payload["messages"]
+        if not isinstance(message_payloads, list):
+            raise TypeError("payload.messages must be a list")
+        messages = tuple(
+            _message_from_payload(message_payload, index=index)
+            for index, message_payload in enumerate(message_payloads)
+        )
+
+        state = SegmentState(row["state"])
+        attempt_count = row["attempt_count"]
+        if type(attempt_count) is not int or attempt_count < 0:
+            raise TypeError("row attempt_count must be a nonnegative integer")
+
+        created_at = row["created_at"]
+        _require_nonblank("row created_at", created_at)
+        lease_expires_at = row["lease_expires_at"]
+        if lease_expires_at is not None:
+            _parse_aware_iso_timestamp(
+                lease_expires_at,
+                field_name="row lease_expires_at",
+            )
+
+        return SummaryRequest(
+            segment_id=payload["segment_id"],
+            profile_id=payload["profile_id"],
+            source_type=payload["source_type"],
+            breakpoint_id=payload["breakpoint_id"],
+            topic=payload["topic"],
+            reason=payload["reason"],
+            messages=messages,
+            state=state,
+            attempt_count=attempt_count,
+            created_at=created_at,
+            lease_expires_at=lease_expires_at,
+        )
+    except (
+        json.JSONDecodeError,
+        KeyError,
+        TypeError,
+        ValueError,
+    ) as error:
+        raise RuntimeError(
+            f"Corrupt short-term segment payload for {segment_id!r}: {error}"
+        ) from error
+
+
+def _message_from_payload(payload: object, *, index: int) -> ShortTermMessage:
+    if not isinstance(payload, dict):
+        raise TypeError(f"payload.messages[{index}] must be an object")
+    required_fields = {
+        "id",
+        "sequence",
+        "role",
+        "content",
+        "source_id",
+        "created_at",
+    }
+    missing_fields = sorted(required_fields - payload.keys())
+    if missing_fields:
+        raise ValueError(
+            f"payload.messages[{index}] is missing required fields: "
+            + ", ".join(missing_fields)
+        )
+    for field_name in ("id", "role", "created_at"):
+        _require_nonblank(
+            f"payload.messages[{index}].{field_name}",
+            payload[field_name],
+        )
+    _require_string(
+        f"payload.messages[{index}].content",
+        payload["content"],
+    )
+    sequence = payload["sequence"]
+    if type(sequence) is not int or sequence < 1:
+        raise TypeError(
+            f"payload.messages[{index}].sequence must be a positive integer"
+        )
+    source_id = payload["source_id"]
+    _require_optional_string(
+        f"payload.messages[{index}].source_id",
+        source_id,
+    )
+    return ShortTermMessage(
+        id=payload["id"],
+        sequence=sequence,
+        role=payload["role"],
+        content=payload["content"],
+        source_id=source_id,
+        created_at=payload["created_at"],
+    )
 
 
 def _message_from_row(row: sqlite3.Row) -> ShortTermMessage:

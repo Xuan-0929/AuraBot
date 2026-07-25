@@ -15,6 +15,7 @@ from backend.memory.short_term.models import (
     ShortTermMessage,
     SummaryRequest,
 )
+from backend.memory.short_term.errors import ShortTermStateError
 from backend.memory.short_term.policy import ShortTermPolicy
 from backend.memory.stores.short_term_sqlite import SQLiteShortTermStore
 
@@ -1349,6 +1350,758 @@ class SQLiteShortTermStoreTests(unittest.TestCase):
         finally:
             if reopened is not None:
                 reopened.close()
+
+
+class SQLiteShortTermDeliveryTests(unittest.TestCase):
+    PROFILE_ID = "profile-1"
+    SOURCE_TYPE = "chat"
+    NOW = "2026-07-25T00:00:00+00:00"
+
+    def setUp(self):
+        self.tmpdir = tempfile.TemporaryDirectory()
+        self.path = Path(self.tmpdir.name) / "delivery.sqlite3"
+        self.store = SQLiteShortTermStore(self.path)
+
+    def tearDown(self):
+        self.store.close()
+        self.tmpdir.cleanup()
+
+    def _prepare_segment(
+        self,
+        *,
+        profile_id=PROFILE_ID,
+        source_type=SOURCE_TYPE,
+        topic="coffee",
+        reason="topic_changed",
+        content="想喝咖啡",
+    ):
+        message = self.store.append_message(
+            profile_id=profile_id,
+            source_type=source_type,
+            role="user",
+            content=content,
+            source_id="message-source",
+        )
+        self.store.add_breakpoint(
+            profile_id=profile_id,
+            source_type=source_type,
+            topic=topic,
+            reason=reason,
+        )
+        request = self.store.prepare_oldest_segment(
+            profile_id=profile_id,
+            source_type=source_type,
+        )
+        self.assertIsNotNone(request)
+        return request, message
+
+    def _segment_row(self, segment_id):
+        with closing(sqlite3.connect(self.path)) as connection:
+            connection.row_factory = sqlite3.Row
+            row = connection.execute(
+                """
+                select *
+                from short_term_segments
+                where id = ?
+                """,
+                (segment_id,),
+            ).fetchone()
+        return None if row is None else dict(row)
+
+    def _update_segment(self, segment_id, **values):
+        assignments = ", ".join(f"{column} = ?" for column in values)
+        with closing(sqlite3.connect(self.path)) as connection, connection:
+            connection.execute(
+                f"update short_term_segments set {assignments} where id = ?",
+                (*values.values(), segment_id),
+            )
+
+    def test_claim_and_owner_scoped_acknowledge_are_idempotent(self):
+        prepared, _ = self._prepare_segment()
+
+        claimed = self.store.claim_next_segment(
+            profile_id=self.PROFILE_ID,
+            source_type=self.SOURCE_TYPE,
+            owner="main-agent",
+            lease_seconds=60,
+            now=self.NOW,
+        )
+
+        self.assertEqual(claimed.state, SegmentState.PROCESSING)
+        self.assertEqual(claimed.attempt_count, 1)
+        self.assertEqual(
+            claimed.lease_expires_at,
+            "2026-07-25T00:01:00+00:00",
+        )
+        claimed_row = self._segment_row(prepared.segment_id)
+        self.assertEqual(claimed_row["lease_owner"], "main-agent")
+
+        completed = self.store.acknowledge_segment(
+            profile_id=self.PROFILE_ID,
+            segment_id=prepared.segment_id,
+            owner="main-agent",
+            outcome="remembered",
+            episode_id="episode-1",
+            memory_ids=["memory-1", "memory-2"],
+            reason=None,
+        )
+        first_row = self._segment_row(prepared.segment_id)
+
+        self.assertEqual(completed.state, SegmentState.COMPLETED)
+        self.assertEqual(
+            json.loads(first_row["result_json"]),
+            {
+                "episode_id": "episode-1",
+                "memory_ids": ["memory-1", "memory-2"],
+                "outcome": "remembered",
+                "reason": None,
+            },
+        )
+        self.assertIsNotNone(first_row["completed_at"])
+        self.assertIsNone(first_row["lease_owner"])
+        self.assertIsNone(first_row["lease_expires_at"])
+        self.assertIsNone(first_row["last_error"])
+
+        repeated = self.store.acknowledge_segment(
+            profile_id=self.PROFILE_ID,
+            segment_id=prepared.segment_id,
+            owner="different-retry-owner",
+            outcome="discarded",
+            episode_id=None,
+            memory_ids=[],
+            reason="late response",
+        )
+        repeated_row = self._segment_row(prepared.segment_id)
+
+        self.assertEqual(repeated, completed)
+        self.assertEqual(repeated_row["result_json"], first_row["result_json"])
+        self.assertEqual(repeated_row["completed_at"], first_row["completed_at"])
+        self.assertIsNone(
+            self.store.claim_next_segment(
+                profile_id=self.PROFILE_ID,
+                source_type=self.SOURCE_TYPE,
+                owner="main-agent",
+                lease_seconds=60,
+                now="2026-07-25T00:02:00+00:00",
+            )
+        )
+
+    def test_release_retries_then_marks_segment_failed(self):
+        prepared, _ = self._prepare_segment()
+        first_claim = self.store.claim_next_segment(
+            profile_id=self.PROFILE_ID,
+            source_type=self.SOURCE_TYPE,
+            owner="main-agent",
+            lease_seconds=60,
+            now=self.NOW,
+        )
+
+        pending = self.store.release_segment(
+            profile_id=self.PROFILE_ID,
+            segment_id=prepared.segment_id,
+            owner="main-agent",
+            error="temporary failure",
+            max_attempts=2,
+        )
+
+        self.assertEqual(pending.state, SegmentState.PENDING)
+        self.assertEqual(pending.attempt_count, first_claim.attempt_count)
+        pending_row = self._segment_row(prepared.segment_id)
+        self.assertEqual(pending_row["last_error"], "temporary failure")
+        self.assertIsNone(pending_row["lease_owner"])
+        self.assertIsNone(pending_row["lease_expires_at"])
+
+        second_claim = self.store.claim_next_segment(
+            profile_id=self.PROFILE_ID,
+            source_type=self.SOURCE_TYPE,
+            owner="main-agent",
+            lease_seconds=60,
+            now="2026-07-25T00:02:00+00:00",
+        )
+        self.assertEqual(
+            self._segment_row(prepared.segment_id)["last_error"],
+            "temporary failure",
+        )
+        failed = self.store.release_segment(
+            profile_id=self.PROFILE_ID,
+            segment_id=prepared.segment_id,
+            owner="main-agent",
+            error="permanent failure",
+            max_attempts=2,
+        )
+
+        self.assertEqual(second_claim.attempt_count, 2)
+        self.assertEqual(failed.state, SegmentState.FAILED)
+        self.assertEqual(failed.attempt_count, 2)
+        failed_row = self._segment_row(prepared.segment_id)
+        self.assertEqual(failed_row["last_error"], "permanent failure")
+        self.assertIsNone(failed_row["lease_owner"])
+        self.assertIsNone(failed_row["lease_expires_at"])
+
+    def test_expired_processing_lease_can_be_claimed_by_another_owner(self):
+        prepared, _ = self._prepare_segment()
+        first = self.store.claim_next_segment(
+            profile_id=self.PROFILE_ID,
+            source_type=self.SOURCE_TYPE,
+            owner="dead-worker",
+            lease_seconds=10,
+            now=self.NOW,
+        )
+
+        reclaimed = self.store.claim_next_segment(
+            profile_id=self.PROFILE_ID,
+            source_type=self.SOURCE_TYPE,
+            owner="main-agent",
+            lease_seconds=60,
+            now="2026-07-25T00:01:00+00:00",
+        )
+
+        self.assertEqual(first.segment_id, prepared.segment_id)
+        self.assertEqual(reclaimed.segment_id, prepared.segment_id)
+        self.assertEqual(reclaimed.state, SegmentState.PROCESSING)
+        self.assertEqual(reclaimed.attempt_count, 2)
+        self.assertEqual(
+            reclaimed.lease_expires_at,
+            "2026-07-25T00:02:00+00:00",
+        )
+        row = self._segment_row(prepared.segment_id)
+        self.assertEqual(row["lease_owner"], "main-agent")
+
+    def test_recover_expired_leases_only_changes_exact_stream(self):
+        expired, _ = self._prepare_segment(content="expired")
+        future, _ = self._prepare_segment(content="future")
+        other_source, _ = self._prepare_segment(
+            source_type="scheduler",
+            content="other source",
+        )
+        for request, owner in (
+            (expired, "expired-owner"),
+            (future, "future-owner"),
+        ):
+            claimed = self.store.claim_next_segment(
+                profile_id=request.profile_id,
+                source_type=request.source_type,
+                owner=owner,
+                lease_seconds=60,
+                now=self.NOW,
+            )
+            self.assertEqual(claimed.segment_id, request.segment_id)
+        self.store.claim_next_segment(
+            profile_id=other_source.profile_id,
+            source_type=other_source.source_type,
+            owner="other-owner",
+            lease_seconds=10,
+            now=self.NOW,
+        )
+        self._update_segment(
+            expired.segment_id,
+            lease_expires_at="2026-07-25T00:00:30+00:00",
+        )
+        self._update_segment(
+            future.segment_id,
+            lease_expires_at="2026-07-25T00:02:00+00:00",
+        )
+
+        recovered = self.store.recover_expired_leases(
+            profile_id=self.PROFILE_ID,
+            source_type=self.SOURCE_TYPE,
+            now="2026-07-25T00:01:00+00:00",
+        )
+
+        self.assertEqual(recovered, 1)
+        expired_row = self._segment_row(expired.segment_id)
+        self.assertEqual(expired_row["state"], "pending")
+        self.assertEqual(expired_row["attempt_count"], 1)
+        self.assertIsNone(expired_row["lease_owner"])
+        self.assertIsNone(expired_row["lease_expires_at"])
+        self.assertEqual(self._segment_row(future.segment_id)["state"], "processing")
+        self.assertEqual(
+            self._segment_row(other_source.segment_id)["state"],
+            "processing",
+        )
+
+    def test_owner_mismatch_does_not_change_durable_segment(self):
+        prepared, _ = self._prepare_segment()
+        self.store.claim_next_segment(
+            profile_id=self.PROFILE_ID,
+            source_type=self.SOURCE_TYPE,
+            owner="main-agent",
+            lease_seconds=60,
+            now=self.NOW,
+        )
+
+        for operation in ("ack", "release"):
+            with self.subTest(operation=operation):
+                before = self._segment_row(prepared.segment_id)
+                with self.assertRaises(ShortTermStateError):
+                    if operation == "ack":
+                        self.store.acknowledge_segment(
+                            profile_id=self.PROFILE_ID,
+                            segment_id=prepared.segment_id,
+                            owner="wrong-owner",
+                            outcome="remembered",
+                            episode_id=None,
+                            memory_ids=[],
+                            reason=None,
+                        )
+                    else:
+                        self.store.release_segment(
+                            profile_id=self.PROFILE_ID,
+                            segment_id=prepared.segment_id,
+                            owner="wrong-owner",
+                            error="failed",
+                            max_attempts=2,
+                        )
+                self.assertEqual(self._segment_row(prepared.segment_id), before)
+
+    def test_cross_profile_and_missing_segment_access_are_rejected(self):
+        prepared, _ = self._prepare_segment()
+        self.store.claim_next_segment(
+            profile_id=self.PROFILE_ID,
+            source_type=self.SOURCE_TYPE,
+            owner="main-agent",
+            lease_seconds=60,
+            now=self.NOW,
+        )
+
+        for profile_id, segment_id in (
+            ("profile-2", prepared.segment_id),
+            (self.PROFILE_ID, "missing-segment"),
+        ):
+            for operation in ("ack", "release", "requeue"):
+                with self.subTest(
+                    profile_id=profile_id,
+                    segment_id=segment_id,
+                    operation=operation,
+                ):
+                    before = self._segment_row(prepared.segment_id)
+                    with self.assertRaises(ShortTermStateError):
+                        if operation == "ack":
+                            self.store.acknowledge_segment(
+                                profile_id=profile_id,
+                                segment_id=segment_id,
+                                owner="main-agent",
+                                outcome="remembered",
+                                episode_id=None,
+                                memory_ids=[],
+                                reason=None,
+                            )
+                        elif operation == "release":
+                            self.store.release_segment(
+                                profile_id=profile_id,
+                                segment_id=segment_id,
+                                owner="main-agent",
+                                error="failed",
+                                max_attempts=2,
+                            )
+                        else:
+                            self.store.requeue_failed_segment(
+                                profile_id=profile_id,
+                                segment_id=segment_id,
+                            )
+                    self.assertEqual(self._segment_row(prepared.segment_id), before)
+
+    def test_acknowledge_and_release_reject_nonprocessing_states(self):
+        failed, _ = self._prepare_segment(content="failed")
+        self.store.claim_next_segment(
+            profile_id=self.PROFILE_ID,
+            source_type=self.SOURCE_TYPE,
+            owner="main-agent",
+            lease_seconds=60,
+            now=self.NOW,
+        )
+        self.store.release_segment(
+            profile_id=self.PROFILE_ID,
+            segment_id=failed.segment_id,
+            owner="main-agent",
+            error="failed",
+            max_attempts=1,
+        )
+        pending, _ = self._prepare_segment(content="pending")
+
+        for request in (pending, failed):
+            for operation in ("ack", "release"):
+                with self.subTest(state=request.state, operation=operation):
+                    before = self._segment_row(request.segment_id)
+                    with self.assertRaises(ShortTermStateError):
+                        if operation == "ack":
+                            self.store.acknowledge_segment(
+                                profile_id=self.PROFILE_ID,
+                                segment_id=request.segment_id,
+                                owner="main-agent",
+                                outcome="remembered",
+                                episode_id=None,
+                                memory_ids=[],
+                                reason=None,
+                            )
+                        else:
+                            self.store.release_segment(
+                                profile_id=self.PROFILE_ID,
+                                segment_id=request.segment_id,
+                                owner="main-agent",
+                                error="failed",
+                                max_attempts=1,
+                            )
+                    self.assertEqual(self._segment_row(request.segment_id), before)
+
+    def test_delivery_arguments_are_validated(self):
+        prepared, _ = self._prepare_segment()
+
+        claim_cases = (
+            {"profile_id": "", "source_type": "chat", "owner": "owner", "lease_seconds": 1},
+            {"profile_id": "profile", "source_type": " ", "owner": "owner", "lease_seconds": 1},
+            {"profile_id": "profile", "source_type": "chat", "owner": "", "lease_seconds": 1},
+            {"profile_id": "profile", "source_type": "chat", "owner": "owner", "lease_seconds": 0},
+            {"profile_id": "profile", "source_type": "chat", "owner": "owner", "lease_seconds": -1},
+            {"profile_id": "profile", "source_type": "chat", "owner": "owner", "lease_seconds": True},
+        )
+        for arguments in claim_cases:
+            with self.subTest(claim=arguments):
+                with self.assertRaises((TypeError, ValueError)):
+                    self.store.claim_next_segment(**arguments, now=self.NOW)
+
+        for invalid_now in ("not-a-time", "2026-07-25T00:00:00"):
+            with self.subTest(now=invalid_now):
+                with self.assertRaises(ValueError):
+                    self.store.claim_next_segment(
+                        profile_id=self.PROFILE_ID,
+                        source_type=self.SOURCE_TYPE,
+                        owner="owner",
+                        lease_seconds=1,
+                        now=invalid_now,
+                    )
+
+        ack_cases = (
+            {"profile_id": "", "segment_id": prepared.segment_id, "owner": "owner", "outcome": "ok", "memory_ids": []},
+            {"profile_id": self.PROFILE_ID, "segment_id": "", "owner": "owner", "outcome": "ok", "memory_ids": []},
+            {"profile_id": self.PROFILE_ID, "segment_id": prepared.segment_id, "owner": " ", "outcome": "ok", "memory_ids": []},
+            {"profile_id": self.PROFILE_ID, "segment_id": prepared.segment_id, "owner": "owner", "outcome": "", "memory_ids": []},
+            {"profile_id": self.PROFILE_ID, "segment_id": prepared.segment_id, "owner": "owner", "outcome": "ok", "memory_ids": ("not", "list")},
+            {"profile_id": self.PROFILE_ID, "segment_id": prepared.segment_id, "owner": "owner", "outcome": "ok", "memory_ids": ["valid", 1]},
+        )
+        for arguments in ack_cases:
+            with self.subTest(ack=arguments):
+                with self.assertRaises((TypeError, ValueError)):
+                    self.store.acknowledge_segment(
+                        **arguments,
+                        episode_id=None,
+                        reason=None,
+                    )
+
+        release_cases = (
+            {"owner": "", "error": "failed", "max_attempts": 1},
+            {"owner": "owner", "error": " ", "max_attempts": 1},
+            {"owner": "owner", "error": "failed", "max_attempts": 0},
+            {"owner": "owner", "error": "failed", "max_attempts": True},
+        )
+        for arguments in release_cases:
+            with self.subTest(release=arguments):
+                with self.assertRaises((TypeError, ValueError)):
+                    self.store.release_segment(
+                        profile_id=self.PROFILE_ID,
+                        segment_id=prepared.segment_id,
+                        **arguments,
+                    )
+
+    def test_only_failed_segments_can_be_requeued_cleanly(self):
+        failed, _ = self._prepare_segment(content="failed")
+        self.store.claim_next_segment(
+            profile_id=self.PROFILE_ID,
+            source_type=self.SOURCE_TYPE,
+            owner="main-agent",
+            lease_seconds=60,
+            now=self.NOW,
+        )
+        self.store.release_segment(
+            profile_id=self.PROFILE_ID,
+            segment_id=failed.segment_id,
+            owner="main-agent",
+            error="failed permanently",
+            max_attempts=1,
+        )
+
+        processing, _ = self._prepare_segment(content="processing")
+        processing_claim = self.store.claim_next_segment(
+            profile_id=self.PROFILE_ID,
+            source_type=self.SOURCE_TYPE,
+            owner="main-agent",
+            lease_seconds=60,
+            now=self.NOW,
+        )
+        self.assertEqual(processing_claim.segment_id, processing.segment_id)
+
+        completed, _ = self._prepare_segment(content="completed")
+        completed_claim = self.store.claim_next_segment(
+            profile_id=self.PROFILE_ID,
+            source_type=self.SOURCE_TYPE,
+            owner="main-agent",
+            lease_seconds=60,
+            now=self.NOW,
+        )
+        self.assertEqual(completed_claim.segment_id, completed.segment_id)
+        self.store.acknowledge_segment(
+            profile_id=self.PROFILE_ID,
+            segment_id=completed.segment_id,
+            owner="main-agent",
+            outcome="remembered",
+            episode_id=None,
+            memory_ids=[],
+            reason=None,
+        )
+
+        pending, _ = self._prepare_segment(content="pending")
+
+        requeued = self.store.requeue_failed_segment(
+            profile_id=self.PROFILE_ID,
+            segment_id=failed.segment_id,
+        )
+
+        self.assertEqual(requeued.state, SegmentState.PENDING)
+        self.assertEqual(requeued.attempt_count, 0)
+        row = self._segment_row(failed.segment_id)
+        self.assertIsNone(row["last_error"])
+        self.assertIsNone(row["lease_owner"])
+        self.assertIsNone(row["lease_expires_at"])
+        self.assertIsNone(row["completed_at"])
+        self.assertEqual(row["result_json"], "{}")
+
+        for segment_id in (
+            pending.segment_id,
+            processing.segment_id,
+            completed.segment_id,
+        ):
+            with self.subTest(segment_id=segment_id):
+                before = self._segment_row(segment_id)
+                with self.assertRaises(ShortTermStateError):
+                    self.store.requeue_failed_segment(
+                        profile_id=self.PROFILE_ID,
+                        segment_id=segment_id,
+                    )
+                self.assertEqual(self._segment_row(segment_id), before)
+
+    def test_claims_pending_segments_oldest_first(self):
+        first, _ = self._prepare_segment(content="first")
+        second, _ = self._prepare_segment(content="second")
+        self._update_segment(
+            first.segment_id,
+            created_at="2026-07-25T00:00:00+00:00",
+        )
+        self._update_segment(
+            second.segment_id,
+            created_at="2026-07-25T00:00:01+00:00",
+        )
+
+        first_claim = self.store.claim_next_segment(
+            profile_id=self.PROFILE_ID,
+            source_type=self.SOURCE_TYPE,
+            owner="worker-1",
+            lease_seconds=60,
+            now=self.NOW,
+        )
+        second_claim = self.store.claim_next_segment(
+            profile_id=self.PROFILE_ID,
+            source_type=self.SOURCE_TYPE,
+            owner="worker-2",
+            lease_seconds=60,
+            now=self.NOW,
+        )
+
+        self.assertEqual(
+            [first_claim.segment_id, second_claim.segment_id],
+            [first.segment_id, second.segment_id],
+        )
+
+    def test_concurrent_claim_returns_segment_to_exactly_one_owner(self):
+        prepared, _ = self._prepare_segment()
+        competing_store = SQLiteShortTermStore(self.path)
+        self.addCleanup(competing_store.close)
+        barrier = Barrier(2)
+        result_lock = Lock()
+        results = []
+        errors = []
+
+        def claim(store, owner):
+            try:
+                barrier.wait()
+                result = store.claim_next_segment(
+                    profile_id=self.PROFILE_ID,
+                    source_type=self.SOURCE_TYPE,
+                    owner=owner,
+                    lease_seconds=60,
+                    now=self.NOW,
+                )
+                with result_lock:
+                    results.append((owner, result))
+            except BaseException as error:
+                with result_lock:
+                    errors.append(error)
+
+        threads = [
+            Thread(target=claim, args=(self.store, "worker-1")),
+            Thread(target=claim, args=(competing_store, "worker-2")),
+        ]
+        for thread in threads:
+            thread.start()
+        for thread in threads:
+            thread.join(timeout=5)
+
+        self.assertFalse(any(thread.is_alive() for thread in threads))
+        self.assertEqual(errors, [])
+        claimed = [(owner, result) for owner, result in results if result is not None]
+        self.assertEqual(len(claimed), 1)
+        self.assertEqual(claimed[0][1].segment_id, prepared.segment_id)
+        self.assertEqual(self._segment_row(prepared.segment_id)["lease_owner"], claimed[0][0])
+
+    def test_transitions_reconstruct_immutable_payload_and_row_state(self):
+        prepared, message = self._prepare_segment(
+            topic="exact topic",
+            reason="exact reason",
+            content="exact message",
+        )
+
+        claimed = self.store.claim_next_segment(
+            profile_id=self.PROFILE_ID,
+            source_type=self.SOURCE_TYPE,
+            owner="main-agent",
+            lease_seconds=60,
+            now=self.NOW,
+        )
+        released = self.store.release_segment(
+            profile_id=self.PROFILE_ID,
+            segment_id=prepared.segment_id,
+            owner="main-agent",
+            error="retry",
+            max_attempts=2,
+        )
+        self.store.claim_next_segment(
+            profile_id=self.PROFILE_ID,
+            source_type=self.SOURCE_TYPE,
+            owner="main-agent",
+            lease_seconds=60,
+            now="2026-07-25T00:02:00+00:00",
+        )
+        completed = self.store.acknowledge_segment(
+            profile_id=self.PROFILE_ID,
+            segment_id=prepared.segment_id,
+            owner="main-agent",
+            outcome="remembered",
+            episode_id=None,
+            memory_ids=[],
+            reason=None,
+        )
+
+        for request, state, attempts, lease in (
+            (
+                claimed,
+                SegmentState.PROCESSING,
+                1,
+                "2026-07-25T00:01:00+00:00",
+            ),
+            (released, SegmentState.PENDING, 1, None),
+            (completed, SegmentState.COMPLETED, 2, None),
+        ):
+            with self.subTest(state=state):
+                self.assertEqual(request.topic, "exact topic")
+                self.assertEqual(request.reason, "exact reason")
+                self.assertEqual(request.messages, (message,))
+                self.assertEqual(request.created_at, prepared.created_at)
+                self.assertEqual(request.state, state)
+                self.assertEqual(request.attempt_count, attempts)
+                self.assertEqual(request.lease_expires_at, lease)
+
+    def test_corrupt_payload_does_not_mutate_pending_segment(self):
+        prepared, _ = self._prepare_segment()
+        self._update_segment(
+            prepared.segment_id,
+            payload_json=json.dumps({"segment_id": prepared.segment_id}),
+        )
+        before = self._segment_row(prepared.segment_id)
+
+        with self.assertRaisesRegex(RuntimeError, "payload"):
+            self.store.claim_next_segment(
+                profile_id=self.PROFILE_ID,
+                source_type=self.SOURCE_TYPE,
+                owner="main-agent",
+                lease_seconds=60,
+                now=self.NOW,
+            )
+
+        self.assertEqual(self._segment_row(prepared.segment_id), before)
+
+    def test_payload_reconstruction_accepts_empty_message_content(self):
+        prepared, message = self._prepare_segment(content="")
+
+        claimed = self.store.claim_next_segment(
+            profile_id=self.PROFILE_ID,
+            source_type=self.SOURCE_TYPE,
+            owner="main-agent",
+            lease_seconds=60,
+            now=self.NOW,
+        )
+
+        self.assertEqual(claimed.segment_id, prepared.segment_id)
+        self.assertEqual(claimed.messages, (message,))
+
+    def test_claim_update_failure_rolls_back_transaction(self):
+        prepared, _ = self._prepare_segment()
+        with closing(sqlite3.connect(self.path)) as connection, connection:
+            connection.execute(
+                """
+                create trigger abort_segment_claim
+                before update on short_term_segments
+                when new.state = 'processing'
+                begin
+                  select raise(abort, 'claim update failed');
+                end
+                """
+            )
+        before = self._segment_row(prepared.segment_id)
+
+        with self.assertRaises(sqlite3.IntegrityError):
+            self.store.claim_next_segment(
+                profile_id=self.PROFILE_ID,
+                source_type=self.SOURCE_TYPE,
+                owner="main-agent",
+                lease_seconds=60,
+                now=self.NOW,
+            )
+
+        self.assertEqual(self._segment_row(prepared.segment_id), before)
+
+    def test_acknowledge_update_failure_rolls_back_transaction(self):
+        prepared, _ = self._prepare_segment()
+        self.store.claim_next_segment(
+            profile_id=self.PROFILE_ID,
+            source_type=self.SOURCE_TYPE,
+            owner="main-agent",
+            lease_seconds=60,
+            now=self.NOW,
+        )
+        with closing(sqlite3.connect(self.path)) as connection, connection:
+            connection.execute(
+                """
+                create trigger abort_segment_acknowledge
+                before update on short_term_segments
+                when new.state = 'completed'
+                begin
+                  select raise(abort, 'acknowledge update failed');
+                end
+                """
+            )
+        before = self._segment_row(prepared.segment_id)
+
+        with self.assertRaises(sqlite3.IntegrityError):
+            self.store.acknowledge_segment(
+                profile_id=self.PROFILE_ID,
+                segment_id=prepared.segment_id,
+                owner="main-agent",
+                outcome="remembered",
+                episode_id="episode-1",
+                memory_ids=["memory-1"],
+                reason=None,
+            )
+
+        self.assertEqual(self._segment_row(prepared.segment_id), before)
 
 
 class ShortTermModelAnnotationTests(unittest.TestCase):
