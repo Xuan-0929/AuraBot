@@ -307,6 +307,37 @@ class SQLiteShortTermStoreTests(unittest.TestCase):
             }
         self.assertEqual(tables, {"short_term_messages"})
 
+    def test_v1_schema_rejects_nullable_critical_column(self):
+        self._rewrite_table_schema(
+            table_name="short_term_segments",
+            old="profile_id text not null",
+            new="profile_id text",
+        )
+
+        self._assert_reopen_rejected("short_term_segments.*profile_id")
+
+    def test_v1_schema_rejects_wrong_critical_default(self):
+        self._rewrite_table_schema(
+            table_name="short_term_segments",
+            old="attempt_count integer not null default 0",
+            new="attempt_count integer not null default 1",
+        )
+
+        self._assert_reopen_rejected("short_term_segments.*attempt_count")
+
+    def test_v1_schema_rejects_missing_required_unique_structure(self):
+        self._rewrite_table_schema(
+            table_name="short_term_breakpoints",
+            old="unique(profile_id, source_type, message_sequence)",
+            new=(
+                "check ("
+                "'unique(profile_id,source_type,message_sequence)' is not null"
+                ")"
+            ),
+        )
+
+        self._assert_reopen_rejected("short_term_breakpoints.*unique")
+
     def test_segment_rows_enforce_json_and_nonnegative_attempts(self):
         cases = (
             ("invalid-payload", "not-json", "{}", 0),
@@ -378,15 +409,67 @@ class SQLiteShortTermStoreTests(unittest.TestCase):
             ).fetchone()
         return row[0]
 
+    def _rewrite_table_schema(self, *, table_name, old, new):
+        index_statements = {
+            "short_term_breakpoints": (
+                """
+                create index idx_short_term_breakpoints_profile_source_sequence
+                on short_term_breakpoints(profile_id, source_type, message_sequence)
+                """,
+            ),
+            "short_term_segments": (
+                """
+                create index idx_short_term_segments_profile_source_state_created
+                on short_term_segments(profile_id, source_type, state, created_at)
+                """,
+                """
+                create index idx_short_term_segments_profile_source_state_lease
+                on short_term_segments(
+                  profile_id, source_type, state, lease_expires_at
+                )
+                """,
+            ),
+        }
+        self.store.close()
+        with closing(sqlite3.connect(self.path)) as connection, connection:
+            row = connection.execute(
+                """
+                select sql
+                from sqlite_master
+                where type = 'table' and name = ?
+                """,
+                (table_name,),
+            ).fetchone()
+            self.assertIsNotNone(row)
+            self.assertIn(old, row[0])
+            rewritten_sql = row[0].replace(old, new, 1)
+
+            connection.execute(f"drop table {table_name}")
+            connection.execute(rewritten_sql)
+            for statement in index_statements[table_name]:
+                connection.execute(statement)
+
+    def _assert_reopen_rejected(self, pattern):
+        reopened = None
+        try:
+            with self.assertRaisesRegex(RuntimeError, pattern):
+                reopened = SQLiteShortTermStore(self.path)
+        finally:
+            if reopened is not None:
+                reopened.close()
+
 
 class ShortTermModelAnnotationTests(unittest.TestCase):
     def test_optional_storage_fields_are_annotated_as_nullable(self):
         message_hints = get_type_hints(ShortTermMessage)
         breakpoint_hints = get_type_hints(ShortTermBreakpoint)
+        summary_hints = get_type_hints(SummaryRequest)
 
         self.assertEqual(message_hints["source_id"], str | None)
         self.assertEqual(breakpoint_hints["topic"], str | None)
         self.assertEqual(breakpoint_hints["reason"], str | None)
+        self.assertEqual(summary_hints["topic"], str | None)
+        self.assertEqual(summary_hints["reason"], str | None)
 
 
 class ShortTermPolicyTests(unittest.TestCase):

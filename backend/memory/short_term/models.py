@@ -45,8 +45,8 @@ class SummaryRequest:
     profile_id: str
     source_type: str
     breakpoint_id: str
-    topic: str
-    reason: str
+    topic: str | None
+    reason: str | None
     messages: tuple[ShortTermMessage, ...]
     state: SegmentState
     attempt_count: int

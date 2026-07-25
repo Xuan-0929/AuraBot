@@ -2,6 +2,7 @@ from __future__ import annotations
 
 import sqlite3
 import threading
+from dataclasses import dataclass
 from datetime import UTC, datetime
 from pathlib import Path
 from uuid import uuid4
@@ -85,89 +86,110 @@ _SCHEMA_STATEMENTS = (
     """,
 )
 
-_REQUIRED_COLUMNS = {
-    "short_term_schema_info": {"key", "value", "updated_at"},
+@dataclass(frozen=True)
+class _ColumnSpec:
+    declared_type: str
+    required_not_null: bool
+    primary_key_position: int = 0
+    default: str | None = None
+
+
+@dataclass(frozen=True)
+class _IndexSpec:
+    table_name: str
+    columns: tuple[str, ...]
+
+
+@dataclass(frozen=True)
+class _IndexMetadata:
+    columns: tuple[str, ...]
+    unique: bool
+    origin: str
+    partial: bool
+
+
+_TEXT_REQUIRED = _ColumnSpec("TEXT", True)
+_TEXT_OPTIONAL = _ColumnSpec("TEXT", False)
+_INTEGER_REQUIRED = _ColumnSpec("INTEGER", True)
+_TEXT_PRIMARY_KEY = _ColumnSpec("TEXT", True, primary_key_position=1)
+_INTEGER_PRIMARY_KEY = _ColumnSpec("INTEGER", True, primary_key_position=1)
+
+_V1_TABLE_COLUMNS = {
+    "short_term_schema_info": {
+        "key": _TEXT_PRIMARY_KEY,
+        "value": _TEXT_REQUIRED,
+        "updated_at": _TEXT_REQUIRED,
+    },
     "short_term_messages": {
-        "sequence",
-        "id",
-        "profile_id",
-        "source_type",
-        "role",
-        "content",
-        "source_id",
-        "created_at",
+        "sequence": _INTEGER_PRIMARY_KEY,
+        "id": _TEXT_REQUIRED,
+        "profile_id": _TEXT_REQUIRED,
+        "source_type": _TEXT_REQUIRED,
+        "role": _TEXT_REQUIRED,
+        "content": _TEXT_REQUIRED,
+        "source_id": _TEXT_OPTIONAL,
+        "created_at": _TEXT_REQUIRED,
     },
     "short_term_breakpoints": {
-        "id",
-        "profile_id",
-        "source_type",
-        "message_sequence",
-        "topic",
-        "reason",
-        "created_at",
+        "id": _TEXT_PRIMARY_KEY,
+        "profile_id": _TEXT_REQUIRED,
+        "source_type": _TEXT_REQUIRED,
+        "message_sequence": _INTEGER_REQUIRED,
+        "topic": _TEXT_OPTIONAL,
+        "reason": _TEXT_OPTIONAL,
+        "created_at": _TEXT_REQUIRED,
     },
     "short_term_segments": {
-        "id",
-        "profile_id",
-        "source_type",
-        "breakpoint_id",
-        "state",
-        "payload_json",
-        "result_json",
-        "attempt_count",
-        "last_error",
-        "lease_owner",
-        "lease_expires_at",
-        "created_at",
-        "updated_at",
-        "completed_at",
+        "id": _TEXT_PRIMARY_KEY,
+        "profile_id": _TEXT_REQUIRED,
+        "source_type": _TEXT_REQUIRED,
+        "breakpoint_id": _TEXT_REQUIRED,
+        "state": _TEXT_REQUIRED,
+        "payload_json": _TEXT_REQUIRED,
+        "result_json": _ColumnSpec("TEXT", True, default="'{}'"),
+        "attempt_count": _ColumnSpec("INTEGER", True, default="0"),
+        "last_error": _TEXT_OPTIONAL,
+        "lease_owner": _TEXT_OPTIONAL,
+        "lease_expires_at": _TEXT_OPTIONAL,
+        "created_at": _TEXT_REQUIRED,
+        "updated_at": _TEXT_REQUIRED,
+        "completed_at": _TEXT_OPTIONAL,
     },
 }
 
-_REQUIRED_CONSTRAINTS = {
-    "short_term_schema_info": (
-        "keytextprimarykey",
-    ),
-    "short_term_messages": (
-        "sequenceintegerprimarykeyautoincrement",
-        "idtextnotnullunique",
-    ),
+_V1_REQUIRED_UNIQUE_COLUMNS = {
+    "short_term_messages": (("id",),),
     "short_term_breakpoints": (
-        "idtextprimarykey",
-        "unique(profile_id,source_type,message_sequence)",
+        ("profile_id", "source_type", "message_sequence"),
     ),
+    "short_term_segments": (("breakpoint_id",),),
+}
+
+_V1_EXPLICIT_INDEXES = {
+    "idx_short_term_messages_profile_source_sequence": _IndexSpec(
+        "short_term_messages",
+        ("profile_id", "source_type", "sequence"),
+    ),
+    "idx_short_term_breakpoints_profile_source_sequence": _IndexSpec(
+        "short_term_breakpoints",
+        ("profile_id", "source_type", "message_sequence"),
+    ),
+    "idx_short_term_segments_profile_source_state_created": _IndexSpec(
+        "short_term_segments",
+        ("profile_id", "source_type", "state", "created_at"),
+    ),
+    "idx_short_term_segments_profile_source_state_lease": _IndexSpec(
+        "short_term_segments",
+        ("profile_id", "source_type", "state", "lease_expires_at"),
+    ),
+}
+
+_V1_REQUIRED_CHECKS = {
     "short_term_segments": (
-        "idtextprimarykey",
-        "breakpoint_idtextnotnullunique",
         "check(statein('pending','processing','completed','failed'))",
         "check(json_valid(payload_json))",
         "check(json_valid(result_json))",
         "check(attempt_count>=0)",
-    ),
-}
-
-_REQUIRED_INDEXES = {
-    "idx_short_term_messages_profile_source_sequence": (
-        "profile_id",
-        "source_type",
-        "sequence",
-    ),
-    "idx_short_term_breakpoints_profile_source_sequence": (
-        "profile_id",
-        "source_type",
-        "message_sequence",
-    ),
-    "idx_short_term_segments_profile_source_state_created": (
-        "profile_id",
-        "source_type",
-        "state",
-        "created_at",
-    ),
-    "idx_short_term_segments_profile_source_state_lease": (
-        "profile_id",
-        "source_type",
-        "state",
-        "lease_expires_at",
     ),
 }
 
@@ -473,8 +495,9 @@ class SQLiteShortTermStore:
 
     def _validate_schema(self) -> None:
         connection = self._get_connection()
+        indexes_by_table: dict[str, dict[str, _IndexMetadata]] = {}
 
-        for table_name, required_columns in _REQUIRED_COLUMNS.items():
+        for table_name, expected_columns in _V1_TABLE_COLUMNS.items():
             row = connection.execute(
                 """
                 select sql
@@ -488,48 +511,91 @@ class SQLiteShortTermStore:
                     f"Incompatible short-term schema: missing table {table_name}"
                 )
 
-            columns = {
-                column["name"]
+            actual_columns = {
+                column["name"]: column
                 for column in connection.execute(
                     """
-                    select name
-                    from pragma_table_info(?)
+                    select *
+                    from pragma_table_xinfo(?)
                     """,
                     (table_name,),
                 )
             }
-            missing_columns = required_columns - columns
-            if missing_columns:
-                missing = ", ".join(sorted(missing_columns))
+            expected_names = set(expected_columns)
+            actual_names = set(actual_columns)
+            if actual_names != expected_names:
+                missing = ", ".join(sorted(expected_names - actual_names)) or "none"
+                unexpected = ", ".join(sorted(actual_names - expected_names)) or "none"
                 raise RuntimeError(
                     "Incompatible short-term schema: "
-                    f"{table_name} is missing columns: {missing}"
+                    f"{table_name} columns differ; missing: {missing}; "
+                    f"unexpected: {unexpected}"
                 )
 
-            normalized_sql = "".join((row["sql"] or "").lower().split())
-            for constraint in _REQUIRED_CONSTRAINTS.get(table_name, ()):
-                if constraint not in normalized_sql:
+            for column_name, expected in expected_columns.items():
+                actual = actual_columns[column_name]
+                actual_type = _normalize_declared_type(actual["type"])
+                actual_not_null = bool(actual["notnull"]) or int(actual["pk"]) > 0
+                actual_primary_key = int(actual["pk"])
+                actual_default = _normalize_default(actual["dflt_value"])
+                actual_hidden = int(actual["hidden"])
+                actual_structure = (
+                    actual_type,
+                    actual_not_null,
+                    actual_primary_key,
+                    actual_default,
+                    actual_hidden,
+                )
+                expected_structure = (
+                    expected.declared_type,
+                    expected.required_not_null,
+                    expected.primary_key_position,
+                    expected.default,
+                    0,
+                )
+                if actual_structure != expected_structure:
                     raise RuntimeError(
                         "Incompatible short-term schema: "
-                        f"{table_name} is missing constraint {constraint}"
+                        f"{table_name}.{column_name} has structure "
+                        f"{actual_structure}, expected {expected_structure}"
                     )
 
-        for index_name, required_columns in _REQUIRED_INDEXES.items():
-            columns = tuple(
-                row["name"]
-                for row in connection.execute(
-                    """
-                    select name
-                    from pragma_index_info(?)
-                    order by seqno
-                    """,
-                    (index_name,),
+            normalized_sql = _normalize_schema_sql(row["sql"] or "")
+            for check in _V1_REQUIRED_CHECKS.get(table_name, ()):
+                if check not in normalized_sql:
+                    raise RuntimeError(
+                        "Incompatible short-term schema: "
+                        f"{table_name} is missing CHECK constraint {check}"
+                    )
+
+            indexes = _read_table_indexes(connection, table_name)
+            indexes_by_table[table_name] = indexes
+            for unique_columns in _V1_REQUIRED_UNIQUE_COLUMNS.get(table_name, ()):
+                has_unique_index = any(
+                    metadata.unique
+                    and not metadata.partial
+                    and metadata.columns == unique_columns
+                    for metadata in indexes.values()
                 )
-            )
-            if columns != required_columns:
+                if not has_unique_index:
+                    raise RuntimeError(
+                        "Incompatible short-term schema: "
+                        f"{table_name} is missing unique index on {unique_columns}"
+                    )
+
+        for index_name, expected in _V1_EXPLICIT_INDEXES.items():
+            metadata = indexes_by_table[expected.table_name].get(index_name)
+            if (
+                metadata is None
+                or metadata.columns != expected.columns
+                or metadata.unique
+                or metadata.origin != "c"
+                or metadata.partial
+            ):
                 raise RuntimeError(
                     "Incompatible short-term schema: "
-                    f"{index_name} has columns {columns}, expected {required_columns}"
+                    f"{index_name} has structure {metadata}, expected a non-unique "
+                    f"explicit index on {expected.columns}"
                 )
 
 
@@ -557,3 +623,54 @@ def _breakpoint_from_row(row: sqlite3.Row) -> ShortTermBreakpoint:
 
 def _now_iso() -> str:
     return datetime.now(UTC).isoformat()
+
+
+def _normalize_declared_type(value: object) -> str:
+    return " ".join(str(value).strip().upper().split())
+
+
+def _normalize_default(value: object | None) -> str | None:
+    if value is None:
+        return None
+
+    normalized = "".join(str(value).strip().lower().split())
+    while len(normalized) >= 2 and normalized[0] == "(" and normalized[-1] == ")":
+        normalized = normalized[1:-1]
+    return normalized
+
+
+def _normalize_schema_sql(sql: str) -> str:
+    return "".join(sql.lower().split())
+
+
+def _read_table_indexes(
+    connection: sqlite3.Connection,
+    table_name: str,
+) -> dict[str, _IndexMetadata]:
+    indexes: dict[str, _IndexMetadata] = {}
+    for row in connection.execute(
+        """
+        select *
+        from pragma_index_list(?)
+        """,
+        (table_name,),
+    ):
+        index_name = row["name"]
+        columns = tuple(
+            column["name"]
+            for column in connection.execute(
+                """
+                select name
+                from pragma_index_info(?)
+                order by seqno
+                """,
+                (index_name,),
+            )
+        )
+        indexes[index_name] = _IndexMetadata(
+            columns=columns,
+            unique=bool(row["unique"]),
+            origin=row["origin"],
+            partial=bool(row["partial"]),
+        )
+    return indexes
