@@ -1,11 +1,15 @@
+from contextlib import closing
 from dataclasses import FrozenInstanceError
 from pathlib import Path
+import sqlite3
 import tempfile
+from typing import get_type_hints
 import unittest
 
 from backend.memory.short_term.models import (
     BufferStats,
     SegmentState,
+    ShortTermBreakpoint,
     ShortTermMessage,
     SummaryRequest,
 )
@@ -135,6 +139,254 @@ class SQLiteShortTermStoreTests(unittest.TestCase):
         self.assertEqual(stats.message_count, 2)
         self.assertEqual(stats.breakpoint_count, 1)
         self.assertEqual(stats.char_count, len("abc") + len("喜欢拿铁"))
+
+    def test_close_is_idempotent_and_closed_operations_fail_clearly(self):
+        self.store.close()
+        self.store.close()
+
+        with self.assertRaisesRegex(RuntimeError, "SQLiteShortTermStore is closed"):
+            self.store.list_messages("profile-1", "chat")
+
+    def test_memory_database_supports_messages_and_breakpoints(self):
+        store = SQLiteShortTermStore(":memory:")
+        self.addCleanup(store.close)
+
+        message = store.append_message(
+            profile_id="profile-1",
+            source_type="chat",
+            role="user",
+            content="只在内存里",
+            source_id=None,
+        )
+        breakpoint = store.add_breakpoint(
+            profile_id="profile-1",
+            source_type="chat",
+            topic=None,
+            reason=None,
+        )
+
+        self.assertEqual(store.list_messages("profile-1", "chat"), [message])
+        self.assertEqual(store.list_breakpoints("profile-1", "chat"), [breakpoint])
+
+    def test_interleaved_streams_keep_global_sequence_and_local_message_index(self):
+        first = self.store.append_message(
+            profile_id="profile-1",
+            source_type="chat",
+            role="user",
+            content="p1-chat-1",
+            source_id=None,
+        )
+        second = self.store.append_message(
+            profile_id="profile-2",
+            source_type="chat",
+            role="user",
+            content="p2-chat-1",
+            source_id=None,
+        )
+        profile_two_breakpoint = self.store.add_breakpoint(
+            profile_id="profile-2",
+            source_type="chat",
+            topic="profile-two",
+            reason=None,
+        )
+        third = self.store.append_message(
+            profile_id="profile-1",
+            source_type="scheduler",
+            role="system",
+            content="p1-scheduler-1",
+            source_id=None,
+        )
+        scheduler_breakpoint = self.store.add_breakpoint(
+            profile_id="profile-1",
+            source_type="scheduler",
+            topic="scheduled",
+            reason=None,
+        )
+        fourth = self.store.append_message(
+            profile_id="profile-1",
+            source_type="chat",
+            role="assistant",
+            content="p1-chat-2",
+            source_id=None,
+        )
+        profile_one_breakpoint = self.store.add_breakpoint(
+            profile_id="profile-1",
+            source_type="chat",
+            topic="profile-one",
+            reason=None,
+        )
+
+        self.assertEqual(
+            [first.sequence, second.sequence, third.sequence, fourth.sequence],
+            [1, 2, 3, 4],
+        )
+        self.assertEqual(profile_two_breakpoint.message_index, 1)
+        self.assertEqual(scheduler_breakpoint.message_index, 1)
+        self.assertEqual(profile_one_breakpoint.message_index, 2)
+
+    def test_two_stores_cannot_add_the_same_latest_breakpoint(self):
+        self.store.append_message(
+            profile_id="profile-1",
+            source_type="chat",
+            role="user",
+            content="共享消息",
+            source_id=None,
+        )
+        competing_store = SQLiteShortTermStore(self.path)
+        self.addCleanup(competing_store.close)
+        breakpoint_args = {
+            "profile_id": "profile-1",
+            "source_type": "chat",
+            "topic": "shared",
+            "reason": "topic_changed",
+        }
+
+        first = self.store.add_breakpoint(**breakpoint_args)
+        duplicate = competing_store.add_breakpoint(**breakpoint_args)
+
+        self.assertIsNotNone(first)
+        self.assertIsNone(duplicate)
+        self.assertEqual(len(self.store.list_breakpoints("profile-1", "chat")), 1)
+
+    def test_rejects_unsupported_schema_version_without_rewriting_it(self):
+        self._replace_schema_version("99")
+
+        reopened = None
+        try:
+            with self.assertRaisesRegex(RuntimeError, "Unsupported.*99"):
+                reopened = SQLiteShortTermStore(self.path)
+        finally:
+            if reopened is not None:
+                reopened.close()
+
+        self.assertEqual(self._read_schema_version(), "99")
+
+    def test_rejects_malformed_schema_version_without_rewriting_it(self):
+        self._replace_schema_version("not-an-integer")
+
+        reopened = None
+        try:
+            with self.assertRaisesRegex(ValueError, "Invalid.*not-an-integer"):
+                reopened = SQLiteShortTermStore(self.path)
+        finally:
+            if reopened is not None:
+                reopened.close()
+
+        self.assertEqual(self._read_schema_version(), "not-an-integer")
+
+    def test_incompatible_partial_schema_rolls_back_new_schema_objects(self):
+        self.store.close()
+        self.path.unlink()
+        with closing(sqlite3.connect(self.path)) as connection, connection:
+            connection.execute(
+                """
+                create table short_term_messages (
+                  sequence integer primary key autoincrement
+                )
+                """
+            )
+
+        reopened = None
+        try:
+            with self.assertRaisesRegex(RuntimeError, "short_term_messages"):
+                reopened = SQLiteShortTermStore(self.path)
+        finally:
+            if reopened is not None:
+                reopened.close()
+
+        with closing(sqlite3.connect(self.path)) as connection, connection:
+            tables = {
+                row[0]
+                for row in connection.execute(
+                    """
+                    select name
+                    from sqlite_master
+                    where type = 'table' and name like 'short_term_%'
+                    """
+                )
+            }
+        self.assertEqual(tables, {"short_term_messages"})
+
+    def test_segment_rows_enforce_json_and_nonnegative_attempts(self):
+        cases = (
+            ("invalid-payload", "not-json", "{}", 0),
+            ("invalid-result", "{}", "not-json", 0),
+            ("negative-attempts", "{}", "{}", -1),
+        )
+
+        for segment_id, payload_json, result_json, attempt_count in cases:
+            with self.subTest(segment_id=segment_id):
+                with closing(sqlite3.connect(self.path)) as connection, connection:
+                    with self.assertRaises(sqlite3.IntegrityError):
+                        connection.execute(
+                            """
+                            insert into short_term_segments (
+                              id, profile_id, source_type, breakpoint_id, state,
+                              payload_json, result_json, attempt_count,
+                              created_at, updated_at
+                            )
+                            values (?, ?, ?, ?, ?, ?, ?, ?, ?, ?)
+                            """,
+                            (
+                                segment_id,
+                                "profile-1",
+                                "chat",
+                                f"breakpoint-{segment_id}",
+                                "pending",
+                                payload_json,
+                                result_json,
+                                attempt_count,
+                                "2026-07-25T00:00:00+00:00",
+                                "2026-07-25T00:00:00+00:00",
+                            ),
+                        )
+
+    def test_schema_has_expired_lease_recovery_index(self):
+        with closing(sqlite3.connect(self.path)) as connection, connection:
+            columns = [
+                row[2]
+                for row in connection.execute(
+                    "pragma index_info(idx_short_term_segments_profile_source_state_lease)"
+                )
+            ]
+
+        self.assertEqual(
+            columns,
+            ["profile_id", "source_type", "state", "lease_expires_at"],
+        )
+
+    def _replace_schema_version(self, version):
+        self.store.close()
+        with closing(sqlite3.connect(self.path)) as connection, connection:
+            connection.execute(
+                """
+                update short_term_schema_info
+                set value = ?
+                where key = 'schema_version'
+                """,
+                (version,),
+            )
+
+    def _read_schema_version(self):
+        with closing(sqlite3.connect(self.path)) as connection, connection:
+            row = connection.execute(
+                """
+                select value
+                from short_term_schema_info
+                where key = 'schema_version'
+                """
+            ).fetchone()
+        return row[0]
+
+
+class ShortTermModelAnnotationTests(unittest.TestCase):
+    def test_optional_storage_fields_are_annotated_as_nullable(self):
+        message_hints = get_type_hints(ShortTermMessage)
+        breakpoint_hints = get_type_hints(ShortTermBreakpoint)
+
+        self.assertEqual(message_hints["source_id"], str | None)
+        self.assertEqual(breakpoint_hints["topic"], str | None)
+        self.assertEqual(breakpoint_hints["reason"], str | None)
 
 
 class ShortTermPolicyTests(unittest.TestCase):

@@ -18,7 +18,7 @@ class ShortTermMessage:
     sequence: int
     role: str
     content: str
-    source_id: str
+    source_id: str | None
     created_at: str
 
 
@@ -27,8 +27,8 @@ class ShortTermBreakpoint:
     id: str
     message_sequence: int
     message_index: int
-    topic: str
-    reason: str
+    topic: str | None
+    reason: str | None
     created_at: str
 
 
