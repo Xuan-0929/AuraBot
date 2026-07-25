@@ -223,6 +223,16 @@ _V1_EXPLICIT_INDEXES = {
     ),
 }
 
+_LEGACY_TOP_LEVEL_KEYS = frozenset(
+    {"profile_id", "source_type", "messages", "breakpoints"}
+)
+_LEGACY_MESSAGE_KEYS = frozenset(
+    {"role", "content", "source_id", "created_at"}
+)
+_LEGACY_BREAKPOINT_KEYS = frozenset(
+    {"id", "message_index", "topic", "reason", "created_at"}
+)
+
 
 class SQLiteShortTermStore:
     def __init__(self, path: str | Path):
@@ -319,6 +329,24 @@ class SQLiteShortTermStore:
                         ),
                     ).fetchone()["has_state"]
                     if has_state:
+                        connection.execute(
+                            """
+                            insert into short_term_schema_info(
+                              key, value, updated_at
+                            )
+                            values (?, ?, ?)
+                            """,
+                            (
+                                marker_key,
+                                _legacy_snapshot_marker_value(
+                                    profile_id,
+                                    source_type,
+                                    path,
+                                    status="existing_state_won",
+                                ),
+                                _now_iso(),
+                            ),
+                        )
                         return LegacySnapshotImportResult(
                             imported=False,
                             reason="existing_state",
@@ -388,6 +416,7 @@ class SQLiteShortTermStore:
                                 profile_id,
                                 source_type,
                                 path,
+                                status="imported",
                             ),
                             _now_iso(),
                         ),
@@ -1297,7 +1326,10 @@ def _load_legacy_snapshot(
 ) -> tuple[list[_LegacyMessage], list[_LegacyBreakpoint]]:
     try:
         raw_snapshot = path.read_text(encoding="utf-8")
-        snapshot = json.loads(raw_snapshot)
+        snapshot = json.loads(
+            raw_snapshot,
+            object_pairs_hook=_legacy_object_without_duplicate_keys,
+        )
     except (UnicodeDecodeError, json.JSONDecodeError) as error:
         raise ValueError(
             f"Invalid legacy short-term JSON at {path}: malformed JSON"
@@ -1305,6 +1337,11 @@ def _load_legacy_snapshot(
 
     if not isinstance(snapshot, dict):
         raise ValueError("Invalid legacy short-term snapshot: root must be an object")
+    _reject_unknown_legacy_keys(
+        snapshot,
+        allowed=_LEGACY_TOP_LEVEL_KEYS,
+        prefix="Invalid legacy short-term snapshot",
+    )
     if snapshot.get("profile_id") != profile_id:
         raise ValueError(
             "Invalid legacy short-term snapshot: profile_id does not match "
@@ -1355,11 +1392,14 @@ def _legacy_snapshot_marker_value(
     profile_id: str,
     source_type: str,
     legacy_path: Path,
+    *,
+    status: str,
 ) -> str:
     return json.dumps(
         {
             "legacy_filename": legacy_path.name,
             "profile_id": profile_id,
+            "status": status,
             "source_type": source_type,
         },
         ensure_ascii=False,
@@ -1376,6 +1416,11 @@ def _validate_legacy_message(
     prefix = f"Invalid legacy message at index {index}"
     if not isinstance(record, dict):
         raise ValueError(f"{prefix}: record must be an object")
+    _reject_unknown_legacy_keys(
+        record,
+        allowed=_LEGACY_MESSAGE_KEYS,
+        prefix=prefix,
+    )
 
     role = _required_legacy_field(record, "role", prefix)
     content = _required_legacy_field(record, "content", prefix)
@@ -1411,6 +1456,11 @@ def _validate_legacy_breakpoints(
         prefix = f"Invalid legacy breakpoint at index {position}"
         if not isinstance(record, dict):
             raise ValueError(f"{prefix}: record must be an object")
+        _reject_unknown_legacy_keys(
+            record,
+            allowed=_LEGACY_BREAKPOINT_KEYS,
+            prefix=prefix,
+        )
 
         breakpoint_id = _required_legacy_field(record, "id", prefix)
         message_index = _required_legacy_field(
@@ -1460,6 +1510,32 @@ def _validate_legacy_breakpoints(
         )
 
     return breakpoints
+
+
+def _legacy_object_without_duplicate_keys(
+    pairs: list[tuple[str, object]],
+) -> dict[str, object]:
+    result = {}
+    for key, value in pairs:
+        if key in result:
+            raise ValueError(
+                f"Invalid legacy short-term JSON: duplicate key {key!r}"
+            )
+        result[key] = value
+    return result
+
+
+def _reject_unknown_legacy_keys(
+    record: dict[object, object],
+    *,
+    allowed: frozenset[str],
+    prefix: str,
+) -> None:
+    unknown = sorted(str(key) for key in set(record) - allowed)
+    if unknown:
+        raise ValueError(
+            f"{prefix}: unknown keys: {', '.join(unknown)}"
+        )
 
 
 def _required_legacy_field(

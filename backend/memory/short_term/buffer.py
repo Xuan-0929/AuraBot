@@ -1,7 +1,9 @@
 from __future__ import annotations
 
 from datetime import UTC, datetime
+import os
 from pathlib import Path
+import stat
 from threading import RLock
 from typing import Any
 
@@ -73,8 +75,19 @@ class ShortTermMemoryBuffer:
                     else ":memory:"
                 )
             )
+            sidecar_identity = (
+                _prepare_legacy_sidecar(legacy_path, store_path)
+                if legacy_path is not None
+                else None
+            )
             owned_store = SQLiteShortTermStore(store_path)
             try:
+                if legacy_path is not None:
+                    _validate_legacy_sidecar(
+                        legacy_path,
+                        Path(store_path),
+                        expected_identity=sidecar_identity,
+                    )
                 if legacy_path is not None and legacy_path.exists():
                     self._legacy_import_result = (
                         owned_store.import_legacy_snapshot(
@@ -285,6 +298,75 @@ class ShortTermMemoryBuffer:
 
 def now_iso() -> str:
     return datetime.now(UTC).isoformat()
+
+
+def _prepare_legacy_sidecar(
+    legacy_path: Path,
+    sidecar_path: str | Path,
+) -> tuple[int, int]:
+    path = Path(sidecar_path)
+    path.parent.mkdir(parents=True, exist_ok=True)
+    try:
+        path.lstat()
+    except FileNotFoundError:
+        flags = os.O_RDWR | os.O_CREAT | os.O_EXCL
+        flags |= getattr(os, "O_NOFOLLOW", 0)
+        flags |= getattr(os, "O_CLOEXEC", 0)
+        try:
+            descriptor = os.open(path, flags, 0o600)
+        except FileExistsError:
+            pass
+        except OSError as error:
+            raise ValueError(
+                f"legacy sidecar could not be reserved safely: {error}"
+            ) from error
+        else:
+            os.close(descriptor)
+    except OSError as error:
+        raise ValueError(
+            f"legacy sidecar could not be inspected safely: {error}"
+        ) from error
+
+    return _validate_legacy_sidecar(legacy_path, path)
+
+
+def _validate_legacy_sidecar(
+    legacy_path: Path,
+    sidecar_path: Path,
+    *,
+    expected_identity: tuple[int, int] | None = None,
+) -> tuple[int, int]:
+    try:
+        sidecar_stat = sidecar_path.lstat()
+    except OSError as error:
+        raise ValueError(
+            f"legacy sidecar could not be inspected safely: {error}"
+        ) from error
+
+    if stat.S_ISLNK(sidecar_stat.st_mode):
+        raise ValueError("legacy sidecar must not be a symlink")
+    if not stat.S_ISREG(sidecar_stat.st_mode):
+        raise ValueError("legacy sidecar must be a regular file")
+
+    identity = (sidecar_stat.st_dev, sidecar_stat.st_ino)
+    if expected_identity is not None and identity != expected_identity:
+        raise ValueError("legacy sidecar identity changed while opening SQLite")
+
+    if legacy_path.exists():
+        try:
+            same_file = os.path.samefile(legacy_path, sidecar_path)
+            same_resolved_path = (
+                legacy_path.resolve(strict=True)
+                == sidecar_path.resolve(strict=True)
+            )
+        except OSError as error:
+            raise ValueError(
+                f"legacy sidecar identity could not be validated: {error}"
+            ) from error
+        if same_file or same_resolved_path:
+            raise ValueError("legacy sidecar must not alias legacy JSON")
+
+    return identity
 
 
 def _require_nonblank(field_name: str, value: object) -> None:

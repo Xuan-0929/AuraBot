@@ -2,7 +2,9 @@ from contextlib import closing
 from dataclasses import FrozenInstanceError
 import hashlib
 import json
+import os
 from pathlib import Path
+import socket
 import sqlite3
 import tempfile
 from threading import Barrier, BrokenBarrierError, Event, Lock, Thread
@@ -3634,6 +3636,35 @@ class LegacyShortTermJsonMigrationTests(unittest.TestCase):
                 )
             )
 
+    def _symlink_or_skip(self, target, link):
+        if not hasattr(os, "symlink"):
+            self.skipTest("symlink creation is not supported")
+        try:
+            os.symlink(target, link)
+        except (NotImplementedError, OSError) as error:
+            self.skipTest(f"symlink creation is unavailable: {error}")
+
+    def _hardlink_or_skip(self, target, link):
+        if not hasattr(os, "link"):
+            self.skipTest("hardlink creation is not supported")
+        try:
+            os.link(target, link)
+        except (NotImplementedError, OSError) as error:
+            self.skipTest(f"hardlink creation is unavailable: {error}")
+
+    def _assert_legacy_bytes_fail_atomically(self, legacy_bytes, error_pattern):
+        if self.sidecar_path.exists():
+            self.sidecar_path.unlink()
+        self.legacy_path.write_bytes(legacy_bytes)
+        original_bytes = self.legacy_path.read_bytes()
+
+        with self.assertRaisesRegex(ValueError, error_pattern):
+            self._buffer()
+
+        self.assertEqual(self.legacy_path.read_bytes(), original_bytes)
+        self.assertEqual(self._state_counts(), (0, 0, 0))
+        self.assertIsNone(self._marker_value())
+
     def test_existing_legacy_snapshot_imports_without_modifying_json(self):
         self._write_snapshot(self._snapshot())
         original_bytes = self.legacy_path.read_bytes()
@@ -3829,6 +3860,7 @@ class LegacyShortTermJsonMigrationTests(unittest.TestCase):
                 {
                     "legacy_filename": legacy_path.name,
                     "profile_id": profile_id,
+                    "status": "imported",
                     "source_type": source_type,
                 },
             )
@@ -3963,6 +3995,67 @@ class LegacyShortTermJsonMigrationTests(unittest.TestCase):
                 self.assertEqual(self._state_counts(), (0, 0, 0))
                 self.assertIsNone(self._marker_value())
 
+    def test_unknown_legacy_object_keys_fail_atomically(self):
+        snapshot = self._snapshot()
+        invalid_snapshots = {
+            "top-level": snapshot | {"unexpected": True},
+            "message": snapshot
+            | {
+                "messages": [
+                    snapshot["messages"][0] | {"unexpected": True}
+                ],
+                "breakpoints": [],
+            },
+            "breakpoint": snapshot
+            | {
+                "breakpoints": [
+                    snapshot["breakpoints"][0] | {"unexpected": True}
+                ]
+            },
+        }
+
+        for level, invalid_snapshot in invalid_snapshots.items():
+            with self.subTest(level=level):
+                self._assert_legacy_bytes_fail_atomically(
+                    json.dumps(
+                        invalid_snapshot,
+                        ensure_ascii=False,
+                    ).encode("utf-8"),
+                    "unknown keys",
+                )
+
+    def test_duplicate_legacy_object_keys_fail_atomically(self):
+        duplicate_snapshots = {
+            "top-level": (
+                b'{"profile_id":"profile-1","profile_id":"profile-1",'
+                b'"source_type":"chat","messages":[],"breakpoints":[]}'
+            ),
+            "message": (
+                b'{"profile_id":"profile-1","source_type":"chat",'
+                b'"messages":[{"role":"user","content":"first",'
+                b'"content":"second","source_id":null,'
+                b'"created_at":"2026-07-24T10:00:00+08:00"}],'
+                b'"breakpoints":[]}'
+            ),
+            "breakpoint": (
+                b'{"profile_id":"profile-1","source_type":"chat",'
+                b'"messages":[{"role":"user","content":"first",'
+                b'"source_id":null,'
+                b'"created_at":"2026-07-24T10:00:00+08:00"}],'
+                b'"breakpoints":[{"id":"breakpoint-1",'
+                b'"id":"breakpoint-2","message_index":1,'
+                b'"topic":null,"reason":null,'
+                b'"created_at":"2026-07-24T10:00:01+08:00"}]}'
+            ),
+        }
+
+        for level, legacy_bytes in duplicate_snapshots.items():
+            with self.subTest(level=level):
+                self._assert_legacy_bytes_fail_atomically(
+                    legacy_bytes,
+                    "duplicate key",
+                )
+
     def test_constructor_closes_owned_store_when_migration_fails(self):
         self._write_snapshot(self._snapshot(messages=["invalid"]))
         created_stores = []
@@ -4011,7 +4104,78 @@ class LegacyShortTermJsonMigrationTests(unittest.TestCase):
             [message.content for message in buffer.messages],
             ["SQLite state"],
         )
-        self.assertIsNone(self._marker_value())
+        self.assertEqual(
+            json.loads(self._marker_value()),
+            {
+                "legacy_filename": self.legacy_path.name,
+                "profile_id": self.PROFILE_ID,
+                "status": "existing_state_won",
+                "source_type": self.SOURCE_TYPE,
+            },
+        )
+
+    def test_existing_state_marker_prevents_legacy_resurrection_after_cleanup(self):
+        self._write_snapshot(self._snapshot())
+        original_bytes = self.legacy_path.read_bytes()
+        store = self._store()
+        store.append_message(
+            profile_id=self.PROFILE_ID,
+            source_type=self.SOURCE_TYPE,
+            role="user",
+            content="durable SQLite state",
+            source_id=None,
+        )
+        store.append_message(
+            profile_id="other-profile",
+            source_type="other-source",
+            role="user",
+            content="other stream",
+            source_id=None,
+        )
+        store.close()
+
+        first = self._buffer()
+        self.assertEqual(
+            [message.content for message in first.messages],
+            ["durable SQLite state"],
+        )
+        first.close()
+        self.assertEqual(
+            json.loads(self._marker_value())["status"],
+            "existing_state_won",
+        )
+
+        with closing(sqlite3.connect(self.sidecar_path)) as connection:
+            for table in (
+                "short_term_segments",
+                "short_term_breakpoints",
+                "short_term_messages",
+            ):
+                connection.execute(
+                    f"""
+                    delete from {table}
+                    where profile_id = ? and source_type = ?
+                    """,
+                    (self.PROFILE_ID, self.SOURCE_TYPE),
+                )
+            connection.commit()
+
+        reopened = self._buffer()
+
+        self.assertEqual(reopened.messages, [])
+        self.assertEqual(reopened.breakpoints, [])
+        other_store = self._store()
+        self.assertEqual(
+            [
+                message.content
+                for message in other_store.list_messages(
+                    "other-profile",
+                    "other-source",
+                )
+            ],
+            ["other stream"],
+        )
+        self.assertEqual(self.legacy_path.read_bytes(), original_bytes)
 
     def test_other_stream_state_does_not_block_exact_stream_import(self):
         store = self._store()
@@ -4078,6 +4242,71 @@ class LegacyShortTermJsonMigrationTests(unittest.TestCase):
         uppercase.close()
         self.assertFalse(uppercase_json.exists())
         self.assertTrue(Path(f"{uppercase_json}.sqlite3").exists())
+
+    def test_dangling_symlink_sidecar_is_rejected_without_touching_legacy(self):
+        self._write_snapshot(self._snapshot())
+        original_bytes = self.legacy_path.read_bytes()
+        missing_target = Path(self.tmpdir.name) / "missing.sqlite3"
+        self._symlink_or_skip(missing_target, self.sidecar_path)
+
+        with self.assertRaisesRegex(ValueError, "sidecar.*symlink"):
+            self._buffer()
+
+        self.assertTrue(self.sidecar_path.is_symlink())
+        self.assertFalse(missing_target.exists())
+        self.assertEqual(self.legacy_path.read_bytes(), original_bytes)
+
+    def test_symlink_sidecar_to_existing_legacy_is_rejected(self):
+        self._write_snapshot(self._snapshot())
+        original_bytes = self.legacy_path.read_bytes()
+        self._symlink_or_skip(self.legacy_path, self.sidecar_path)
+
+        with self.assertRaisesRegex(ValueError, "sidecar.*symlink"):
+            self._buffer()
+
+        self.assertTrue(self.sidecar_path.is_symlink())
+        self.assertEqual(self.legacy_path.read_bytes(), original_bytes)
+
+    def test_hardlink_sidecar_aliasing_legacy_is_rejected(self):
+        self._write_snapshot(self._snapshot())
+        original_bytes = self.legacy_path.read_bytes()
+        self._hardlink_or_skip(self.legacy_path, self.sidecar_path)
+
+        with self.assertRaisesRegex(ValueError, "sidecar.*legacy"):
+            self._buffer()
+
+        self.assertTrue(os.path.samefile(self.legacy_path, self.sidecar_path))
+        self.assertEqual(self.legacy_path.read_bytes(), original_bytes)
+
+    def test_directory_sidecar_is_rejected_without_touching_legacy(self):
+        self._write_snapshot(self._snapshot())
+        original_bytes = self.legacy_path.read_bytes()
+        self.sidecar_path.mkdir()
+
+        with self.assertRaisesRegex(ValueError, "sidecar.*regular file"):
+            self._buffer()
+
+        self.assertTrue(self.sidecar_path.is_dir())
+        self.assertEqual(self.legacy_path.read_bytes(), original_bytes)
+
+    @unittest.skipUnless(
+        hasattr(socket, "AF_UNIX"),
+        "Unix-domain sockets are unavailable",
+    )
+    def test_nonregular_socket_sidecar_is_rejected(self):
+        self._write_snapshot(self._snapshot())
+        original_bytes = self.legacy_path.read_bytes()
+        unix_socket = socket.socket(socket.AF_UNIX, socket.SOCK_STREAM)
+        self.addCleanup(unix_socket.close)
+        try:
+            unix_socket.bind(str(self.sidecar_path))
+        except OSError as error:
+            self.skipTest(f"Unix-domain socket binding is unavailable: {error}")
+
+        with self.assertRaisesRegex(ValueError, "sidecar.*regular file"):
+            self._buffer()
+
+        self.assertEqual(self.legacy_path.read_bytes(), original_bytes)
 
 
 class ShortTermCompatibilityTests(unittest.TestCase):
