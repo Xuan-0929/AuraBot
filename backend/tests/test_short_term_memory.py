@@ -354,6 +354,19 @@ class SQLiteShortTermStoreTests(unittest.TestCase):
 
         self._assert_reopen_rejected("effective CHECK.*state")
 
+    def test_v1_schema_rejects_overly_restrictive_state_check(self):
+        self._rewrite_table_schema(
+            table_name="short_term_segments",
+            old=(
+                "check (\n"
+                "        state in ('pending', 'processing', 'completed', 'failed')\n"
+                "      )"
+            ),
+            new="check (state = 'pending')",
+        )
+
+        self._assert_reopen_rejected("overly restrictive.*state")
+
     def test_v1_schema_rejects_reusable_message_sequence(self):
         self._rewrite_table_schema(
             table_name="short_term_messages",
@@ -460,6 +473,41 @@ class SQLiteShortTermStoreTests(unittest.TestCase):
         )
 
         self.assertGreater(second.sequence, first.sequence)
+
+    def test_schema_validation_probes_leave_no_rows_or_sequence_state(self):
+        with closing(sqlite3.connect(self.path)) as connection, connection:
+            segment_count = connection.execute(
+                "select count(*) from short_term_segments"
+            ).fetchone()[0]
+            validation_message_count = connection.execute(
+                """
+                select count(*)
+                from short_term_messages
+                where profile_id = ?
+                """,
+                ("schema-validation",),
+            ).fetchone()[0]
+            sequence_row = connection.execute(
+                """
+                select seq
+                from sqlite_sequence
+                where name = ?
+                """,
+                ("short_term_messages",),
+            ).fetchone()
+
+        first_real_message = self.store.append_message(
+            profile_id="profile-1",
+            source_type="chat",
+            role="user",
+            content="first real message",
+            source_id=None,
+        )
+
+        self.assertEqual(segment_count, 0)
+        self.assertEqual(validation_message_count, 0)
+        self.assertIsNone(sequence_row)
+        self.assertEqual(first_real_message.sequence, 1)
 
     def test_segment_rows_enforce_json_and_nonnegative_attempts(self):
         cases = (

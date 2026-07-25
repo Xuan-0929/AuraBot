@@ -662,7 +662,36 @@ def _read_table_indexes(
 
 
 def _validate_effective_segment_checks(connection: sqlite3.Connection) -> None:
-    valid_values = ("pending", "{}", "{}", 0)
+    valid_probes = (
+        (
+            "state-pending",
+            "pending",
+            '{"messages":["queued"]}',
+            '{"outcome":"waiting"}',
+            2,
+        ),
+        (
+            "state-processing",
+            "processing",
+            '["message-1","message-2"]',
+            '["worker-active"]',
+            2,
+        ),
+        (
+            "state-completed",
+            "completed",
+            '{"messages":["summarized"]}',
+            '["memory-1","memory-2"]',
+            2,
+        ),
+        (
+            "state-failed",
+            "failed",
+            '["message-failed"]',
+            '{"error":"summary failed"}',
+            2,
+        ),
+    )
     invalid_probes = (
         ("state", "not-a-state", "{}", "{}", 0),
         ("payload_json", "pending", "not-json", "{}", 0),
@@ -671,19 +700,21 @@ def _validate_effective_segment_checks(connection: sqlite3.Connection) -> None:
     )
 
     with _rollback_only_validation(connection):
-        try:
-            _insert_validation_segment(
-                connection,
-                label="valid",
-                state=valid_values[0],
-                payload_json=valid_values[1],
-                result_json=valid_values[2],
-                attempt_count=valid_values[3],
-            )
-        except sqlite3.IntegrityError as error:
-            raise RuntimeError(
-                "Incompatible short-term schema: valid segment rows are rejected"
-            ) from error
+        for label, state, payload_json, result_json, attempt_count in valid_probes:
+            try:
+                _insert_validation_segment(
+                    connection,
+                    label=label,
+                    state=state,
+                    payload_json=payload_json,
+                    result_json=result_json,
+                    attempt_count=attempt_count,
+                )
+            except sqlite3.IntegrityError as error:
+                raise RuntimeError(
+                    "Incompatible short-term schema: overly restrictive segment "
+                    f"constraint rejects valid {label}"
+                ) from error
 
         for label, state, payload_json, result_json, attempt_count in invalid_probes:
             try:
