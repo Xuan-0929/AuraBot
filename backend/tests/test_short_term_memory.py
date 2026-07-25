@@ -1567,6 +1567,136 @@ class SQLiteShortTermDeliveryTests(unittest.TestCase):
         row = self._segment_row(prepared.segment_id)
         self.assertEqual(row["lease_owner"], "main-agent")
 
+    def test_claim_recovery_preserves_full_microsecond_precision(self):
+        prepared, _ = self._prepare_segment()
+        self.store.claim_next_segment(
+            profile_id=self.PROFILE_ID,
+            source_type=self.SOURCE_TYPE,
+            owner="original-owner",
+            lease_seconds=60,
+            now=self.NOW,
+        )
+        self._update_segment(
+            prepared.segment_id,
+            lease_expires_at="2026-07-25T00:01:00.123456+00:00",
+        )
+        before = self._segment_row(prepared.segment_id)
+
+        early_claim = self.store.claim_next_segment(
+            profile_id=self.PROFILE_ID,
+            source_type=self.SOURCE_TYPE,
+            owner="early-owner",
+            lease_seconds=60,
+            now="2026-07-25T00:01:00.123455+00:00",
+        )
+
+        self.assertIsNone(early_claim)
+        self.assertEqual(self._segment_row(prepared.segment_id), before)
+
+        exact_claim = self.store.claim_next_segment(
+            profile_id=self.PROFILE_ID,
+            source_type=self.SOURCE_TYPE,
+            owner="exact-owner",
+            lease_seconds=60,
+            now="2026-07-25T00:01:00.123456+00:00",
+        )
+
+        self.assertEqual(exact_claim.segment_id, prepared.segment_id)
+        self.assertEqual(exact_claim.attempt_count, 2)
+        exact_row = self._segment_row(prepared.segment_id)
+        self.assertEqual(exact_row["lease_owner"], "exact-owner")
+        self.assertEqual(exact_row["attempt_count"], 2)
+
+    def test_recover_expired_lease_compares_equivalent_offset_instants(self):
+        prepared, _ = self._prepare_segment()
+        self.store.claim_next_segment(
+            profile_id=self.PROFILE_ID,
+            source_type=self.SOURCE_TYPE,
+            owner="offset-owner",
+            lease_seconds=60,
+            now=self.NOW,
+        )
+        self._update_segment(
+            prepared.segment_id,
+            lease_expires_at="2026-07-25T08:01:00.123456+08:00",
+        )
+
+        recovered = self.store.recover_expired_leases(
+            profile_id=self.PROFILE_ID,
+            source_type=self.SOURCE_TYPE,
+            now="2026-07-24T20:01:00.123456-04:00",
+        )
+
+        self.assertEqual(recovered, 1)
+        row = self._segment_row(prepared.segment_id)
+        self.assertEqual(row["state"], "pending")
+        self.assertEqual(row["attempt_count"], 1)
+        self.assertIsNone(row["lease_owner"])
+        self.assertIsNone(row["lease_expires_at"])
+
+    def test_invalid_persisted_lease_rolls_back_all_recovery_paths(self):
+        invalid_timestamps = {
+            "malformed": "not-a-timestamp",
+            "naive": "2026-07-25T00:00:30.000000",
+        }
+        for operation in ("explicit", "claim"):
+            for label, invalid_timestamp in invalid_timestamps.items():
+                with self.subTest(operation=operation, timestamp=label):
+                    profile_id = f"profile-{operation}-{label}"
+                    valid, _ = self._prepare_segment(
+                        profile_id=profile_id,
+                        content="valid expired lease",
+                    )
+                    invalid, _ = self._prepare_segment(
+                        profile_id=profile_id,
+                        content="invalid lease",
+                    )
+                    for owner in ("valid-owner", "invalid-owner"):
+                        self.store.claim_next_segment(
+                            profile_id=profile_id,
+                            source_type=self.SOURCE_TYPE,
+                            owner=owner,
+                            lease_seconds=60,
+                            now=self.NOW,
+                        )
+                    self._update_segment(
+                        valid.segment_id,
+                        lease_expires_at="2026-07-25T00:00:30+00:00",
+                    )
+                    self._update_segment(
+                        invalid.segment_id,
+                        lease_expires_at=invalid_timestamp,
+                    )
+                    before = {
+                        valid.segment_id: self._segment_row(valid.segment_id),
+                        invalid.segment_id: self._segment_row(invalid.segment_id),
+                    }
+
+                    with self.assertRaisesRegex(
+                        RuntimeError,
+                        "lease_expires_at",
+                    ):
+                        if operation == "explicit":
+                            self.store.recover_expired_leases(
+                                profile_id=profile_id,
+                                source_type=self.SOURCE_TYPE,
+                                now="2026-07-25T00:01:00+00:00",
+                            )
+                        else:
+                            self.store.claim_next_segment(
+                                profile_id=profile_id,
+                                source_type=self.SOURCE_TYPE,
+                                owner="replacement-owner",
+                                lease_seconds=60,
+                                now="2026-07-25T00:01:00+00:00",
+                            )
+
+                    after = {
+                        valid.segment_id: self._segment_row(valid.segment_id),
+                        invalid.segment_id: self._segment_row(invalid.segment_id),
+                    }
+                    self.assertEqual(after, before)
+
     def test_recover_expired_leases_only_changes_exact_stream(self):
         expired, _ = self._prepare_segment(content="expired")
         future, _ = self._prepare_segment(content="future")

@@ -553,27 +553,11 @@ class SQLiteShortTermStore:
             connection = self._get_connection()
             with connection:
                 connection.execute("begin immediate")
-                connection.execute(
-                    """
-                    update short_term_segments
-                    set state = ?,
-                        lease_owner = null,
-                        lease_expires_at = null,
-                        updated_at = ?
-                    where profile_id = ?
-                      and source_type = ?
-                      and state = ?
-                      and lease_expires_at is not null
-                      and julianday(lease_expires_at) <= julianday(?)
-                    """,
-                    (
-                        SegmentState.PENDING.value,
-                        claimed_at_iso,
-                        profile_id,
-                        source_type,
-                        SegmentState.PROCESSING.value,
-                        claimed_at_iso,
-                    ),
+                _recover_expired_segment_leases(
+                    connection,
+                    profile_id=profile_id,
+                    source_type=source_type,
+                    now=claimed_at,
                 )
                 row = connection.execute(
                     """
@@ -778,35 +762,18 @@ class SQLiteShortTermStore:
     ) -> int:
         _require_nonblank("profile_id", profile_id)
         _require_nonblank("source_type", source_type)
-        recovered_at = _parse_aware_iso_timestamp(now, field_name="now").isoformat()
+        recovered_at = _parse_aware_iso_timestamp(now, field_name="now")
 
         with self._lock:
             connection = self._get_connection()
             with connection:
                 connection.execute("begin immediate")
-                cursor = connection.execute(
-                    """
-                    update short_term_segments
-                    set state = ?,
-                        lease_owner = null,
-                        lease_expires_at = null,
-                        updated_at = ?
-                    where profile_id = ?
-                      and source_type = ?
-                      and state = ?
-                      and lease_expires_at is not null
-                      and julianday(lease_expires_at) <= julianday(?)
-                    """,
-                    (
-                        SegmentState.PENDING.value,
-                        recovered_at,
-                        profile_id,
-                        source_type,
-                        SegmentState.PROCESSING.value,
-                        recovered_at,
-                    ),
+                recovered_count = _recover_expired_segment_leases(
+                    connection,
+                    profile_id=profile_id,
+                    source_type=source_type,
+                    now=recovered_at,
                 )
-                recovered_count = cursor.rowcount
 
         return recovered_count
 
@@ -1087,6 +1054,74 @@ def _parse_aware_iso_timestamp(
     if parsed.tzinfo is None or parsed.utcoffset() is None:
         raise ValueError(f"{field_name} must be a timezone-aware ISO timestamp")
     return parsed.astimezone(UTC)
+
+
+def _recover_expired_segment_leases(
+    connection: sqlite3.Connection,
+    *,
+    profile_id: str,
+    source_type: str,
+    now: datetime,
+) -> int:
+    rows = connection.execute(
+        """
+        select id, lease_expires_at
+        from short_term_segments
+        where profile_id = ?
+          and source_type = ?
+          and state = ?
+          and lease_expires_at is not null
+        order by created_at asc, id asc
+        """,
+        (
+            profile_id,
+            source_type,
+            SegmentState.PROCESSING.value,
+        ),
+    ).fetchall()
+
+    expired_segment_ids = []
+    for row in rows:
+        try:
+            lease_expires_at = _parse_aware_iso_timestamp(
+                row["lease_expires_at"],
+                field_name="lease_expires_at",
+            )
+        except ValueError as error:
+            raise RuntimeError(
+                "Persisted short-term segment "
+                f"{row['id']!r} has invalid lease_expires_at: {error}"
+            ) from error
+        if lease_expires_at <= now:
+            expired_segment_ids.append(row["id"])
+
+    recovered_count = 0
+    recovered_at = now.isoformat()
+    for segment_id in expired_segment_ids:
+        cursor = connection.execute(
+            """
+            update short_term_segments
+            set state = ?,
+                lease_owner = null,
+                lease_expires_at = null,
+                updated_at = ?
+            where id = ?
+              and profile_id = ?
+              and source_type = ?
+              and state = ?
+              and lease_expires_at is not null
+            """,
+            (
+                SegmentState.PENDING.value,
+                recovered_at,
+                segment_id,
+                profile_id,
+                source_type,
+                SegmentState.PROCESSING.value,
+            ),
+        )
+        recovered_count += cursor.rowcount
+    return recovered_count
 
 
 def _get_exact_segment_row(
