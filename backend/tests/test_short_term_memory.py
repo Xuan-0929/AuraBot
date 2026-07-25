@@ -3169,29 +3169,94 @@ class ShortTermMemoryBufferTests(unittest.TestCase):
     def test_default_owned_store_closes_idempotently(self):
         buffer = self._buffer()
         buffer.add(role="user", content="咖啡", source_id=None)
+        owned_store = buffer._store
 
         buffer.close()
         buffer.close()
 
         with self.assertRaisesRegex(
             RuntimeError,
-            "^SQLiteShortTermStore is closed$",
+            "^ShortTermMemoryBuffer is closed$",
         ):
             _ = buffer.messages
+        with self.assertRaisesRegex(
+            RuntimeError,
+            "^SQLiteShortTermStore is closed$",
+        ):
+            owned_store.list_messages(self.PROFILE_ID, self.SOURCE_TYPE)
 
-    def test_injected_store_remains_open_after_buffer_close(self):
+    def test_all_public_operations_fail_after_injected_buffer_close(self):
         store = self._store()
         buffer = self._buffer(store=store)
         buffer.add(role="user", content="咖啡", source_id=None)
 
         buffer.close()
 
+        operations = {
+            "messages": lambda: buffer.messages,
+            "breakpoints": lambda: buffer.breakpoints,
+            "add": lambda: buffer.add(
+                role="user",
+                content="new",
+                source_id=None,
+            ),
+            "add_message": lambda: buffer.add_message(
+                role="user",
+                content="new",
+                source_id=None,
+            ),
+            "mark_breakpoint": lambda: buffer.mark_breakpoint(
+                topic="coffee",
+                reason=None,
+            ),
+            "pop_oldest_segment_for_summary": (
+                buffer.pop_oldest_segment_for_summary
+            ),
+            "claim_next_summary": lambda: buffer.claim_next_summary(
+                owner="main-agent",
+                lease_seconds=60,
+            ),
+            "acknowledge_summary": lambda: buffer.acknowledge_summary(
+                segment_id="segment-1",
+                owner="main-agent",
+                outcome="remembered",
+                episode_id=None,
+                memory_ids=[],
+                reason=None,
+            ),
+            "release_summary": lambda: buffer.release_summary(
+                segment_id="segment-1",
+                owner="main-agent",
+                error="failed",
+            ),
+            "recover_expired_summaries": (
+                buffer.recover_expired_summaries
+            ),
+            "requeue_failed_summary": lambda: (
+                buffer.requeue_failed_summary(segment_id="segment-1")
+            ),
+        }
+        for name, operation in operations.items():
+            with self.subTest(operation=name):
+                with self.assertRaisesRegex(
+                    RuntimeError,
+                    "^ShortTermMemoryBuffer is closed$",
+                ):
+                    operation()
+
+        store.append_message(
+            profile_id=self.PROFILE_ID,
+            source_type=self.SOURCE_TYPE,
+            role="user",
+            content="caller still owns store",
+            source_id=None,
+        )
         self.assertEqual(
             [message.content for message in store.list_messages(
                 self.PROFILE_ID,
                 self.SOURCE_TYPE,
             )],
-            ["咖啡"],
+            ["咖啡", "caller still owns store"],
         )
 
     def test_persistence_path_is_used_directly_even_with_json_suffix(self):

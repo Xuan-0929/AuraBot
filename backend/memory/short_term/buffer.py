@@ -61,10 +61,12 @@ class ShortTermMemoryBuffer:
 
     @property
     def messages(self) -> list[ShortTermMessage]:
+        self._ensure_open()
         return self._store.list_messages(self.profile_id, self.source_type)
 
     @property
     def breakpoints(self) -> list[ShortTermBreakpoint]:
+        self._ensure_open()
         return self._store.list_breakpoints(
             self.profile_id,
             self.source_type,
@@ -77,6 +79,7 @@ class ShortTermMemoryBuffer:
         content: str,
         source_id: str | None = None,
     ) -> dict[str, Any] | None:
+        self._ensure_open()
         return self.add_message(
             role=role,
             content=content,
@@ -90,6 +93,7 @@ class ShortTermMemoryBuffer:
         content: str,
         source_id: str | None = None,
     ) -> dict[str, Any] | None:
+        self._ensure_open()
         _require_nonblank("role", role)
         _require_nonblank("content", content)
         _require_optional_string("source_id", source_id)
@@ -108,6 +112,7 @@ class ShortTermMemoryBuffer:
         topic: str | None = None,
         reason: str | None = None,
     ) -> dict[str, Any] | None:
+        self._ensure_open()
         _require_optional_string("topic", topic)
         _require_optional_string("reason", reason)
         breakpoint = self._store.add_breakpoint(
@@ -121,6 +126,7 @@ class ShortTermMemoryBuffer:
         return self._prepare_if_needed()
 
     def pop_oldest_segment_for_summary(self) -> dict[str, Any] | None:
+        self._ensure_open()
         request = self._store.prepare_oldest_segment(
             profile_id=self.profile_id,
             source_type=self.source_type,
@@ -134,6 +140,7 @@ class ShortTermMemoryBuffer:
         lease_seconds: int,
         now: str | None = None,
     ) -> SummaryRequest | None:
+        self._ensure_open()
         return self._store.claim_next_segment(
             profile_id=self.profile_id,
             source_type=self.source_type,
@@ -152,6 +159,7 @@ class ShortTermMemoryBuffer:
         memory_ids: list[str],
         reason: str | None,
     ) -> SummaryRequest:
+        self._ensure_open()
         return self._store.acknowledge_segment(
             profile_id=self.profile_id,
             segment_id=segment_id,
@@ -170,6 +178,7 @@ class ShortTermMemoryBuffer:
         error: str,
         max_attempts: int | None = None,
     ) -> SummaryRequest:
+        self._ensure_open()
         effective_max_attempts = (
             self.max_summary_attempts
             if max_attempts is None
@@ -189,6 +198,7 @@ class ShortTermMemoryBuffer:
         *,
         now: str | None = None,
     ) -> int:
+        self._ensure_open()
         return self._store.recover_expired_leases(
             profile_id=self.profile_id,
             source_type=self.source_type,
@@ -200,15 +210,18 @@ class ShortTermMemoryBuffer:
         *,
         segment_id: str,
     ) -> SummaryRequest:
+        self._ensure_open()
         return self._store.requeue_failed_segment(
             profile_id=self.profile_id,
             segment_id=segment_id,
         )
 
     def close(self) -> None:
-        if self._owns_store and not self._closed:
+        if self._closed:
+            return
+        self._closed = True
+        if self._owns_store:
             self._store.close()
-            self._closed = True
 
     def _prepare_if_needed(self) -> dict[str, Any] | None:
         stats = self._store.get_stats(
@@ -218,6 +231,10 @@ class ShortTermMemoryBuffer:
         if not self._policy.should_prepare(stats):
             return None
         return self.pop_oldest_segment_for_summary()
+
+    def _ensure_open(self) -> None:
+        if self._closed:
+            raise RuntimeError("ShortTermMemoryBuffer is closed")
 
 
 def now_iso() -> str:
