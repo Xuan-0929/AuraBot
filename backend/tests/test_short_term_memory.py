@@ -1,16 +1,19 @@
 from contextlib import closing
 from dataclasses import FrozenInstanceError
+import gc
 import hashlib
 import json
 import os
 from pathlib import Path
 import socket
 import sqlite3
+import stat
 import tempfile
 from threading import Barrier, BrokenBarrierError, Event, Lock, Thread
 from typing import get_type_hints
 import unittest
 from unittest.mock import Mock, patch
+import weakref
 
 from backend.memory.short_term.buffer import ShortTermMemoryBuffer
 from backend.memory.short_term.models import (
@@ -124,6 +127,107 @@ class SQLiteShortTermStoreTests(unittest.TestCase):
             [message.content for message in scheduler_messages],
             ["scheduler"],
         )
+
+    def test_new_direct_database_is_private_under_permissive_umask(self):
+        self.store.close()
+        path = Path(self.tmpdir.name) / "private.sqlite3"
+        previous_umask = os.umask(0o022)
+        store = None
+        try:
+            store = SQLiteShortTermStore(path)
+        finally:
+            os.umask(previous_umask)
+        try:
+            self.assertEqual(stat.S_IMODE(path.stat().st_mode), 0o600)
+        finally:
+            if store is not None:
+                store.close()
+
+    def test_existing_direct_database_is_tightened_without_truncating_data(self):
+        self.store.append_message(
+            profile_id="profile-1",
+            source_type="chat",
+            role="user",
+            content="existing bytes",
+            source_id=None,
+        )
+        self.store.close()
+        os.chmod(self.path, 0o644)
+        before = self.path.read_bytes()
+
+        self.store = SQLiteShortTermStore(self.path)
+        self.store.close()
+
+        self.assertEqual(stat.S_IMODE(self.path.stat().st_mode), 0o600)
+        after = self.path.read_bytes()
+        self.assertEqual(after[:16], before[:16])
+        self.assertEqual(len(after), len(before))
+        with closing(sqlite3.connect(self.path)) as connection:
+            columns = {
+                row[1]
+                for row in connection.execute(
+                    "pragma table_info(short_term_messages)"
+                )
+            }
+            count = connection.execute(
+                "select count(*) from short_term_messages"
+            ).fetchone()[0]
+        self.assertIn("source_type", columns)
+        self.assertEqual(count, 1)
+
+    def test_direct_database_symlink_is_rejected_without_touching_target(self):
+        self.store.close()
+        target = Path(self.tmpdir.name) / "target.sqlite3"
+        target.write_bytes(b"not a database")
+        link = Path(self.tmpdir.name) / "linked.sqlite3"
+        if not hasattr(os, "symlink"):
+            self.skipTest("symlink creation is not supported")
+        try:
+            os.symlink(target, link)
+        except (NotImplementedError, OSError) as error:
+            self.skipTest(f"symlink creation is unavailable: {error}")
+
+        with self.assertRaisesRegex(ValueError, "symlink"):
+            SQLiteShortTermStore(link)
+
+        self.assertEqual(target.read_bytes(), b"not a database")
+        self.assertTrue(link.is_symlink())
+
+    def test_concurrent_direct_database_constructors_share_private_file(self):
+        self.store.close()
+        path = Path(self.tmpdir.name) / "concurrent.sqlite3"
+        start = Barrier(3)
+        stores = []
+        errors = []
+        result_lock = Lock()
+        previous_umask = os.umask(0o022)
+
+        def construct():
+            try:
+                start.wait(timeout=5)
+                store = SQLiteShortTermStore(path)
+                with result_lock:
+                    stores.append(store)
+            except BaseException as error:
+                with result_lock:
+                    errors.append(error)
+
+        threads = [Thread(target=construct) for _ in range(2)]
+        try:
+            for thread in threads:
+                thread.start()
+            start.wait(timeout=5)
+            for thread in threads:
+                thread.join(timeout=5)
+        finally:
+            os.umask(previous_umask)
+            for store in stores:
+                store.close()
+
+        self.assertFalse(any(thread.is_alive() for thread in threads))
+        self.assertEqual(errors, [])
+        self.assertEqual(len(stores), 2)
+        self.assertEqual(stat.S_IMODE(path.stat().st_mode), 0o600)
 
     def test_breakpoint_requires_a_new_latest_message(self):
         breakpoint_args = {
@@ -1485,6 +1589,251 @@ class SQLiteShortTermDeliveryTests(unittest.TestCase):
     def _payload(self, segment_id):
         return json.loads(self._segment_row(segment_id)["payload_json"])
 
+    def _assert_cross_source_error_is_opaque(self, operation, *, state):
+        before = self._segment_row(operation["segment_id"])
+
+        with self.assertRaises(ShortTermStateError) as raised:
+            operation["call"]()
+
+        message = str(raised.exception)
+        self.assertNotIn("source-only secret", message)
+        self.assertNotIn(state, message)
+        self.assertEqual(self._segment_row(operation["segment_id"]), before)
+
+    def test_acknowledge_requires_exact_source_and_correct_source_succeeds(self):
+        prepared, _ = self._prepare_segment(content="source-only secret")
+        self._prepare_segment(
+            source_type="scheduler",
+            content="other source",
+        )
+        self.store.claim_next_segment(
+            profile_id=self.PROFILE_ID,
+            source_type=self.SOURCE_TYPE,
+            owner="main-agent",
+            lease_seconds=60,
+            now=self.NOW,
+        )
+
+        self._assert_cross_source_error_is_opaque(
+            {
+                "segment_id": prepared.segment_id,
+                "call": lambda: self.store.acknowledge_segment(
+                    profile_id=self.PROFILE_ID,
+                    source_type="scheduler",
+                    segment_id=prepared.segment_id,
+                    owner="main-agent",
+                    outcome="remembered",
+                    episode_id=None,
+                    memory_ids=[],
+                    reason=None,
+                    now="2026-07-25T00:00:30+00:00",
+                ),
+            },
+            state="processing",
+        )
+
+        completed = self.store.acknowledge_segment(
+            profile_id=self.PROFILE_ID,
+            source_type=self.SOURCE_TYPE,
+            segment_id=prepared.segment_id,
+            owner="main-agent",
+            outcome="remembered",
+            episode_id=None,
+            memory_ids=[],
+            reason=None,
+            now="2026-07-25T00:00:30+00:00",
+        )
+        self.assertEqual(completed.state, SegmentState.COMPLETED)
+
+    def test_release_requires_exact_source_and_correct_source_succeeds(self):
+        prepared, _ = self._prepare_segment(content="source-only secret")
+        self._prepare_segment(
+            source_type="scheduler",
+            content="other source",
+        )
+        self.store.claim_next_segment(
+            profile_id=self.PROFILE_ID,
+            source_type=self.SOURCE_TYPE,
+            owner="main-agent",
+            lease_seconds=60,
+            now=self.NOW,
+        )
+
+        self._assert_cross_source_error_is_opaque(
+            {
+                "segment_id": prepared.segment_id,
+                "call": lambda: self.store.release_segment(
+                    profile_id=self.PROFILE_ID,
+                    source_type="scheduler",
+                    segment_id=prepared.segment_id,
+                    owner="main-agent",
+                    error="temporary",
+                    max_attempts=2,
+                    now="2026-07-25T00:00:30+00:00",
+                ),
+            },
+            state="processing",
+        )
+
+        released = self.store.release_segment(
+            profile_id=self.PROFILE_ID,
+            source_type=self.SOURCE_TYPE,
+            segment_id=prepared.segment_id,
+            owner="main-agent",
+            error="temporary",
+            max_attempts=2,
+            now="2026-07-25T00:00:30+00:00",
+        )
+        self.assertEqual(released.state, SegmentState.PENDING)
+
+    def test_requeue_requires_exact_source_and_correct_source_succeeds(self):
+        prepared, _ = self._prepare_segment(content="source-only secret")
+        self._prepare_segment(
+            source_type="scheduler",
+            content="other source",
+        )
+        self.store.claim_next_segment(
+            profile_id=self.PROFILE_ID,
+            source_type=self.SOURCE_TYPE,
+            owner="main-agent",
+            lease_seconds=60,
+            now=self.NOW,
+        )
+        self.store.release_segment(
+            profile_id=self.PROFILE_ID,
+            source_type=self.SOURCE_TYPE,
+            segment_id=prepared.segment_id,
+            owner="main-agent",
+            error="permanent",
+            max_attempts=1,
+            now="2026-07-25T00:00:30+00:00",
+        )
+
+        self._assert_cross_source_error_is_opaque(
+            {
+                "segment_id": prepared.segment_id,
+                "call": lambda: self.store.requeue_failed_segment(
+                    profile_id=self.PROFILE_ID,
+                    source_type="scheduler",
+                    segment_id=prepared.segment_id,
+                ),
+            },
+            state="failed",
+        )
+
+        requeued = self.store.requeue_failed_segment(
+            profile_id=self.PROFILE_ID,
+            source_type=self.SOURCE_TYPE,
+            segment_id=prepared.segment_id,
+        )
+        self.assertEqual(requeued.state, SegmentState.PENDING)
+
+    def test_acknowledge_and_release_require_live_lease_at_exact_instant(self):
+        cases = (
+            ("before", "2026-07-25T08:00:59.999999+08:00", True),
+            ("equal", "2026-07-24T20:01:00-04:00", False),
+            ("after", "2026-07-25T09:01:00+08:00", False),
+        )
+        for operation in ("acknowledge", "release"):
+            for label, now, succeeds in cases:
+                with self.subTest(operation=operation, timing=label):
+                    profile_id = f"profile-{operation}-{label}"
+                    prepared, _ = self._prepare_segment(profile_id=profile_id)
+                    self.store.claim_next_segment(
+                        profile_id=profile_id,
+                        source_type=self.SOURCE_TYPE,
+                        owner="stale-owner",
+                        lease_seconds=60,
+                        now=self.NOW,
+                    )
+                    before = self._segment_row(prepared.segment_id)
+
+                    if operation == "acknowledge":
+                        transition = lambda: self.store.acknowledge_segment(
+                            profile_id=profile_id,
+                            source_type=self.SOURCE_TYPE,
+                            segment_id=prepared.segment_id,
+                            owner="stale-owner",
+                            outcome="remembered",
+                            episode_id=None,
+                            memory_ids=[],
+                            reason=None,
+                            now=now,
+                        )
+                    else:
+                        transition = lambda: self.store.release_segment(
+                            profile_id=profile_id,
+                            source_type=self.SOURCE_TYPE,
+                            segment_id=prepared.segment_id,
+                            owner="stale-owner",
+                            error="failed",
+                            max_attempts=2,
+                            now=now,
+                        )
+
+                    if succeeds:
+                        result = transition()
+                        self.assertIn(
+                            result.state,
+                            (SegmentState.COMPLETED, SegmentState.PENDING),
+                        )
+                        continue
+
+                    with self.assertRaisesRegex(
+                        ShortTermStateError,
+                        "lease",
+                    ):
+                        transition()
+                    self.assertEqual(
+                        self._segment_row(prepared.segment_id),
+                        before,
+                    )
+                    self.store.close()
+                    self.store = SQLiteShortTermStore(self.path)
+                    self.assertEqual(
+                        self._segment_row(prepared.segment_id),
+                        before,
+                    )
+
+    def test_completed_acknowledge_is_idempotent_after_original_lease_expiry(self):
+        prepared, _ = self._prepare_segment()
+        self.store.claim_next_segment(
+            profile_id=self.PROFILE_ID,
+            source_type=self.SOURCE_TYPE,
+            owner="main-agent",
+            lease_seconds=60,
+            now=self.NOW,
+        )
+        first = self.store.acknowledge_segment(
+            profile_id=self.PROFILE_ID,
+            source_type=self.SOURCE_TYPE,
+            segment_id=prepared.segment_id,
+            owner="main-agent",
+            outcome="remembered",
+            episode_id="episode-1",
+            memory_ids=["memory-1"],
+            reason=None,
+            now="2026-07-25T00:00:30+00:00",
+        )
+        before = self._segment_row(prepared.segment_id)
+        self.store.close()
+        self.store = SQLiteShortTermStore(self.path)
+
+        repeated = self.store.acknowledge_segment(
+            profile_id=self.PROFILE_ID,
+            source_type=self.SOURCE_TYPE,
+            segment_id=prepared.segment_id,
+            owner="retry-owner",
+            outcome="discarded",
+            episode_id=None,
+            memory_ids=[],
+            reason="late",
+            now="2026-07-25T00:02:00+00:00",
+        )
+
+        self.assertEqual(repeated, first)
+        self.assertEqual(self._segment_row(prepared.segment_id), before)
+
     def test_claim_and_owner_scoped_acknowledge_are_idempotent(self):
         prepared, _ = self._prepare_segment()
 
@@ -1507,12 +1856,14 @@ class SQLiteShortTermDeliveryTests(unittest.TestCase):
 
         completed = self.store.acknowledge_segment(
             profile_id=self.PROFILE_ID,
+            source_type=self.SOURCE_TYPE,
             segment_id=prepared.segment_id,
             owner="main-agent",
             outcome="remembered",
             episode_id="episode-1",
             memory_ids=["memory-1", "memory-2"],
             reason=None,
+            now=self.NOW,
         )
         first_row = self._segment_row(prepared.segment_id)
 
@@ -1533,12 +1884,14 @@ class SQLiteShortTermDeliveryTests(unittest.TestCase):
 
         repeated = self.store.acknowledge_segment(
             profile_id=self.PROFILE_ID,
+            source_type=self.SOURCE_TYPE,
             segment_id=prepared.segment_id,
             owner="different-retry-owner",
             outcome="discarded",
             episode_id=None,
             memory_ids=[],
             reason="late response",
+            now=self.NOW,
         )
         repeated_row = self._segment_row(prepared.segment_id)
 
@@ -1567,10 +1920,12 @@ class SQLiteShortTermDeliveryTests(unittest.TestCase):
 
         pending = self.store.release_segment(
             profile_id=self.PROFILE_ID,
+            source_type=self.SOURCE_TYPE,
             segment_id=prepared.segment_id,
             owner="main-agent",
             error="temporary failure",
             max_attempts=2,
+            now=self.NOW,
         )
 
         self.assertEqual(pending.state, SegmentState.PENDING)
@@ -1593,10 +1948,12 @@ class SQLiteShortTermDeliveryTests(unittest.TestCase):
         )
         failed = self.store.release_segment(
             profile_id=self.PROFILE_ID,
+            source_type=self.SOURCE_TYPE,
             segment_id=prepared.segment_id,
             owner="main-agent",
             error="permanent failure",
             max_attempts=2,
+            now=self.NOW,
         )
 
         self.assertEqual(second_claim.attempt_count, 2)
@@ -1909,20 +2266,24 @@ class SQLiteShortTermDeliveryTests(unittest.TestCase):
                     if operation == "ack":
                         self.store.acknowledge_segment(
                             profile_id=self.PROFILE_ID,
+                            source_type=self.SOURCE_TYPE,
                             segment_id=prepared.segment_id,
                             owner="wrong-owner",
                             outcome="remembered",
                             episode_id=None,
                             memory_ids=[],
                             reason=None,
+                            now=self.NOW,
                         )
                     else:
                         self.store.release_segment(
                             profile_id=self.PROFILE_ID,
+                            source_type=self.SOURCE_TYPE,
                             segment_id=prepared.segment_id,
                             owner="wrong-owner",
                             error="failed",
                             max_attempts=2,
+                            now=self.NOW,
                         )
                 self.assertEqual(self._segment_row(prepared.segment_id), before)
 
@@ -1951,24 +2312,29 @@ class SQLiteShortTermDeliveryTests(unittest.TestCase):
                         if operation == "ack":
                             self.store.acknowledge_segment(
                                 profile_id=profile_id,
+                                source_type=self.SOURCE_TYPE,
                                 segment_id=segment_id,
                                 owner="main-agent",
                                 outcome="remembered",
                                 episode_id=None,
                                 memory_ids=[],
                                 reason=None,
+                                now=self.NOW,
                             )
                         elif operation == "release":
                             self.store.release_segment(
                                 profile_id=profile_id,
+                                source_type=self.SOURCE_TYPE,
                                 segment_id=segment_id,
                                 owner="main-agent",
                                 error="failed",
                                 max_attempts=2,
+                                now=self.NOW,
                             )
                         else:
                             self.store.requeue_failed_segment(
                                 profile_id=profile_id,
+                                source_type=self.SOURCE_TYPE,
                                 segment_id=segment_id,
                             )
                     self.assertEqual(self._segment_row(prepared.segment_id), before)
@@ -1984,10 +2350,12 @@ class SQLiteShortTermDeliveryTests(unittest.TestCase):
         )
         self.store.release_segment(
             profile_id=self.PROFILE_ID,
+            source_type=self.SOURCE_TYPE,
             segment_id=failed.segment_id,
             owner="main-agent",
             error="failed",
             max_attempts=1,
+            now=self.NOW,
         )
         pending, _ = self._prepare_segment(content="pending")
 
@@ -1999,20 +2367,24 @@ class SQLiteShortTermDeliveryTests(unittest.TestCase):
                         if operation == "ack":
                             self.store.acknowledge_segment(
                                 profile_id=self.PROFILE_ID,
+                                source_type=self.SOURCE_TYPE,
                                 segment_id=request.segment_id,
                                 owner="main-agent",
                                 outcome="remembered",
                                 episode_id=None,
                                 memory_ids=[],
                                 reason=None,
+                                now=self.NOW,
                             )
                         else:
                             self.store.release_segment(
                                 profile_id=self.PROFILE_ID,
+                                source_type=self.SOURCE_TYPE,
                                 segment_id=request.segment_id,
                                 owner="main-agent",
                                 error="failed",
                                 max_attempts=1,
+                                now=self.NOW,
                             )
                     self.assertEqual(self._segment_row(request.segment_id), before)
 
@@ -2056,8 +2428,10 @@ class SQLiteShortTermDeliveryTests(unittest.TestCase):
                 with self.assertRaises((TypeError, ValueError)):
                     self.store.acknowledge_segment(
                         **arguments,
+                        source_type=self.SOURCE_TYPE,
                         episode_id=None,
                         reason=None,
+                        now=self.NOW,
                     )
 
         release_cases = (
@@ -2071,8 +2445,10 @@ class SQLiteShortTermDeliveryTests(unittest.TestCase):
                 with self.assertRaises((TypeError, ValueError)):
                     self.store.release_segment(
                         profile_id=self.PROFILE_ID,
+                        source_type=self.SOURCE_TYPE,
                         segment_id=prepared.segment_id,
                         **arguments,
+                        now=self.NOW,
                     )
 
     def test_only_failed_segments_can_be_requeued_cleanly(self):
@@ -2086,10 +2462,12 @@ class SQLiteShortTermDeliveryTests(unittest.TestCase):
         )
         self.store.release_segment(
             profile_id=self.PROFILE_ID,
+            source_type=self.SOURCE_TYPE,
             segment_id=failed.segment_id,
             owner="main-agent",
             error="failed permanently",
             max_attempts=1,
+            now=self.NOW,
         )
 
         processing, _ = self._prepare_segment(content="processing")
@@ -2113,18 +2491,21 @@ class SQLiteShortTermDeliveryTests(unittest.TestCase):
         self.assertEqual(completed_claim.segment_id, completed.segment_id)
         self.store.acknowledge_segment(
             profile_id=self.PROFILE_ID,
+            source_type=self.SOURCE_TYPE,
             segment_id=completed.segment_id,
             owner="main-agent",
             outcome="remembered",
             episode_id=None,
             memory_ids=[],
             reason=None,
+            now=self.NOW,
         )
 
         pending, _ = self._prepare_segment(content="pending")
 
         requeued = self.store.requeue_failed_segment(
             profile_id=self.PROFILE_ID,
+            source_type=self.SOURCE_TYPE,
             segment_id=failed.segment_id,
         )
 
@@ -2147,6 +2528,7 @@ class SQLiteShortTermDeliveryTests(unittest.TestCase):
                 with self.assertRaises(ShortTermStateError):
                     self.store.requeue_failed_segment(
                         profile_id=self.PROFILE_ID,
+                        source_type=self.SOURCE_TYPE,
                         segment_id=segment_id,
                     )
                 self.assertEqual(self._segment_row(segment_id), before)
@@ -2246,10 +2628,12 @@ class SQLiteShortTermDeliveryTests(unittest.TestCase):
         )
         released = self.store.release_segment(
             profile_id=self.PROFILE_ID,
+            source_type=self.SOURCE_TYPE,
             segment_id=prepared.segment_id,
             owner="main-agent",
             error="retry",
             max_attempts=2,
+            now=self.NOW,
         )
         self.store.claim_next_segment(
             profile_id=self.PROFILE_ID,
@@ -2260,12 +2644,14 @@ class SQLiteShortTermDeliveryTests(unittest.TestCase):
         )
         completed = self.store.acknowledge_segment(
             profile_id=self.PROFILE_ID,
+            source_type=self.SOURCE_TYPE,
             segment_id=prepared.segment_id,
             owner="main-agent",
             outcome="remembered",
             episode_id=None,
             memory_ids=[],
             reason=None,
+            now=self.NOW,
         )
 
         for request, state, attempts, lease in (
@@ -2455,10 +2841,12 @@ class SQLiteShortTermDeliveryTests(unittest.TestCase):
                 if operation == "requeue":
                     self.store.release_segment(
                         profile_id=profile_id,
+                        source_type=self.SOURCE_TYPE,
                         segment_id=prepared.segment_id,
                         owner="main-agent",
                         error="failed",
                         max_attempts=1,
+                        now=self.NOW,
                     )
                 elif operation == "recover":
                     self._update_segment(
@@ -2477,20 +2865,24 @@ class SQLiteShortTermDeliveryTests(unittest.TestCase):
                     if operation == "ack":
                         self.store.acknowledge_segment(
                             profile_id=profile_id,
+                            source_type=self.SOURCE_TYPE,
                             segment_id=prepared.segment_id,
                             owner="main-agent",
                             outcome="remembered",
                             episode_id=None,
                             memory_ids=[],
                             reason=None,
+                            now=self.NOW,
                         )
                     elif operation == "release":
                         self.store.release_segment(
                             profile_id=profile_id,
+                            source_type=self.SOURCE_TYPE,
                             segment_id=prepared.segment_id,
                             owner="main-agent",
                             error="retry",
                             max_attempts=2,
+                            now=self.NOW,
                         )
                     elif operation == "recover":
                         self.store.recover_expired_leases(
@@ -2501,6 +2893,7 @@ class SQLiteShortTermDeliveryTests(unittest.TestCase):
                     else:
                         self.store.requeue_failed_segment(
                             profile_id=profile_id,
+                            source_type=self.SOURCE_TYPE,
                             segment_id=prepared.segment_id,
                         )
 
@@ -2537,12 +2930,14 @@ class SQLiteShortTermDeliveryTests(unittest.TestCase):
                 )
                 self.store.acknowledge_segment(
                     profile_id=profile_id,
+                    source_type=self.SOURCE_TYPE,
                     segment_id=prepared.segment_id,
                     owner="main-agent",
                     outcome="remembered",
                     episode_id=None,
                     memory_ids=[],
                     reason=None,
+                    now=self.NOW,
                 )
                 self._update_segment(
                     prepared.segment_id,
@@ -2555,12 +2950,14 @@ class SQLiteShortTermDeliveryTests(unittest.TestCase):
                 with self.assertRaisesRegex(RuntimeError, "result"):
                     self.store.acknowledge_segment(
                         profile_id=profile_id,
+                        source_type=self.SOURCE_TYPE,
                         segment_id=prepared.segment_id,
                         owner="retry-owner",
                         outcome="discarded",
                         episode_id=None,
                         memory_ids=[],
                         reason="retry",
+                        now=self.NOW,
                     )
 
                 self.assertEqual(self._segment_row(prepared.segment_id), before)
@@ -2576,12 +2973,14 @@ class SQLiteShortTermDeliveryTests(unittest.TestCase):
         )
         first = self.store.acknowledge_segment(
             profile_id=self.PROFILE_ID,
+            source_type=self.SOURCE_TYPE,
             segment_id=prepared.segment_id,
             owner="main-agent",
             outcome="remembered",
             episode_id="episode-1",
             memory_ids=["memory-1"],
             reason=None,
+            now=self.NOW,
         )
         before = self._segment_row(prepared.segment_id)
         self.store.close()
@@ -2589,12 +2988,14 @@ class SQLiteShortTermDeliveryTests(unittest.TestCase):
 
         repeated = self.store.acknowledge_segment(
             profile_id=self.PROFILE_ID,
+            source_type=self.SOURCE_TYPE,
             segment_id=prepared.segment_id,
             owner="retry-owner",
             outcome="discarded",
             episode_id=None,
             memory_ids=[],
             reason="late",
+            now=self.NOW,
         )
 
         self.assertEqual(repeated, first)
@@ -2688,12 +3089,14 @@ class SQLiteShortTermDeliveryTests(unittest.TestCase):
         with self.assertRaises(sqlite3.IntegrityError):
             self.store.acknowledge_segment(
                 profile_id=self.PROFILE_ID,
+                source_type=self.SOURCE_TYPE,
                 segment_id=prepared.segment_id,
                 owner="main-agent",
                 outcome="remembered",
                 episode_id="episode-1",
                 memory_ids=["memory-1"],
                 reason=None,
+                now=self.NOW,
             )
 
         self.assertEqual(self._segment_row(prepared.segment_id), before)
@@ -2726,10 +3129,12 @@ class SQLiteShortTermDeliveryTests(unittest.TestCase):
         ):
             self.store.release_segment(
                 profile_id=self.PROFILE_ID,
+                source_type=self.SOURCE_TYPE,
                 segment_id=prepared.segment_id,
                 owner="main-agent",
                 error="retry",
                 max_attempts=2,
+                now=self.NOW,
             )
 
         self.store.close()
@@ -2747,10 +3152,12 @@ class SQLiteShortTermDeliveryTests(unittest.TestCase):
         )
         self.store.release_segment(
             profile_id=self.PROFILE_ID,
+            source_type=self.SOURCE_TYPE,
             segment_id=prepared.segment_id,
             owner="main-agent",
             error="failed",
             max_attempts=1,
+            now=self.NOW,
         )
         with closing(sqlite3.connect(self.path)) as connection, connection:
             connection.execute(
@@ -2771,6 +3178,7 @@ class SQLiteShortTermDeliveryTests(unittest.TestCase):
         ):
             self.store.requeue_failed_segment(
                 profile_id=self.PROFILE_ID,
+                source_type=self.SOURCE_TYPE,
                 segment_id=prepared.segment_id,
             )
 
@@ -3056,6 +3464,7 @@ class ShortTermMemoryBufferTests(unittest.TestCase):
             segment_id=claimed.segment_id,
             owner="main-agent",
             error="temporary failure",
+            now="2026-07-25T00:00:30+00:00",
         )
         claimed_again = buffer.claim_next_summary(
             owner="main-agent",
@@ -3069,6 +3478,7 @@ class ShortTermMemoryBufferTests(unittest.TestCase):
             episode_id="episode-1",
             memory_ids=["memory-1"],
             reason=None,
+            now="2026-07-25T00:01:15+00:00",
         )
 
         self.assertIsInstance(claimed, SummaryRequest)
@@ -3083,19 +3493,23 @@ class ShortTermMemoryBufferTests(unittest.TestCase):
         )
         wrapped.release_segment.assert_called_once_with(
             profile_id=self.PROFILE_ID,
+            source_type=self.SOURCE_TYPE,
             segment_id=prepared["segment_id"],
             owner="main-agent",
             error="temporary failure",
             max_attempts=4,
+            now="2026-07-25T00:00:30+00:00",
         )
         wrapped.acknowledge_segment.assert_called_once_with(
             profile_id=self.PROFILE_ID,
+            source_type=self.SOURCE_TYPE,
             segment_id=prepared["segment_id"],
             owner="main-agent",
             outcome="remembered",
             episode_id="episode-1",
             memory_ids=["memory-1"],
             reason=None,
+            now="2026-07-25T00:01:15+00:00",
         )
 
     def test_release_summary_accepts_valid_per_call_attempt_override(self):
@@ -3119,10 +3533,12 @@ class ShortTermMemoryBufferTests(unittest.TestCase):
         self.assertEqual(released.state, SegmentState.FAILED)
         wrapped.release_segment.assert_called_once_with(
             profile_id=self.PROFILE_ID,
+            source_type=self.SOURCE_TYPE,
             segment_id=prepared["segment_id"],
             owner="main-agent",
             error="permanent failure",
             max_attempts=1,
+            now=None,
         )
 
     def test_recover_and_requeue_delegate_and_preserve_store_behavior(self):
@@ -3152,6 +3568,7 @@ class ShortTermMemoryBufferTests(unittest.TestCase):
             segment_id=claimed.segment_id,
             owner="main-agent",
             error="failed",
+            now="2026-07-25T00:02:30+00:00",
         )
         requeued = buffer.requeue_failed_summary(
             segment_id=failed.segment_id
@@ -3166,6 +3583,7 @@ class ShortTermMemoryBufferTests(unittest.TestCase):
         )
         wrapped.requeue_failed_segment.assert_called_once_with(
             profile_id=self.PROFILE_ID,
+            source_type=self.SOURCE_TYPE,
             segment_id=prepared["segment_id"],
         )
 
@@ -3187,6 +3605,69 @@ class ShortTermMemoryBufferTests(unittest.TestCase):
             "^SQLiteShortTermStore is closed$",
         ):
             owned_store.list_messages(self.PROFILE_ID, self.SOURCE_TYPE)
+
+    def test_context_manager_closes_only_owned_store(self):
+        with ShortTermMemoryBuffer(
+            profile_id=self.PROFILE_ID,
+            source_type=self.SOURCE_TYPE,
+        ) as owned:
+            owned_store = owned._store
+            owned.add(role="user", content="owned", source_id=None)
+
+        with self.assertRaisesRegex(
+            RuntimeError,
+            "^SQLiteShortTermStore is closed$",
+        ):
+            owned_store.list_messages(self.PROFILE_ID, self.SOURCE_TYPE)
+
+        injected_store = self._store("injected.sqlite3")
+        with ShortTermMemoryBuffer(
+            profile_id=self.PROFILE_ID,
+            source_type=self.SOURCE_TYPE,
+            store=injected_store,
+        ) as injected:
+            injected.add(role="user", content="injected", source_id=None)
+
+        self.assertEqual(
+            [
+                message.content
+                for message in injected_store.list_messages(
+                    self.PROFILE_ID,
+                    self.SOURCE_TYPE,
+                )
+            ],
+            ["injected"],
+        )
+
+    def test_gc_finalizer_closes_owned_but_not_injected_store(self):
+        owned_store = Mock()
+        with patch(
+            "backend.memory.short_term.buffer.SQLiteShortTermStore",
+            return_value=owned_store,
+        ):
+            owned = ShortTermMemoryBuffer(
+                profile_id=self.PROFILE_ID,
+                source_type=self.SOURCE_TYPE,
+            )
+        owned_ref = weakref.ref(owned)
+        del owned
+        gc.collect()
+
+        self.assertIsNone(owned_ref())
+        owned_store.close.assert_called_once_with()
+
+        injected_store = Mock()
+        injected = ShortTermMemoryBuffer(
+            profile_id=self.PROFILE_ID,
+            source_type=self.SOURCE_TYPE,
+            store=injected_store,
+        )
+        injected_ref = weakref.ref(injected)
+        del injected
+        gc.collect()
+
+        self.assertIsNone(injected_ref())
+        injected_store.close.assert_not_called()
 
     def test_all_public_operations_fail_after_injected_buffer_close(self):
         store = self._store()
@@ -3428,13 +3909,18 @@ class ShortTermMemoryBufferTests(unittest.TestCase):
 
     def test_json_persistence_path_uses_sqlite_sidecar(self):
         path = Path(self.tmpdir.name) / "new-memory.json"
-        buffer = self._buffer(persistence_path=path)
-        buffer.add(role="user", content="持久化", source_id=None)
-        buffer.close()
+        previous_umask = os.umask(0o022)
+        try:
+            buffer = self._buffer(persistence_path=path)
+            buffer.add(role="user", content="持久化", source_id=None)
+            buffer.close()
+        finally:
+            os.umask(previous_umask)
 
         sidecar = Path(f"{path}.sqlite3")
         self.assertFalse(path.exists())
         self.assertTrue(sidecar.exists())
+        self.assertEqual(stat.S_IMODE(sidecar.stat().st_mode), 0o600)
         self.assertEqual(sidecar.read_bytes()[:16], b"SQLite format 3\x00")
         reopened = SQLiteShortTermStore(sidecar)
         self.stores.append(reopened)

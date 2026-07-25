@@ -2,7 +2,9 @@ from __future__ import annotations
 
 import hashlib
 import json
+import os
 import sqlite3
+import stat
 import threading
 from contextlib import contextmanager
 from dataclasses import dataclass
@@ -234,19 +236,136 @@ _LEGACY_BREAKPOINT_KEYS = frozenset(
 )
 
 
+def _prepare_sqlite_file(path: Path) -> tuple[int, int]:
+    flags = os.O_RDWR
+    flags |= getattr(os, "O_CLOEXEC", 0)
+    nofollow_flag = getattr(os, "O_NOFOLLOW", 0)
+    flags |= nofollow_flag
+
+    while True:
+        try:
+            descriptor = os.open(
+                path,
+                flags | os.O_CREAT | os.O_EXCL,
+                0o600,
+            )
+            break
+        except FileExistsError:
+            try:
+                path_stat = path.lstat()
+            except FileNotFoundError:
+                continue
+            except OSError as error:
+                raise ValueError(
+                    f"SQLite database could not be inspected safely: {error}"
+                ) from error
+
+            if stat.S_ISLNK(path_stat.st_mode):
+                raise ValueError("SQLite database must not be a symlink")
+            if not stat.S_ISREG(path_stat.st_mode):
+                raise ValueError("SQLite database must be a regular file")
+            try:
+                descriptor = os.open(path, flags)
+                break
+            except FileNotFoundError:
+                continue
+            except OSError as error:
+                raise ValueError(
+                    f"SQLite database could not be opened safely: {error}"
+                ) from error
+        except OSError as error:
+            raise ValueError(
+                f"SQLite database could not be reserved safely: {error}"
+            ) from error
+
+    try:
+        path_stat = path.lstat()
+        descriptor_stat = os.fstat(descriptor)
+        _validate_regular_file_identity(path_stat, descriptor_stat)
+        os.fchmod(descriptor, 0o600)
+        final_path_stat = path.lstat()
+        final_descriptor_stat = os.fstat(descriptor)
+        _validate_regular_file_identity(
+            final_path_stat,
+            final_descriptor_stat,
+        )
+        return (final_descriptor_stat.st_dev, final_descriptor_stat.st_ino)
+    except OSError as error:
+        raise ValueError(
+            f"SQLite database identity could not be validated: {error}"
+        ) from error
+    finally:
+        os.close(descriptor)
+
+
+def _validate_sqlite_file_identity(
+    path: Path,
+    *,
+    expected_identity: tuple[int, int],
+) -> None:
+    try:
+        path_stat = path.lstat()
+    except OSError as error:
+        raise ValueError(
+            f"SQLite database could not be revalidated safely: {error}"
+        ) from error
+    if stat.S_ISLNK(path_stat.st_mode):
+        raise ValueError("SQLite database must not be a symlink")
+    if not stat.S_ISREG(path_stat.st_mode):
+        raise ValueError("SQLite database must be a regular file")
+    identity = (path_stat.st_dev, path_stat.st_ino)
+    if identity != expected_identity:
+        raise ValueError("SQLite database identity changed while opening")
+    if stat.S_IMODE(path_stat.st_mode) != 0o600:
+        raise ValueError("SQLite database permissions changed while opening")
+
+
+def _validate_regular_file_identity(
+    path_stat: os.stat_result,
+    descriptor_stat: os.stat_result,
+) -> None:
+    if stat.S_ISLNK(path_stat.st_mode):
+        raise ValueError("SQLite database must not be a symlink")
+    if not stat.S_ISREG(path_stat.st_mode):
+        raise ValueError("SQLite database must be a regular file")
+    if not stat.S_ISREG(descriptor_stat.st_mode):
+        raise ValueError("SQLite database descriptor must be a regular file")
+    if (
+        path_stat.st_dev,
+        path_stat.st_ino,
+    ) != (
+        descriptor_stat.st_dev,
+        descriptor_stat.st_ino,
+    ):
+        raise ValueError("SQLite database identity changed while opening")
+
+
 class SQLiteShortTermStore:
     def __init__(self, path: str | Path):
+        expected_identity = None
         if str(path) == ":memory:":
             self.path: str | Path = ":memory:"
         else:
             self.path = Path(path)
             self.path.parent.mkdir(parents=True, exist_ok=True)
+            expected_identity = _prepare_sqlite_file(self.path)
 
-        self._connection: sqlite3.Connection | None = sqlite3.connect(
+        connection = sqlite3.connect(
             self.path,
             check_same_thread=False,
         )
-        self._connection.row_factory = sqlite3.Row
+        try:
+            if expected_identity is not None:
+                _validate_sqlite_file_identity(
+                    self.path,
+                    expected_identity=expected_identity,
+                )
+        except BaseException:
+            connection.close()
+            raise
+
+        self._connection: sqlite3.Connection | None = connection
+        connection.row_factory = sqlite3.Row
         self._lock = threading.RLock()
         try:
             self._initialize_schema()
@@ -849,14 +968,17 @@ class SQLiteShortTermStore:
         self,
         *,
         profile_id: str,
+        source_type: str,
         segment_id: str,
         owner: str,
         outcome: str,
         episode_id: str | None,
         memory_ids: list[str],
         reason: str | None,
+        now: str | None = None,
     ) -> SummaryRequest:
         _require_nonblank("profile_id", profile_id)
+        _require_nonblank("source_type", source_type)
         _require_nonblank("segment_id", segment_id)
         _require_nonblank("owner", owner)
         _require_nonblank("outcome", outcome)
@@ -886,6 +1008,7 @@ class SQLiteShortTermStore:
                 row = _get_exact_segment_row(
                     connection,
                     profile_id=profile_id,
+                    source_type=source_type,
                     segment_id=segment_id,
                 )
                 if row["state"] == SegmentState.COMPLETED.value:
@@ -894,7 +1017,15 @@ class SQLiteShortTermStore:
                 else:
                     _summary_request_from_segment_row(row)
                     _require_processing_owner(row, owner)
-                    completed_at = _now_iso()
+                    transition_at = _parse_aware_iso_timestamp(
+                        now,
+                        field_name="now",
+                    )
+                    observed_lease = _require_live_processing_lease(
+                        row,
+                        transition_at,
+                    )
+                    completed_at = transition_at.isoformat()
                     cursor = connection.execute(
                         """
                         update short_term_segments
@@ -907,8 +1038,10 @@ class SQLiteShortTermStore:
                             completed_at = ?
                         where id = ?
                           and profile_id = ?
+                          and source_type = ?
                           and state = ?
                           and lease_owner = ?
+                          and lease_expires_at = ?
                         """,
                         (
                             SegmentState.COMPLETED.value,
@@ -917,8 +1050,10 @@ class SQLiteShortTermStore:
                             completed_at,
                             segment_id,
                             profile_id,
+                            source_type,
                             SegmentState.PROCESSING.value,
                             owner,
+                            observed_lease,
                         ),
                     )
                     if cursor.rowcount != 1:
@@ -926,14 +1061,12 @@ class SQLiteShortTermStore:
                             "Short-term segment "
                             f"{segment_id!r} changed while it was acknowledged"
                         )
-                    updated_row = connection.execute(
-                        """
-                        select *
-                        from short_term_segments
-                        where id = ?
-                        """,
-                        (segment_id,),
-                    ).fetchone()
+                    updated_row = _get_exact_segment_row(
+                        connection,
+                        profile_id=profile_id,
+                        source_type=source_type,
+                        segment_id=segment_id,
+                    )
                     request = _summary_request_from_segment_row(updated_row)
 
         return request
@@ -942,12 +1075,15 @@ class SQLiteShortTermStore:
         self,
         *,
         profile_id: str,
+        source_type: str,
         segment_id: str,
         owner: str,
         error: str,
         max_attempts: int,
+        now: str | None = None,
     ) -> SummaryRequest:
         _require_nonblank("profile_id", profile_id)
+        _require_nonblank("source_type", source_type)
         _require_nonblank("segment_id", segment_id)
         _require_nonblank("owner", owner)
         _require_nonblank("error", error)
@@ -960,10 +1096,19 @@ class SQLiteShortTermStore:
                 row = _get_exact_segment_row(
                     connection,
                     profile_id=profile_id,
+                    source_type=source_type,
                     segment_id=segment_id,
                 )
                 _summary_request_from_segment_row(row)
                 _require_processing_owner(row, owner)
+                transition_at = _parse_aware_iso_timestamp(
+                    now,
+                    field_name="now",
+                )
+                observed_lease = _require_live_processing_lease(
+                    row,
+                    transition_at,
+                )
                 next_state = (
                     SegmentState.FAILED
                     if row["attempt_count"] >= max_attempts
@@ -979,17 +1124,21 @@ class SQLiteShortTermStore:
                         updated_at = ?
                     where id = ?
                       and profile_id = ?
+                      and source_type = ?
                       and state = ?
                       and lease_owner = ?
+                      and lease_expires_at = ?
                     """,
                     (
                         next_state.value,
                         error,
-                        _now_iso(),
+                        transition_at.isoformat(),
                         segment_id,
                         profile_id,
+                        source_type,
                         SegmentState.PROCESSING.value,
                         owner,
+                        observed_lease,
                     ),
                 )
                 if cursor.rowcount != 1:
@@ -997,14 +1146,12 @@ class SQLiteShortTermStore:
                         "Short-term segment "
                         f"{segment_id!r} changed while it was released"
                     )
-                updated_row = connection.execute(
-                    """
-                    select *
-                    from short_term_segments
-                    where id = ?
-                    """,
-                    (segment_id,),
-                ).fetchone()
+                updated_row = _get_exact_segment_row(
+                    connection,
+                    profile_id=profile_id,
+                    source_type=source_type,
+                    segment_id=segment_id,
+                )
                 request = _summary_request_from_segment_row(updated_row)
 
         return request
@@ -1037,9 +1184,11 @@ class SQLiteShortTermStore:
         self,
         *,
         profile_id: str,
+        source_type: str,
         segment_id: str,
     ) -> SummaryRequest:
         _require_nonblank("profile_id", profile_id)
+        _require_nonblank("source_type", source_type)
         _require_nonblank("segment_id", segment_id)
 
         with self._lock:
@@ -1049,6 +1198,7 @@ class SQLiteShortTermStore:
                 row = _get_exact_segment_row(
                     connection,
                     profile_id=profile_id,
+                    source_type=source_type,
                     segment_id=segment_id,
                 )
                 _summary_request_from_segment_row(row)
@@ -1069,6 +1219,7 @@ class SQLiteShortTermStore:
                         completed_at = null
                     where id = ?
                       and profile_id = ?
+                      and source_type = ?
                       and state = ?
                     """,
                     (
@@ -1076,6 +1227,7 @@ class SQLiteShortTermStore:
                         _now_iso(),
                         segment_id,
                         profile_id,
+                        source_type,
                         SegmentState.FAILED.value,
                     ),
                 )
@@ -1084,14 +1236,12 @@ class SQLiteShortTermStore:
                         "Short-term segment "
                         f"{segment_id!r} changed while it was requeued"
                     )
-                updated_row = connection.execute(
-                    """
-                    select *
-                    from short_term_segments
-                    where id = ?
-                    """,
-                    (segment_id,),
-                ).fetchone()
+                updated_row = _get_exact_segment_row(
+                    connection,
+                    profile_id=profile_id,
+                    source_type=source_type,
+                    segment_id=segment_id,
+                )
                 request = _summary_request_from_segment_row(updated_row)
 
         return request
@@ -1634,19 +1784,20 @@ def _get_exact_segment_row(
     connection: sqlite3.Connection,
     *,
     profile_id: str,
+    source_type: str,
     segment_id: str,
 ) -> sqlite3.Row:
     row = connection.execute(
         """
         select *
         from short_term_segments
-        where profile_id = ? and id = ?
+        where profile_id = ? and source_type = ? and id = ?
         """,
-        (profile_id, segment_id),
+        (profile_id, source_type, segment_id),
     ).fetchone()
     if row is None:
         raise ShortTermStateError(
-            "Short-term segment is unavailable for the requested profile"
+            "Short-term segment is unavailable for the requested stream"
         )
     return row
 
@@ -1660,6 +1811,16 @@ def _require_processing_owner(row: sqlite3.Row, owner: str) -> None:
         raise ShortTermStateError(
             f"Short-term segment {row['id']!r} is leased by another owner"
         )
+
+
+def _require_live_processing_lease(
+    row: sqlite3.Row,
+    now: datetime,
+) -> str:
+    lease_expires_at = row["lease_expires_at"]
+    if _processing_lease_expiry(row) <= now:
+        raise ShortTermStateError("Short-term segment lease is no longer active")
+    return lease_expires_at
 
 
 def _summary_request_from_segment_row(row: sqlite3.Row) -> SummaryRequest:

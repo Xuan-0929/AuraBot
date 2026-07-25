@@ -407,67 +407,75 @@ class MemoryInvodeTests(unittest.TestCase):
         self.assertEqual(invalid_forget_response.status_code, 400)
 
     def test_short_term_buffer_returns_oldest_breakpoint_segment_for_chat_agent_summary(self):
-        buffer = ShortTermMemoryBuffer(
+        with ShortTermMemoryBuffer(
             profile_id="user-1",
             source_type="chat",
             max_breakpoints=2,
-        )
+        ) as buffer:
+            buffer.add(role="user", content="我最近喜欢热拿铁。", source_id="m1")
+            buffer.add(role="assistant", content="我记住啦。", source_id="m2")
+            self.assertIsNone(
+                buffer.mark_breakpoint(topic="coffee", reason="topic ended")
+            )
+            buffer.add(role="user", content="明天我和阿杰聊项目。", source_id="m3")
+            buffer.add(role="assistant", content="好，我会留意这个安排。", source_id="m4")
+            segment = buffer.mark_breakpoint(
+                topic="project",
+                reason="topic ended",
+            )
 
-        buffer.add(role="user", content="我最近喜欢热拿铁。", source_id="m1")
-        buffer.add(role="assistant", content="我记住啦。", source_id="m2")
-        self.assertIsNone(buffer.mark_breakpoint(topic="coffee", reason="topic ended"))
-        buffer.add(role="user", content="明天我和阿杰聊项目。", source_id="m3")
-        buffer.add(role="assistant", content="好，我会留意这个安排。", source_id="m4")
-        segment = buffer.mark_breakpoint(topic="project", reason="topic ended")
-
-        self.assertIsNotNone(segment)
-        self.assertEqual(segment["profile_id"], "user-1")
-        self.assertEqual(segment["topic"], "coffee")
-        self.assertIn("我最近喜欢热拿铁", segment["content"])
-        self.assertNotIn("阿杰", segment["content"])
-        self.assertEqual(len(buffer.messages), 2)
-        self.assertEqual(len(buffer.breakpoints), 1)
-        self.assertEqual(self.vector_store.points, {})
+            self.assertIsNotNone(segment)
+            self.assertEqual(segment["profile_id"], "user-1")
+            self.assertEqual(segment["topic"], "coffee")
+            self.assertIn("我最近喜欢热拿铁", segment["content"])
+            self.assertNotIn("阿杰", segment["content"])
+            self.assertEqual(len(buffer.messages), 2)
+            self.assertEqual(len(buffer.breakpoints), 1)
+            self.assertEqual(self.vector_store.points, {})
 
     def test_short_term_buffer_persists_breakpoints_to_disk(self):
         persistence_path = Path(self.tmpdir.name) / "short-term.json"
-        buffer = ShortTermMemoryBuffer(
+        with ShortTermMemoryBuffer(
             profile_id="user-1",
             source_type="chat",
             max_breakpoints=3,
             persistence_path=persistence_path,
-        )
+        ) as buffer:
+            buffer.add(role="user", content="第一段话题。", source_id="m1")
+            buffer.mark_breakpoint(topic="first-topic", reason="topic ended")
 
-        buffer.add(role="user", content="第一段话题。", source_id="m1")
-        buffer.mark_breakpoint(topic="first-topic", reason="topic ended")
-
-        restored = ShortTermMemoryBuffer(
+        with ShortTermMemoryBuffer(
             profile_id="user-1",
             source_type="chat",
             max_breakpoints=3,
             persistence_path=persistence_path,
-        )
-
-        self.assertEqual(len(restored.messages), 1)
-        self.assertEqual(len(restored.breakpoints), 1)
-        self.assertEqual(restored.breakpoints[0].topic, "first-topic")
+        ) as restored:
+            self.assertEqual(len(restored.messages), 1)
+            self.assertEqual(len(restored.breakpoints), 1)
+            self.assertEqual(restored.breakpoints[0].topic, "first-topic")
 
     def test_short_term_buffer_returns_segment_when_context_length_reaches_limit(self):
-        buffer = ShortTermMemoryBuffer(
+        with ShortTermMemoryBuffer(
             profile_id="user-1",
             source_type="chat",
             max_breakpoints=10,
             max_chars=10,
-        )
+        ) as buffer:
+            buffer.add(role="user", content="咖啡话题。", source_id="m1")
+            buffer.mark_breakpoint(topic="coffee", reason="topic ended")
+            segment = buffer.add(
+                role="user",
+                content="项目话题内容很长。",
+                source_id="m2",
+            )
 
-        buffer.add(role="user", content="咖啡话题。", source_id="m1")
-        buffer.mark_breakpoint(topic="coffee", reason="topic ended")
-        segment = buffer.add(role="user", content="项目话题内容很长。", source_id="m2")
-
-        self.assertIsNotNone(segment)
-        self.assertEqual(segment["topic"], "coffee")
-        self.assertIn("咖啡话题", segment["content"])
-        self.assertEqual([message.content for message in buffer.messages], ["项目话题内容很长。"])
+            self.assertIsNotNone(segment)
+            self.assertEqual(segment["topic"], "coffee")
+            self.assertIn("咖啡话题", segment["content"])
+            self.assertEqual(
+                [message.content for message in buffer.messages],
+                ["项目话题内容很长。"],
+            )
 
     def test_improve_marks_older_conflicting_preference_superseded(self):
         liked = self.service.remember(

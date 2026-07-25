@@ -6,6 +6,7 @@ from pathlib import Path
 import stat
 from threading import RLock
 from typing import Any
+import weakref
 
 from ..stores.short_term_sqlite import SQLiteShortTermStore
 from .models import ShortTermBreakpoint, ShortTermMessage, SummaryRequest
@@ -57,6 +58,7 @@ class ShortTermMemoryBuffer:
         self._closed = False
         self._lock = RLock()
         self._legacy_import_result = None
+        self._store_finalizer = None
         if store is None:
             legacy_path = (
                 self.persistence_path
@@ -100,8 +102,21 @@ class ShortTermMemoryBuffer:
                 owned_store.close()
                 raise
             self._store = owned_store
+            self._store_finalizer = weakref.finalize(
+                self,
+                _close_owned_store,
+                owned_store,
+            )
         else:
             self._store = store
+
+    def __enter__(self) -> ShortTermMemoryBuffer:
+        with self._lock:
+            self._ensure_open()
+            return self
+
+    def __exit__(self, exc_type, exc_value, traceback) -> None:
+        self.close()
 
     @property
     def messages(self) -> list[ShortTermMessage]:
@@ -212,17 +227,20 @@ class ShortTermMemoryBuffer:
         episode_id: str | None,
         memory_ids: list[str],
         reason: str | None,
+        now: str | None = None,
     ) -> SummaryRequest:
         with self._lock:
             self._ensure_open()
             return self._store.acknowledge_segment(
                 profile_id=self.profile_id,
+                source_type=self.source_type,
                 segment_id=segment_id,
                 owner=owner,
                 outcome=outcome,
                 episode_id=episode_id,
                 memory_ids=memory_ids,
                 reason=reason,
+                now=now,
             )
 
     def release_summary(
@@ -232,6 +250,7 @@ class ShortTermMemoryBuffer:
         owner: str,
         error: str,
         max_attempts: int | None = None,
+        now: str | None = None,
     ) -> SummaryRequest:
         with self._lock:
             self._ensure_open()
@@ -243,10 +262,12 @@ class ShortTermMemoryBuffer:
             _require_positive_int("max_attempts", effective_max_attempts)
             return self._store.release_segment(
                 profile_id=self.profile_id,
+                source_type=self.source_type,
                 segment_id=segment_id,
                 owner=owner,
                 error=error,
                 max_attempts=effective_max_attempts,
+                now=now,
             )
 
     def recover_expired_summaries(
@@ -271,6 +292,7 @@ class ShortTermMemoryBuffer:
             self._ensure_open()
             return self._store.requeue_failed_segment(
                 profile_id=self.profile_id,
+                source_type=self.source_type,
                 segment_id=segment_id,
             )
 
@@ -279,8 +301,8 @@ class ShortTermMemoryBuffer:
             if self._closed:
                 return
             self._closed = True
-            if self._owns_store:
-                self._store.close()
+            if self._store_finalizer is not None:
+                self._store_finalizer()
 
     def _prepare_if_needed(self) -> dict[str, Any] | None:
         stats = self._store.get_stats(
@@ -298,6 +320,10 @@ class ShortTermMemoryBuffer:
 
 def now_iso() -> str:
     return datetime.now(UTC).isoformat()
+
+
+def _close_owned_store(store: ShortTermStore) -> None:
+    store.close()
 
 
 def _prepare_legacy_sidecar(

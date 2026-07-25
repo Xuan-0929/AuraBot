@@ -75,12 +75,14 @@ class ShortTermStore(Protocol):
         self,
         *,
         profile_id: str,
+        source_type: str,
         segment_id: str,
         owner: str,
         outcome: str,
         episode_id: str | None,
         memory_ids: list[str],
         reason: str | None,
+        now: str | None = None,
     ) -> SummaryRequest:
         raise NotImplementedError
 
@@ -88,10 +90,12 @@ class ShortTermStore(Protocol):
         self,
         *,
         profile_id: str,
+        source_type: str,
         segment_id: str,
         owner: str,
         error: str,
         max_attempts: int,
+        now: str | None = None,
     ) -> SummaryRequest:
         raise NotImplementedError
 
@@ -108,6 +112,7 @@ class ShortTermStore(Protocol):
         self,
         *,
         profile_id: str,
+        source_type: str,
         segment_id: str,
     ) -> SummaryRequest:
         raise NotImplementedError
