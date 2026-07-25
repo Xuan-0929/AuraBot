@@ -88,7 +88,7 @@ class ShortTermMemoryBuffer:
                         Path(store_path),
                         expected_identity=sidecar_identity,
                     )
-                if legacy_path is not None and legacy_path.exists():
+                if legacy_path is not None:
                     self._legacy_import_result = (
                         owned_store.import_legacy_snapshot(
                             profile_id=self.profile_id,

@@ -354,11 +354,19 @@ class SQLiteShortTermStore:
                             breakpoint_count=0,
                         )
 
-                    messages, breakpoints = _load_legacy_snapshot(
-                        path,
-                        profile_id=profile_id,
-                        source_type=source_type,
-                    )
+                    try:
+                        messages, breakpoints = _load_legacy_snapshot(
+                            path,
+                            profile_id=profile_id,
+                            source_type=source_type,
+                        )
+                    except FileNotFoundError:
+                        return LegacySnapshotImportResult(
+                            imported=False,
+                            reason="legacy_absent",
+                            message_count=0,
+                            breakpoint_count=0,
+                        )
                     message_sequences: list[int] = []
                     for message in messages:
                         cursor = connection.execute(

@@ -4177,6 +4177,151 @@ class LegacyShortTermJsonMigrationTests(unittest.TestCase):
         )
         self.assertEqual(self.legacy_path.read_bytes(), original_bytes)
 
+    def test_absent_legacy_with_existing_state_writes_terminal_marker(self):
+        self.assertFalse(self.legacy_path.exists())
+        store = self._store()
+        store.append_message(
+            profile_id=self.PROFILE_ID,
+            source_type=self.SOURCE_TYPE,
+            role="user",
+            content="SQLite state while legacy is absent",
+            source_id=None,
+        )
+        store.close()
+
+        first = self._buffer()
+
+        self.assertEqual(
+            [message.content for message in first.messages],
+            ["SQLite state while legacy is absent"],
+        )
+        first.close()
+        self.assertEqual(
+            json.loads(self._marker_value())["status"],
+            "existing_state_won",
+        )
+
+        with closing(sqlite3.connect(self.sidecar_path)) as connection:
+            connection.execute(
+                """
+                delete from short_term_messages
+                where profile_id = ? and source_type = ?
+                """,
+                (self.PROFILE_ID, self.SOURCE_TYPE),
+            )
+            connection.commit()
+        self._write_snapshot(self._snapshot())
+
+        reopened = self._buffer()
+
+        self.assertEqual(reopened.messages, [])
+        self.assertEqual(reopened.breakpoints, [])
+
+    def test_absent_legacy_without_state_can_import_when_file_appears(self):
+        self.assertFalse(self.legacy_path.exists())
+
+        absent = self._buffer()
+
+        self.assertFalse(absent._legacy_import_result.imported)
+        self.assertEqual(
+            absent._legacy_import_result.reason,
+            "legacy_absent",
+        )
+        absent.close()
+        self.assertTrue(self.sidecar_path.exists())
+        self.assertEqual(self._state_counts(), (0, 0, 0))
+        self.assertIsNone(self._marker_value())
+
+        self._write_snapshot(self._snapshot())
+        imported = self._buffer()
+        imported.close()
+        reopened = self._buffer()
+
+        self.assertEqual(len(reopened.messages), 2)
+        self.assertEqual(len(reopened.breakpoints), 1)
+        self.assertEqual(self._state_counts(), (2, 1, 0))
+        self.assertEqual(
+            json.loads(self._marker_value())["status"],
+            "imported",
+        )
+
+    def test_concurrent_absent_restored_boundary_imports_once(self):
+        from backend.memory.stores import short_term_sqlite as store_module
+
+        first_store = self._store()
+        second_store = self._store()
+        real_loader = store_module._load_legacy_snapshot
+        first_read_started = Event()
+        release_absent_read = Event()
+        loader_lock = Lock()
+        loader_calls = 0
+        results = []
+        errors = []
+        result_lock = Lock()
+
+        def controlled_loader(path, *, profile_id, source_type):
+            nonlocal loader_calls
+            with loader_lock:
+                loader_calls += 1
+                call_number = loader_calls
+            if call_number == 1:
+                first_read_started.set()
+                if not release_absent_read.wait(timeout=3):
+                    raise AssertionError("test did not release absent read")
+                raise FileNotFoundError(path)
+            return real_loader(
+                path,
+                profile_id=profile_id,
+                source_type=source_type,
+            )
+
+        def import_snapshot(store):
+            try:
+                result = store.import_legacy_snapshot(
+                    profile_id=self.PROFILE_ID,
+                    source_type=self.SOURCE_TYPE,
+                    legacy_path=self.legacy_path,
+                )
+                with result_lock:
+                    results.append(result)
+            except BaseException as error:
+                with result_lock:
+                    errors.append(error)
+
+        with patch.object(
+            store_module,
+            "_load_legacy_snapshot",
+            controlled_loader,
+        ):
+            first_thread = Thread(
+                target=import_snapshot,
+                args=(first_store,),
+            )
+            second_thread = Thread(
+                target=import_snapshot,
+                args=(second_store,),
+            )
+            first_thread.start()
+            self.assertTrue(first_read_started.wait(timeout=1))
+            self._write_snapshot(self._snapshot())
+            second_thread.start()
+            release_absent_read.set()
+            first_thread.join(timeout=5)
+            second_thread.join(timeout=5)
+
+        self.assertFalse(first_thread.is_alive())
+        self.assertFalse(second_thread.is_alive())
+        self.assertEqual(errors, [])
+        self.assertEqual(
+            sorted(result.reason for result in results),
+            ["imported", "legacy_absent"],
+        )
+        self.assertEqual(
+            sum(result.imported for result in results),
+            1,
+        )
+        self.assertEqual(self._state_counts(), (2, 1, 0))
+
     def test_other_stream_state_does_not_block_exact_stream_import(self):
         store = self._store()
         store.append_message(
