@@ -2,8 +2,12 @@ import json
 import unittest
 
 from backend.agent.LLMClient import ChatCompletionChoice
-from backend.agent.task.Task import Task, TaskType
-from backend.agent.task.harness.Harness import Harness
+from backend.agent.task.Task import Task, TaskState, TaskType
+from backend.agent.task.harness.Harness import (
+    Harness,
+    HarnessInterruptedError,
+    HarnessStateTransitionError,
+)
 from backend.agent.task.harness.adaptors.Adaptor import (
     Adaptor,
     AdaptorRouteError,
@@ -81,6 +85,57 @@ def make_task(*, tool_groups=None) -> Task:
 
 
 class HarnessTests(unittest.TestCase):
+    def test_base_commits_harness_selected_state_transition(self):
+        task = make_task()
+        harness = ConcreteHarness(
+            task=task,
+            llm_client=FakeLLMClient(),
+        )
+
+        harness._transition_task_state(
+            TaskState.Initializing,
+            TaskState.Planning,
+        )
+
+        self.assertIs(task.state, TaskState.Planning)
+
+    def test_base_rejects_a_stale_state_expectation(self):
+        task = make_task()
+        harness = ConcreteHarness(
+            task=task,
+            llm_client=FakeLLMClient(),
+        )
+        task.compare_and_set_state(
+            TaskState.Initializing,
+            TaskState.Thinking,
+        )
+
+        with self.assertRaisesRegex(
+            HarnessStateTransitionError,
+            "ConcreteHarness.*from Initializing to Planning.*Thinking",
+        ):
+            harness._transition_task_state(
+                TaskState.Initializing,
+                TaskState.Planning,
+            )
+
+        self.assertIs(task.state, TaskState.Thinking)
+
+    def test_base_converts_interrupted_state_into_control_exception(self):
+        task = make_task()
+        harness = ConcreteHarness(
+            task=task,
+            llm_client=FakeLLMClient(),
+        )
+        task.compare_and_set_state(
+            TaskState.Initializing,
+            TaskState.Thinking,
+        )
+        task.interrupt()
+
+        with self.assertRaises(HarnessInterruptedError):
+            harness._require_task_state(TaskState.Thinking)
+
     def test_owns_task_and_llm_without_protocol_instance_state(self):
         task = make_task()
         llm_client = FakeLLMClient()

@@ -1,3 +1,4 @@
+import asyncio
 from abc import ABC, abstractmethod
 from collections.abc import Mapping, Sequence
 from types import MappingProxyType
@@ -14,8 +15,17 @@ from ...tools.core.ToolCallEntity import (
 )
 from ...tools.core.ToolCallGateway import ToolCallGateway
 from ..Task import Task
+from ..TaskEntity import TaskState
 from .adaptors.Adaptor import Adaptor, AdaptorRouteError
 from .adaptors.AdaptorRegistry import AdaptorRegistry
+
+
+class HarnessInterruptedError(asyncio.CancelledError):
+    """Raised when an external interrupt wins a Task state race."""
+
+
+class HarnessStateTransitionError(RuntimeError):
+    """Raised when a Harness cannot commit its expected Task transition."""
 
 
 class Harness(ABC):
@@ -82,6 +92,40 @@ class Harness(ABC):
         """Return the Task request used to initialize the agent conversation."""
 
         return self.task.task_prompt
+
+    def _transition_task_state(
+        self,
+        expected: TaskState,
+        target: TaskState,
+    ) -> None:
+        """Commit one Harness-selected state transition through Task CAS."""
+
+        if self.task.compare_and_set_state(expected, target):
+            return
+
+        current = self.task.state
+        if current is TaskState.Interrupted:
+            raise HarnessInterruptedError
+
+        raise HarnessStateTransitionError(
+            f"{type(self).__name__} could not transition Task "
+            f"from {expected.value} to {target.value}; "
+            f"current state is {current.value}"
+        )
+
+    def _require_task_state(self, expected: TaskState) -> None:
+        """Assert the state expected by the concrete Harness algorithm."""
+
+        current = self.task.state
+        if current is expected:
+            return
+        if current is TaskState.Interrupted:
+            raise HarnessInterruptedError
+
+        raise HarnessStateTransitionError(
+            f"{type(self).__name__} expected Task state "
+            f"{expected.value}, got {current.value}"
+        )
 
     def build_openai_tools(self) -> list[dict[str, Any]]:
         """Atomically build OpenAI definitions and required Adaptors."""
@@ -176,4 +220,8 @@ class Harness(ABC):
         raise NotImplementedError
 
 
-__all__ = ["Harness"]
+__all__ = [
+    "Harness",
+    "HarnessInterruptedError",
+    "HarnessStateTransitionError",
+]

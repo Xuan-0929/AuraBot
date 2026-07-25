@@ -1,4 +1,8 @@
-from .harness.Harness import Harness
+from .harness.Harness import (
+    Harness,
+    HarnessInterruptedError,
+    HarnessStateTransitionError,
+)
 from .harness.HarnessFactory import HarnessFactory
 from .harness.PlanAndSolveHarness import PlanAndSolveHarness
 from .harness.ReActHarness import ReActHarness
@@ -14,6 +18,8 @@ from .TaskEntity import (
 __all__ = [
     "Harness",
     "HarnessFactory",
+    "HarnessInterruptedError",
+    "HarnessStateTransitionError",
     "InterruptTaskOutcome",
     "InterruptTaskResult",
     "PeekTaskResult",
