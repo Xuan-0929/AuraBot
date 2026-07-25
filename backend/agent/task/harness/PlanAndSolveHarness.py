@@ -1,9 +1,21 @@
+import asyncio
 from collections.abc import Sequence
 from threading import RLock
+from typing import Literal
 
-from ...tools.native.PlanToolGroup import create_plan_tool_group
+from ...LLMClient import Message, OpenAITool
+from ...tools.core.ToolCallEntity import (
+    FinalResponse,
+    ToolCallBatch,
+    ToolExecutionResult,
+)
+from ...tools.native.PlanToolGroup import (
+    PLAN_TOOL_NAMES,
+    create_plan_tool_group,
+)
 from ..Task import TaskInactiveError
-from .Harness import Harness
+from ..TaskEntity import TaskState
+from .Harness import Harness, HarnessInterruptedError
 from .Plan import (
     CompletePlanStepResult,
     CreatePlanResult,
@@ -19,8 +31,23 @@ from .prompts import system_prompt_PlanAndSolve
 from .utils import build_common_prompt_values
 
 
+class PlanAndSolveLimitError(RuntimeError):
+    """Raised when the Plan-and-Solve loop exhausts an execution limit."""
+
+
+class PlanAndSolveFinalResponseError(ValueError):
+    """Raised when a final response violates the declared status protocol."""
+
+
+PlanFinalStatus = Literal["completed", "failed", "waiting_for_info"]
+
+
 class PlanAndSolveHarness(Harness):
     """Task-local planning and checkpoint loop."""
+
+    MAX_PLAN_ROUNDS = 60
+    MAX_TOOL_CALLS = 100
+    PLAN_PROGRESS_GRACE_ROUNDS = 5
 
     def __init__(self, **kwargs):
         super().__init__(**kwargs)
@@ -233,7 +260,228 @@ class PlanAndSolveHarness(Harness):
             **build_common_prompt_values(self.task)
         ).strip()
 
-    async def run(self) -> object:
-        raise NotImplementedError(
-            "Plan-and-Solve agent loop is not implemented yet"
+    async def run(self) -> str:
+        """Run a bounded planning/checkpoint loop and retain Task context."""
+
+        if self.task.state is not TaskState.Initializing:
+            raise RuntimeError(
+                "PlanAndSolveHarness.run() can only execute a new Task"
+            )
+
+        runner = asyncio.current_task()
+        if runner is None or not self.task.bind_runner(runner):
+            raise RuntimeError(
+                "Plan-and-Solve Task already has an active Harness"
+            )
+
+        try:
+            openai_tools = self.build_openai_tools()
+            self._initialize_context()
+            self._transition_task_state(
+                TaskState.Initializing,
+                self._reasoning_state(),
+            )
+
+            async with asyncio.timeout(self.task.timeout_ms / 1000):
+                result = await self._run_plan_loop(openai_tools)
+        except asyncio.CancelledError as exc:
+            self.task.interrupt()
+            if isinstance(exc, HarnessInterruptedError):
+                raise
+            raise HarnessInterruptedError from exc
+        except Exception:
+            self.task.compare_and_set_state(
+                {
+                    TaskState.Initializing,
+                    TaskState.Planning,
+                    TaskState.Thinking,
+                    TaskState.Pushing,
+                },
+                TaskState.Failed,
+            )
+            raise
+        finally:
+            self.task.unbind_runner(runner)
+
+        return result
+
+    def _initialize_context(self) -> None:
+        self.task.messages.extend(
+            [
+                {"role": "system", "content": self.build_system_prompt()},
+                {"role": "user", "content": self.build_user_prompt()},
+            ]
         )
+
+    async def _run_plan_loop(
+        self,
+        openai_tools: list[OpenAITool],
+    ) -> str:
+        tool_call_count = 0
+        rounds_without_successful_plan_tool = 0
+        force_plan_reminder = False
+
+        for _ in range(self.MAX_PLAN_ROUNDS):
+            reasoning_state = self._reasoning_state()
+            self._require_task_state(reasoning_state)
+            request_messages = self._build_request_messages(
+                rounds_without_successful_plan_tool,
+                force_plan_reminder,
+            )
+            choice = await self.llm_client.invoke(
+                request_messages,
+                tools=openai_tools or None,
+                tool_choice="auto" if openai_tools else None,
+            )
+            self._transition_task_state(
+                reasoning_state,
+                TaskState.Pushing,
+            )
+            self.task.messages.append(dict(choice.message))
+            response = self.parse_completion(choice)
+
+            if isinstance(response, FinalResponse):
+                final_status = self._parse_final_status(response.content)
+                if final_status in {"failed", "waiting_for_info"}:
+                    self._transition_task_state(
+                        TaskState.Pushing,
+                        TaskState.Failed,
+                    )
+                    return response.content
+
+                plan = self.plan
+                if plan is not None and plan.is_complete:
+                    self._transition_task_state(
+                        TaskState.Pushing,
+                        TaskState.Completed,
+                    )
+                    return response.content
+
+                rounds_without_successful_plan_tool += 1
+                force_plan_reminder = True
+                self._transition_task_state(
+                    TaskState.Pushing,
+                    self._reasoning_state(),
+                )
+                continue
+
+            if not isinstance(response, ToolCallBatch):
+                raise TypeError(
+                    "unsupported Plan-and-Solve model response"
+                )
+
+            tool_call_count += len(response.calls)
+            if tool_call_count > self.MAX_TOOL_CALLS:
+                raise PlanAndSolveLimitError(
+                    "Plan-and-Solve tool-call limit exceeded "
+                    f"({self.MAX_TOOL_CALLS})"
+                )
+
+            resolved_calls = self.resolve_and_adapt_tool_calls(response.calls)
+            results = await self.tool_call_gateway.execute_many(resolved_calls)
+            self._require_task_state(TaskState.Pushing)
+            self.task.messages.extend(
+                self.build_tool_result_messages(results)
+            )
+
+            if self._has_successful_plan_tool_result(results):
+                rounds_without_successful_plan_tool = 0
+                force_plan_reminder = False
+            else:
+                rounds_without_successful_plan_tool += 1
+
+            self._transition_task_state(
+                TaskState.Pushing,
+                self._reasoning_state(),
+            )
+
+        raise PlanAndSolveLimitError(
+            "Plan-and-Solve round limit exceeded "
+            f"({self.MAX_PLAN_ROUNDS})"
+        )
+
+    def _reasoning_state(self) -> TaskState:
+        return (
+            TaskState.Planning
+            if self.plan is None
+            else TaskState.Thinking
+        )
+
+    def _build_request_messages(
+        self,
+        rounds_without_successful_plan_tool: int,
+        force_plan_reminder: bool,
+    ) -> list[Message]:
+        plan = self.plan
+        if plan is not None and plan.is_complete:
+            return self.task.messages
+        if (
+            not force_plan_reminder
+            and rounds_without_successful_plan_tool
+            < self.PLAN_PROGRESS_GRACE_ROUNDS
+        ):
+            return self.task.messages
+        return [
+            *self.task.messages,
+            {
+                "role": "system",
+                "content": self._build_plan_progress_reminder(plan),
+            },
+        ]
+
+    @staticmethod
+    def _build_plan_progress_reminder(
+        plan: PlanSnapshot | None,
+    ) -> str:
+        if plan is None:
+            return (
+                "Plan progress reminder: no initial runtime Plan exists. "
+                "Call create_plan now with a finite, executable plan before "
+                "continuing. Do not claim completion without a completed Plan."
+            )
+        return (
+            "Plan progress reminder: advance the runtime Plan using a Plan "
+            f"Tool. The current pending step is {plan.current_step_id!r}. "
+            "Use read_plan or update_plan when needed, and call "
+            "plan_step_complete only after observing the step's real result. "
+            "Do not invent progress or claim completion while steps remain."
+        )
+
+    @staticmethod
+    def _has_successful_plan_tool_result(
+        results: Sequence[ToolExecutionResult],
+    ) -> bool:
+        return any(
+            result.tool_name in PLAN_TOOL_NAMES and not result.is_error
+            for result in results
+        )
+
+    @staticmethod
+    def _parse_final_status(content: str) -> PlanFinalStatus:
+        first_non_empty_line = next(
+            (line.strip() for line in content.splitlines() if line.strip()),
+            None,
+        )
+        statuses: dict[str, PlanFinalStatus] = {
+            "Status: completed": "completed",
+            "Status: failed": "failed",
+            "Status: waiting_for_info": "waiting_for_info",
+        }
+        try:
+            return statuses[first_non_empty_line]
+        except (KeyError, TypeError) as exc:
+            raise PlanAndSolveFinalResponseError(
+                "Plan-and-Solve final response must begin with exactly "
+                "'Status: completed' or 'Status: failed'"
+            ) from exc
+
+
+PlanAndSolveInterruptedError = HarnessInterruptedError
+
+
+__all__ = [
+    "PlanAndSolveFinalResponseError",
+    "PlanAndSolveHarness",
+    "PlanAndSolveInterruptedError",
+    "PlanAndSolveLimitError",
+]

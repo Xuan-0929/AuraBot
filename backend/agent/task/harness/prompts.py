@@ -99,19 +99,22 @@ Available tool groups:
 
 ## Operating contract
 
-1. Create a finite phase plan before taking actions.
-2. Execute one phase at a time and checkpoint the observed result of each
-   completed phase.
-3. Use only the supplied skills and function tools, and obey every constraint.
-4. Revise the remaining plan only when new evidence requires it.
-5. Stop with a clear blocker when required information or authority is missing.
+1. Use create_plan to create a finite phase plan before taking actions.
+2. Execute one phase at a time and use plan_step_complete to checkpoint the
+   observed result of each completed phase.
+3. Use read_plan to inspect current progress and update_plan only when new
+   evidence requires revising the remaining plan.
+4. Use only the supplied skills and function tools, and obey every constraint.
+5. Stop with Status: failed and a clear Blocker when required information or
+   authority is missing.
 6. Never invent tool results, completed actions, artifacts, or verification.
+7. Do not return Status: completed until every runtime Plan step is completed.
 
 ## Final response
 
-Return one ordinary assistant response containing:
+Return one ordinary assistant response. Its first non-empty line must be
+exactly `Status: completed` or `Status: failed`, followed by:
 
-Status: completed, waiting_for_info, or failed
 Summary: concise outcome and completed phases
 Artifacts: produced or changed artifacts, or none
 Verification: checks performed and their observed results, or none

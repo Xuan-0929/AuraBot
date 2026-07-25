@@ -76,7 +76,7 @@ class PlanAndSolveHarnessTests(unittest.TestCase):
 
         self.assertIsInstance(harness, Harness)
         self.assertIn("Plan-and-Solve agent", prompt)
-        self.assertIn("Create a finite phase plan", prompt)
+        self.assertIn("create_plan to create a finite phase plan", prompt)
         self.assertIn("checkpoint", prompt)
         self.assertIn("Working directory:\n/workspace", prompt)
         self.assertNotIn("20 ReAct rounds", prompt)
@@ -276,18 +276,6 @@ class PlanAndSolveHarnessTests(unittest.TestCase):
             with self.assertRaises(PlanOperationError) as raised:
                 operation()
             self.assertEqual(raised.exception.code, "invalid_task_state")
-
-    def test_run_remains_unimplemented(self):
-        harness = make_harness()
-
-        with self.assertRaisesRegex(
-            NotImplementedError,
-            "Plan-and-Solve agent loop is not implemented yet",
-        ):
-            import asyncio
-
-            asyncio.run(harness.run())
-
 
 if __name__ == "__main__":
     unittest.main()
