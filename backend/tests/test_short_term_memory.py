@@ -1,4 +1,6 @@
 from dataclasses import FrozenInstanceError
+from pathlib import Path
+import tempfile
 import unittest
 
 from backend.memory.short_term.models import (
@@ -8,6 +10,131 @@ from backend.memory.short_term.models import (
     SummaryRequest,
 )
 from backend.memory.short_term.policy import ShortTermPolicy
+from backend.memory.stores.short_term_sqlite import SQLiteShortTermStore
+
+
+class SQLiteShortTermStoreTests(unittest.TestCase):
+    def setUp(self):
+        self.tmpdir = tempfile.TemporaryDirectory()
+        self.path = Path(self.tmpdir.name) / "memory.sqlite3"
+        self.store = SQLiteShortTermStore(self.path)
+
+    def tearDown(self):
+        self.store.close()
+        self.tmpdir.cleanup()
+
+    def test_messages_and_breakpoints_survive_close_and_reopen(self):
+        self.store.append_message(
+            profile_id="profile-1",
+            source_type="chat",
+            role="user",
+            content="第一段话题",
+            source_id="source-1",
+        )
+        self.store.add_breakpoint(
+            profile_id="profile-1",
+            source_type="chat",
+            topic="first",
+            reason="topic_changed",
+        )
+        self.store.close()
+
+        self.store = SQLiteShortTermStore(self.path)
+
+        messages = self.store.list_messages("profile-1", "chat")
+        breakpoints = self.store.list_breakpoints("profile-1", "chat")
+        self.assertEqual(len(messages), 1)
+        self.assertEqual(len(breakpoints), 1)
+        self.assertEqual(breakpoints[0].topic, "first")
+
+    def test_profiles_are_isolated(self):
+        for profile_id in ("profile-1", "profile-2"):
+            self.store.append_message(
+                profile_id=profile_id,
+                source_type="chat",
+                role="user",
+                content=profile_id,
+                source_id=None,
+            )
+
+        messages = self.store.list_messages("profile-1", "chat")
+
+        self.assertEqual([message.content for message in messages], ["profile-1"])
+
+    def test_sources_are_isolated(self):
+        for source_type in ("chat", "scheduler"):
+            self.store.append_message(
+                profile_id="profile-1",
+                source_type=source_type,
+                role="user",
+                content=source_type,
+                source_id=None,
+            )
+
+        chat_messages = self.store.list_messages("profile-1", "chat")
+        scheduler_messages = self.store.list_messages("profile-1", "scheduler")
+
+        self.assertEqual([message.content for message in chat_messages], ["chat"])
+        self.assertEqual(
+            [message.content for message in scheduler_messages],
+            ["scheduler"],
+        )
+
+    def test_breakpoint_requires_a_new_latest_message(self):
+        breakpoint_args = {
+            "profile_id": "profile-1",
+            "source_type": "chat",
+            "topic": "coffee",
+            "reason": "topic_changed",
+        }
+        self.assertIsNone(self.store.add_breakpoint(**breakpoint_args))
+
+        self.store.append_message(
+            profile_id="profile-1",
+            source_type="chat",
+            role="user",
+            content="咖啡",
+            source_id=None,
+        )
+        first = self.store.add_breakpoint(**breakpoint_args)
+        duplicate = self.store.add_breakpoint(**breakpoint_args)
+
+        self.assertIsNotNone(first)
+        self.assertIsNone(duplicate)
+
+        self.store.append_message(
+            profile_id="profile-1",
+            source_type="chat",
+            role="assistant",
+            content="拿铁",
+            source_id=None,
+        )
+        second = self.store.add_breakpoint(**breakpoint_args)
+
+        self.assertIsNotNone(second)
+        self.assertNotEqual(first.id, second.id)
+
+    def test_stats_count_messages_breakpoints_and_content_characters(self):
+        for content in ("abc", "喜欢拿铁"):
+            self.store.append_message(
+                profile_id="profile-1",
+                source_type="chat",
+                role="user",
+                content=content,
+                source_id=None,
+            )
+        self.store.add_breakpoint(
+            profile_id="profile-1",
+            source_type="chat",
+            topic="coffee",
+            reason="topic_changed",
+        )
+
+        stats = self.store.get_stats("profile-1", "chat")
+
+        self.assertEqual(stats.message_count, 2)
+        self.assertEqual(stats.breakpoint_count, 1)
+        self.assertEqual(stats.char_count, len("abc") + len("喜欢拿铁"))
 
 
 class ShortTermPolicyTests(unittest.TestCase):
