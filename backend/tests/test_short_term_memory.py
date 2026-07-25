@@ -7,7 +7,9 @@ import tempfile
 from threading import Barrier, Lock, Thread
 from typing import get_type_hints
 import unittest
+from unittest.mock import Mock
 
+from backend.memory.short_term.buffer import ShortTermMemoryBuffer
 from backend.memory.short_term.models import (
     BufferStats,
     SegmentState,
@@ -2896,7 +2898,421 @@ class SummaryRequestTests(unittest.TestCase):
             self._request([self._message(), "not-a-message"])
 
 
+class ShortTermMemoryBufferTests(unittest.TestCase):
+    PROFILE_ID = "profile-1"
+    SOURCE_TYPE = "chat"
+
+    def setUp(self):
+        self.tmpdir = tempfile.TemporaryDirectory()
+        self.stores = []
+        self.buffers = []
+
+    def tearDown(self):
+        for buffer in self.buffers:
+            buffer.close()
+        for store in self.stores:
+            store.close()
+        self.tmpdir.cleanup()
+
+    def _store(self, filename="memory.sqlite3"):
+        store = SQLiteShortTermStore(Path(self.tmpdir.name) / filename)
+        self.stores.append(store)
+        return store
+
+    def _buffer(self, **kwargs):
+        kwargs.setdefault("profile_id", self.PROFILE_ID)
+        kwargs.setdefault("source_type", self.SOURCE_TYPE)
+        buffer = ShortTermMemoryBuffer(**kwargs)
+        self.buffers.append(buffer)
+        return buffer
+
+    def _prepare_segment(self, buffer):
+        buffer.add(role="user", content="咖啡", source_id="m1")
+        return buffer.mark_breakpoint(topic="coffee", reason="topic_changed")
+
+    def test_breakpoint_threshold_prepares_oldest_pending_segment(self):
+        store = self._store()
+        service = Mock()
+        buffer = self._buffer(
+            max_breakpoints=2,
+            store=store,
+            service=service,
+            max_messages=1,
+        )
+        buffer.add(role="user", content="咖啡", source_id="m1")
+
+        self.assertIsNone(
+            buffer.mark_breakpoint(topic="coffee", reason="topic_changed")
+        )
+        buffer.add_message(role="user", content="项目", source_id="m2")
+        prepared = buffer.mark_breakpoint(
+            topic="project",
+            reason="topic_changed",
+        )
+
+        self.assertIsInstance(prepared, dict)
+        self.assertEqual(prepared["state"], "pending")
+        self.assertEqual(prepared["topic"], "coffee")
+        self.assertEqual(
+            [message.content for message in buffer.messages],
+            ["项目"],
+        )
+        self.assertEqual(
+            [breakpoint.topic for breakpoint in buffer.breakpoints],
+            ["project"],
+        )
+        self.assertEqual(service.mock_calls, [])
+
+    def test_context_limit_prepares_only_oldest_complete_segment(self):
+        buffer = self._buffer(max_breakpoints=10, max_chars=8)
+        buffer.add(role="user", content="咖啡", source_id="m1")
+        buffer.mark_breakpoint(topic="coffee", reason="topic_changed")
+
+        prepared = buffer.add(
+            role="user",
+            content="项目内容很长",
+            source_id="m2",
+        )
+
+        self.assertEqual(prepared["topic"], "coffee")
+        self.assertEqual(
+            [message.content for message in buffer.messages],
+            ["项目内容很长"],
+        )
+        self.assertEqual(buffer.breakpoints, [])
+
+    def test_context_limit_keeps_unbroken_current_message_intact(self):
+        buffer = self._buffer(max_breakpoints=10, max_chars=5)
+
+        prepared = buffer.add(
+            role="user",
+            content="超过上下文限制",
+            source_id="m1",
+        )
+
+        self.assertIsNone(prepared)
+        self.assertEqual(
+            [message.content for message in buffer.messages],
+            ["超过上下文限制"],
+        )
+
+    def test_legacy_mutators_return_dictionary_or_none(self):
+        buffer = self._buffer(max_breakpoints=10, max_chars=100)
+
+        self.assertIsNone(
+            buffer.add(role="user", content="first", source_id="m1")
+        )
+        prepared = buffer.mark_breakpoint(topic="first", reason=None)
+        self.assertIsNone(prepared)
+        prepared = buffer.pop_oldest_segment_for_summary()
+
+        self.assertIsInstance(prepared, dict)
+        self.assertEqual(prepared["state"], "pending")
+        self.assertIsNone(
+            buffer.add_message(
+                role="user",
+                content="second",
+                source_id="m2",
+            )
+        )
+
+    def test_messages_and_breakpoints_are_fresh_read_only_snapshots(self):
+        store = self._store()
+        buffer = self._buffer(store=store)
+        buffer.add(role="user", content="咖啡", source_id="m1")
+        buffer.mark_breakpoint(topic="coffee", reason="topic_changed")
+
+        messages = buffer.messages
+        breakpoints = buffer.breakpoints
+        messages.clear()
+        breakpoints.clear()
+
+        self.assertEqual([message.content for message in buffer.messages], ["咖啡"])
+        self.assertEqual(
+            [breakpoint.topic for breakpoint in buffer.breakpoints],
+            ["coffee"],
+        )
+        self.assertIsNot(buffer.messages, buffer.messages)
+        self.assertIsNot(buffer.breakpoints, buffer.breakpoints)
+
+    def test_delivery_methods_delegate_exact_buffer_scope_and_arguments(self):
+        store = self._store()
+        wrapped = Mock(wraps=store, spec=store)
+        buffer = self._buffer(
+            store=wrapped,
+            max_breakpoints=1,
+            max_summary_attempts=4,
+        )
+        prepared = self._prepare_segment(buffer)
+        claimed = buffer.claim_next_summary(
+            owner="main-agent",
+            lease_seconds=60,
+            now="2026-07-25T00:00:00+00:00",
+        )
+        released = buffer.release_summary(
+            segment_id=claimed.segment_id,
+            owner="main-agent",
+            error="temporary failure",
+        )
+        claimed_again = buffer.claim_next_summary(
+            owner="main-agent",
+            lease_seconds=30,
+            now="2026-07-25T00:01:00+00:00",
+        )
+        completed = buffer.acknowledge_summary(
+            segment_id=claimed_again.segment_id,
+            owner="main-agent",
+            outcome="remembered",
+            episode_id="episode-1",
+            memory_ids=["memory-1"],
+            reason=None,
+        )
+
+        self.assertIsInstance(claimed, SummaryRequest)
+        self.assertEqual(released.state, SegmentState.PENDING)
+        self.assertEqual(completed.state, SegmentState.COMPLETED)
+        wrapped.claim_next_segment.assert_any_call(
+            profile_id=self.PROFILE_ID,
+            source_type=self.SOURCE_TYPE,
+            owner="main-agent",
+            lease_seconds=60,
+            now="2026-07-25T00:00:00+00:00",
+        )
+        wrapped.release_segment.assert_called_once_with(
+            profile_id=self.PROFILE_ID,
+            segment_id=prepared["segment_id"],
+            owner="main-agent",
+            error="temporary failure",
+            max_attempts=4,
+        )
+        wrapped.acknowledge_segment.assert_called_once_with(
+            profile_id=self.PROFILE_ID,
+            segment_id=prepared["segment_id"],
+            owner="main-agent",
+            outcome="remembered",
+            episode_id="episode-1",
+            memory_ids=["memory-1"],
+            reason=None,
+        )
+
+    def test_release_summary_accepts_valid_per_call_attempt_override(self):
+        store = self._store()
+        wrapped = Mock(wraps=store, spec=store)
+        buffer = self._buffer(
+            store=wrapped,
+            max_breakpoints=1,
+            max_summary_attempts=4,
+        )
+        prepared = self._prepare_segment(buffer)
+        buffer.claim_next_summary(owner="main-agent", lease_seconds=60)
+
+        released = buffer.release_summary(
+            segment_id=prepared["segment_id"],
+            owner="main-agent",
+            error="permanent failure",
+            max_attempts=1,
+        )
+
+        self.assertEqual(released.state, SegmentState.FAILED)
+        wrapped.release_segment.assert_called_once_with(
+            profile_id=self.PROFILE_ID,
+            segment_id=prepared["segment_id"],
+            owner="main-agent",
+            error="permanent failure",
+            max_attempts=1,
+        )
+
+    def test_recover_and_requeue_delegate_and_preserve_store_behavior(self):
+        store = self._store()
+        wrapped = Mock(wraps=store, spec=store)
+        buffer = self._buffer(
+            store=wrapped,
+            max_breakpoints=1,
+            max_summary_attempts=1,
+        )
+        prepared = self._prepare_segment(buffer)
+        buffer.claim_next_summary(
+            owner="expired-worker",
+            lease_seconds=10,
+            now="2026-07-25T00:00:00+00:00",
+        )
+
+        recovered = buffer.recover_expired_summaries(
+            now="2026-07-25T00:01:00+00:00"
+        )
+        claimed = buffer.claim_next_summary(
+            owner="main-agent",
+            lease_seconds=60,
+            now="2026-07-25T00:02:00+00:00",
+        )
+        failed = buffer.release_summary(
+            segment_id=claimed.segment_id,
+            owner="main-agent",
+            error="failed",
+        )
+        requeued = buffer.requeue_failed_summary(
+            segment_id=failed.segment_id
+        )
+
+        self.assertEqual(recovered, 1)
+        self.assertEqual(requeued.state, SegmentState.PENDING)
+        wrapped.recover_expired_leases.assert_called_once_with(
+            profile_id=self.PROFILE_ID,
+            source_type=self.SOURCE_TYPE,
+            now="2026-07-25T00:01:00+00:00",
+        )
+        wrapped.requeue_failed_segment.assert_called_once_with(
+            profile_id=self.PROFILE_ID,
+            segment_id=prepared["segment_id"],
+        )
+
+    def test_default_owned_store_closes_idempotently(self):
+        buffer = self._buffer()
+        buffer.add(role="user", content="咖啡", source_id=None)
+
+        buffer.close()
+        buffer.close()
+
+        with self.assertRaisesRegex(
+            RuntimeError,
+            "^SQLiteShortTermStore is closed$",
+        ):
+            _ = buffer.messages
+
+    def test_injected_store_remains_open_after_buffer_close(self):
+        store = self._store()
+        buffer = self._buffer(store=store)
+        buffer.add(role="user", content="咖啡", source_id=None)
+
+        buffer.close()
+
+        self.assertEqual(
+            [message.content for message in store.list_messages(
+                self.PROFILE_ID,
+                self.SOURCE_TYPE,
+            )],
+            ["咖啡"],
+        )
+
+    def test_persistence_path_is_used_directly_even_with_json_suffix(self):
+        path = Path(self.tmpdir.name) / "new-memory.json"
+        buffer = self._buffer(persistence_path=path)
+        buffer.add(role="user", content="持久化", source_id=None)
+        buffer.close()
+
+        self.assertTrue(path.exists())
+        self.assertEqual(path.read_bytes()[:16], b"SQLite format 3\x00")
+        reopened = SQLiteShortTermStore(path)
+        self.stores.append(reopened)
+        self.assertEqual(
+            [message.content for message in reopened.list_messages(
+                self.PROFILE_ID,
+                self.SOURCE_TYPE,
+            )],
+            ["持久化"],
+        )
+
+    def test_store_and_persistence_path_are_mutually_exclusive(self):
+        store = self._store()
+
+        with self.assertRaisesRegex(
+            ValueError,
+            "^store and persistence_path cannot both be provided$",
+        ):
+            self._buffer(
+                store=store,
+                persistence_path=Path(self.tmpdir.name) / "other.sqlite3",
+            )
+
+    def test_constructor_requires_valid_scope_and_positive_exact_integers(self):
+        for field in ("profile_id", "source_type"):
+            for value, error in (
+                (None, TypeError),
+                (1, TypeError),
+                ("", ValueError),
+                ("  ", ValueError),
+            ):
+                with self.subTest(field=field, value=value):
+                    kwargs = {
+                        "profile_id": self.PROFILE_ID,
+                        "source_type": self.SOURCE_TYPE,
+                        field: value,
+                    }
+                    with self.assertRaises(error):
+                        ShortTermMemoryBuffer(**kwargs)
+
+        for field in (
+            "max_breakpoints",
+            "max_chars",
+            "max_summary_attempts",
+        ):
+            for value in (0, -1, True, False, 0.5, 1.5):
+                with self.subTest(field=field, value=value):
+                    kwargs = {
+                        "profile_id": self.PROFILE_ID,
+                        "source_type": self.SOURCE_TYPE,
+                        field: value,
+                    }
+                    with self.assertRaisesRegex(
+                        ValueError,
+                        rf"^{field} must be a positive integer$",
+                    ):
+                        ShortTermMemoryBuffer(**kwargs)
+
+    def test_add_message_validates_role_and_content_like_store_identifiers(self):
+        buffer = self._buffer()
+
+        for field in ("role", "content"):
+            for value, error in (
+                (None, TypeError),
+                (1, TypeError),
+                ("", ValueError),
+                ("  ", ValueError),
+            ):
+                with self.subTest(field=field, value=value):
+                    kwargs = {"role": "user", "content": "hello", field: value}
+                    with self.assertRaises(error):
+                        buffer.add_message(**kwargs)
+
+        self.assertEqual(buffer.messages, [])
+
+    def test_duplicate_or_empty_breakpoint_does_not_prepare(self):
+        buffer = self._buffer(max_breakpoints=2)
+
+        self.assertIsNone(buffer.mark_breakpoint(topic="empty", reason=None))
+        buffer.add(role="user", content="咖啡", source_id=None)
+        self.assertIsNone(
+            buffer.mark_breakpoint(topic="coffee", reason=None)
+        )
+        self.assertIsNone(
+            buffer.mark_breakpoint(topic="duplicate", reason=None)
+        )
+        self.assertEqual(
+            [breakpoint.topic for breakpoint in buffer.breakpoints],
+            ["coffee"],
+        )
+
+
 class ShortTermCompatibilityTests(unittest.TestCase):
+    def test_short_term_package_exports_domain_surface(self):
+        from backend.memory import short_term
+
+        self.assertEqual(
+            short_term.__all__,
+            [
+                "BufferStats",
+                "SegmentState",
+                "ShortTermBreakpoint",
+                "ShortTermMemoryBuffer",
+                "ShortTermMessage",
+                "ShortTermPolicy",
+                "ShortTermStateError",
+                "ShortTermStore",
+                "SummaryRequest",
+                "now_iso",
+            ],
+        )
+
     def test_now_iso_remains_importable_from_short_term_package(self):
         from backend.memory.short_term import now_iso
         from backend.memory.short_term.buffer import now_iso as buffer_now_iso

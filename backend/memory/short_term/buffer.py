@@ -1,37 +1,17 @@
 from __future__ import annotations
 
-import json
-from dataclasses import asdict, dataclass
 from datetime import UTC, datetime
 from pathlib import Path
 from typing import Any
-from uuid import uuid4
 
-
-@dataclass
-class ShortTermMessage:
-    role: str
-    content: str
-    source_id: str | None = None
-    created_at: str = ""
-
-
-@dataclass
-class ShortTermBreakpoint:
-    id: str
-    message_index: int
-    topic: str | None
-    reason: str | None
-    created_at: str
+from ..stores.short_term_sqlite import SQLiteShortTermStore
+from .models import ShortTermBreakpoint, ShortTermMessage, SummaryRequest
+from .policy import ShortTermPolicy
+from .store import ShortTermStore
 
 
 class ShortTermMemoryBuffer:
-    """PRD-v2 short-term memory buffer.
-
-    The buffer tracks chat-agent context and topic breakpoints. When breakpoint
-    or context limits are reached, it returns the oldest complete segment for
-    the main agent to summarize. It does not write long-term memory directly.
-    """
+    """Compatibility facade for reliable short-term memory storage."""
 
     def __init__(
         self,
@@ -41,20 +21,67 @@ class ShortTermMemoryBuffer:
         max_breakpoints: int = 4,
         max_chars: int = 3000,
         persistence_path: str | Path | None = None,
+        store: ShortTermStore | None = None,
+        max_summary_attempts: int = 3,
         service: Any | None = None,
         max_messages: int | None = None,
     ):
+        _require_nonblank("profile_id", profile_id)
+        _require_nonblank("source_type", source_type)
+        policy = ShortTermPolicy(
+            max_breakpoints=max_breakpoints,
+            max_chars=max_chars,
+        )
+        _require_positive_int("max_summary_attempts", max_summary_attempts)
+        if store is not None and persistence_path is not None:
+            raise ValueError(
+                "store and persistence_path cannot both be provided"
+            )
+
         self.profile_id = profile_id
         self.source_type = source_type
-        self.max_breakpoints = max_breakpoints
-        self.max_chars = max_chars
-        self.persistence_path = Path(persistence_path) if persistence_path else None
-        self.messages: list[ShortTermMessage] = []
-        self.breakpoints: list[ShortTermBreakpoint] = []
-        self._load()
+        self.max_breakpoints = policy.max_breakpoints
+        self.max_chars = policy.max_chars
+        self.max_summary_attempts = max_summary_attempts
+        self.persistence_path = (
+            Path(persistence_path) if persistence_path is not None else None
+        )
+        self._policy = policy
+        self._owns_store = store is None
+        self._closed = False
+        self._store: ShortTermStore = (
+            SQLiteShortTermStore(
+                self.persistence_path
+                if self.persistence_path is not None
+                else ":memory:"
+            )
+            if store is None
+            else store
+        )
 
-    def add(self, *, role: str, content: str, source_id: str | None = None) -> dict[str, Any] | None:
-        return self.add_message(role=role, content=content, source_id=source_id)
+    @property
+    def messages(self) -> list[ShortTermMessage]:
+        return self._store.list_messages(self.profile_id, self.source_type)
+
+    @property
+    def breakpoints(self) -> list[ShortTermBreakpoint]:
+        return self._store.list_breakpoints(
+            self.profile_id,
+            self.source_type,
+        )
+
+    def add(
+        self,
+        *,
+        role: str,
+        content: str,
+        source_id: str | None = None,
+    ) -> dict[str, Any] | None:
+        return self.add_message(
+            role=role,
+            content=content,
+            source_id=source_id,
+        )
 
     def add_message(
         self,
@@ -63,20 +90,17 @@ class ShortTermMemoryBuffer:
         content: str,
         source_id: str | None = None,
     ) -> dict[str, Any] | None:
-        self.messages.append(
-            ShortTermMessage(
-                role=role,
-                content=content,
-                source_id=source_id,
-                created_at=now_iso(),
-            )
+        _require_nonblank("role", role)
+        _require_nonblank("content", content)
+        _require_optional_string("source_id", source_id)
+        self._store.append_message(
+            profile_id=self.profile_id,
+            source_type=self.source_type,
+            role=role,
+            content=content,
+            source_id=source_id,
         )
-        self._persist()
-
-        if self._context_too_large():
-            return self.pop_oldest_segment_for_summary()
-
-        return None
+        return self._prepare_if_needed()
 
     def mark_breakpoint(
         self,
@@ -84,93 +108,137 @@ class ShortTermMemoryBuffer:
         topic: str | None = None,
         reason: str | None = None,
     ) -> dict[str, Any] | None:
-        if not self.messages:
-            return None
-
-        message_index = len(self.messages)
-        if self.breakpoints and self.breakpoints[-1].message_index == message_index:
-            return None
-
-        self.breakpoints.append(
-            ShortTermBreakpoint(
-                id=f"breakpoint_{uuid4().hex}",
-                message_index=message_index,
-                topic=topic,
-                reason=reason,
-                created_at=now_iso(),
-            )
+        _require_optional_string("topic", topic)
+        _require_optional_string("reason", reason)
+        breakpoint = self._store.add_breakpoint(
+            profile_id=self.profile_id,
+            source_type=self.source_type,
+            topic=topic,
+            reason=reason,
         )
-        self._persist()
-
-        if len(self.breakpoints) >= self.max_breakpoints:
-            return self.pop_oldest_segment_for_summary()
-
-        return None
+        if breakpoint is None:
+            return None
+        return self._prepare_if_needed()
 
     def pop_oldest_segment_for_summary(self) -> dict[str, Any] | None:
-        if not self.breakpoints:
-            return None
+        request = self._store.prepare_oldest_segment(
+            profile_id=self.profile_id,
+            source_type=self.source_type,
+        )
+        return request.to_dict() if request is not None else None
 
-        breakpoint = self.breakpoints.pop(0)
-        segment_messages = self.messages[: breakpoint.message_index]
-        self.messages = self.messages[breakpoint.message_index :]
-
-        for remaining in self.breakpoints:
-            remaining.message_index -= breakpoint.message_index
-
-        segment = {
-            "profile_id": self.profile_id,
-            "source_type": self.source_type,
-            "breakpoint_id": breakpoint.id,
-            "topic": breakpoint.topic,
-            "reason": breakpoint.reason,
-            "message_count": len(segment_messages),
-            "messages": [asdict(message) for message in segment_messages],
-            "content": "\n".join(
-                f"{message.role}: {message.content}" for message in segment_messages
-            ),
-            "created_at": breakpoint.created_at,
-            "handoff": "chat_agent_summary_required",
-        }
-        self._persist()
-        return segment
-
-    def _context_too_large(self) -> bool:
-        return sum(len(message.content) for message in self.messages) >= self.max_chars
-
-    def _persist(self) -> None:
-        if not self.persistence_path:
-            return
-
-        self.persistence_path.parent.mkdir(parents=True, exist_ok=True)
-        payload = {
-            "profile_id": self.profile_id,
-            "source_type": self.source_type,
-            "messages": [asdict(message) for message in self.messages],
-            "breakpoints": [asdict(breakpoint) for breakpoint in self.breakpoints],
-        }
-        self.persistence_path.write_text(
-            json.dumps(payload, ensure_ascii=False, indent=2),
-            encoding="utf-8",
+    def claim_next_summary(
+        self,
+        *,
+        owner: str,
+        lease_seconds: int,
+        now: str | None = None,
+    ) -> SummaryRequest | None:
+        return self._store.claim_next_segment(
+            profile_id=self.profile_id,
+            source_type=self.source_type,
+            owner=owner,
+            lease_seconds=lease_seconds,
+            now=now,
         )
 
-    def _load(self) -> None:
-        if not self.persistence_path or not self.persistence_path.exists():
-            return
+    def acknowledge_summary(
+        self,
+        *,
+        segment_id: str,
+        owner: str,
+        outcome: str,
+        episode_id: str | None,
+        memory_ids: list[str],
+        reason: str | None,
+    ) -> SummaryRequest:
+        return self._store.acknowledge_segment(
+            profile_id=self.profile_id,
+            segment_id=segment_id,
+            owner=owner,
+            outcome=outcome,
+            episode_id=episode_id,
+            memory_ids=memory_ids,
+            reason=reason,
+        )
 
-        payload = json.loads(self.persistence_path.read_text(encoding="utf-8"))
-        if payload.get("profile_id") != self.profile_id:
-            return
+    def release_summary(
+        self,
+        *,
+        segment_id: str,
+        owner: str,
+        error: str,
+        max_attempts: int | None = None,
+    ) -> SummaryRequest:
+        effective_max_attempts = (
+            self.max_summary_attempts
+            if max_attempts is None
+            else max_attempts
+        )
+        _require_positive_int("max_attempts", effective_max_attempts)
+        return self._store.release_segment(
+            profile_id=self.profile_id,
+            segment_id=segment_id,
+            owner=owner,
+            error=error,
+            max_attempts=effective_max_attempts,
+        )
 
-        self.messages = [
-            ShortTermMessage(**message)
-            for message in payload.get("messages", [])
-        ]
-        self.breakpoints = [
-            ShortTermBreakpoint(**breakpoint)
-            for breakpoint in payload.get("breakpoints", [])
-        ]
+    def recover_expired_summaries(
+        self,
+        *,
+        now: str | None = None,
+    ) -> int:
+        return self._store.recover_expired_leases(
+            profile_id=self.profile_id,
+            source_type=self.source_type,
+            now=now,
+        )
+
+    def requeue_failed_summary(
+        self,
+        *,
+        segment_id: str,
+    ) -> SummaryRequest:
+        return self._store.requeue_failed_segment(
+            profile_id=self.profile_id,
+            segment_id=segment_id,
+        )
+
+    def close(self) -> None:
+        if self._owns_store and not self._closed:
+            self._store.close()
+            self._closed = True
+
+    def _prepare_if_needed(self) -> dict[str, Any] | None:
+        stats = self._store.get_stats(
+            self.profile_id,
+            self.source_type,
+        )
+        if not self._policy.should_prepare(stats):
+            return None
+        return self.pop_oldest_segment_for_summary()
 
 
 def now_iso() -> str:
     return datetime.now(UTC).isoformat()
+
+
+def _require_nonblank(field_name: str, value: object) -> None:
+    if not isinstance(value, str):
+        raise TypeError(f"{field_name} must be a string")
+    if not value.strip():
+        raise ValueError(f"{field_name} must not be blank")
+
+
+def _require_optional_string(
+    field_name: str,
+    value: object | None,
+) -> None:
+    if value is not None and not isinstance(value, str):
+        raise TypeError(f"{field_name} must be a string or None")
+
+
+def _require_positive_int(field_name: str, value: object) -> None:
+    if type(value) is not int or value <= 0:
+        raise ValueError(f"{field_name} must be a positive integer")
