@@ -2,6 +2,7 @@ from __future__ import annotations
 
 from datetime import UTC, datetime
 from pathlib import Path
+from threading import RLock
 from typing import Any
 
 from ..stores.short_term_sqlite import SQLiteShortTermStore
@@ -11,7 +12,10 @@ from .store import ShortTermStore
 
 
 class ShortTermMemoryBuffer:
-    """Compatibility facade for reliable short-term memory storage."""
+    """Compatibility facade and synchronization boundary for one buffer.
+
+    Multiple facade instances sharing the same store stream are unsupported.
+    """
 
     def __init__(
         self,
@@ -49,6 +53,7 @@ class ShortTermMemoryBuffer:
         self._policy = policy
         self._owns_store = store is None
         self._closed = False
+        self._lock = RLock()
         self._store: ShortTermStore = (
             SQLiteShortTermStore(
                 self.persistence_path
@@ -61,16 +66,21 @@ class ShortTermMemoryBuffer:
 
     @property
     def messages(self) -> list[ShortTermMessage]:
-        self._ensure_open()
-        return self._store.list_messages(self.profile_id, self.source_type)
+        with self._lock:
+            self._ensure_open()
+            return self._store.list_messages(
+                self.profile_id,
+                self.source_type,
+            )
 
     @property
     def breakpoints(self) -> list[ShortTermBreakpoint]:
-        self._ensure_open()
-        return self._store.list_breakpoints(
-            self.profile_id,
-            self.source_type,
-        )
+        with self._lock:
+            self._ensure_open()
+            return self._store.list_breakpoints(
+                self.profile_id,
+                self.source_type,
+            )
 
     def add(
         self,
@@ -79,12 +89,13 @@ class ShortTermMemoryBuffer:
         content: str,
         source_id: str | None = None,
     ) -> dict[str, Any] | None:
-        self._ensure_open()
-        return self.add_message(
-            role=role,
-            content=content,
-            source_id=source_id,
-        )
+        with self._lock:
+            self._ensure_open()
+            return self.add_message(
+                role=role,
+                content=content,
+                source_id=source_id,
+            )
 
     def add_message(
         self,
@@ -93,18 +104,19 @@ class ShortTermMemoryBuffer:
         content: str,
         source_id: str | None = None,
     ) -> dict[str, Any] | None:
-        self._ensure_open()
-        _require_nonblank("role", role)
-        _require_nonblank("content", content)
-        _require_optional_string("source_id", source_id)
-        self._store.append_message(
-            profile_id=self.profile_id,
-            source_type=self.source_type,
-            role=role,
-            content=content,
-            source_id=source_id,
-        )
-        return self._prepare_if_needed()
+        with self._lock:
+            self._ensure_open()
+            _require_nonblank("role", role)
+            _require_nonblank("content", content)
+            _require_optional_string("source_id", source_id)
+            self._store.append_message(
+                profile_id=self.profile_id,
+                source_type=self.source_type,
+                role=role,
+                content=content,
+                source_id=source_id,
+            )
+            return self._prepare_if_needed()
 
     def mark_breakpoint(
         self,
@@ -112,26 +124,28 @@ class ShortTermMemoryBuffer:
         topic: str | None = None,
         reason: str | None = None,
     ) -> dict[str, Any] | None:
-        self._ensure_open()
-        _require_optional_string("topic", topic)
-        _require_optional_string("reason", reason)
-        breakpoint = self._store.add_breakpoint(
-            profile_id=self.profile_id,
-            source_type=self.source_type,
-            topic=topic,
-            reason=reason,
-        )
-        if breakpoint is None:
-            return None
-        return self._prepare_if_needed()
+        with self._lock:
+            self._ensure_open()
+            _require_optional_string("topic", topic)
+            _require_optional_string("reason", reason)
+            breakpoint = self._store.add_breakpoint(
+                profile_id=self.profile_id,
+                source_type=self.source_type,
+                topic=topic,
+                reason=reason,
+            )
+            if breakpoint is None:
+                return None
+            return self._prepare_if_needed()
 
     def pop_oldest_segment_for_summary(self) -> dict[str, Any] | None:
-        self._ensure_open()
-        request = self._store.prepare_oldest_segment(
-            profile_id=self.profile_id,
-            source_type=self.source_type,
-        )
-        return request.to_dict() if request is not None else None
+        with self._lock:
+            self._ensure_open()
+            request = self._store.prepare_oldest_segment(
+                profile_id=self.profile_id,
+                source_type=self.source_type,
+            )
+            return request.to_dict() if request is not None else None
 
     def claim_next_summary(
         self,
@@ -140,14 +154,15 @@ class ShortTermMemoryBuffer:
         lease_seconds: int,
         now: str | None = None,
     ) -> SummaryRequest | None:
-        self._ensure_open()
-        return self._store.claim_next_segment(
-            profile_id=self.profile_id,
-            source_type=self.source_type,
-            owner=owner,
-            lease_seconds=lease_seconds,
-            now=now,
-        )
+        with self._lock:
+            self._ensure_open()
+            return self._store.claim_next_segment(
+                profile_id=self.profile_id,
+                source_type=self.source_type,
+                owner=owner,
+                lease_seconds=lease_seconds,
+                now=now,
+            )
 
     def acknowledge_summary(
         self,
@@ -159,16 +174,17 @@ class ShortTermMemoryBuffer:
         memory_ids: list[str],
         reason: str | None,
     ) -> SummaryRequest:
-        self._ensure_open()
-        return self._store.acknowledge_segment(
-            profile_id=self.profile_id,
-            segment_id=segment_id,
-            owner=owner,
-            outcome=outcome,
-            episode_id=episode_id,
-            memory_ids=memory_ids,
-            reason=reason,
-        )
+        with self._lock:
+            self._ensure_open()
+            return self._store.acknowledge_segment(
+                profile_id=self.profile_id,
+                segment_id=segment_id,
+                owner=owner,
+                outcome=outcome,
+                episode_id=episode_id,
+                memory_ids=memory_ids,
+                reason=reason,
+            )
 
     def release_summary(
         self,
@@ -178,50 +194,54 @@ class ShortTermMemoryBuffer:
         error: str,
         max_attempts: int | None = None,
     ) -> SummaryRequest:
-        self._ensure_open()
-        effective_max_attempts = (
-            self.max_summary_attempts
-            if max_attempts is None
-            else max_attempts
-        )
-        _require_positive_int("max_attempts", effective_max_attempts)
-        return self._store.release_segment(
-            profile_id=self.profile_id,
-            segment_id=segment_id,
-            owner=owner,
-            error=error,
-            max_attempts=effective_max_attempts,
-        )
+        with self._lock:
+            self._ensure_open()
+            effective_max_attempts = (
+                self.max_summary_attempts
+                if max_attempts is None
+                else max_attempts
+            )
+            _require_positive_int("max_attempts", effective_max_attempts)
+            return self._store.release_segment(
+                profile_id=self.profile_id,
+                segment_id=segment_id,
+                owner=owner,
+                error=error,
+                max_attempts=effective_max_attempts,
+            )
 
     def recover_expired_summaries(
         self,
         *,
         now: str | None = None,
     ) -> int:
-        self._ensure_open()
-        return self._store.recover_expired_leases(
-            profile_id=self.profile_id,
-            source_type=self.source_type,
-            now=now,
-        )
+        with self._lock:
+            self._ensure_open()
+            return self._store.recover_expired_leases(
+                profile_id=self.profile_id,
+                source_type=self.source_type,
+                now=now,
+            )
 
     def requeue_failed_summary(
         self,
         *,
         segment_id: str,
     ) -> SummaryRequest:
-        self._ensure_open()
-        return self._store.requeue_failed_segment(
-            profile_id=self.profile_id,
-            segment_id=segment_id,
-        )
+        with self._lock:
+            self._ensure_open()
+            return self._store.requeue_failed_segment(
+                profile_id=self.profile_id,
+                segment_id=segment_id,
+            )
 
     def close(self) -> None:
-        if self._closed:
-            return
-        self._closed = True
-        if self._owns_store:
-            self._store.close()
+        with self._lock:
+            if self._closed:
+                return
+            self._closed = True
+            if self._owns_store:
+                self._store.close()
 
     def _prepare_if_needed(self) -> dict[str, Any] | None:
         stats = self._store.get_stats(

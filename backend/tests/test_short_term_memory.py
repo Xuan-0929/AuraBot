@@ -4,7 +4,7 @@ import json
 from pathlib import Path
 import sqlite3
 import tempfile
-from threading import Barrier, Lock, Thread
+from threading import Barrier, BrokenBarrierError, Event, Lock, Thread
 from typing import get_type_hints
 import unittest
 from unittest.mock import Mock
@@ -3257,6 +3257,170 @@ class ShortTermMemoryBufferTests(unittest.TestCase):
                 self.SOURCE_TYPE,
             )],
             ["咖啡", "caller still owns store"],
+        )
+
+    def test_concurrent_threshold_crossing_matches_serial_ordering(self):
+        store = self._store()
+        for content, topic in (("first", "first"), ("second", "second")):
+            store.append_message(
+                profile_id=self.PROFILE_ID,
+                source_type=self.SOURCE_TYPE,
+                role="user",
+                content=content,
+                source_id=None,
+            )
+            store.add_breakpoint(
+                profile_id=self.PROFILE_ID,
+                source_type=self.SOURCE_TYPE,
+                topic=topic,
+                reason="topic_changed",
+            )
+
+        append_barrier = Barrier(2)
+        stats_barrier = Barrier(2)
+
+        class ThresholdRaceStore:
+            def __getattr__(self, name):
+                return getattr(store, name)
+
+            def append_message(self, **kwargs):
+                message = store.append_message(**kwargs)
+                try:
+                    append_barrier.wait(timeout=1)
+                except BrokenBarrierError:
+                    pass
+                return message
+
+            def get_stats(self, profile_id, source_type):
+                stats = store.get_stats(profile_id, source_type)
+                try:
+                    stats_barrier.wait(timeout=1)
+                except BrokenBarrierError:
+                    pass
+                return stats
+
+        buffer = self._buffer(
+            store=ThresholdRaceStore(),
+            max_breakpoints=2,
+            max_chars=1000,
+        )
+        start = Barrier(3)
+        results = []
+        errors = []
+
+        def add_message(content):
+            start.wait()
+            try:
+                results.append(
+                    buffer.add(
+                        role="user",
+                        content=content,
+                        source_id=None,
+                    )
+                )
+            except BaseException as error:
+                errors.append(error)
+
+        threads = [
+            Thread(target=add_message, args=(content,))
+            for content in ("concurrent-a", "concurrent-b")
+        ]
+        for thread in threads:
+            thread.start()
+        start.wait()
+        for thread in threads:
+            thread.join(timeout=5)
+
+        self.assertFalse(any(thread.is_alive() for thread in threads))
+        self.assertEqual(errors, [])
+        prepared = [result for result in results if result is not None]
+        self.assertEqual(len(prepared), 1)
+        self.assertEqual(prepared[0]["topic"], "first")
+        self.assertEqual(
+            [breakpoint.topic for breakpoint in buffer.breakpoints],
+            ["second"],
+        )
+
+    def test_close_waits_for_started_add_before_closing_facade(self):
+        store = self._store()
+        append_started = Event()
+        allow_append = Event()
+
+        class BlockingAppendStore:
+            def __getattr__(self, name):
+                return getattr(store, name)
+
+            def append_message(self, **kwargs):
+                append_started.set()
+                if not allow_append.wait(timeout=3):
+                    raise AssertionError("test did not release blocked append")
+                return store.append_message(**kwargs)
+
+        buffer = self._buffer(store=BlockingAppendStore())
+        add_results = []
+        errors = []
+        close_started = Event()
+        close_done = Event()
+
+        def add_message():
+            try:
+                add_results.append(
+                    buffer.add(
+                        role="user",
+                        content="in flight",
+                        source_id=None,
+                    )
+                )
+            except BaseException as error:
+                errors.append(error)
+
+        def close_buffer():
+            close_started.set()
+            try:
+                buffer.close()
+            except BaseException as error:
+                errors.append(error)
+            finally:
+                close_done.set()
+
+        add_thread = Thread(target=add_message)
+        close_thread = Thread(target=close_buffer)
+        add_thread.start()
+        self.assertTrue(append_started.wait(timeout=1))
+        close_thread.start()
+        self.assertTrue(close_started.wait(timeout=1))
+        close_returned_while_add_blocked = close_done.wait(timeout=0.2)
+        allow_append.set()
+        add_thread.join(timeout=3)
+        close_thread.join(timeout=3)
+
+        self.assertFalse(add_thread.is_alive())
+        self.assertFalse(close_thread.is_alive())
+        self.assertFalse(close_returned_while_add_blocked)
+        self.assertEqual(errors, [])
+        self.assertEqual(add_results, [None])
+        with self.assertRaisesRegex(
+            RuntimeError,
+            "^ShortTermMemoryBuffer is closed$",
+        ):
+            _ = buffer.messages
+
+        store.append_message(
+            profile_id=self.PROFILE_ID,
+            source_type=self.SOURCE_TYPE,
+            role="user",
+            content="caller use",
+            source_id=None,
+        )
+        self.assertEqual(
+            [
+                message.content
+                for message in store.list_messages(
+                    self.PROFILE_ID,
+                    self.SOURCE_TYPE,
+                )
+            ],
+            ["in flight", "caller use"],
         )
 
     def test_persistence_path_is_used_directly_even_with_json_suffix(self):
