@@ -2,6 +2,7 @@ from __future__ import annotations
 
 import sqlite3
 import threading
+from contextlib import contextmanager
 from dataclasses import dataclass
 from datetime import UTC, datetime
 from pathlib import Path
@@ -19,7 +20,7 @@ SCHEMA_VERSION = 1
 _SCHEMA_STATEMENTS = (
     """
     create table if not exists short_term_schema_info (
-      key text primary key,
+      key text not null primary key,
       value text not null,
       updated_at text not null
     )
@@ -38,7 +39,7 @@ _SCHEMA_STATEMENTS = (
     """,
     """
     create table if not exists short_term_breakpoints (
-      id text primary key,
+      id text not null primary key,
       profile_id text not null,
       source_type text not null,
       message_sequence integer not null,
@@ -50,7 +51,7 @@ _SCHEMA_STATEMENTS = (
     """,
     """
     create table if not exists short_term_segments (
-      id text primary key,
+      id text not null primary key,
       profile_id text not null,
       source_type text not null,
       breakpoint_id text not null unique,
@@ -181,15 +182,6 @@ _V1_EXPLICIT_INDEXES = {
     "idx_short_term_segments_profile_source_state_lease": _IndexSpec(
         "short_term_segments",
         ("profile_id", "source_type", "state", "lease_expires_at"),
-    ),
-}
-
-_V1_REQUIRED_CHECKS = {
-    "short_term_segments": (
-        "check(statein('pending','processing','completed','failed'))",
-        "check(json_valid(payload_json))",
-        "check(json_valid(result_json))",
-        "check(attempt_count>=0)",
     ),
 }
 
@@ -535,8 +527,10 @@ class SQLiteShortTermStore:
             for column_name, expected in expected_columns.items():
                 actual = actual_columns[column_name]
                 actual_type = _normalize_declared_type(actual["type"])
-                actual_not_null = bool(actual["notnull"]) or int(actual["pk"]) > 0
                 actual_primary_key = int(actual["pk"])
+                actual_not_null = bool(actual["notnull"]) or (
+                    actual_type == "INTEGER" and actual_primary_key > 0
+                )
                 actual_default = _normalize_default(actual["dflt_value"])
                 actual_hidden = int(actual["hidden"])
                 actual_structure = (
@@ -558,14 +552,6 @@ class SQLiteShortTermStore:
                         "Incompatible short-term schema: "
                         f"{table_name}.{column_name} has structure "
                         f"{actual_structure}, expected {expected_structure}"
-                    )
-
-            normalized_sql = _normalize_schema_sql(row["sql"] or "")
-            for check in _V1_REQUIRED_CHECKS.get(table_name, ()):
-                if check not in normalized_sql:
-                    raise RuntimeError(
-                        "Incompatible short-term schema: "
-                        f"{table_name} is missing CHECK constraint {check}"
                     )
 
             indexes = _read_table_indexes(connection, table_name)
@@ -597,6 +583,9 @@ class SQLiteShortTermStore:
                     f"{index_name} has structure {metadata}, expected a non-unique "
                     f"explicit index on {expected.columns}"
                 )
+
+        _validate_effective_segment_checks(connection)
+        _validate_monotonic_message_sequence(connection)
 
 
 def _message_from_row(row: sqlite3.Row) -> ShortTermMessage:
@@ -639,10 +628,6 @@ def _normalize_default(value: object | None) -> str | None:
     return normalized
 
 
-def _normalize_schema_sql(sql: str) -> str:
-    return "".join(sql.lower().split())
-
-
 def _read_table_indexes(
     connection: sqlite3.Connection,
     table_name: str,
@@ -674,3 +659,138 @@ def _read_table_indexes(
             partial=bool(row["partial"]),
         )
     return indexes
+
+
+def _validate_effective_segment_checks(connection: sqlite3.Connection) -> None:
+    valid_values = ("pending", "{}", "{}", 0)
+    invalid_probes = (
+        ("state", "not-a-state", "{}", "{}", 0),
+        ("payload_json", "pending", "not-json", "{}", 0),
+        ("result_json", "pending", "{}", "not-json", 0),
+        ("attempt_count", "pending", "{}", "{}", -1),
+    )
+
+    with _rollback_only_validation(connection):
+        try:
+            _insert_validation_segment(
+                connection,
+                label="valid",
+                state=valid_values[0],
+                payload_json=valid_values[1],
+                result_json=valid_values[2],
+                attempt_count=valid_values[3],
+            )
+        except sqlite3.IntegrityError as error:
+            raise RuntimeError(
+                "Incompatible short-term schema: valid segment rows are rejected"
+            ) from error
+
+        for label, state, payload_json, result_json, attempt_count in invalid_probes:
+            try:
+                _insert_validation_segment(
+                    connection,
+                    label=label,
+                    state=state,
+                    payload_json=payload_json,
+                    result_json=result_json,
+                    attempt_count=attempt_count,
+                )
+            except sqlite3.IntegrityError:
+                continue
+
+            raise RuntimeError(
+                "Incompatible short-term schema: "
+                f"effective CHECK constraint is missing for {label}"
+            )
+
+
+def _insert_validation_segment(
+    connection: sqlite3.Connection,
+    *,
+    label: str,
+    state: str,
+    payload_json: str,
+    result_json: str,
+    attempt_count: int,
+) -> None:
+    validation_id = uuid4().hex
+    connection.execute(
+        """
+        insert into short_term_segments (
+          id, profile_id, source_type, breakpoint_id, state,
+          payload_json, result_json, attempt_count, created_at, updated_at
+        )
+        values (?, ?, ?, ?, ?, ?, ?, ?, ?, ?)
+        """,
+        (
+            f"validation-segment-{label}-{validation_id}",
+            "schema-validation",
+            "schema-validation",
+            f"validation-breakpoint-{label}-{validation_id}",
+            state,
+            payload_json,
+            result_json,
+            attempt_count,
+            "1970-01-01T00:00:00+00:00",
+            "1970-01-01T00:00:00+00:00",
+        ),
+    )
+
+
+def _validate_monotonic_message_sequence(connection: sqlite3.Connection) -> None:
+    with _rollback_only_validation(connection):
+        first_id = f"validation-message-first-{uuid4().hex}"
+        first = connection.execute(
+            """
+            insert into short_term_messages (
+              id, profile_id, source_type, role, content, source_id, created_at
+            )
+            values (?, ?, ?, ?, ?, ?, ?)
+            """,
+            (
+                first_id,
+                "schema-validation",
+                "schema-validation",
+                "system",
+                "first",
+                None,
+                "1970-01-01T00:00:00+00:00",
+            ),
+        ).lastrowid
+        connection.execute(
+            "delete from short_term_messages where id = ?",
+            (first_id,),
+        )
+        second = connection.execute(
+            """
+            insert into short_term_messages (
+              id, profile_id, source_type, role, content, source_id, created_at
+            )
+            values (?, ?, ?, ?, ?, ?, ?)
+            """,
+            (
+                f"validation-message-second-{uuid4().hex}",
+                "schema-validation",
+                "schema-validation",
+                "system",
+                "second",
+                None,
+                "1970-01-01T00:00:00+00:00",
+            ),
+        ).lastrowid
+
+        if first is None or second is None or second <= first:
+            raise RuntimeError(
+                "Incompatible short-term schema: message sequence requires "
+                "AUTOINCREMENT monotonic non-reuse"
+            )
+
+
+@contextmanager
+def _rollback_only_validation(connection: sqlite3.Connection):
+    connection.execute("savepoint short_term_schema_validation")
+    try:
+        yield
+    finally:
+        connection.execute("rollback to short_term_schema_validation")
+        connection.execute("release short_term_schema_validation")

@@ -338,6 +338,129 @@ class SQLiteShortTermStoreTests(unittest.TestCase):
 
         self._assert_reopen_rejected("short_term_breakpoints.*unique")
 
+    def test_v1_schema_rejects_spoofed_state_check(self):
+        self._rewrite_table_schema(
+            table_name="short_term_segments",
+            old=(
+                "check (\n"
+                "        state in ('pending', 'processing', 'completed', 'failed')\n"
+                "      )"
+            ),
+            new=(
+                "check (1) "
+                "/* check(state in ('pending', 'processing', 'completed', 'failed')) */"
+            ),
+        )
+
+        self._assert_reopen_rejected("effective CHECK.*state")
+
+    def test_v1_schema_rejects_reusable_message_sequence(self):
+        self._rewrite_table_schema(
+            table_name="short_term_messages",
+            old="sequence integer primary key autoincrement",
+            new="sequence integer primary key",
+        )
+
+        self._assert_reopen_rejected("AUTOINCREMENT|monotonic")
+
+    def test_fresh_schema_rejects_null_text_primary_keys(self):
+        cases = (
+            (
+                "schema-info",
+                """
+                insert into short_term_schema_info(key, value, updated_at)
+                values (?, ?, ?)
+                """,
+                (None, "value", "2026-07-25T00:00:00+00:00"),
+            ),
+            (
+                "breakpoint",
+                """
+                insert into short_term_breakpoints (
+                  id, profile_id, source_type, message_sequence, created_at
+                )
+                values (?, ?, ?, ?, ?)
+                """,
+                (
+                    None,
+                    "profile-1",
+                    "chat",
+                    1,
+                    "2026-07-25T00:00:00+00:00",
+                ),
+            ),
+            (
+                "segment",
+                """
+                insert into short_term_segments (
+                  id, profile_id, source_type, breakpoint_id, state,
+                  payload_json, created_at, updated_at
+                )
+                values (?, ?, ?, ?, ?, ?, ?, ?)
+                """,
+                (
+                    None,
+                    "profile-1",
+                    "chat",
+                    "breakpoint-null-id",
+                    "pending",
+                    "{}",
+                    "2026-07-25T00:00:00+00:00",
+                    "2026-07-25T00:00:00+00:00",
+                ),
+            ),
+        )
+
+        for name, statement, params in cases:
+            with self.subTest(name=name):
+                with closing(sqlite3.connect(self.path)) as connection, connection:
+                    with self.assertRaises(sqlite3.IntegrityError):
+                        connection.execute(statement, params)
+
+    def test_v1_schema_rejects_nullable_text_primary_key(self):
+        self._rewrite_table_schema(
+            table_name="short_term_breakpoints",
+            old=("id text not null primary key", "id text primary key"),
+            new="id text primary key",
+        )
+
+        self._assert_reopen_rejected("short_term_breakpoints.id")
+
+    def test_v1_schema_rejects_missing_lease_recovery_index(self):
+        self.store.close()
+        with closing(sqlite3.connect(self.path)) as connection, connection:
+            connection.execute(
+                "drop index idx_short_term_segments_profile_source_state_lease"
+            )
+
+        self._assert_reopen_rejected(
+            "idx_short_term_segments_profile_source_state_lease"
+        )
+
+    def test_message_sequence_is_not_reused_after_delete(self):
+        first = self.store.append_message(
+            profile_id="profile-1",
+            source_type="chat",
+            role="user",
+            content="first",
+            source_id=None,
+        )
+        with closing(sqlite3.connect(self.path)) as connection, connection:
+            connection.execute(
+                "delete from short_term_messages where id = ?",
+                (first.id,),
+            )
+
+        second = self.store.append_message(
+            profile_id="profile-1",
+            source_type="chat",
+            role="user",
+            content="second",
+            source_id=None,
+        )
+
+        self.assertGreater(second.sequence, first.sequence)
+
     def test_segment_rows_enforce_json_and_nonnegative_attempts(self):
         cases = (
             ("invalid-payload", "not-json", "{}", 0),
@@ -411,6 +534,12 @@ class SQLiteShortTermStoreTests(unittest.TestCase):
 
     def _rewrite_table_schema(self, *, table_name, old, new):
         index_statements = {
+            "short_term_messages": (
+                """
+                create index idx_short_term_messages_profile_source_sequence
+                on short_term_messages(profile_id, source_type, sequence)
+                """,
+            ),
             "short_term_breakpoints": (
                 """
                 create index idx_short_term_breakpoints_profile_source_sequence
@@ -441,8 +570,13 @@ class SQLiteShortTermStoreTests(unittest.TestCase):
                 (table_name,),
             ).fetchone()
             self.assertIsNotNone(row)
-            self.assertIn(old, row[0])
-            rewritten_sql = row[0].replace(old, new, 1)
+            old_candidates = (old,) if isinstance(old, str) else old
+            matched = next(
+                (candidate for candidate in old_candidates if candidate in row[0]),
+                None,
+            )
+            self.assertIsNotNone(matched)
+            rewritten_sql = row[0].replace(matched, new, 1)
 
             connection.execute(f"drop table {table_name}")
             connection.execute(rewritten_sql)
