@@ -121,6 +121,31 @@ class _IndexMetadata:
     partial: bool
 
 
+@dataclass(frozen=True)
+class LegacySnapshotImportResult:
+    imported: bool
+    reason: str
+    message_count: int
+    breakpoint_count: int
+
+
+@dataclass(frozen=True)
+class _LegacyMessage:
+    role: str
+    content: str
+    source_id: str | None
+    created_at: str
+
+
+@dataclass(frozen=True)
+class _LegacyBreakpoint:
+    id: str
+    message_index: int
+    topic: str | None
+    reason: str | None
+    created_at: str
+
+
 _TEXT_REQUIRED = _ColumnSpec("TEXT", True)
 _TEXT_OPTIONAL = _ColumnSpec("TEXT", False)
 _INTEGER_REQUIRED = _ColumnSpec("INTEGER", True)
@@ -229,6 +254,146 @@ class SQLiteShortTermStore:
             connection = self._connection
             self._connection = None
             connection.close()
+
+    def import_legacy_snapshot(
+        self,
+        *,
+        profile_id: str,
+        source_type: str,
+        legacy_path: str | Path,
+    ) -> LegacySnapshotImportResult:
+        _require_nonblank("profile_id", profile_id)
+        _require_nonblank("source_type", source_type)
+        path = Path(legacy_path)
+        marker_key = f"legacy_json_imported:{profile_id}:{source_type}"
+
+        with self._lock:
+            connection = self._get_connection()
+            try:
+                with connection:
+                    connection.execute("begin immediate")
+                    marker = connection.execute(
+                        """
+                        select 1
+                        from short_term_schema_info
+                        where key = ?
+                        """,
+                        (marker_key,),
+                    ).fetchone()
+                    if marker is not None:
+                        return LegacySnapshotImportResult(
+                            imported=False,
+                            reason="already_imported",
+                            message_count=0,
+                            breakpoint_count=0,
+                        )
+
+                    has_state = connection.execute(
+                        """
+                        select (
+                          exists(
+                            select 1
+                            from short_term_messages
+                            where profile_id = ? and source_type = ?
+                          )
+                          or exists(
+                            select 1
+                            from short_term_breakpoints
+                            where profile_id = ? and source_type = ?
+                          )
+                          or exists(
+                            select 1
+                            from short_term_segments
+                            where profile_id = ? and source_type = ?
+                          )
+                        ) as has_state
+                        """,
+                        (
+                            profile_id,
+                            source_type,
+                            profile_id,
+                            source_type,
+                            profile_id,
+                            source_type,
+                        ),
+                    ).fetchone()["has_state"]
+                    if has_state:
+                        return LegacySnapshotImportResult(
+                            imported=False,
+                            reason="existing_state",
+                            message_count=0,
+                            breakpoint_count=0,
+                        )
+
+                    messages, breakpoints = _load_legacy_snapshot(
+                        path,
+                        profile_id=profile_id,
+                        source_type=source_type,
+                    )
+                    message_sequences: list[int] = []
+                    for message in messages:
+                        cursor = connection.execute(
+                            """
+                            insert into short_term_messages (
+                              id, profile_id, source_type, role, content,
+                              source_id, created_at
+                            )
+                            values (?, ?, ?, ?, ?, ?, ?)
+                            """,
+                            (
+                                f"message_{uuid4().hex}",
+                                profile_id,
+                                source_type,
+                                message.role,
+                                message.content,
+                                message.source_id,
+                                message.created_at,
+                            ),
+                        )
+                        if cursor.lastrowid is None:
+                            raise RuntimeError(
+                                "SQLite did not assign a legacy message sequence"
+                            )
+                        message_sequences.append(cursor.lastrowid)
+
+                    for breakpoint in breakpoints:
+                        connection.execute(
+                            """
+                            insert into short_term_breakpoints (
+                              id, profile_id, source_type, message_sequence,
+                              topic, reason, created_at
+                            )
+                            values (?, ?, ?, ?, ?, ?, ?)
+                            """,
+                            (
+                                breakpoint.id,
+                                profile_id,
+                                source_type,
+                                message_sequences[breakpoint.message_index - 1],
+                                breakpoint.topic,
+                                breakpoint.reason,
+                                breakpoint.created_at,
+                            ),
+                        )
+
+                    connection.execute(
+                        """
+                        insert into short_term_schema_info(key, value, updated_at)
+                        values (?, ?, ?)
+                        """,
+                        (marker_key, "1", _now_iso()),
+                    )
+            except sqlite3.IntegrityError as error:
+                raise ValueError(
+                    f"Invalid legacy short-term snapshot: {error}"
+                ) from error
+
+        return LegacySnapshotImportResult(
+            imported=True,
+            reason="imported",
+            message_count=len(messages),
+            breakpoint_count=len(breakpoints),
+        )
 
     def append_message(
         self,
@@ -959,7 +1124,9 @@ class SQLiteShortTermStore:
                 self._validate_schema()
                 connection.execute(
                     """
-                    insert into short_term_schema_info(key, value, updated_at)
+                    insert or ignore into short_term_schema_info(
+                      key, value, updated_at
+                    )
                     values (?, ?, ?)
                     """,
                     ("schema_version", str(SCHEMA_VERSION), _now_iso()),
@@ -1111,6 +1278,166 @@ def _parse_aware_iso_timestamp(
         raise ValueError(
             f"{field_name} must be a timezone-aware ISO timestamp"
         ) from error
+
+
+def _load_legacy_snapshot(
+    path: Path,
+    *,
+    profile_id: str,
+    source_type: str,
+) -> tuple[list[_LegacyMessage], list[_LegacyBreakpoint]]:
+    try:
+        raw_snapshot = path.read_text(encoding="utf-8")
+        snapshot = json.loads(raw_snapshot)
+    except (UnicodeDecodeError, json.JSONDecodeError) as error:
+        raise ValueError(
+            f"Invalid legacy short-term JSON at {path}: malformed JSON"
+        ) from error
+
+    if not isinstance(snapshot, dict):
+        raise ValueError("Invalid legacy short-term snapshot: root must be an object")
+    if snapshot.get("profile_id") != profile_id:
+        raise ValueError(
+            "Invalid legacy short-term snapshot: profile_id does not match "
+            f"{profile_id!r}"
+        )
+    if snapshot.get("source_type") != source_type:
+        raise ValueError(
+            "Invalid legacy short-term snapshot: source_type does not match "
+            f"{source_type!r}"
+        )
+
+    raw_messages = snapshot.get("messages")
+    raw_breakpoints = snapshot.get("breakpoints")
+    if not isinstance(raw_messages, list):
+        raise ValueError(
+            "Invalid legacy short-term snapshot: messages must be a list"
+        )
+    if not isinstance(raw_breakpoints, list):
+        raise ValueError(
+            "Invalid legacy short-term snapshot: breakpoints must be a list"
+        )
+
+    messages = [
+        _validate_legacy_message(record, index=index)
+        for index, record in enumerate(raw_messages, start=1)
+    ]
+    breakpoints = _validate_legacy_breakpoints(
+        raw_breakpoints,
+        message_count=len(messages),
+    )
+    return messages, breakpoints
+
+
+def _validate_legacy_message(
+    record: object,
+    *,
+    index: int,
+) -> _LegacyMessage:
+    prefix = f"Invalid legacy message at index {index}"
+    if not isinstance(record, dict):
+        raise ValueError(f"{prefix}: record must be an object")
+
+    role = _required_legacy_field(record, "role", prefix)
+    content = _required_legacy_field(record, "content", prefix)
+    source_id = _required_legacy_field(record, "source_id", prefix)
+    created_at = _required_legacy_field(record, "created_at", prefix)
+    if not isinstance(role, str):
+        raise ValueError(f"{prefix}: role must be a string")
+    if not isinstance(content, str):
+        raise ValueError(f"{prefix}: content must be a string")
+    if source_id is not None and not isinstance(source_id, str):
+        raise ValueError(f"{prefix}: source_id must be a string or null")
+    _validate_legacy_timestamp(created_at, prefix=prefix)
+
+    return _LegacyMessage(
+        role=role,
+        content=content,
+        source_id=source_id,
+        created_at=created_at,
+    )
+
+
+def _validate_legacy_breakpoints(
+    records: list[object],
+    *,
+    message_count: int,
+) -> list[_LegacyBreakpoint]:
+    breakpoints = []
+    seen_ids: set[str] = set()
+    seen_indexes: set[int] = set()
+    previous_index = 0
+
+    for position, record in enumerate(records, start=1):
+        prefix = f"Invalid legacy breakpoint at index {position}"
+        if not isinstance(record, dict):
+            raise ValueError(f"{prefix}: record must be an object")
+
+        breakpoint_id = _required_legacy_field(record, "id", prefix)
+        message_index = _required_legacy_field(
+            record,
+            "message_index",
+            prefix,
+        )
+        topic = _required_legacy_field(record, "topic", prefix)
+        reason = _required_legacy_field(record, "reason", prefix)
+        created_at = _required_legacy_field(record, "created_at", prefix)
+
+        if not isinstance(breakpoint_id, str) or not breakpoint_id.strip():
+            raise ValueError(f"{prefix}: id must be a nonblank string")
+        if type(message_index) is not int:
+            raise ValueError(f"{prefix}: message_index must be an integer")
+        if not 1 <= message_index <= message_count:
+            raise ValueError(
+                f"{prefix}: message_index must be between 1 and {message_count}"
+            )
+        if topic is not None and not isinstance(topic, str):
+            raise ValueError(f"{prefix}: topic must be a string or null")
+        if reason is not None and not isinstance(reason, str):
+            raise ValueError(f"{prefix}: reason must be a string or null")
+        _validate_legacy_timestamp(created_at, prefix=prefix)
+
+        if breakpoint_id in seen_ids:
+            raise ValueError(f"{prefix}: duplicate id {breakpoint_id!r}")
+        if message_index in seen_indexes:
+            raise ValueError(
+                f"{prefix}: duplicate message_index {message_index}"
+            )
+        if message_index <= previous_index:
+            raise ValueError(
+                f"{prefix}: message indexes must be strictly increasing"
+            )
+        seen_ids.add(breakpoint_id)
+        seen_indexes.add(message_index)
+        previous_index = message_index
+        breakpoints.append(
+            _LegacyBreakpoint(
+                id=breakpoint_id,
+                message_index=message_index,
+                topic=topic,
+                reason=reason,
+                created_at=created_at,
+            )
+        )
+
+    return breakpoints
+
+
+def _required_legacy_field(
+    record: dict[object, object],
+    field_name: str,
+    prefix: str,
+) -> object:
+    if field_name not in record:
+        raise ValueError(f"{prefix}: missing {field_name}")
+    return record[field_name]
+
+
+def _validate_legacy_timestamp(value: object, *, prefix: str) -> None:
+    try:
+        _parse_aware_iso_timestamp(value, field_name="created_at")
+    except ValueError as error:
+        raise ValueError(f"{prefix}: {error}") from error
 
 
 def _recover_expired_segment_leases(

@@ -7,7 +7,7 @@ import tempfile
 from threading import Barrier, BrokenBarrierError, Event, Lock, Thread
 from typing import get_type_hints
 import unittest
-from unittest.mock import Mock
+from unittest.mock import Mock, patch
 
 from backend.memory.short_term.buffer import ShortTermMemoryBuffer
 from backend.memory.short_term.models import (
@@ -3423,15 +3423,17 @@ class ShortTermMemoryBufferTests(unittest.TestCase):
             ["in flight", "caller use"],
         )
 
-    def test_persistence_path_is_used_directly_even_with_json_suffix(self):
+    def test_json_persistence_path_uses_sqlite_sidecar(self):
         path = Path(self.tmpdir.name) / "new-memory.json"
         buffer = self._buffer(persistence_path=path)
         buffer.add(role="user", content="持久化", source_id=None)
         buffer.close()
 
-        self.assertTrue(path.exists())
-        self.assertEqual(path.read_bytes()[:16], b"SQLite format 3\x00")
-        reopened = SQLiteShortTermStore(path)
+        sidecar = Path(f"{path}.sqlite3")
+        self.assertFalse(path.exists())
+        self.assertTrue(sidecar.exists())
+        self.assertEqual(sidecar.read_bytes()[:16], b"SQLite format 3\x00")
+        reopened = SQLiteShortTermStore(sidecar)
         self.stores.append(reopened)
         self.assertEqual(
             [message.content for message in reopened.list_messages(
@@ -3522,6 +3524,463 @@ class ShortTermMemoryBufferTests(unittest.TestCase):
         )
 
 
+class LegacyShortTermJsonMigrationTests(unittest.TestCase):
+    PROFILE_ID = "profile-1"
+    SOURCE_TYPE = "chat"
+
+    def setUp(self):
+        self.tmpdir = tempfile.TemporaryDirectory()
+        self.legacy_path = Path(self.tmpdir.name) / "short-term.json"
+        self.sidecar_path = Path(f"{self.legacy_path}.sqlite3")
+        self.buffers = []
+        self.stores = []
+
+    def tearDown(self):
+        for buffer in self.buffers:
+            buffer.close()
+        for store in self.stores:
+            store.close()
+        self.tmpdir.cleanup()
+
+    def _snapshot(self, *, messages=None, breakpoints=None):
+        return {
+            "profile_id": self.PROFILE_ID,
+            "source_type": self.SOURCE_TYPE,
+            "messages": (
+                [
+                    {
+                        "role": "user",
+                        "content": "第一条",
+                        "source_id": "legacy-message-1",
+                        "created_at": "2026-07-24T10:00:00+08:00",
+                    },
+                    {
+                        "role": "assistant",
+                        "content": "第二条",
+                        "source_id": None,
+                        "created_at": "2026-07-24T02:00:01Z",
+                    },
+                ]
+                if messages is None
+                else messages
+            ),
+            "breakpoints": (
+                [
+                    {
+                        "id": "breakpoint-legacy-1",
+                        "message_index": 2,
+                        "topic": "legacy-topic",
+                        "reason": "topic_changed",
+                        "created_at": "2026-07-24T10:00:02+08:00",
+                    }
+                ]
+                if breakpoints is None
+                else breakpoints
+            ),
+        }
+
+    def _write_snapshot(self, snapshot):
+        self.legacy_path.write_text(
+            json.dumps(snapshot, ensure_ascii=False, indent=2),
+            encoding="utf-8",
+        )
+
+    def _buffer(self, **kwargs):
+        kwargs.setdefault("profile_id", self.PROFILE_ID)
+        kwargs.setdefault("source_type", self.SOURCE_TYPE)
+        kwargs.setdefault("persistence_path", self.legacy_path)
+        buffer = ShortTermMemoryBuffer(**kwargs)
+        self.buffers.append(buffer)
+        return buffer
+
+    def _store(self, path=None):
+        store = SQLiteShortTermStore(path or self.sidecar_path)
+        self.stores.append(store)
+        return store
+
+    def _marker_value(self):
+        marker_key = (
+            f"legacy_json_imported:{self.PROFILE_ID}:{self.SOURCE_TYPE}"
+        )
+        with closing(sqlite3.connect(self.sidecar_path)) as connection:
+            row = connection.execute(
+                """
+                select value
+                from short_term_schema_info
+                where key = ?
+                """,
+                (marker_key,),
+            ).fetchone()
+        return None if row is None else row[0]
+
+    def _state_counts(self):
+        with closing(sqlite3.connect(self.sidecar_path)) as connection:
+            return tuple(
+                connection.execute(
+                    f"select count(*) from {table}"
+                ).fetchone()[0]
+                for table in (
+                    "short_term_messages",
+                    "short_term_breakpoints",
+                    "short_term_segments",
+                )
+            )
+
+    def test_existing_legacy_snapshot_imports_without_modifying_json(self):
+        self._write_snapshot(self._snapshot())
+        original_bytes = self.legacy_path.read_bytes()
+
+        buffer = self._buffer()
+
+        self.assertEqual(
+            [
+                (
+                    message.role,
+                    message.content,
+                    message.source_id,
+                    message.created_at,
+                )
+                for message in buffer.messages
+            ],
+            [
+                (
+                    "user",
+                    "第一条",
+                    "legacy-message-1",
+                    "2026-07-24T10:00:00+08:00",
+                ),
+                (
+                    "assistant",
+                    "第二条",
+                    None,
+                    "2026-07-24T02:00:01Z",
+                ),
+            ],
+        )
+        self.assertEqual(len(buffer.breakpoints), 1)
+        breakpoint = buffer.breakpoints[0]
+        self.assertEqual(breakpoint.id, "breakpoint-legacy-1")
+        self.assertEqual(breakpoint.message_index, 2)
+        self.assertEqual(
+            breakpoint.message_sequence,
+            buffer.messages[1].sequence,
+        )
+        self.assertEqual(breakpoint.topic, "legacy-topic")
+        self.assertEqual(breakpoint.reason, "topic_changed")
+        self.assertEqual(
+            breakpoint.created_at,
+            "2026-07-24T10:00:02+08:00",
+        )
+        self.assertTrue(self.sidecar_path.exists())
+        self.assertEqual(self.legacy_path.read_bytes(), original_bytes)
+
+    def test_repeated_reopen_is_restart_safe_and_does_not_duplicate(self):
+        self._write_snapshot(self._snapshot())
+
+        for _ in range(3):
+            buffer = self._buffer()
+            self.assertEqual(len(buffer.messages), 2)
+            self.assertEqual(len(buffer.breakpoints), 1)
+            buffer.close()
+
+        self.assertEqual(self._state_counts(), (2, 1, 0))
+
+    def test_empty_snapshot_writes_marker_and_is_not_reimported(self):
+        self._write_snapshot(self._snapshot(messages=[], breakpoints=[]))
+        first = self._buffer()
+        first.close()
+        self.assertIsNotNone(self._marker_value())
+
+        self._write_snapshot(self._snapshot())
+        reopened = self._buffer()
+
+        self.assertEqual(reopened.messages, [])
+        self.assertEqual(reopened.breakpoints, [])
+        self.assertEqual(self._state_counts(), (0, 0, 0))
+
+    def test_concurrent_buffer_constructors_import_once(self):
+        self._write_snapshot(self._snapshot())
+        start = Barrier(3)
+        results = []
+        errors = []
+        result_lock = Lock()
+
+        def construct_buffer():
+            start.wait()
+            try:
+                buffer = ShortTermMemoryBuffer(
+                    profile_id=self.PROFILE_ID,
+                    source_type=self.SOURCE_TYPE,
+                    persistence_path=self.legacy_path,
+                )
+                result = (len(buffer.messages), len(buffer.breakpoints))
+                buffer.close()
+                with result_lock:
+                    results.append(result)
+            except BaseException as error:
+                with result_lock:
+                    errors.append(error)
+
+        threads = [Thread(target=construct_buffer) for _ in range(2)]
+        for thread in threads:
+            thread.start()
+        start.wait()
+        for thread in threads:
+            thread.join(timeout=5)
+
+        self.assertFalse(any(thread.is_alive() for thread in threads))
+        self.assertEqual(errors, [])
+        self.assertEqual(sorted(results), [(2, 1), (2, 1)])
+        self.assertEqual(self._state_counts(), (2, 1, 0))
+        self.assertIsNotNone(self._marker_value())
+
+    def test_invalid_top_level_snapshots_fail_without_partial_import(self):
+        invalid_cases = {
+            "malformed JSON": b"{",
+            "non-object root": json.dumps([]).encode(),
+            "missing profile": json.dumps(
+                {
+                    "source_type": self.SOURCE_TYPE,
+                    "messages": [],
+                    "breakpoints": [],
+                }
+            ).encode(),
+            "wrong profile": json.dumps(
+                self._snapshot() | {"profile_id": "profile-2"}
+            ).encode(),
+            "missing source": json.dumps(
+                {
+                    "profile_id": self.PROFILE_ID,
+                    "messages": [],
+                    "breakpoints": [],
+                }
+            ).encode(),
+            "wrong source": json.dumps(
+                self._snapshot() | {"source_type": "scheduler"}
+            ).encode(),
+            "non-list messages": json.dumps(
+                self._snapshot(messages={})
+            ).encode(),
+            "non-list breakpoints": json.dumps(
+                self._snapshot(breakpoints={})
+            ).encode(),
+        }
+
+        for name, legacy_bytes in invalid_cases.items():
+            with self.subTest(case=name):
+                if self.sidecar_path.exists():
+                    self.sidecar_path.unlink()
+                self.legacy_path.write_bytes(legacy_bytes)
+
+                with self.assertRaisesRegex(ValueError, "legacy"):
+                    self._buffer()
+
+                if self.sidecar_path.exists():
+                    self.assertEqual(self._state_counts(), (0, 0, 0))
+                    self.assertIsNone(self._marker_value())
+
+    def test_invalid_message_records_fail_atomically(self):
+        valid_message = self._snapshot()["messages"][0]
+        invalid_messages = {
+            "non-object": ["not-an-object"],
+            "missing role": [
+                {
+                    key: value
+                    for key, value in valid_message.items()
+                    if key != "role"
+                }
+            ],
+            "invalid content": [valid_message | {"content": 3}],
+            "invalid source id": [valid_message | {"source_id": 3}],
+            "naive timestamp": [
+                valid_message | {"created_at": "2026-07-24T10:00:00"}
+            ],
+        }
+
+        for name, messages in invalid_messages.items():
+            with self.subTest(case=name):
+                if self.sidecar_path.exists():
+                    self.sidecar_path.unlink()
+                self._write_snapshot(
+                    self._snapshot(messages=messages, breakpoints=[])
+                )
+
+                with self.assertRaisesRegex(ValueError, "legacy message"):
+                    self._buffer()
+
+                self.assertEqual(self._state_counts(), (0, 0, 0))
+                self.assertIsNone(self._marker_value())
+
+    def test_invalid_breakpoint_records_fail_atomically(self):
+        valid_breakpoint = self._snapshot()["breakpoints"][0]
+        invalid_breakpoints = {
+            "non-object": ["not-an-object"],
+            "missing id": [
+                {
+                    key: value
+                    for key, value in valid_breakpoint.items()
+                    if key != "id"
+                }
+            ],
+            "blank id": [valid_breakpoint | {"id": " "}],
+            "invalid index": [
+                valid_breakpoint | {"message_index": True}
+            ],
+            "out-of-range index": [
+                valid_breakpoint | {"message_index": 3}
+            ],
+            "invalid topic": [valid_breakpoint | {"topic": 3}],
+            "invalid reason": [valid_breakpoint | {"reason": 3}],
+            "naive timestamp": [
+                valid_breakpoint
+                | {"created_at": "2026-07-24T10:00:02"}
+            ],
+            "duplicate ids": [
+                valid_breakpoint | {"message_index": 1},
+                valid_breakpoint,
+            ],
+            "duplicate indexes": [
+                valid_breakpoint | {"id": "breakpoint-1"},
+                valid_breakpoint | {"id": "breakpoint-2"},
+            ],
+            "out-of-order indexes": [
+                valid_breakpoint,
+                valid_breakpoint
+                | {"id": "breakpoint-2", "message_index": 1},
+            ],
+        }
+
+        for name, breakpoints in invalid_breakpoints.items():
+            with self.subTest(case=name):
+                if self.sidecar_path.exists():
+                    self.sidecar_path.unlink()
+                self._write_snapshot(
+                    self._snapshot(breakpoints=breakpoints)
+                )
+
+                with self.assertRaisesRegex(ValueError, "legacy breakpoint"):
+                    self._buffer()
+
+                self.assertEqual(self._state_counts(), (0, 0, 0))
+                self.assertIsNone(self._marker_value())
+
+    def test_constructor_closes_owned_store_when_migration_fails(self):
+        self._write_snapshot(self._snapshot(messages=["invalid"]))
+        created_stores = []
+
+        class TrackingStore(SQLiteShortTermStore):
+            def __init__(self, path):
+                super().__init__(path)
+                created_stores.append(self)
+
+        with patch(
+            "backend.memory.short_term.buffer.SQLiteShortTermStore",
+            TrackingStore,
+        ):
+            with self.assertRaisesRegex(ValueError, "legacy message"):
+                ShortTermMemoryBuffer(
+                    profile_id=self.PROFILE_ID,
+                    source_type=self.SOURCE_TYPE,
+                    persistence_path=self.legacy_path,
+                )
+
+        self.assertEqual(len(created_stores), 1)
+        with self.assertRaisesRegex(
+            RuntimeError,
+            "^SQLiteShortTermStore is closed$",
+        ):
+            created_stores[0].list_messages(
+                self.PROFILE_ID,
+                self.SOURCE_TYPE,
+            )
+
+    def test_existing_stream_state_wins_without_reading_legacy_json(self):
+        store = self._store()
+        store.append_message(
+            profile_id=self.PROFILE_ID,
+            source_type=self.SOURCE_TYPE,
+            role="user",
+            content="SQLite state",
+            source_id=None,
+        )
+        store.close()
+        self.legacy_path.write_bytes(b"{")
+
+        buffer = self._buffer()
+
+        self.assertEqual(
+            [message.content for message in buffer.messages],
+            ["SQLite state"],
+        )
+        self.assertIsNone(self._marker_value())
+
+    def test_other_stream_state_does_not_block_exact_stream_import(self):
+        store = self._store()
+        store.append_message(
+            profile_id="profile-2",
+            source_type=self.SOURCE_TYPE,
+            role="user",
+            content="other stream",
+            source_id=None,
+        )
+        store.close()
+        self._write_snapshot(self._snapshot())
+
+        buffer = self._buffer()
+
+        self.assertEqual(
+            [message.content for message in buffer.messages],
+            ["第一条", "第二条"],
+        )
+        reopened = self._store()
+        self.assertEqual(
+            [
+                message.content
+                for message in reopened.list_messages(
+                    "profile-2",
+                    self.SOURCE_TYPE,
+                )
+            ],
+            ["other stream"],
+        )
+
+    def test_legacy_changes_after_import_do_not_overwrite_sqlite_state(self):
+        self._write_snapshot(self._snapshot())
+        first = self._buffer()
+        first.add(role="user", content="SQLite only", source_id=None)
+        first.close()
+        self._write_snapshot(
+            self._snapshot(
+                messages=[
+                    self._snapshot()["messages"][0]
+                    | {"content": "changed legacy"}
+                ],
+                breakpoints=[],
+            )
+        )
+
+        reopened = self._buffer()
+
+        self.assertEqual(
+            [message.content for message in reopened.messages],
+            ["第一条", "第二条", "SQLite only"],
+        )
+
+    def test_sqlite_path_is_used_directly_and_case_insensitive_json_gets_sidecar(self):
+        direct_path = Path(self.tmpdir.name) / "direct.sqlite3"
+        direct = self._buffer(persistence_path=direct_path)
+        direct.add(role="user", content="direct", source_id=None)
+        direct.close()
+        self.assertTrue(direct_path.exists())
+        self.assertFalse(Path(f"{direct_path}.sqlite3").exists())
+
+        uppercase_json = Path(self.tmpdir.name) / "legacy.JSON"
+        uppercase = self._buffer(persistence_path=uppercase_json)
+        uppercase.close()
+        self.assertFalse(uppercase_json.exists())
+        self.assertTrue(Path(f"{uppercase_json}.sqlite3").exists())
+
+
 class ShortTermCompatibilityTests(unittest.TestCase):
     def test_short_term_package_exports_domain_surface(self):
         from backend.memory import short_term
@@ -3547,3 +4006,24 @@ class ShortTermCompatibilityTests(unittest.TestCase):
         from backend.memory.short_term.buffer import now_iso as buffer_now_iso
 
         self.assertIs(now_iso, buffer_now_iso)
+
+    def test_memory_package_and_facade_export_short_term_contract(self):
+        from backend.memory import (
+            SegmentState as PublicSegmentState,
+            ShortTermMemoryBuffer as PublicShortTermMemoryBuffer,
+            ShortTermPolicy as PublicShortTermPolicy,
+            ShortTermStateError as PublicShortTermStateError,
+            SQLiteShortTermStore as PublicSQLiteShortTermStore,
+            SummaryRequest as PublicSummaryRequest,
+        )
+        from backend.memory.invode import (
+            SQLiteShortTermStore as FacadeShortTermStore,
+        )
+
+        self.assertIs(PublicSegmentState, SegmentState)
+        self.assertIs(PublicShortTermMemoryBuffer, ShortTermMemoryBuffer)
+        self.assertIs(PublicShortTermPolicy, ShortTermPolicy)
+        self.assertIs(PublicShortTermStateError, ShortTermStateError)
+        self.assertIs(PublicSQLiteShortTermStore, SQLiteShortTermStore)
+        self.assertIs(PublicSummaryRequest, SummaryRequest)
+        self.assertIs(FacadeShortTermStore, SQLiteShortTermStore)

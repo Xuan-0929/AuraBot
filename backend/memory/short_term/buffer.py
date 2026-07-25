@@ -54,15 +54,41 @@ class ShortTermMemoryBuffer:
         self._owns_store = store is None
         self._closed = False
         self._lock = RLock()
-        self._store: ShortTermStore = (
-            SQLiteShortTermStore(
+        self._legacy_import_result = None
+        if store is None:
+            legacy_path = (
                 self.persistence_path
-                if self.persistence_path is not None
-                else ":memory:"
+                if (
+                    self.persistence_path is not None
+                    and self.persistence_path.suffix.lower() == ".json"
+                )
+                else None
             )
-            if store is None
-            else store
-        )
+            store_path: str | Path = (
+                Path(f"{legacy_path}.sqlite3")
+                if legacy_path is not None
+                else (
+                    self.persistence_path
+                    if self.persistence_path is not None
+                    else ":memory:"
+                )
+            )
+            owned_store = SQLiteShortTermStore(store_path)
+            try:
+                if legacy_path is not None and legacy_path.exists():
+                    self._legacy_import_result = (
+                        owned_store.import_legacy_snapshot(
+                            profile_id=self.profile_id,
+                            source_type=self.source_type,
+                            legacy_path=legacy_path,
+                        )
+                    )
+            except BaseException:
+                owned_store.close()
+                raise
+            self._store = owned_store
+        else:
+            self._store = store
 
     @property
     def messages(self) -> list[ShortTermMessage]:
