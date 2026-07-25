@@ -1,5 +1,6 @@
 from __future__ import annotations
 
+import json
 import sqlite3
 import threading
 from contextlib import contextmanager
@@ -10,8 +11,10 @@ from uuid import uuid4
 
 from ..short_term.models import (
     BufferStats,
+    SegmentState,
     ShortTermBreakpoint,
     ShortTermMessage,
+    SummaryRequest,
 )
 
 
@@ -405,6 +408,120 @@ class SQLiteShortTermStore:
             char_count=message_stats["char_count"],
         )
 
+    def prepare_oldest_segment(
+        self,
+        *,
+        profile_id: str,
+        source_type: str,
+    ) -> SummaryRequest | None:
+        with self._lock:
+            connection = self._get_connection()
+            with connection:
+                connection.execute("begin immediate")
+                breakpoint_row = connection.execute(
+                    """
+                    select
+                      id, message_sequence, topic, reason, created_at
+                    from short_term_breakpoints
+                    where profile_id = ? and source_type = ?
+                    order by message_sequence asc, created_at asc, id asc
+                    limit 1
+                    """,
+                    (profile_id, source_type),
+                ).fetchone()
+                if breakpoint_row is None:
+                    return None
+
+                message_rows = connection.execute(
+                    """
+                    select id, sequence, role, content, source_id, created_at
+                    from short_term_messages
+                    where profile_id = ?
+                      and source_type = ?
+                      and sequence <= ?
+                    order by sequence asc
+                    """,
+                    (
+                        profile_id,
+                        source_type,
+                        breakpoint_row["message_sequence"],
+                    ),
+                ).fetchall()
+                if not message_rows:
+                    raise RuntimeError(
+                        "Persisted short-term breakpoint "
+                        f"{breakpoint_row['id']!r} has no matching messages"
+                    )
+
+                segment_id = f"segment_{uuid4().hex}"
+                created_at = _now_iso()
+                request = SummaryRequest(
+                    segment_id=segment_id,
+                    profile_id=profile_id,
+                    source_type=source_type,
+                    breakpoint_id=breakpoint_row["id"],
+                    topic=breakpoint_row["topic"],
+                    reason=breakpoint_row["reason"],
+                    messages=tuple(
+                        _message_from_row(row) for row in message_rows
+                    ),
+                    state=SegmentState.PENDING,
+                    attempt_count=0,
+                    created_at=created_at,
+                    lease_expires_at=None,
+                )
+                payload_json = _summary_request_to_json(request)
+
+                connection.execute(
+                    """
+                    insert into short_term_segments (
+                      id, profile_id, source_type, breakpoint_id, state,
+                      payload_json, result_json, attempt_count,
+                      last_error, lease_owner, lease_expires_at,
+                      created_at, updated_at, completed_at
+                    )
+                    values (?, ?, ?, ?, ?, ?, '{}', 0, null, null, null, ?, ?, null)
+                    """,
+                    (
+                        segment_id,
+                        profile_id,
+                        source_type,
+                        breakpoint_row["id"],
+                        SegmentState.PENDING.value,
+                        payload_json,
+                        created_at,
+                        created_at,
+                    ),
+                )
+                connection.execute(
+                    """
+                    delete from short_term_messages
+                    where profile_id = ?
+                      and source_type = ?
+                      and sequence <= ?
+                    """,
+                    (
+                        profile_id,
+                        source_type,
+                        breakpoint_row["message_sequence"],
+                    ),
+                )
+                connection.execute(
+                    """
+                    delete from short_term_breakpoints
+                    where profile_id = ?
+                      and source_type = ?
+                      and message_sequence <= ?
+                    """,
+                    (
+                        profile_id,
+                        source_type,
+                        breakpoint_row["message_sequence"],
+                    ),
+                )
+
+        return request
+
     def _get_connection(self) -> sqlite3.Connection:
         if self._connection is None:
             raise RuntimeError("SQLiteShortTermStore is closed")
@@ -607,6 +724,15 @@ def _breakpoint_from_row(row: sqlite3.Row) -> ShortTermBreakpoint:
         topic=row["topic"],
         reason=row["reason"],
         created_at=row["created_at"],
+    )
+
+
+def _summary_request_to_json(request: SummaryRequest) -> str:
+    return json.dumps(
+        request.to_dict(),
+        ensure_ascii=False,
+        sort_keys=True,
+        separators=(",", ":"),
     )
 
 

@@ -1,5 +1,6 @@
 from contextlib import closing
 from dataclasses import FrozenInstanceError
+import json
 from pathlib import Path
 import sqlite3
 import tempfile
@@ -247,6 +248,373 @@ class SQLiteShortTermStoreTests(unittest.TestCase):
         self.assertIsNotNone(first)
         self.assertIsNone(duplicate)
         self.assertEqual(len(self.store.list_breakpoints("profile-1", "chat")), 1)
+
+    def test_prepare_oldest_segment_keeps_newer_topic_active(self):
+        coffee_messages = [
+            self.store.append_message(
+                profile_id="profile-1",
+                source_type="chat",
+                role="user",
+                content="想喝咖啡",
+                source_id="chat-1",
+            ),
+            self.store.append_message(
+                profile_id="profile-1",
+                source_type="chat",
+                role="assistant",
+                content="可以试试拿铁",
+                source_id="chat-2",
+            ),
+        ]
+        coffee_breakpoint = self.store.add_breakpoint(
+            profile_id="profile-1",
+            source_type="chat",
+            topic="coffee",
+            reason="topic_changed",
+        )
+        project_messages = [
+            self.store.append_message(
+                profile_id="profile-1",
+                source_type="chat",
+                role="user",
+                content="项目进度怎么样",
+                source_id="chat-3",
+            ),
+            self.store.append_message(
+                profile_id="profile-1",
+                source_type="chat",
+                role="assistant",
+                content="正在实现短期记忆",
+                source_id="chat-4",
+            ),
+        ]
+        project_breakpoint = self.store.add_breakpoint(
+            profile_id="profile-1",
+            source_type="chat",
+            topic="project",
+            reason="topic_changed",
+        )
+
+        request = self.store.prepare_oldest_segment(
+            profile_id="profile-1",
+            source_type="chat",
+        )
+
+        self.assertIsNotNone(request)
+        self.assertEqual(request.state, SegmentState.PENDING)
+        self.assertEqual(request.topic, "coffee")
+        self.assertEqual(request.breakpoint_id, coffee_breakpoint.id)
+        self.assertEqual(request.messages, tuple(coffee_messages))
+        self.assertEqual(
+            self.store.list_messages("profile-1", "chat"),
+            project_messages,
+        )
+        remaining_breakpoints = self.store.list_breakpoints("profile-1", "chat")
+        self.assertEqual([item.id for item in remaining_breakpoints], [project_breakpoint.id])
+        self.assertEqual(
+            [item.message_index for item in remaining_breakpoints],
+            [len(project_messages)],
+        )
+
+    def test_prepare_requires_a_complete_breakpoint(self):
+        message = self.store.append_message(
+            profile_id="profile-1",
+            source_type="chat",
+            role="user",
+            content="还在当前话题",
+            source_id=None,
+        )
+
+        request = self.store.prepare_oldest_segment(
+            profile_id="profile-1",
+            source_type="chat",
+        )
+
+        self.assertIsNone(request)
+        self.assertEqual(self.store.list_messages("profile-1", "chat"), [message])
+
+    def test_same_breakpoint_never_creates_duplicate_segments(self):
+        self.store.append_message(
+            profile_id="profile-1",
+            source_type="chat",
+            role="user",
+            content="单段消息",
+            source_id=None,
+        )
+        breakpoint = self.store.add_breakpoint(
+            profile_id="profile-1",
+            source_type="chat",
+            topic="single",
+            reason=None,
+        )
+
+        first = self.store.prepare_oldest_segment(
+            profile_id="profile-1",
+            source_type="chat",
+        )
+        second = self.store.prepare_oldest_segment(
+            profile_id="profile-1",
+            source_type="chat",
+        )
+
+        self.assertIsNotNone(first)
+        self.assertIsNone(second)
+        with closing(sqlite3.connect(self.path)) as connection:
+            count = connection.execute(
+                """
+                select count(*)
+                from short_term_segments
+                where breakpoint_id = ?
+                """,
+                (breakpoint.id,),
+            ).fetchone()[0]
+        self.assertEqual(count, 1)
+
+    def test_prepare_oldest_segment_isolates_exact_profile_and_source(self):
+        profile_one_chat = self.store.append_message(
+            profile_id="profile-1",
+            source_type="chat",
+            role="user",
+            content="profile-1 chat",
+            source_id=None,
+        )
+        profile_one_chat_breakpoint = self.store.add_breakpoint(
+            profile_id="profile-1",
+            source_type="chat",
+            topic="target",
+            reason=None,
+        )
+        profile_two_chat = self.store.append_message(
+            profile_id="profile-2",
+            source_type="chat",
+            role="user",
+            content="profile-2 chat",
+            source_id=None,
+        )
+        profile_two_chat_breakpoint = self.store.add_breakpoint(
+            profile_id="profile-2",
+            source_type="chat",
+            topic="other-profile",
+            reason=None,
+        )
+        profile_one_scheduler = self.store.append_message(
+            profile_id="profile-1",
+            source_type="scheduler",
+            role="system",
+            content="profile-1 scheduler",
+            source_id="job-1",
+        )
+        profile_one_scheduler_breakpoint = self.store.add_breakpoint(
+            profile_id="profile-1",
+            source_type="scheduler",
+            topic="other-source",
+            reason=None,
+        )
+
+        request = self.store.prepare_oldest_segment(
+            profile_id="profile-1",
+            source_type="chat",
+        )
+
+        self.assertEqual(request.messages, (profile_one_chat,))
+        self.assertEqual(request.breakpoint_id, profile_one_chat_breakpoint.id)
+        self.assertEqual(self.store.list_messages("profile-1", "chat"), [])
+        self.assertEqual(self.store.list_breakpoints("profile-1", "chat"), [])
+        self.assertEqual(
+            self.store.list_messages("profile-2", "chat"),
+            [profile_two_chat],
+        )
+        self.assertEqual(
+            self.store.list_breakpoints("profile-2", "chat"),
+            [profile_two_chat_breakpoint],
+        )
+        self.assertEqual(
+            self.store.list_messages("profile-1", "scheduler"),
+            [profile_one_scheduler],
+        )
+        self.assertEqual(
+            self.store.list_breakpoints("profile-1", "scheduler"),
+            [profile_one_scheduler_breakpoint],
+        )
+
+    def test_prepare_preserves_payload_and_pending_row_durably(self):
+        messages = [
+            self.store.append_message(
+                profile_id="profile-1",
+                source_type="chat",
+                role="user",
+                content="保留原文",
+                source_id=None,
+            ),
+            self.store.append_message(
+                profile_id="profile-1",
+                source_type="chat",
+                role="assistant",
+                content="with source",
+                source_id="source-2",
+            ),
+        ]
+        breakpoint = self.store.add_breakpoint(
+            profile_id="profile-1",
+            source_type="chat",
+            topic=None,
+            reason=None,
+        )
+
+        request = self.store.prepare_oldest_segment(
+            profile_id="profile-1",
+            source_type="chat",
+        )
+
+        self.assertTrue(request.segment_id.startswith("segment_"))
+        self.assertEqual(request.profile_id, "profile-1")
+        self.assertEqual(request.source_type, "chat")
+        self.assertEqual(request.breakpoint_id, breakpoint.id)
+        self.assertIsNone(request.topic)
+        self.assertIsNone(request.reason)
+        self.assertEqual(request.messages, tuple(messages))
+        self.assertEqual(request.state, SegmentState.PENDING)
+        self.assertEqual(request.attempt_count, 0)
+        self.assertIsNone(request.lease_expires_at)
+
+        with closing(sqlite3.connect(self.path)) as connection:
+            connection.row_factory = sqlite3.Row
+            row = connection.execute(
+                """
+                select *
+                from short_term_segments
+                where id = ?
+                """,
+                (request.segment_id,),
+            ).fetchone()
+        payload_json = row["payload_json"]
+        payload = json.loads(payload_json)
+
+        self.assertIn("保留原文", payload_json)
+        self.assertEqual(payload, request.to_dict())
+        self.assertEqual(row["profile_id"], "profile-1")
+        self.assertEqual(row["source_type"], "chat")
+        self.assertEqual(row["breakpoint_id"], breakpoint.id)
+        self.assertEqual(row["state"], "pending")
+        self.assertEqual(row["result_json"], "{}")
+        self.assertEqual(row["attempt_count"], 0)
+        self.assertIsNone(row["last_error"])
+        self.assertIsNone(row["lease_owner"])
+        self.assertIsNone(row["lease_expires_at"])
+        self.assertEqual(row["created_at"], request.created_at)
+        self.assertEqual(row["updated_at"], request.created_at)
+        self.assertIsNone(row["completed_at"])
+
+        self.store.append_message(
+            profile_id="profile-1",
+            source_type="chat",
+            role="user",
+            content="新的活动消息",
+            source_id=None,
+        )
+        with closing(sqlite3.connect(self.path)) as connection:
+            stored_payload = connection.execute(
+                """
+                select payload_json
+                from short_term_segments
+                where id = ?
+                """,
+                (request.segment_id,),
+            ).fetchone()[0]
+        self.assertEqual(stored_payload, payload_json)
+        self.assertNotIn("新的活动消息", stored_payload)
+
+    def test_prepare_rejects_persisted_breakpoint_without_messages(self):
+        with closing(sqlite3.connect(self.path)) as connection, connection:
+            connection.execute(
+                """
+                insert into short_term_breakpoints (
+                  id, profile_id, source_type, message_sequence,
+                  topic, reason, created_at
+                )
+                values (?, ?, ?, ?, ?, ?, ?)
+                """,
+                (
+                    "orphan-breakpoint",
+                    "profile-1",
+                    "chat",
+                    999,
+                    "orphan",
+                    None,
+                    "2026-07-25T00:00:00+00:00",
+                ),
+            )
+
+        with self.assertRaisesRegex(RuntimeError, "no matching messages"):
+            self.store.prepare_oldest_segment(
+                profile_id="profile-1",
+                source_type="chat",
+            )
+
+        self.assertEqual(
+            [item.id for item in self.store.list_breakpoints("profile-1", "chat")],
+            ["orphan-breakpoint"],
+        )
+
+    def test_prepare_rolls_back_when_segment_breakpoint_is_duplicate(self):
+        message = self.store.append_message(
+            profile_id="profile-1",
+            source_type="chat",
+            role="user",
+            content="必须保留",
+            source_id=None,
+        )
+        breakpoint = self.store.add_breakpoint(
+            profile_id="profile-1",
+            source_type="chat",
+            topic="rollback",
+            reason="test",
+        )
+        with closing(sqlite3.connect(self.path)) as connection, connection:
+            connection.execute(
+                """
+                insert into short_term_segments (
+                  id, profile_id, source_type, breakpoint_id, state,
+                  payload_json, result_json, attempt_count,
+                  created_at, updated_at
+                )
+                values (?, ?, ?, ?, ?, ?, ?, ?, ?, ?)
+                """,
+                (
+                    "conflicting-segment",
+                    "profile-1",
+                    "chat",
+                    breakpoint.id,
+                    "pending",
+                    json.dumps({"valid": True}),
+                    "{}",
+                    0,
+                    "2026-07-25T00:00:00+00:00",
+                    "2026-07-25T00:00:00+00:00",
+                ),
+            )
+
+        with self.assertRaises(sqlite3.IntegrityError):
+            self.store.prepare_oldest_segment(
+                profile_id="profile-1",
+                source_type="chat",
+            )
+
+        self.assertEqual(self.store.list_messages("profile-1", "chat"), [message])
+        self.assertEqual(
+            self.store.list_breakpoints("profile-1", "chat"),
+            [breakpoint],
+        )
+        with closing(sqlite3.connect(self.path)) as connection:
+            segment_count = connection.execute(
+                """
+                select count(*)
+                from short_term_segments
+                where breakpoint_id = ?
+                """,
+                (breakpoint.id,),
+            ).fetchone()[0]
+        self.assertEqual(segment_count, 1)
 
     def test_rejects_unsupported_schema_version_without_rewriting_it(self):
         self._replace_schema_version("99")
