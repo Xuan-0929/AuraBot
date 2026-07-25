@@ -70,7 +70,15 @@ _SCHEMA_STATEMENTS = (
       lease_expires_at text,
       created_at text not null,
       updated_at text not null,
-      completed_at text
+      completed_at text,
+      check (
+        state != 'processing'
+        or (
+          lease_owner is not null
+          and length(trim(lease_owner)) > 0
+          and lease_expires_at is not null
+        )
+      )
     )
     """,
     """
@@ -547,7 +555,14 @@ class SQLiteShortTermStore:
         _require_positive_int("lease_seconds", lease_seconds)
         claimed_at = _parse_aware_iso_timestamp(now, field_name="now")
         claimed_at_iso = claimed_at.isoformat()
-        lease_expires_at = (claimed_at + timedelta(seconds=lease_seconds)).isoformat()
+        try:
+            lease_expires_at = (
+                claimed_at + timedelta(seconds=lease_seconds)
+            ).isoformat()
+        except OverflowError as error:
+            raise ValueError(
+                "lease_seconds produces an out-of-range lease_expires_at"
+            ) from error
 
         with self._lock:
             connection = self._get_connection()
@@ -588,6 +603,8 @@ class SQLiteShortTermStore:
                         lease_expires_at = ?,
                         updated_at = ?
                     where id = ? and state = ?
+                      and profile_id = ?
+                      and source_type = ?
                     """,
                     (
                         SegmentState.PROCESSING.value,
@@ -596,11 +613,14 @@ class SQLiteShortTermStore:
                         claimed_at_iso,
                         row["id"],
                         SegmentState.PENDING.value,
+                        profile_id,
+                        source_type,
                     ),
                 )
                 if cursor.rowcount != 1:
-                    raise RuntimeError(
-                        f"Failed to claim short-term segment {row['id']!r}"
+                    raise ShortTermStateError(
+                        "Short-term segment "
+                        f"{row['id']!r} changed while it was being claimed"
                     )
                 updated_row = connection.execute(
                     """
@@ -659,10 +679,12 @@ class SQLiteShortTermStore:
                 )
                 if row["state"] == SegmentState.COMPLETED.value:
                     request = _summary_request_from_segment_row(row)
+                    _validate_completed_result(row)
                 else:
+                    _summary_request_from_segment_row(row)
                     _require_processing_owner(row, owner)
                     completed_at = _now_iso()
-                    connection.execute(
+                    cursor = connection.execute(
                         """
                         update short_term_segments
                         set state = ?,
@@ -673,6 +695,9 @@ class SQLiteShortTermStore:
                             updated_at = ?,
                             completed_at = ?
                         where id = ?
+                          and profile_id = ?
+                          and state = ?
+                          and lease_owner = ?
                         """,
                         (
                             SegmentState.COMPLETED.value,
@@ -680,8 +705,16 @@ class SQLiteShortTermStore:
                             completed_at,
                             completed_at,
                             segment_id,
+                            profile_id,
+                            SegmentState.PROCESSING.value,
+                            owner,
                         ),
                     )
+                    if cursor.rowcount != 1:
+                        raise ShortTermStateError(
+                            "Short-term segment "
+                            f"{segment_id!r} changed while it was acknowledged"
+                        )
                     updated_row = connection.execute(
                         """
                         select *
@@ -718,13 +751,14 @@ class SQLiteShortTermStore:
                     profile_id=profile_id,
                     segment_id=segment_id,
                 )
+                _summary_request_from_segment_row(row)
                 _require_processing_owner(row, owner)
                 next_state = (
                     SegmentState.FAILED
                     if row["attempt_count"] >= max_attempts
                     else SegmentState.PENDING
                 )
-                connection.execute(
+                cursor = connection.execute(
                     """
                     update short_term_segments
                     set state = ?,
@@ -733,14 +767,25 @@ class SQLiteShortTermStore:
                         lease_expires_at = null,
                         updated_at = ?
                     where id = ?
+                      and profile_id = ?
+                      and state = ?
+                      and lease_owner = ?
                     """,
                     (
                         next_state.value,
                         error,
                         _now_iso(),
                         segment_id,
+                        profile_id,
+                        SegmentState.PROCESSING.value,
+                        owner,
                     ),
                 )
+                if cursor.rowcount != 1:
+                    raise ShortTermStateError(
+                        "Short-term segment "
+                        f"{segment_id!r} changed while it was released"
+                    )
                 updated_row = connection.execute(
                     """
                     select *
@@ -795,11 +840,12 @@ class SQLiteShortTermStore:
                     profile_id=profile_id,
                     segment_id=segment_id,
                 )
+                _summary_request_from_segment_row(row)
                 if row["state"] != SegmentState.FAILED.value:
                     raise ShortTermStateError(
                         f"Short-term segment {segment_id!r} is not failed"
                     )
-                connection.execute(
+                cursor = connection.execute(
                     """
                     update short_term_segments
                     set state = ?,
@@ -811,13 +857,22 @@ class SQLiteShortTermStore:
                         updated_at = ?,
                         completed_at = null
                     where id = ?
+                      and profile_id = ?
+                      and state = ?
                     """,
                     (
                         SegmentState.PENDING.value,
                         _now_iso(),
                         segment_id,
+                        profile_id,
+                        SegmentState.FAILED.value,
                     ),
                 )
+                if cursor.rowcount != 1:
+                    raise ShortTermStateError(
+                        "Short-term segment "
+                        f"{segment_id!r} changed while it was requeued"
+                    )
                 updated_row = connection.execute(
                     """
                     select *
@@ -1047,13 +1102,15 @@ def _parse_aware_iso_timestamp(
         raise ValueError(f"{field_name} must be a timezone-aware ISO timestamp")
     try:
         parsed = datetime.fromisoformat(value)
-    except ValueError as error:
+        if parsed.tzinfo is None or parsed.utcoffset() is None:
+            raise ValueError(
+                f"{field_name} must be a timezone-aware ISO timestamp"
+            )
+        return parsed.astimezone(UTC)
+    except (OverflowError, ValueError) as error:
         raise ValueError(
             f"{field_name} must be a timezone-aware ISO timestamp"
         ) from error
-    if parsed.tzinfo is None or parsed.utcoffset() is None:
-        raise ValueError(f"{field_name} must be a timezone-aware ISO timestamp")
-    return parsed.astimezone(UTC)
 
 
 def _recover_expired_segment_leases(
@@ -1065,12 +1122,11 @@ def _recover_expired_segment_leases(
 ) -> int:
     rows = connection.execute(
         """
-        select id, lease_expires_at
+        select *
         from short_term_segments
         where profile_id = ?
           and source_type = ?
           and state = ?
-          and lease_expires_at is not null
         order by created_at asc, id asc
         """,
         (
@@ -1080,24 +1136,16 @@ def _recover_expired_segment_leases(
         ),
     ).fetchall()
 
-    expired_segment_ids = []
+    expired_rows = []
     for row in rows:
-        try:
-            lease_expires_at = _parse_aware_iso_timestamp(
-                row["lease_expires_at"],
-                field_name="lease_expires_at",
-            )
-        except ValueError as error:
-            raise RuntimeError(
-                "Persisted short-term segment "
-                f"{row['id']!r} has invalid lease_expires_at: {error}"
-            ) from error
+        _summary_request_from_segment_row(row)
+        lease_expires_at = _processing_lease_expiry(row)
         if lease_expires_at <= now:
-            expired_segment_ids.append(row["id"])
+            expired_rows.append(row)
 
     recovered_count = 0
     recovered_at = now.isoformat()
-    for segment_id in expired_segment_ids:
+    for row in expired_rows:
         cursor = connection.execute(
             """
             update short_term_segments
@@ -1109,18 +1157,26 @@ def _recover_expired_segment_leases(
               and profile_id = ?
               and source_type = ?
               and state = ?
-              and lease_expires_at is not null
+              and lease_owner = ?
+              and lease_expires_at = ?
             """,
             (
                 SegmentState.PENDING.value,
                 recovered_at,
-                segment_id,
+                row["id"],
                 profile_id,
                 source_type,
                 SegmentState.PROCESSING.value,
+                row["lease_owner"],
+                row["lease_expires_at"],
             ),
         )
-        recovered_count += cursor.rowcount
+        if cursor.rowcount != 1:
+            raise RuntimeError(
+                "Short-term segment "
+                f"{row['id']!r} changed while its lease was recovered"
+            )
+        recovered_count += 1
     return recovered_count
 
 
@@ -1185,7 +1241,6 @@ def _summary_request_from_segment_row(row: sqlite3.Row) -> SummaryRequest:
             "profile_id",
             "source_type",
             "breakpoint_id",
-            "created_at",
         ):
             _require_nonblank(f"payload.{field_name}", payload[field_name])
         for field_name in ("topic", "reason"):
@@ -1206,23 +1261,76 @@ def _summary_request_from_segment_row(row: sqlite3.Row) -> SummaryRequest:
                     f"payload.{payload_field} does not match its row column"
                 )
 
+        payload_created_at = _parse_aware_iso_timestamp(
+            payload["created_at"],
+            field_name="payload.created_at",
+        )
+        row_created_at = row["created_at"]
+        _require_nonblank("row created_at", row_created_at)
+        parsed_row_created_at = _parse_aware_iso_timestamp(
+            row_created_at,
+            field_name="row created_at",
+        )
+        if payload_created_at != parsed_row_created_at:
+            raise ValueError(
+                "payload.created_at does not match its row column instant"
+            )
+
         message_payloads = payload["messages"]
         if not isinstance(message_payloads, list):
             raise TypeError("payload.messages must be a list")
-        messages = tuple(
-            _message_from_payload(message_payload, index=index)
-            for index, message_payload in enumerate(message_payloads)
-        )
+        if not message_payloads:
+            raise ValueError("payload.messages must contain at least one message")
+
+        messages = []
+        message_ids: set[str] = set()
+        message_sequences: set[int] = set()
+        previous_sequence = 0
+        for index, message_payload in enumerate(message_payloads):
+            message = _message_from_payload(message_payload, index=index)
+            if message.id in message_ids:
+                raise ValueError(
+                    f"payload.messages[{index}].id must be unique"
+                )
+            if message.sequence in message_sequences:
+                raise ValueError(
+                    f"payload.messages[{index}].sequence must be unique"
+                )
+            if message.sequence <= previous_sequence:
+                raise ValueError(
+                    "payload message sequences must be strictly ascending"
+                )
+            message_ids.add(message.id)
+            message_sequences.add(message.sequence)
+            previous_sequence = message.sequence
+            messages.append(message)
+
+        if "state" in payload:
+            _require_string("payload.state", payload["state"])
+            SegmentState(payload["state"])
+        if "attempt_count" in payload:
+            payload_attempt_count = payload["attempt_count"]
+            if type(payload_attempt_count) is not int or payload_attempt_count < 0:
+                raise TypeError(
+                    "payload.attempt_count must be a nonnegative integer"
+                )
+        if "lease_expires_at" in payload:
+            payload_lease_expires_at = payload["lease_expires_at"]
+            if payload_lease_expires_at is not None:
+                _parse_aware_iso_timestamp(
+                    payload_lease_expires_at,
+                    field_name="payload.lease_expires_at",
+                )
 
         state = SegmentState(row["state"])
         attempt_count = row["attempt_count"]
         if type(attempt_count) is not int or attempt_count < 0:
             raise TypeError("row attempt_count must be a nonnegative integer")
 
-        created_at = row["created_at"]
-        _require_nonblank("row created_at", created_at)
         lease_expires_at = row["lease_expires_at"]
-        if lease_expires_at is not None:
+        if state == SegmentState.PROCESSING:
+            _processing_lease_expiry(row)
+        elif lease_expires_at is not None:
             _parse_aware_iso_timestamp(
                 lease_expires_at,
                 field_name="row lease_expires_at",
@@ -1235,10 +1343,10 @@ def _summary_request_from_segment_row(row: sqlite3.Row) -> SummaryRequest:
             breakpoint_id=payload["breakpoint_id"],
             topic=payload["topic"],
             reason=payload["reason"],
-            messages=messages,
+            messages=tuple(messages),
             state=state,
             attempt_count=attempt_count,
-            created_at=created_at,
+            created_at=row_created_at,
             lease_expires_at=lease_expires_at,
         )
     except (
@@ -1288,6 +1396,10 @@ def _message_from_payload(payload: object, *, index: int) -> ShortTermMessage:
         f"payload.messages[{index}].source_id",
         source_id,
     )
+    _parse_aware_iso_timestamp(
+        payload["created_at"],
+        field_name=f"payload.messages[{index}].created_at",
+    )
     return ShortTermMessage(
         id=payload["id"],
         sequence=sequence,
@@ -1296,6 +1408,64 @@ def _message_from_payload(payload: object, *, index: int) -> ShortTermMessage:
         source_id=source_id,
         created_at=payload["created_at"],
     )
+
+
+def _processing_lease_expiry(row: sqlite3.Row) -> datetime:
+    try:
+        _require_nonblank("lease_owner", row["lease_owner"])
+        lease_expires_at = row["lease_expires_at"]
+        if lease_expires_at is None:
+            raise ValueError(
+                "lease_expires_at must be a timezone-aware ISO timestamp"
+            )
+        return _parse_aware_iso_timestamp(
+            lease_expires_at,
+            field_name="lease_expires_at",
+        )
+    except (TypeError, ValueError) as error:
+        raise RuntimeError(
+            "Persisted short-term segment "
+            f"{row['id']!r} has invalid processing lease: {error}"
+        ) from error
+
+
+def _validate_completed_result(row: sqlite3.Row) -> None:
+    segment_id = row["id"]
+    try:
+        result = json.loads(row["result_json"])
+        if not isinstance(result, dict):
+            raise TypeError("result must be an object")
+
+        required_fields = {
+            "outcome",
+            "episode_id",
+            "memory_ids",
+            "reason",
+        }
+        missing_fields = sorted(required_fields - result.keys())
+        if missing_fields:
+            raise ValueError(
+                "result is missing required fields: "
+                + ", ".join(missing_fields)
+            )
+
+        _require_nonblank("result.outcome", result["outcome"])
+        _require_optional_string("result.episode_id", result["episode_id"])
+        memory_ids = result["memory_ids"]
+        if type(memory_ids) is not list or not all(
+            isinstance(memory_id, str) for memory_id in memory_ids
+        ):
+            raise TypeError("result.memory_ids must be a list of strings")
+        _require_optional_string("result.reason", result["reason"])
+    except (
+        json.JSONDecodeError,
+        KeyError,
+        TypeError,
+        ValueError,
+    ) as error:
+        raise RuntimeError(
+            f"Corrupt short-term segment result for {segment_id!r}: {error}"
+        ) from error
 
 
 def _message_from_row(row: sqlite3.Row) -> ShortTermMessage:
@@ -1388,6 +1558,8 @@ def _validate_effective_segment_checks(connection: sqlite3.Connection) -> None:
             '{"messages":["queued"]}',
             '{"outcome":"waiting"}',
             2,
+            None,
+            None,
         ),
         (
             "state-processing",
@@ -1395,6 +1567,8 @@ def _validate_effective_segment_checks(connection: sqlite3.Connection) -> None:
             '["message-1","message-2"]',
             '["worker-active"]',
             2,
+            "schema-worker",
+            "1970-01-01T00:01:00+00:00",
         ),
         (
             "state-completed",
@@ -1402,6 +1576,8 @@ def _validate_effective_segment_checks(connection: sqlite3.Connection) -> None:
             '{"messages":["summarized"]}',
             '["memory-1","memory-2"]',
             2,
+            None,
+            None,
         ),
         (
             "state-failed",
@@ -1409,17 +1585,54 @@ def _validate_effective_segment_checks(connection: sqlite3.Connection) -> None:
             '["message-failed"]',
             '{"error":"summary failed"}',
             2,
+            None,
+            None,
         ),
     )
     invalid_probes = (
-        ("state", "not-a-state", "{}", "{}", 0),
-        ("payload_json", "pending", "not-json", "{}", 0),
-        ("result_json", "pending", "{}", "not-json", 0),
-        ("attempt_count", "pending", "{}", "{}", -1),
+        ("state", "not-a-state", "{}", "{}", 0, None, None),
+        ("payload_json", "pending", "not-json", "{}", 0, None, None),
+        ("result_json", "pending", "{}", "not-json", 0, None, None),
+        ("attempt_count", "pending", "{}", "{}", -1, None, None),
+        (
+            "processing lease null owner",
+            "processing",
+            "{}",
+            "{}",
+            0,
+            None,
+            "1970-01-01T00:01:00+00:00",
+        ),
+        (
+            "processing lease blank owner",
+            "processing",
+            "{}",
+            "{}",
+            0,
+            " ",
+            "1970-01-01T00:01:00+00:00",
+        ),
+        (
+            "processing lease null expiry",
+            "processing",
+            "{}",
+            "{}",
+            0,
+            "schema-worker",
+            None,
+        ),
     )
 
     with _rollback_only_validation(connection):
-        for label, state, payload_json, result_json, attempt_count in valid_probes:
+        for (
+            label,
+            state,
+            payload_json,
+            result_json,
+            attempt_count,
+            lease_owner,
+            lease_expires_at,
+        ) in valid_probes:
             try:
                 _insert_validation_segment(
                     connection,
@@ -1428,6 +1641,8 @@ def _validate_effective_segment_checks(connection: sqlite3.Connection) -> None:
                     payload_json=payload_json,
                     result_json=result_json,
                     attempt_count=attempt_count,
+                    lease_owner=lease_owner,
+                    lease_expires_at=lease_expires_at,
                 )
             except sqlite3.IntegrityError as error:
                 raise RuntimeError(
@@ -1435,7 +1650,15 @@ def _validate_effective_segment_checks(connection: sqlite3.Connection) -> None:
                     f"constraint rejects valid {label}"
                 ) from error
 
-        for label, state, payload_json, result_json, attempt_count in invalid_probes:
+        for (
+            label,
+            state,
+            payload_json,
+            result_json,
+            attempt_count,
+            lease_owner,
+            lease_expires_at,
+        ) in invalid_probes:
             try:
                 _insert_validation_segment(
                     connection,
@@ -1444,6 +1667,8 @@ def _validate_effective_segment_checks(connection: sqlite3.Connection) -> None:
                     payload_json=payload_json,
                     result_json=result_json,
                     attempt_count=attempt_count,
+                    lease_owner=lease_owner,
+                    lease_expires_at=lease_expires_at,
                 )
             except sqlite3.IntegrityError:
                 continue
@@ -1462,15 +1687,18 @@ def _insert_validation_segment(
     payload_json: str,
     result_json: str,
     attempt_count: int,
+    lease_owner: str | None,
+    lease_expires_at: str | None,
 ) -> None:
     validation_id = uuid4().hex
     connection.execute(
         """
         insert into short_term_segments (
           id, profile_id, source_type, breakpoint_id, state,
-          payload_json, result_json, attempt_count, created_at, updated_at
+          payload_json, result_json, attempt_count,
+          lease_owner, lease_expires_at, created_at, updated_at
         )
-        values (?, ?, ?, ?, ?, ?, ?, ?, ?, ?)
+        values (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)
         """,
         (
             f"validation-segment-{label}-{validation_id}",
@@ -1481,6 +1709,8 @@ def _insert_validation_segment(
             payload_json,
             result_json,
             attempt_count,
+            lease_owner,
+            lease_expires_at,
             "1970-01-01T00:00:00+00:00",
             "1970-01-01T00:00:00+00:00",
         ),
