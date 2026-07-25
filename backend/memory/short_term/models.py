@@ -53,6 +53,12 @@ class SummaryRequest:
     created_at: str
     lease_expires_at: str | None = None
 
+    def __post_init__(self) -> None:
+        messages = tuple(self.messages)
+        if not all(isinstance(message, ShortTermMessage) for message in messages):
+            raise TypeError("messages must contain only ShortTermMessage instances")
+        object.__setattr__(self, "messages", messages)
+
     def to_dict(self) -> dict[str, Any]:
         return {
             "segment_id": self.segment_id,
