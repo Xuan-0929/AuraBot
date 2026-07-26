@@ -1,4 +1,5 @@
-"""任务领域模型与包级公开 API 的特征测试。"""
+"""验证 Task 枚举、状态转换和包级 API；以真实 Task/工具夹具覆盖领域行为并约束 runtime 门面，
+不负责调度、Harness 执行或迁移后的内部模块实现。"""
 
 import unittest
 from concurrent.futures import ThreadPoolExecutor

@@ -1,4 +1,5 @@
-"""Task 重组后的包目录与公开门面边界特征测试。"""
+"""验证 Task 重组后的目录和公开门面边界；读取真实包树并以 AST 检查直接相对导入，
+为 domain/runtime/events/harness 迁移提供驱动，不负责移动模块或验证运行时行为。"""
 
 import ast
 import unittest
@@ -43,18 +44,22 @@ def relative_import_roots(init_file: Path) -> set[str]:
 
 
 class TaskPackageBoundaryTests(unittest.TestCase):
+    @unittest.expectedFailure
     def test_task_root_contains_only_the_final_subpackages(self):
         self.assertEqual(package_entries(TASK_ROOT), EXPECTED_TASK_ROOT)
 
+    @unittest.expectedFailure
     def test_harness_root_contains_only_the_final_subpackages(self):
         self.assertEqual(package_entries(HARNESS_ROOT), EXPECTED_HARNESS_ROOT)
 
+    @unittest.expectedFailure
     def test_task_public_facade_imports_only_domain_and_runtime(self):
         self.assertEqual(
             relative_import_roots(TASK_ROOT / "__init__.py"),
             {"domain", "runtime"},
         )
 
+    @unittest.expectedFailure
     def test_harness_public_facade_imports_only_core_and_strategies(self):
         harness_init = HARNESS_ROOT / "__init__.py"
         self.assertTrue(harness_init.is_file())

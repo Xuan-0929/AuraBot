@@ -1,4 +1,5 @@
-"""Plan Harness 经由原生 MCP 服务执行的端到端特征测试。"""
+"""验证 Plan Harness 经原生 MCP 到应用服务的集成契约；用进程内 ASGI 与脚本化 LLM 夹具串联相邻层，
+不负责真实网络监听、外部 MCP 进程或模型质量。"""
 
 import json
 import sys

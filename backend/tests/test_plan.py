@@ -1,4 +1,5 @@
-"""Plan 聚合、不可变值对象与公开导出的特征测试。"""
+"""验证 Plan 聚合、值对象和公开导出；以手写步骤定义驱动领域生命周期并约束 Harness 所消费的 Plan 模块，
+不负责 MCP 路由、LLM 调用或 Task 调度。"""
 
 import unittest
 from dataclasses import FrozenInstanceError

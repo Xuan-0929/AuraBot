@@ -1,4 +1,5 @@
-"""任务运行时注册表与调度器组件的特征测试。"""
+"""验证运行时注册表和调度器的身份、FIFO 与容量契约；用最小 Task 记录夹具驱动组件并约束 runtime，
+不负责 TaskManager 编排、Harness 运行或事件传输。"""
 
 import unittest
 from datetime import UTC, datetime

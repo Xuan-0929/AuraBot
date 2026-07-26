@@ -1,4 +1,5 @@
-"""任务事件 broker 的快照、增量与关闭 wire 契约测试。"""
+"""验证事件 broker 的快照、增量、溢出和关闭 wire 契约；以真实异步订阅夹具驱动 events 层并约束运行时消费者，
+不负责 SSE HTTP 序列化、TaskManager 生命周期或持久化。"""
 
 import unittest
 
