@@ -5,7 +5,7 @@ from __future__ import annotations
 import re
 from dataclasses import dataclass, field
 from types import MappingProxyType
-from typing import Literal
+from typing import Literal, Sequence
 
 
 PlanStepStatus = Literal["pending", "completed"]
@@ -165,12 +165,169 @@ def build_snapshot(
     )
 
 
+class Plan:
+    """Behavior-rich aggregate for one ordered, immutable Plan snapshot."""
+
+    __slots__ = ("_snapshot",)
+
+    def __init__(self, snapshot: PlanSnapshot):
+        if not isinstance(snapshot, PlanSnapshot):
+            raise TypeError("snapshot must be a PlanSnapshot")
+        self._snapshot = snapshot
+
+    @classmethod
+    def create(
+        cls,
+        goal: str,
+        steps: Sequence[PlanStepDefinition],
+    ) -> Plan:
+        definitions = _normalize_definitions(steps)
+        validate_plan_definition(goal, definitions)
+        return cls(
+            build_snapshot(
+                goal,
+                tuple(
+                    PlanStep(
+                        id=step.id,
+                        title=step.title,
+                        description=step.description,
+                        expected_output=step.expected_output,
+                        status="pending",
+                        completion_summary=None,
+                    )
+                    for step in definitions
+                ),
+            )
+        )
+
+    @property
+    def snapshot(self) -> PlanSnapshot:
+        return self._snapshot
+
+    def update(
+        self,
+        goal: str,
+        steps: Sequence[PlanStepDefinition],
+    ) -> UpdatePlanResult:
+        definitions = _normalize_definitions(steps)
+        validate_plan_definition(goal, definitions)
+        current = self._snapshot
+        if current.is_complete:
+            raise PlanOperationError("invalid_task_state")
+
+        completed_count = current.completed_step_count
+        completed_definitions = tuple(
+            step.definition for step in current.steps[:completed_count]
+        )
+        if (
+            len(definitions) < completed_count
+            or definitions[:completed_count] != completed_definitions
+        ):
+            raise PlanOperationError("completed_step_immutable")
+        if len(definitions) == completed_count:
+            raise PlanOperationError("invalid_plan")
+
+        completed_steps = current.steps[:completed_count]
+        pending_steps = tuple(
+            PlanStep(
+                id=step.id,
+                title=step.title,
+                description=step.description,
+                expected_output=step.expected_output,
+                status="pending",
+                completion_summary=None,
+            )
+            for step in definitions[completed_count:]
+        )
+        self._snapshot = build_snapshot(
+            goal,
+            (*completed_steps, *pending_steps),
+        )
+        return UpdatePlanResult(
+            current_step_id=_require_current_step_id(self._snapshot),
+            total_step_count=self._snapshot.total_step_count,
+        )
+
+    def complete_step(
+        self,
+        step_id: str,
+        completion_summary: str,
+    ) -> CompletePlanStepResult:
+        if (
+            not isinstance(step_id, str)
+            or not isinstance(completion_summary, str)
+            or not completion_summary
+        ):
+            raise PlanOperationError("invalid_plan")
+
+        current = self._snapshot
+        matching_index = next(
+            (
+                index
+                for index, step in enumerate(current.steps)
+                if step.id == step_id
+            ),
+            None,
+        )
+        if matching_index is None:
+            raise PlanOperationError("step_not_found")
+        matching_step = current.steps[matching_index]
+        if matching_step.status == "completed":
+            if matching_step.completion_summary != completion_summary:
+                raise PlanOperationError("step_already_completed")
+            return CompletePlanStepResult(
+                completed_step_id=step_id,
+                next_step_id=current.current_step_id,
+                is_complete=current.is_complete,
+            )
+        if step_id != current.current_step_id:
+            raise PlanOperationError("step_not_current")
+
+        completed_step = PlanStep(
+            id=matching_step.id,
+            title=matching_step.title,
+            description=matching_step.description,
+            expected_output=matching_step.expected_output,
+            status="completed",
+            completion_summary=completion_summary,
+        )
+        self._snapshot = build_snapshot(
+            current.goal,
+            (
+                *current.steps[:matching_index],
+                completed_step,
+                *current.steps[matching_index + 1 :],
+            ),
+        )
+        return CompletePlanStepResult(
+            completed_step_id=step_id,
+            next_step_id=self._snapshot.current_step_id,
+            is_complete=self._snapshot.is_complete,
+        )
+
+
+def _normalize_definitions(
+    steps: Sequence[PlanStepDefinition],
+) -> tuple[PlanStepDefinition, ...]:
+    try:
+        return tuple(steps)
+    except TypeError as exc:
+        raise PlanOperationError("invalid_plan") from exc
+
+
+def _require_current_step_id(plan: PlanSnapshot) -> str:
+    if plan.current_step_id is None:
+        raise PlanOperationError("invalid_task_state")
+    return plan.current_step_id
+
+
 __all__ = [
     "CompletePlanStepResult",
     "CreatePlanResult",
     "MAX_PLAN_STEPS",
     "MIN_PLAN_STEPS",
     "PLAN_ERROR_MESSAGES",
+    "Plan",
     "PlanOperationError",
     "PlanSnapshot",
     "PlanStep",

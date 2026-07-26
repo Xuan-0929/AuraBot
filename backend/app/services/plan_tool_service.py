@@ -6,8 +6,9 @@ from dataclasses import asdict
 from typing import Any
 
 from ...agent.task.TaskManager import TaskManager
+from ...agent.task.TaskEntity import TaskType
 from ...agent.task.harness.Plan import PlanOperationError, PlanStepDefinition
-from ...agent.task.harness.PlanAndSolveHarness import PlanAndSolveHarness
+from ...agent.task.harness.planning import PlanningHarness
 from .errors import ApplicationError
 
 PLAN_ERROR_STATUS = {
@@ -26,8 +27,8 @@ PLAN_ERROR_STATUS = {
 
 class PlanToolApplicationService:
     def __init__(self, task_manager: TaskManager):
-        if not isinstance(task_manager, TaskManager):
-            raise TypeError("task_manager must be a TaskManager")
+        if not callable(getattr(task_manager, "get_runtime", None)):
+            raise TypeError("task_manager must provide get_runtime()")
         self.task_manager = task_manager
 
     def create(
@@ -38,11 +39,11 @@ class PlanToolApplicationService:
     ) -> dict[str, Any]:
         return self._invoke(
             task_name,
-            lambda harness: harness.create_plan(goal, steps),
+            lambda runtime: runtime.create(goal, steps),
         )
 
     def read(self, task_name: str) -> dict[str, Any]:
-        return self._invoke(task_name, lambda harness: harness.read_plan())
+        return self._invoke(task_name, lambda runtime: runtime.read())
 
     def update(
         self,
@@ -52,7 +53,7 @@ class PlanToolApplicationService:
     ) -> dict[str, Any]:
         return self._invoke(
             task_name,
-            lambda harness: harness.update_plan(goal, steps),
+            lambda runtime: runtime.update(goal, steps),
         )
 
     def complete_step(
@@ -63,7 +64,7 @@ class PlanToolApplicationService:
     ) -> dict[str, Any]:
         return self._invoke(
             task_name,
-            lambda harness: harness.complete_plan_step(
+            lambda runtime: runtime.complete_step(
                 step_id,
                 completion_summary,
             ),
@@ -77,14 +78,17 @@ class PlanToolApplicationService:
                 "No active or retained Task runtime has that name.",
                 404,
             )
-        if not isinstance(runtime, PlanAndSolveHarness):
+        if (
+            runtime.task.task_type is not TaskType.PlanAndSolve
+            or not isinstance(runtime, PlanningHarness)
+        ):
             raise ApplicationError(
                 "invalid_task_type",
                 "The requested Task runtime is not Plan-and-Solve.",
                 409,
             )
         try:
-            return asdict(operation(runtime))
+            return asdict(operation(runtime.planning_runtime))
         except PlanOperationError as exc:
             raise ApplicationError(
                 exc.code,

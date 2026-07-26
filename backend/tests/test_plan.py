@@ -2,6 +2,7 @@ import unittest
 from dataclasses import FrozenInstanceError
 
 from backend.agent.task.harness.Plan import (
+    Plan,
     PlanOperationError,
     PlanStep,
     PlanStepDefinition,
@@ -20,6 +21,24 @@ def step(step_id: str) -> PlanStepDefinition:
 
 
 class PlanDomainTests(unittest.TestCase):
+    def test_plan_aggregate_owns_lifecycle_transitions(self):
+        plan = Plan.create("Ship", (step("s1"), step("s2")))
+
+        self.assertEqual(plan.snapshot.current_step_id, "s1")
+        completed = plan.complete_step("s1", "Built")
+        self.assertEqual(completed.next_step_id, "s2")
+
+        updated = plan.update(
+            "Ship safely",
+            (step("s1"), step("s3")),
+        )
+        self.assertEqual(updated.current_step_id, "s3")
+        self.assertEqual(plan.snapshot.goal, "Ship safely")
+
+        final = plan.complete_step("s3", "Verified")
+        self.assertTrue(final.is_complete)
+        self.assertTrue(plan.snapshot.is_complete)
+
     def test_protocol_entities_are_frozen_and_steps_are_tuples(self):
         snapshot = build_snapshot(
             "Goal",
