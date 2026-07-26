@@ -1,6 +1,9 @@
+"""任务运行时注册表与调度器组件的特征测试。"""
+
 import unittest
 from datetime import UTC, datetime
 
+import backend.agent.task.runtime as task_runtime
 from backend.agent.task.model import Task, TaskType
 from backend.agent.task.runtime import _TaskRuntimeRecord, TaskStartSpec
 from backend.agent.task.runtime_registry import TaskRuntimeRegistry
@@ -28,6 +31,9 @@ def record(task_id: int, name: str) -> _TaskRuntimeRecord:
 
 
 class TaskRuntimeRegistryTests(unittest.TestCase):
+    def test_runtime_public_exports_hide_mutable_runtime_records(self):
+        self.assertNotIn("_TaskRuntimeRecord", task_runtime.__all__)
+
     def test_registry_enforces_id_and_name_identity(self):
         registry = TaskRuntimeRegistry()
         first = record(1, "first")

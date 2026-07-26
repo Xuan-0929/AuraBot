@@ -1,6 +1,9 @@
+"""任务领域模型与包级公开 API 的特征测试。"""
+
 import unittest
 from concurrent.futures import ThreadPoolExecutor
 
+import backend.agent.task as task_package
 from backend.agent.skills.skill_group import SkillGroup
 from backend.agent.task.model import Task, TaskState, TaskType
 from backend.agent.tools.tool import Tool
@@ -16,9 +19,53 @@ EMPTY_INPUT_SCHEMA = {"type": "object", "properties": {}}
 
 
 class TaskTypeTests(unittest.TestCase):
-    def test_task_type_defines_supported_agent_modes(self):
-        self.assertEqual(TaskType.ReAct.value, "ReAct")
-        self.assertEqual(TaskType.PlanAndSolve.value, "PlanAndSolve")
+    def test_task_type_preserves_each_public_name_and_wire_value(self):
+        self.assertEqual(
+            {member.name: member.value for member in TaskType},
+            {
+                "ReAct": "ReAct",
+                "PlanAndSolve": "PlanAndSolve",
+                "Goal": "Goal",
+            },
+        )
+
+    def test_task_state_preserves_each_public_name_and_wire_value(self):
+        self.assertEqual(
+            {member.name: member.value for member in TaskState},
+            {
+                "Initializing": "Initializing",
+                "Thinking": "Thinking",
+                "Pushing": "Pushing",
+                "Planning": "Planning",
+                "Concluding": "Concluding",
+                "Waiting": "Waiting",
+                "Completed": "Completed",
+                "Failed": "Failed",
+                "Interrupted": "Interrupted",
+            },
+        )
+
+    def test_task_package_preserves_its_public_export_contract(self):
+        self.assertEqual(
+            set(task_package.__all__),
+            {
+                "DuplicateTaskNameError",
+                "InterruptTaskOutcome",
+                "InterruptTaskResult",
+                "Task",
+                "TaskInactiveError",
+                "TaskListSnapshot",
+                "TaskManager",
+                "TaskManagerClosedError",
+                "TaskSnapshot",
+                "TaskStartSpec",
+                "TaskState",
+                "TaskType",
+            },
+        )
+
+    def test_task_package_does_not_publish_its_mutable_runtime_record(self):
+        self.assertNotIn("_TaskRuntimeRecord", task_package.__all__)
 
 
 class TaskTests(unittest.TestCase):

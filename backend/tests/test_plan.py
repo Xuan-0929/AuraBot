@@ -1,6 +1,9 @@
+"""Plan 聚合、不可变值对象与公开导出的特征测试。"""
+
 import unittest
 from dataclasses import FrozenInstanceError
 
+from backend.agent.task.harness import plan as plan_module
 from backend.agent.task.harness.plan import (
     Plan,
     PlanOperationError,
@@ -21,6 +24,28 @@ def step(step_id: str) -> PlanStepDefinition:
 
 
 class PlanDomainTests(unittest.TestCase):
+    def test_plan_module_preserves_its_public_export_contract(self):
+        self.assertEqual(
+            set(plan_module.__all__),
+            {
+                "CompletePlanStepResult",
+                "CreatePlanResult",
+                "MAX_PLAN_STEPS",
+                "MIN_PLAN_STEPS",
+                "PLAN_ERROR_MESSAGES",
+                "Plan",
+                "PlanOperationError",
+                "PlanSnapshot",
+                "PlanStep",
+                "PlanStepDefinition",
+                "PlanStepStatus",
+                "STEP_ID_PATTERN",
+                "UpdatePlanResult",
+                "build_snapshot",
+                "validate_plan_definition",
+            },
+        )
+
     def test_plan_aggregate_owns_lifecycle_transitions(self):
         plan = Plan.create("Ship", (step("s1"), step("s2")))
 

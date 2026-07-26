@@ -1,3 +1,5 @@
+"""任务事件 broker 的快照、增量与关闭 wire 契约测试。"""
+
 import unittest
 
 from backend.agent.task.events import TaskEventBroker
@@ -22,10 +24,26 @@ class TaskEventBrokerTests(unittest.IsolatedAsyncioTestCase):
         received = await subscription.next_event()
 
         self.assertEqual(snapshot["event"], "task.snapshot")
+        self.assertEqual(
+            set(snapshot),
+            {
+                "schema_version",
+                "stream_id",
+                "revision",
+                "timestamp",
+                "event",
+                "running_count",
+                "queued_count",
+                "payload",
+            },
+        )
+        self.assertEqual(snapshot["schema_version"], 1)
+        self.assertRegex(snapshot["timestamp"], r"Z$")
         self.assertEqual(snapshot["stream_id"], "stream-test")
         self.assertEqual(snapshot["revision"], 0)
         self.assertEqual(snapshot["payload"]["tasks"][0]["task_name"], "queued")
         self.assertEqual(received, delta)
+        self.assertEqual(set(received["payload"]), {"task"})
         self.assertEqual(received["revision"], 1)
         self.assertEqual(received["running_count"], 1)
 

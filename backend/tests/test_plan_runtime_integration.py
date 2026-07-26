@@ -1,3 +1,5 @@
+"""Plan Harness 经由原生 MCP 服务执行的端到端特征测试。"""
+
 import json
 import sys
 import unittest
