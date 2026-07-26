@@ -1,208 +1,481 @@
 import asyncio
 import unittest
-from concurrent.futures import ThreadPoolExecutor
 
+from backend.agent.capabilities.lease import CapabilitySession
+from backend.agent.skills.SkillGroup import SkillGroup
+from backend.agent.skills.SkillGroupManager import SkillGroupManager
 from backend.agent.task.Task import Task
 from backend.agent.task.TaskEntity import (
     InterruptTaskOutcome,
     TaskState,
     TaskType,
 )
-from backend.agent.task.TaskManager import TaskManager
-from backend.agent.task.harness.ReActHarness import ReActHarness
+from backend.agent.task.TaskManager import (
+    DuplicateTaskNameError,
+    TaskManager,
+)
+from backend.agent.task.events import TaskEventBroker
+from backend.agent.task.harness.Harness import Harness
+from backend.agent.task.harness.HarnessFactory import HarnessFactory
+from backend.agent.task.runtime import TaskStartSpec
+from backend.agent.tools.Tool import Tool
+from backend.agent.tools.ToolGroup import ToolGroup
+from backend.agent.tools.ToolGroupManager import ToolGroupManager
+from backend.agent.tools.native.PlanToolGroup import create_plan_tool_group
 
 
-class FakeLLMClient:
-    pass
-
-
-def make_runtime(
-    *,
-    task_id: int = 1,
-    task_title: str = "Inspect repository",
-    state: TaskState = TaskState.Thinking,
-) -> ReActHarness:
-    task = Task(
-        task_id=task_id,
-        task_title=task_title,
-        parent_session_id="main-session",
-        task_type=TaskType.ReAct,
-        task_prompt="Inspect the repository.",
+def make_tool_group(name: str) -> ToolGroup:
+    return ToolGroup(
+        name,
+        [
+            Tool(
+                f"{name}_tool",
+                f"{name} tool",
+                "http://127.0.0.1:6410/mcp",
+                input_schema={"type": "object", "properties": {}},
+            )
+        ],
+        f"{name} tools",
     )
-    task.current_state = state
-    return ReActHarness(task=task, llm_client=FakeLLMClient())
 
 
-class TaskManagerTests(unittest.TestCase):
-    def setUp(self):
-        TaskManager._instance = None
-        self.manager = TaskManager()
+class ControlledHarness(Harness):
+    def __init__(self, *, release: asyncio.Event, **kwargs):
+        self._release = release
+        super().__init__(**kwargs)
 
-    def tearDown(self):
-        self.manager.shutdown()
-        TaskManager._instance = None
+    def inject_tool_group(self) -> None:
+        self._inject_required_tool_groups(())
 
-    def test_singleton_and_runtime_indexes(self):
-        runtime = make_runtime()
-        self.manager.register_runtime(runtime)
+    def build_system_prompt(self) -> str:
+        return "controlled"
 
-        self.assertIs(TaskManager(), self.manager)
-        self.assertIs(
-            self.manager.get_runtime(runtime.task.task_title),
-            runtime,
-        )
-        self.assertEqual(self.manager.list_runtimes(), (runtime,))
-
-    def test_registration_rejects_duplicate_id_and_name(self):
-        first = make_runtime()
-        self.manager.register_runtime(first)
-
-        with self.assertRaisesRegex(ValueError, "ID"):
-            self.manager.register_runtime(
-                make_runtime(task_id=1, task_title="Other")
+    async def run(self) -> str:
+        runner = asyncio.current_task()
+        if runner is None or not self.task.bind_runner(runner):
+            raise RuntimeError("already running")
+        try:
+            self._transition_task_state(
+                TaskState.Initializing,
+                TaskState.Thinking,
             )
-        with self.assertRaisesRegex(ValueError, "name"):
-            self.manager.register_runtime(
-                make_runtime(task_id=2, task_title=first.task.task_title)
+            await self._release.wait()
+            self._transition_task_state(
+                TaskState.Thinking,
+                TaskState.Completed,
             )
-        with self.assertRaises(TypeError):
-            self.manager.register_runtime(object())
+            return f"result:{self.task.task_title}"
+        finally:
+            self.task.unbind_runner(runner)
 
-    def test_peek_reads_task_through_harness(self):
-        runtime = make_runtime()
-        runtime.task.checkpoint = "Read configuration"
-        self.manager.register_runtime(runtime)
 
-        result = self.manager.peek_task(runtime.task.task_title)
+class ControlledHarnessFactory:
+    def __init__(self):
+        self.releases: dict[str, asyncio.Event] = {}
+        self.created: list[str] = []
 
-        self.assertTrue(result.found)
-        self.assertEqual(result.task_id, runtime.task.task_id)
-        self.assertIs(result.task_type, TaskType.ReAct)
-        self.assertIs(result.state, TaskState.Thinking)
-        self.assertEqual(result.checkpoint, "Read configuration")
-        self.assertFalse(self.manager.peek_task("missing").found)
+    def create(
+        self,
+        task: Task,
+        *,
+        capability_session: CapabilitySession | None = None,
+    ) -> ControlledHarness:
+        release = asyncio.Event()
+        self.releases[task.task_title] = release
+        self.created.append(task.task_title)
+        return ControlledHarness(
+            task=task,
+            llm_client=object(),
+            capability_session=capability_session,
+            release=release,
+        )
 
-    def test_interrupt_atomically_changes_an_active_task(self):
-        runtime = make_runtime()
-        self.manager.register_runtime(runtime)
 
-        with ThreadPoolExecutor(max_workers=4) as executor:
-            results = list(
-                executor.map(
-                    self.manager.interrupt_task,
-                    [runtime.task.task_title] * 4,
-                )
+class FailingHarnessFactory:
+    def create(self, task, *, capability_session=None):
+        raise RuntimeError("construction failed")
+
+
+class BlockingLLMClient:
+    async def invoke(self, messages, *, tools=None, tool_choice=None):
+        await asyncio.Event().wait()
+
+
+class StubbornHarness(ControlledHarness):
+    def __init__(
+        self,
+        *,
+        started: asyncio.Event,
+        cancelled: asyncio.Event,
+        finish_cancel: asyncio.Event,
+        **kwargs,
+    ):
+        self._started = started
+        self._cancelled = cancelled
+        self._finish_cancel = finish_cancel
+        super().__init__(**kwargs)
+
+    async def run(self) -> str:
+        runner = asyncio.current_task()
+        if runner is None or not self.task.bind_runner(runner):
+            raise RuntimeError("already running")
+        try:
+            self._transition_task_state(
+                TaskState.Initializing,
+                TaskState.Thinking,
             )
+            self._started.set()
+            try:
+                await asyncio.Event().wait()
+            except asyncio.CancelledError:
+                self._cancelled.set()
+                await self._finish_cancel.wait()
+                raise
+        finally:
+            self.task.unbind_runner(runner)
 
-        outcomes = [result.outcome for result in results]
-        self.assertEqual(outcomes.count(InterruptTaskOutcome.Interrupted), 1)
-        self.assertEqual(
-            outcomes.count(InterruptTaskOutcome.AlreadyInterrupted),
-            3,
-        )
-        self.assertIs(runtime.task.state, TaskState.Interrupted)
 
-    def test_interrupt_deferred_settled_and_missing_outcomes(self):
-        initializing = make_runtime(state=TaskState.Initializing)
-        self.manager.register_runtime(initializing)
-        deferred = self.manager.interrupt_task(initializing.task.task_title)
-        self.assertIs(deferred.outcome, InterruptTaskOutcome.Deferred)
+class StubbornHarnessFactory:
+    def __init__(self):
+        self.started = asyncio.Event()
+        self.cancelled = asyncio.Event()
+        self.finish_cancel = asyncio.Event()
 
-        self.manager.shutdown()
-        settled = make_runtime(
-            task_id=2,
-            task_title="settled",
-            state=TaskState.Completed,
-        )
-        self.manager.register_runtime(settled)
-        result = self.manager.interrupt_task("settled")
-        self.assertIs(result.outcome, InterruptTaskOutcome.AlreadySettled)
-        self.assertIs(
-            self.manager.interrupt_task("missing").outcome,
-            InterruptTaskOutcome.NotFound,
-        )
-
-    def test_context_removes_nonterminal_runtime_on_normal_or_error_exit(self):
-        normal = make_runtime()
-        with self.manager.runtime(normal):
-            self.assertIsNotNone(self.manager.get_runtime(normal.task.task_title))
-        self.assertIsNone(self.manager.get_runtime(normal.task.task_title))
-
-        failing = make_runtime(task_id=2, task_title="failing")
-        with self.assertRaisesRegex(RuntimeError, "boom"):
-            with self.manager.runtime(failing):
-                raise RuntimeError("boom")
-        self.assertIsNone(self.manager.get_runtime("failing"))
-
-    def test_clear_only_removes_terminal_runtime(self):
-        active = make_runtime()
-        self.manager.register_runtime(active)
-        self.assertFalse(self.manager.clear_task(active.task.task_title))
-
-        active.task.current_state = TaskState.Failed
-        self.assertTrue(self.manager.clear_task(active.task.task_title))
-        self.assertFalse(self.manager.clear_task(active.task.task_title))
-
-    def test_old_expiry_callback_cannot_remove_new_runtime(self):
-        old = make_runtime(state=TaskState.Completed)
-        self.manager.register_runtime(old)
-        self.assertTrue(self.manager.clear_task(old.task.task_title))
-        replacement = make_runtime(task_id=2)
-        self.manager.register_runtime(replacement)
-
-        self.manager._expire_runtime(replacement.task.task_title, old)
-
-        self.assertIs(
-            self.manager.get_runtime(replacement.task.task_title),
-            replacement,
+    def create(self, task, *, capability_session=None):
+        return StubbornHarness(
+            task=task,
+            llm_client=object(),
+            capability_session=capability_session,
+            release=asyncio.Event(),
+            started=self.started,
+            cancelled=self.cancelled,
+            finish_cancel=self.finish_cancel,
         )
 
 
-class TaskManagerRetentionTests(unittest.IsolatedAsyncioTestCase):
+def spec(
+    name: str,
+    *,
+    tool_groups: tuple[str, ...] = (),
+    timeout_ms: int | None = None,
+) -> TaskStartSpec:
+    return TaskStartSpec(
+        task_name=name,
+        parent_session_id="main",
+        task_type=TaskType.ReAct,
+        task_prompt=f"Run {name}",
+        tool_group_names=tool_groups,
+        timeout_ms=timeout_ms,
+    )
+
+
+class TaskManagerTests(unittest.IsolatedAsyncioTestCase):
     async def asyncSetUp(self):
-        TaskManager._instance = None
-        self.manager = TaskManager(retention_seconds=0.01)
+        self.factory = ControlledHarnessFactory()
+        self.tool_manager = ToolGroupManager(loader=make_tool_group)
+        self.skill_manager = SkillGroupManager(
+            loader=lambda name: SkillGroup(name, [])
+        )
+        self.broker = TaskEventBroker(queue_size=32, stream_id="tests")
+        self.manager = TaskManager(
+            harness_factory=self.factory,
+            tool_group_manager=self.tool_manager,
+            skill_group_manager=self.skill_manager,
+            event_broker=self.broker,
+            max_running=1,
+            default_timeout_ms=300_000,
+            max_timeout_ms=1_800_000,
+            retention_seconds=0.02,
+        )
         self.manager.bind_event_loop(asyncio.get_running_loop())
 
     async def asyncTearDown(self):
-        self.manager.shutdown()
-        TaskManager._instance = None
+        await self.manager.aclose(grace_seconds=0)
 
-    async def test_all_terminal_states_are_retained_then_expire(self):
-        for index, state in enumerate(
-            (
-                TaskState.Completed,
-                TaskState.Failed,
-                TaskState.Interrupted,
-            ),
-            start=1,
-        ):
-            runtime = make_runtime(
-                task_id=index,
-                task_title=f"terminal-{index}",
-                state=state,
-            )
-            with self.manager.runtime(runtime):
-                pass
-            self.assertIs(
-                self.manager.get_runtime(runtime.task.task_title),
-                runtime,
-            )
+    async def test_manager_instances_are_owned_by_runtime_not_global_singletons(self):
+        other = TaskManager(
+            harness_factory=self.factory,
+            tool_group_manager=self.tool_manager,
+            skill_group_manager=self.skill_manager,
+            event_broker=TaskEventBroker(),
+        )
+        self.assertIsNot(other, self.manager)
+        await other.aclose(grace_seconds=0)
 
-        await asyncio.sleep(0.03)
-        self.assertEqual(self.manager.list_runtimes(), ())
-
-    async def test_shutdown_cancels_timers_and_clears_runtimes(self):
-        runtime = make_runtime(state=TaskState.Completed)
-        with self.manager.runtime(runtime):
-            pass
+    async def test_fifo_admission_constructs_capabilities_and_harness_only_on_slot(self):
+        first = self.manager.start_task(spec("first", tool_groups=("files",)))
+        second = self.manager.start_task(spec("second", tool_groups=("shell",)))
         await asyncio.sleep(0)
-        self.assertTrue(self.manager._cleanup_handles)
 
-        self.manager.shutdown()
+        self.assertEqual(self.factory.created, ["first"])
+        self.assertIs(first.task.state, TaskState.Thinking)
+        self.assertIs(second.task.state, TaskState.Initializing)
+        self.assertEqual(second.queue_position, 1)
+        self.assertEqual(self.tool_manager.reference_count("files"), 1)
+        self.assertEqual(self.tool_manager.reference_count("shell"), 0)
 
-        self.assertEqual(self.manager.list_runtimes(), ())
-        self.assertEqual(self.manager._cleanup_handles, {})
+        self.factory.releases["first"].set()
+        await asyncio.sleep(0)
+        await asyncio.sleep(0)
+
+        self.assertEqual(self.factory.created, ["first", "second"])
+        self.assertIs(second.task.state, TaskState.Thinking)
+        self.assertEqual(self.tool_manager.reference_count("files"), 1)
+        self.assertEqual(self.tool_manager.reference_count("shell"), 1)
+
+    async def test_duplicate_name_is_rejected_during_retention(self):
+        self.manager.start_task(spec("same"))
+
+        with self.assertRaises(DuplicateTaskNameError):
+            self.manager.start_task(spec("same"))
+
+    async def test_interrupting_queued_task_is_immediate_and_never_builds_harness(self):
+        self.manager.start_task(spec("running"))
+        queued = self.manager.start_task(spec("queued"))
+        await asyncio.sleep(0)
+
+        result = self.manager.interrupt_task("queued")
+
+        self.assertIs(result.outcome, InterruptTaskOutcome.Interrupted)
+        self.assertIs(queued.task.state, TaskState.Interrupted)
+        self.assertNotIn("queued", self.factory.created)
+        self.assertEqual(queued.queue_position, None)
+
+    async def test_runner_result_is_retained_then_capability_is_released(self):
+        record = self.manager.start_task(spec("retained", tool_groups=("files",)))
+        await asyncio.sleep(0)
+        self.factory.releases["retained"].set()
+        await asyncio.sleep(0)
+        await asyncio.sleep(0)
+
+        self.assertIs(record.task.state, TaskState.Completed)
+        self.assertEqual(record.result, "result:retained")
+        self.assertEqual(self.tool_manager.reference_count("files"), 1)
+
+        await asyncio.sleep(0.04)
+
+        self.assertIsNone(self.manager.get_record("retained"))
+        self.assertEqual(self.tool_manager.reference_count("files"), 0)
+
+    async def test_clear_rejects_active_and_releases_terminal_runtime(self):
+        record = self.manager.start_task(spec("clear", tool_groups=("files",)))
+        await asyncio.sleep(0)
+        self.assertFalse(self.manager.clear_task("clear"))
+
+        self.factory.releases["clear"].set()
+        await asyncio.sleep(0)
+        await asyncio.sleep(0)
+
+        self.assertTrue(self.manager.clear_task("clear"))
+        self.assertIsNone(self.manager.get_record("clear"))
+        self.assertEqual(self.tool_manager.reference_count("files"), 0)
+
+    async def test_timeout_is_validated_and_starts_with_actual_execution(self):
+        running = self.manager.start_task(spec("running"))
+        queued = self.manager.start_task(
+            spec("short-timeout", timeout_ms=10)
+        )
+        await asyncio.sleep(0.03)
+
+        self.assertIs(running.task.state, TaskState.Thinking)
+        self.assertIs(queued.task.state, TaskState.Initializing)
+
+        self.factory.releases["running"].set()
+        for _ in range(20):
+            if queued.task.state is TaskState.Failed:
+                break
+            await asyncio.sleep(0.005)
+
+        self.assertIs(queued.task.state, TaskState.Failed)
+        self.assertEqual(
+            queued.error,
+            {
+                "code": "task_execution_failed",
+                "message": "Task execution failed.",
+            },
+        )
+
+        with self.assertRaisesRegex(ValueError, "timeout"):
+            self.manager.start_task(spec("too-long", timeout_ms=1_800_001))
+
+    async def test_real_harness_timeouts_settle_as_failed_not_interrupted(self):
+        tool_manager = ToolGroupManager(
+            loader=make_tool_group,
+            native_factories={
+                "Plan": lambda: create_plan_tool_group(
+                    "http://127.0.0.1:6410/mcp"
+                )
+            },
+        )
+        manager = TaskManager(
+            harness_factory=HarnessFactory(
+                task_llm_client=BlockingLLMClient()
+            ),
+            tool_group_manager=tool_manager,
+            skill_group_manager=SkillGroupManager(
+                loader=lambda name: SkillGroup(name, [])
+            ),
+            event_broker=TaskEventBroker(),
+            max_running=2,
+            default_timeout_ms=10,
+            max_timeout_ms=100,
+        )
+        manager.bind_event_loop(asyncio.get_running_loop())
+        records = [
+            manager.start_task(
+                TaskStartSpec(
+                    task_name=task_type.value,
+                    parent_session_id="main",
+                    task_type=task_type,
+                    task_prompt="wait forever",
+                    timeout_ms=10,
+                )
+            )
+            for task_type in (TaskType.ReAct, TaskType.PlanAndSolve)
+        ]
+
+        for _ in range(30):
+            if all(
+                record.task.state is TaskState.Failed
+                for record in records
+            ):
+                break
+            await asyncio.sleep(0.005)
+
+        self.assertEqual(
+            [record.task.state for record in records],
+            [TaskState.Failed, TaskState.Failed],
+        )
+        self.assertTrue(
+            all(
+                record.error
+                == {
+                    "code": "task_execution_failed",
+                    "message": "Task execution failed.",
+                }
+                for record in records
+            )
+        )
+        await manager.aclose(grace_seconds=0)
+
+    async def test_list_and_counts_cover_running_queued_and_retained_tasks(self):
+        self.manager.start_task(spec("running"))
+        self.manager.start_task(spec("queued"))
+        await asyncio.sleep(0)
+
+        self.assertEqual(self.manager.running_count, 1)
+        self.assertEqual(self.manager.queued_count, 1)
+        self.assertEqual(
+            tuple(record.task.task_title for record in self.manager.list_records()),
+            ("running", "queued"),
+        )
+
+    async def test_partial_capability_acquisition_is_rolled_back_on_skill_failure(self):
+        tool_manager = ToolGroupManager(loader=make_tool_group)
+        manager = TaskManager(
+            harness_factory=self.factory,
+            tool_group_manager=tool_manager,
+            skill_group_manager=SkillGroupManager(loader=lambda name: None),
+            event_broker=TaskEventBroker(),
+        )
+        manager.bind_event_loop(asyncio.get_running_loop())
+
+        record = manager.start_task(
+            TaskStartSpec(
+                task_name="missing-skill",
+                parent_session_id="main",
+                task_type=TaskType.ReAct,
+                task_prompt="work",
+                tool_group_names=("files",),
+                skill_group_names=("missing",),
+            )
+        )
+
+        self.assertIs(record.task.state, TaskState.Failed)
+        self.assertIsNone(record.capabilities)
+        self.assertEqual(tool_manager.reference_count("files"), 0)
+        await manager.aclose(grace_seconds=0)
+
+    async def test_capabilities_are_rolled_back_when_harness_construction_fails(self):
+        tool_manager = ToolGroupManager(loader=make_tool_group)
+        skill_manager = SkillGroupManager(
+            loader=lambda name: SkillGroup(name, [])
+        )
+        manager = TaskManager(
+            harness_factory=FailingHarnessFactory(),
+            tool_group_manager=tool_manager,
+            skill_group_manager=skill_manager,
+            event_broker=TaskEventBroker(),
+        )
+        manager.bind_event_loop(asyncio.get_running_loop())
+
+        record = manager.start_task(
+            TaskStartSpec(
+                task_name="bad-harness",
+                parent_session_id="main",
+                task_type=TaskType.ReAct,
+                task_prompt="work",
+                tool_group_names=("files",),
+                skill_group_names=("research",),
+            )
+        )
+
+        self.assertIs(record.task.state, TaskState.Failed)
+        self.assertIsNone(record.capabilities)
+        self.assertEqual(tool_manager.reference_count("files"), 0)
+        self.assertEqual(skill_manager.reference_count("research"), 0)
+        await manager.aclose(grace_seconds=0)
+
+    async def test_shutdown_survives_caller_cancellation_and_emits_closing_event(self):
+        subscription = self.manager.subscribe_events()
+        await subscription.next_event()
+        record = self.manager.start_task(spec("shutdown", tool_groups=("files",)))
+        await asyncio.sleep(0)
+
+        closing = asyncio.create_task(
+            self.manager.aclose(grace_seconds=0)
+        )
+        closing.cancel()
+        with self.assertRaises(asyncio.CancelledError):
+            await closing
+
+        await self.manager.aclose(grace_seconds=0)
+
+        events = []
+        while True:
+            try:
+                events.append(await subscription.next_event())
+            except StopAsyncIteration:
+                break
+        self.assertIn("runtime.closing", [event["event"] for event in events])
+        self.assertIs(record.task.state, TaskState.Interrupted)
+        self.assertEqual(self.manager.list_records(), ())
+        self.assertEqual(self.tool_manager.reference_count("files"), 0)
+
+    async def test_in_progress_shutdown_continues_when_awaiting_caller_is_cancelled(self):
+        factory = StubbornHarnessFactory()
+        manager = TaskManager(
+            harness_factory=factory,
+            tool_group_manager=ToolGroupManager(loader=make_tool_group),
+            skill_group_manager=SkillGroupManager(
+                loader=lambda name: SkillGroup(name, [])
+            ),
+            event_broker=TaskEventBroker(),
+        )
+        manager.bind_event_loop(asyncio.get_running_loop())
+        manager.start_task(spec("stubborn"))
+        await factory.started.wait()
+        caller = asyncio.create_task(manager.aclose(grace_seconds=1))
+        await factory.cancelled.wait()
+
+        caller.cancel()
+        with self.assertRaises(asyncio.CancelledError):
+            await caller
+        self.assertNotEqual(manager.list_records(), ())
+
+        factory.finish_cancel.set()
+        await manager.aclose(grace_seconds=1)
+        self.assertEqual(manager.list_records(), ())
 
 
 if __name__ == "__main__":

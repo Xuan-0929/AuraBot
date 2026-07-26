@@ -426,7 +426,7 @@ class ReActHarnessRunTests(unittest.IsolatedAsyncioTestCase):
             ["system", "user"],
         )
 
-    async def test_defers_interrupt_until_atomic_initialization_finishes(self):
+    async def test_unstarted_interrupted_task_never_initializes_context(self):
         task = make_task()
         task.interrupt()
         harness = ReActHarness(
@@ -439,10 +439,7 @@ class ReActHarnessRunTests(unittest.IsolatedAsyncioTestCase):
             await harness.run()
 
         self.assertIs(task.state, TaskState.Interrupted)
-        self.assertEqual(
-            [message["role"] for message in task.messages],
-            ["system", "user"],
-        )
+        self.assertEqual(task.messages, [])
 
     async def test_cancels_an_in_flight_tool_batch_when_interrupted(self):
         gateway_started = asyncio.Event()

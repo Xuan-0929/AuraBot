@@ -11,6 +11,19 @@ ports:
 
 local_mcp_server: "http://127.0.0.1:6410/mcp"
 
+task_runtime:
+  # At most this many Harness runners execute concurrently. Extra Tasks wait
+  # FIFO in Initializing state.
+  max_running: 8
+  default_timeout_ms: 300000
+  max_timeout_ms: 1800000
+  # Complete Harness runtimes and capability leases remain inspectable for
+  # this period before automatic cleanup.
+  terminal_retention_seconds: 100
+  sse_subscriber_queue_size: 256
+  sse_keepalive_seconds: 15
+  shutdown_grace_seconds: 5
+
 
 
 # -----------------------------------------------------

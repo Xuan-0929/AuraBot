@@ -7,7 +7,13 @@ from .harness.HarnessFactory import HarnessFactory
 from .harness.PlanAndSolveHarness import PlanAndSolveHarness
 from .harness.ReActHarness import ReActHarness
 from .Task import Task, TaskInactiveError
-from .TaskManager import TaskManager
+from .TaskManager import (
+    DuplicateTaskNameError,
+    TaskManager,
+    TaskManagerClosedError,
+)
+from .events import TaskEventBroker, TaskEventSubscription
+from .runtime import TaskRuntimeRecord, TaskStartSpec
 from .TaskEntity import (
     InterruptTaskOutcome,
     InterruptTaskResult,
@@ -21,6 +27,7 @@ __all__ = [
     "HarnessFactory",
     "HarnessInterruptedError",
     "HarnessStateTransitionError",
+    "DuplicateTaskNameError",
     "InterruptTaskOutcome",
     "InterruptTaskResult",
     "PeekTaskResult",
@@ -29,6 +36,11 @@ __all__ = [
     "Task",
     "TaskInactiveError",
     "TaskManager",
+    "TaskManagerClosedError",
+    "TaskEventBroker",
+    "TaskEventSubscription",
+    "TaskRuntimeRecord",
+    "TaskStartSpec",
     "TaskState",
     "TaskType",
 ]

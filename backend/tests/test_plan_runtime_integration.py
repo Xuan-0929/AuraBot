@@ -15,7 +15,11 @@ from backend.agent.task.TaskManager import TaskManager
 from backend.agent.task.harness.HarnessFactory import HarnessFactory
 from backend.agent.tools.core.ToolCallEntity import ToolCall
 from backend.agent.tools.core.ToolCallGateway import ToolCallGateway
-from backend.app.gateway.plan_tool_routes import get_task_manager, router
+from backend.app.gateway.dependencies import get_plan_tool_service
+from backend.app.gateway.errors import application_error_handler
+from backend.app.gateway.plan_tool_routes import router
+from backend.app.services.errors import ApplicationError
+from backend.app.services.plan_tool_service import PlanToolApplicationService
 
 
 MCP_SERVER_ROOT = Path(__file__).resolve().parents[2] / "mcp_server"
@@ -112,12 +116,15 @@ class InProcessNativePlanClient:
 
 class PlanRuntimeIntegrationTests(unittest.IsolatedAsyncioTestCase):
     async def asyncSetUp(self):
-        TaskManager._instance = None
         self.manager = TaskManager()
         application = FastAPI()
+        application.add_exception_handler(
+            ApplicationError,
+            application_error_handler,
+        )
         application.include_router(router)
-        application.dependency_overrides[get_task_manager] = (
-            lambda: self.manager
+        application.dependency_overrides[get_plan_tool_service] = (
+            lambda: PlanToolApplicationService(self.manager)
         )
         backend_transport = httpx.ASGITransport(app=application)
         handlers = PlanToolHandlers(6401, transport=backend_transport)
@@ -125,7 +132,6 @@ class PlanRuntimeIntegrationTests(unittest.IsolatedAsyncioTestCase):
 
     async def asyncTearDown(self):
         self.manager.shutdown()
-        TaskManager._instance = None
 
     async def test_factory_to_adaptor_to_mcp_proxy_to_harness_plan(self):
         task = Task(

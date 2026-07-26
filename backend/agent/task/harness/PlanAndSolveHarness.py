@@ -64,10 +64,12 @@ class PlanAndSolveHarness(Harness):
     def inject_tool_group(self) -> None:
         """Install the canonical native Plan tools required by this Harness."""
 
+        if self.capability_session is not None:
+            required = self.capability_session.acquire_tool_groups(("Plan",))
+        else:
+            required = (create_plan_tool_group(),)
         self._inject_required_tool_groups(
-            (
-                create_plan_tool_group(),
-            )
+            required
         )
 
     def create_plan(
@@ -263,6 +265,8 @@ class PlanAndSolveHarness(Harness):
     async def run(self) -> str:
         """Run a bounded planning/checkpoint loop and retain Task context."""
 
+        if self.task.state is TaskState.Interrupted:
+            raise HarnessInterruptedError
         if self.task.state is not TaskState.Initializing:
             raise RuntimeError(
                 "PlanAndSolveHarness.run() can only execute a new Task"
@@ -282,13 +286,17 @@ class PlanAndSolveHarness(Harness):
                 self._reasoning_state(),
             )
 
-            async with asyncio.timeout(self.task.timeout_ms / 1000):
-                result = await self._run_plan_loop(openai_tools)
+            result = await self._run_plan_loop(openai_tools)
         except asyncio.CancelledError as exc:
-            self.task.interrupt()
+            # TaskManager owns the wall-clock timeout. External interrupts
+            # first commit TaskState.Interrupted and then cancel the runner,
+            # allowing timeout cancellation to propagate without corrupting
+            # the terminal state.
             if isinstance(exc, HarnessInterruptedError):
                 raise
-            raise HarnessInterruptedError from exc
+            if self.task.state is TaskState.Interrupted:
+                raise HarnessInterruptedError from exc
+            raise
         except Exception:
             self.task.compare_and_set_state(
                 {

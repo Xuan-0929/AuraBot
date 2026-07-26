@@ -11,9 +11,12 @@ from backend.agent.task.harness.PlanAndSolveHarness import (
 )
 from backend.agent.task.harness.ReActHarness import ReActHarness
 from backend.app.gateway.plan_tool_routes import (
-    get_task_manager,
     router,
 )
+from backend.app.gateway.dependencies import get_plan_tool_service
+from backend.app.gateway.errors import application_error_handler
+from backend.app.services.errors import ApplicationError
+from backend.app.services.plan_tool_service import PlanToolApplicationService
 
 
 class FakeLLMClient:
@@ -54,26 +57,28 @@ def runtime(task_type=TaskType.PlanAndSolve, *, name="Plan task"):
 
 class PlanToolRouteTests(unittest.TestCase):
     def setUp(self):
-        TaskManager._instance = None
         self.manager = TaskManager()
         application = FastAPI()
+        application.add_exception_handler(
+            ApplicationError,
+            application_error_handler,
+        )
         application.include_router(router)
-        application.dependency_overrides[get_task_manager] = (
-            lambda: self.manager
+        application.dependency_overrides[get_plan_tool_service] = (
+            lambda: PlanToolApplicationService(self.manager)
         )
         self.client = TestClient(application)
 
     def tearDown(self):
         self.client.close()
         self.manager.shutdown()
-        TaskManager._instance = None
 
     def test_complete_internal_api_flow_returns_frozen_protocol(self):
         harness = runtime()
         self.manager.register_runtime(harness)
 
         created = self.client.post(
-            "/tool/create_plan",
+            "/tool/plan/create",
             json={"task_name": "Plan task", "goal": "Ship", "steps": STEPS},
         )
         self.assertEqual(
@@ -86,7 +91,7 @@ class PlanToolRouteTests(unittest.TestCase):
         )
 
         read = self.client.post(
-            "/tool/read_plan",
+            "/tool/plan/read",
             json={"task_name": "Plan task"},
         )
         self.assertEqual(read.status_code, 200)
@@ -94,7 +99,7 @@ class PlanToolRouteTests(unittest.TestCase):
         self.assertNotIn("task_name", read.json())
 
         completed = self.client.post(
-            "/tool/plan_step_complete",
+            "/tool/plan/step/complete",
             json={
                 "task_name": "Plan task",
                 "step_id": "s1",
@@ -113,7 +118,7 @@ class PlanToolRouteTests(unittest.TestCase):
 
         updated_steps = [STEPS[0], {**STEPS[1], "title": "Revised"}]
         updated = self.client.post(
-            "/tool/update_plan",
+            "/tool/plan/update",
             json={
                 "task_name": "Plan task",
                 "goal": "Ship safely",
@@ -131,7 +136,7 @@ class PlanToolRouteTests(unittest.TestCase):
 
     def test_routing_and_business_errors_have_safe_statuses(self):
         missing = self.client.post(
-            "/tool/read_plan",
+            "/tool/plan/read",
             json={"task_name": "missing"},
         )
         self.assertEqual(missing.status_code, 404)
@@ -140,7 +145,7 @@ class PlanToolRouteTests(unittest.TestCase):
         wrong = runtime(TaskType.ReAct, name="Wrong")
         self.manager.register_runtime(wrong)
         invalid_type = self.client.post(
-            "/tool/read_plan",
+            "/tool/plan/read",
             json={"task_name": "Wrong"},
         )
         self.assertEqual(invalid_type.status_code, 409)
@@ -153,7 +158,7 @@ class PlanToolRouteTests(unittest.TestCase):
         plan.task.task_id = 2
         self.manager.register_runtime(plan)
         not_found = self.client.post(
-            "/tool/read_plan",
+            "/tool/plan/read",
             json={"task_name": "No plan"},
         )
         self.assertEqual(not_found.status_code, 404)
@@ -170,10 +175,10 @@ class PlanToolRouteTests(unittest.TestCase):
             "goal": "Ship",
             "steps": STEPS,
         }
-        self.client.post("/tool/create_plan", json=create_body)
+        self.client.post("/tool/plan/create", json=create_body)
 
         conflict = self.client.post(
-            "/tool/create_plan",
+            "/tool/plan/create",
             json={**create_body, "goal": "Different"},
         )
         self.assertEqual(conflict.status_code, 409)
@@ -184,7 +189,7 @@ class PlanToolRouteTests(unittest.TestCase):
 
         harness.task.current_state = TaskState.Interrupted
         terminal = self.client.post(
-            "/tool/read_plan",
+            "/tool/plan/read",
             json={"task_name": "Plan task"},
         )
         self.assertEqual(terminal.status_code, 409)
@@ -197,7 +202,7 @@ class PlanToolRouteTests(unittest.TestCase):
 
     def test_models_forbid_extra_fields_with_422(self):
         response = self.client.post(
-            "/tool/read_plan",
+            "/tool/plan/read",
             json={"task_name": "Task", "extra": True},
         )
         self.assertEqual(response.status_code, 422)
@@ -206,7 +211,7 @@ class PlanToolRouteTests(unittest.TestCase):
         application = FastAPI()
         application.include_router(router)
         paths = application.openapi()["paths"]
-        self.assertNotIn("/tool/create_plan", paths)
+        self.assertNotIn("/tool/plan/create", paths)
 
 
 if __name__ == "__main__":

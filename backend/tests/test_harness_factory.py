@@ -9,6 +9,10 @@ from backend.agent.task.harness.adaptors.AdaptorRegistry import (
     AdaptorRegistry,
 )
 from backend.agent.task.Task import Task, TaskType
+from backend.agent.capabilities.lease import CapabilitySession
+from backend.agent.skills.SkillGroupManager import SkillGroupManager
+from backend.agent.tools.ToolGroupManager import ToolGroupManager
+from backend.agent.tools.native.PlanToolGroup import create_plan_tool_group
 
 
 class FakeLLMClient:
@@ -63,6 +67,11 @@ class HarnessFactoryTests(unittest.TestCase):
         self.assertIs(harness.llm_client, self.llm_client)
         self.assertEqual(task.tool_groups, ())
 
+    def test_factory_exposes_task_specific_llm_dependency_name(self):
+        factory = HarnessFactory(task_llm_client=self.llm_client)
+
+        self.assertIs(factory.task_llm_client, self.llm_client)
+
     def test_creates_plan_harness_for_plan_and_solve_task(self):
         task = make_task(2, TaskType.PlanAndSolve)
 
@@ -72,6 +81,29 @@ class HarnessFactoryTests(unittest.TestCase):
         self.assertIs(harness.task, task)
         self.assertIs(harness.llm_client, self.llm_client)
         self.assertEqual(task.tool_groups[0].name, "Plan")
+
+    def test_plan_harness_acquires_native_group_through_capability_session(self):
+        plan_group = create_plan_tool_group("http://127.0.0.1:7410/mcp")
+        tool_manager = ToolGroupManager(
+            loader=lambda name: None,
+            native_factories={"Plan": lambda: plan_group},
+        )
+        capability_session = CapabilitySession(
+            tool_manager,
+            SkillGroupManager(loader=lambda name: None),
+        )
+        task = make_task(20, TaskType.PlanAndSolve)
+
+        harness = self.factory.create(
+            task,
+            capability_session=capability_session,
+        )
+
+        self.assertIs(harness.capability_session, capability_session)
+        self.assertIs(task.tool_groups[0], plan_group)
+        self.assertEqual(tool_manager.reference_count("Plan"), 1)
+        capability_session.close()
+        self.assertEqual(tool_manager.reference_count("Plan"), 0)
 
     def test_each_creation_returns_an_isolated_harness(self):
         task = make_task(3, TaskType.ReAct)

@@ -25,7 +25,7 @@ Console window:
 | Area | Status |
 | --- | --- |
 | Desktop shell | Electron + Vue + TypeScript + Vite app boots locally from the `frontend/` directory. |
-| Backend gateway | Python FastAPI gateway exposes local `/health`, `/services`, read-only debug endpoints, and backend-first main chat history/task list reads. |
+| Backend runtime | Python FastAPI owns in-memory ReAct/Plan-and-Solve Tasks, FIFO admission, shared Tool/Skill capability leases, `/task` APIs, Task SSE, and internal Plan Tool routes. |
 | Live2D surface | Official Live2D Hiyori sample model renders in the pet window. |
 | Two-window UX | Small pet window opens or focuses a normal console window from the hover control. |
 | Pet behavior settings | Console settings can let clicks pass through the pet window. |
@@ -101,8 +101,9 @@ Run the complete Python backend test suite from `frontend/` with:
 npm run test:backend
 ```
 
-The Python backend entry point is `backend/main.py`, loaded by Uvicorn as
-`backend.main:app`.
+The only Python backend entry point is `backend/main.py`, loaded by Uvicorn as
+`backend.main:app`. Its lifespan creates one `BackendRuntime` and closes all
+Task runners, capability leases, Managers, and `task_llm_client` at shutdown.
 
 The native MCP runtime is a separate process. For focused Plan runtime
 development, start the backend and the aggregated FileSystem + Plan MCP server
@@ -120,6 +121,12 @@ The MCP endpoint comes from `local_mcp_server` (normally
 FileSystem tools followed by four Plan tools. The backend does not launch or
 stop the MCP process. Plan calls travel through the MCP protocol even though
 their state is ultimately updated in the backend process.
+
+The current backend contract is [docs/interfaces.md](docs/interfaces.md).
+Public Task control uses `/task`, realtime monitoring uses SSE at
+`/task/events`, and native Plan proxy routes use `/tool/plan/*`. `/registry`
+is reserved as an empty Router. The old demo `/services`, `/tasks`, `/chat/*`,
+and `/debug/*` routes have been removed.
 
 Before importing the API routes, the entry point loads the repository-root
 `config.yaml` into the process-wide `backend.config.config` singleton. Copy
@@ -545,15 +552,20 @@ This is still an MVP skeleton, not a production companion:
 6. Voice input currently depends on Chromium's `SpeechRecognition`; a stable local or model-backed STT adapter is still needed.
 7. Profile switching, scheduled jobs, desktop notifications, packaging, and auto-start are not implemented yet.
 
-## Frontend/Backend Split Gap
+## Backend Runtime Boundary
 
-Current backend-first reads cover gateway status, service discovery, main chat history, task lists, event logs, memory debug snapshots, and task debug snapshots. The target split is not complete yet:
+The Python Gateway now only validates and forwards HTTP/SSE messages.
+Application Services coordinate Manager and Harness layers; Gateway routes do
+not access SQLite or implement Task/Plan rules. ToolGroups and SkillGroups are
+process-shared, lazily created capabilities released when the last retained
+agent session disappears.
 
-1. Electron still assembles `getInitialState`; profile, settings, model health, pet/Live2D state, and notification settings still read from TypeScript services or local stores.
-2. Chat sending, memory writes, task creation/control/execution, and proactive triggers still run through Electron + `src/core`.
-3. The Python backend opens SQLite directly in read-only mode; it does not yet own repositories, migrations, write transactions, auth, or schema-version negotiation.
-4. The service registry exists but has no real `6402+` feature services or lifecycle supervision.
-5. Packaging/runtime supervision for the Python gateway is still pending; `npm run dev` starts it for development, but production restart/port-recovery behavior is not done.
+Task state is intentionally in-memory in this phase. Eight Harnesses run
+concurrently by default; excess Tasks wait FIFO in `Initializing`. Terminal
+Harness runtimes and their capability leases remain inspectable for 100
+seconds. Persistence, resume, registry mutation, Skill MCP Tools, and a
+launcher remain future work. The current frontend demo is not an API
+compatibility target for this runtime iteration.
 
 ## Next Recommended Work
 

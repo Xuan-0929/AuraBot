@@ -10,10 +10,10 @@ from .errors import PlanToolFailure
 
 
 TOOL_ENDPOINTS = {
-    "create_plan": "/tool/create_plan",
-    "read_plan": "/tool/read_plan",
-    "update_plan": "/tool/update_plan",
-    "plan_step_complete": "/tool/plan_step_complete",
+    "create_plan": "/tool/plan/create",
+    "read_plan": "/tool/plan/read",
+    "update_plan": "/tool/plan/update",
+    "plan_step_complete": "/tool/plan/step/complete",
 }
 BACKEND_ERROR_STATUS = {
     "invalid_plan": 400,

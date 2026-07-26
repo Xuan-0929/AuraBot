@@ -37,6 +37,8 @@ class ReActHarness(Harness):
     async def run(self) -> str:
         """Run a bounded ReAct loop and retain all context on the Task."""
 
+        if self.task.state is TaskState.Interrupted:
+            raise HarnessInterruptedError
         if self.task.state is not TaskState.Initializing:
             raise RuntimeError("ReActHarness.run() can only execute a new Task")
 
@@ -52,13 +54,17 @@ class ReActHarness(Harness):
                 TaskState.Thinking,
             )
 
-            async with asyncio.timeout(self.task.timeout_ms / 1000):
-                result = await self._run_react_loop(openai_tools)
+            result = await self._run_react_loop(openai_tools)
         except asyncio.CancelledError as exc:
-            self.task.interrupt()
+            # The application TaskManager owns the wall-clock timeout. Its
+            # cancellation must remain distinguishable from an external
+            # Task.interrupt(), which commits Interrupted before cancelling
+            # this runner.
             if isinstance(exc, HarnessInterruptedError):
                 raise
-            raise HarnessInterruptedError from exc
+            if self.task.state is TaskState.Interrupted:
+                raise HarnessInterruptedError from exc
+            raise
         except Exception:
             self.task.compare_and_set_state(
                 {

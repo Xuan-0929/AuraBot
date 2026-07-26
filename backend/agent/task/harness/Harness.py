@@ -5,6 +5,7 @@ from types import MappingProxyType
 from typing import Any
 
 from ...LLMClient import ChatCompletionChoice, LLMClient, Message
+from ...capabilities.lease import CapabilitySession
 from ...integration.mcp import MCPClient
 from ...tools.Tool import Tool
 from ...tools.ToolGroup import ToolGroup
@@ -40,6 +41,7 @@ class Harness(ABC):
         llm_client: LLMClient,
         tool_call_gateway: ToolCallGateway | None = None,
         adaptor_registry: AdaptorRegistry | None = None,
+        capability_session: CapabilitySession | None = None,
     ):
         self._task = task
         self._llm_client = llm_client
@@ -55,6 +57,14 @@ class Harness(ABC):
             if adaptor_registry is not None
             else AdaptorRegistry()
         )
+        if (
+            capability_session is not None
+            and not isinstance(capability_session, CapabilitySession)
+        ):
+            raise TypeError(
+                "capability_session must be a CapabilitySession or None"
+            )
+        self._capability_session = capability_session
         self._adaptors: dict[str, Adaptor] = {}
         self._adaptor_pipelines: dict[str, tuple[Adaptor, ...]] = {}
         self._adaptor_routes_built = False
@@ -76,6 +86,10 @@ class Harness(ABC):
     @property
     def adaptor_registry(self) -> AdaptorRegistry:
         return self._adaptor_registry
+
+    @property
+    def capability_session(self) -> CapabilitySession | None:
+        return self._capability_session
 
     @property
     def adaptors(self) -> Mapping[str, Adaptor]:

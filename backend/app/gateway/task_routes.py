@@ -1,69 +1,60 @@
-import sqlite3
-from pathlib import Path
+"""Public Task HTTP transport."""
 
-from fastapi import APIRouter, HTTPException, Query
+from __future__ import annotations
 
-router = APIRouter()
+from typing import Annotated
+
+from fastapi import APIRouter, Depends, Response, status
+
+from ..services.errors import ApplicationError
+from ..services.task_service import TaskApplicationService
+from .dependencies import get_task_service
+from .task_models import CreateTaskBody, TaskListResponse, TaskView
+
+router = APIRouter(prefix="/task", tags=["task"])
+TaskServiceDependency = Annotated[
+    TaskApplicationService,
+    Depends(get_task_service),
+]
 
 
-@router.get("/tasks")
-def tasks(
-    storage_path: str = Query(min_length=1),
-    profile_id: str = Query(min_length=1),
-) -> dict[str, object]:
-    database_path = _require_database_path(storage_path)
-
+@router.post("", response_model=TaskView, status_code=status.HTTP_202_ACCEPTED)
+async def create_task(
+    body: CreateTaskBody,
+    service: TaskServiceDependency,
+):
     try:
-        connection = _connect_readonly(database_path)
-        rows = connection.execute(
-            """
-            select *
-            from tasks
-            where profile_id = ?
-            order by created_at desc
-            """,
-            (profile_id,),
-        ).fetchall()
-    except sqlite3.Error as error:
-        raise HTTPException(status_code=500, detail=f"Could not read tasks: {error}") from error
-    finally:
-        if "connection" in locals():
-            connection.close()
-
-    return {"tasks": [_map_task(row) for row in rows]}
+        return service.start(body.to_spec())
+    except (TypeError, ValueError) as exc:
+        raise ApplicationError(
+            "invalid_task_request",
+            "The Task request is not valid for this runtime.",
+            400,
+        ) from exc
 
 
-def _require_database_path(storage_path: str) -> Path:
-    database_path = Path(storage_path)
-
-    if not database_path.exists():
-        raise HTTPException(status_code=404, detail="Storage database does not exist.")
-
-    return database_path
+@router.get("", response_model=TaskListResponse)
+async def list_tasks(service: TaskServiceDependency):
+    return service.list()
 
 
-def _connect_readonly(database_path: Path) -> sqlite3.Connection:
-    connection = sqlite3.connect(f"file:{database_path}?mode=ro", uri=True)
-    connection.row_factory = sqlite3.Row
-
-    return connection
+@router.get("/{task_name}", response_model=TaskView)
+async def get_task(task_name: str, service: TaskServiceDependency):
+    return service.get(task_name)
 
 
-def _map_task(row: sqlite3.Row) -> dict[str, object]:
-    task = {
-        "id": row["id"],
-        "profileId": row["profile_id"],
-        "parentSessionId": row["parent_session_id"],
-        "sessionId": row["session_id"],
-        "kind": row["task_kind"] or "result_output",
-        "title": row["title"],
-        "status": row["status"],
-        "latestProgress": row["latest_progress"],
-        "createdAt": row["created_at"],
-        "updatedAt": row["updated_at"],
-    }
+@router.post("/{task_name}/interrupt", response_model=TaskView)
+async def interrupt_task(task_name: str, service: TaskServiceDependency):
+    return service.interrupt(task_name)
 
-    if row["due_at"]:
-        task["dueAt"] = row["due_at"]
 
-    return task
+@router.delete("/{task_name}", status_code=status.HTTP_204_NO_CONTENT)
+async def clear_task(
+    task_name: str,
+    service: TaskServiceDependency,
+) -> Response:
+    service.clear(task_name)
+    return Response(status_code=status.HTTP_204_NO_CONTENT)
+
+
+__all__ = ["router"]

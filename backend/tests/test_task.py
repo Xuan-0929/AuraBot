@@ -71,6 +71,34 @@ class TaskTests(unittest.TestCase):
             {TaskState.Thinking, TaskState.Planning},
         )
 
+    def test_state_observers_receive_committed_transitions_outside_state_lock(self):
+        task = Task(1, "Observed", "session", TaskType.ReAct, "Work")
+        transitions = []
+
+        def observer(observed, previous, current):
+            self.assertIs(observed, task)
+            with observed.active_state_guard():
+                transitions.append((previous, current))
+
+        unsubscribe = task.add_state_observer(observer)
+        task.compare_and_set_state(TaskState.Initializing, TaskState.Thinking)
+        unsubscribe()
+        task.compare_and_set_state(TaskState.Thinking, TaskState.Pushing)
+
+        self.assertEqual(
+            transitions,
+            [(TaskState.Initializing, TaskState.Thinking)],
+        )
+
+    def test_interrupting_unstarted_initializing_task_is_immediate(self):
+        task = Task(1, "Queued", "session", TaskType.ReAct, "Work")
+
+        previous, current, deferred = task.interrupt()
+
+        self.assertIs(previous, TaskState.Initializing)
+        self.assertIs(current, TaskState.Interrupted)
+        self.assertFalse(deferred)
+
     def test_constructor_accepts_multiple_skill_and_tool_groups(self):
         skill_groups = [
             SkillGroup("research", []),

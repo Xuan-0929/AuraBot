@@ -1,5 +1,5 @@
 import asyncio
-from collections.abc import Collection, Sequence
+from collections.abc import Callable, Collection, Sequence
 from contextlib import contextmanager
 from threading import RLock
 from typing import Iterator
@@ -9,6 +9,8 @@ from ..tools.ToolGroup import ToolGroup
 from ..tools.core.ToolCallResolver import ToolCallResolver
 
 from .TaskEntity import TaskState, TaskType
+
+TaskStateObserver = Callable[["Task", TaskState, TaskState], None]
 
 """
 定义任务本体
@@ -37,7 +39,7 @@ class Task:
         self.update_tool_groups(tool_groups or ())
 
         self._state_lock = RLock()
-        self._interrupt_requested = False
+        self._state_observers: set[TaskStateObserver] = set()
         self._runner: asyncio.Task[object] | None = None
         self.current_state : TaskState = TaskState.Initializing
 
@@ -82,17 +84,14 @@ class Task:
             if isinstance(expected, TaskState)
             else set(expected)
         )
+        previous_state: TaskState
         with self._state_lock:
             if self.current_state not in expected_states:
                 return False
-            if (
-                self.current_state is TaskState.Initializing
-                and self._interrupt_requested
-            ):
-                self.current_state = TaskState.Interrupted
-                return False
+            previous_state = self.current_state
             self.current_state = target
-            return True
+        self._notify_state_observers(previous_state, target)
+        return True
 
     @contextmanager
     def active_state_guard(self) -> Iterator[TaskState]:
@@ -113,11 +112,9 @@ class Task:
         """Atomically apply an external interrupt when the task is active."""
 
         runner: asyncio.Task[object] | None = None
+        changed = False
         with self._state_lock:
             previous_state = self.current_state
-            if previous_state is TaskState.Initializing:
-                self._interrupt_requested = True
-                return previous_state, self.current_state, True
             if previous_state not in {
                 TaskState.Completed,
                 TaskState.Failed,
@@ -125,11 +122,31 @@ class Task:
             }:
                 self.current_state = TaskState.Interrupted
                 runner = self._runner
+                changed = True
             current_state = self.current_state
 
+        if changed:
+            self._notify_state_observers(previous_state, current_state)
         if runner is not None and runner is not self._current_asyncio_task():
             runner.get_loop().call_soon_threadsafe(runner.cancel)
         return previous_state, current_state, False
+
+    def add_state_observer(
+        self,
+        observer: TaskStateObserver,
+    ) -> Callable[[], None]:
+        """Subscribe to committed transitions and return an unsubscribe hook."""
+
+        if not callable(observer):
+            raise TypeError("observer must be callable")
+        with self._state_lock:
+            self._state_observers.add(observer)
+
+        def unsubscribe() -> None:
+            with self._state_lock:
+                self._state_observers.discard(observer)
+
+        return unsubscribe
 
     def bind_runner(self, runner: asyncio.Task[object]) -> bool:
         """Bind the one asyncio runner allowed to execute this Task."""
@@ -145,6 +162,22 @@ class Task:
             if self._runner is runner:
                 self._runner = None
 
+    def _notify_state_observers(
+        self,
+        previous_state: TaskState,
+        current_state: TaskState,
+    ) -> None:
+        if previous_state is current_state:
+            return
+        with self._state_lock:
+            observers = tuple(self._state_observers)
+        for observer in observers:
+            try:
+                observer(self, previous_state, current_state)
+            except Exception:
+                # State commits must not be rolled back by diagnostics.
+                continue
+
     @staticmethod
     def _current_asyncio_task() -> asyncio.Task[object] | None:
         try:
@@ -157,4 +190,4 @@ class TaskInactiveError(RuntimeError):
     """Raised by the generic state guard after a Task reaches a terminal state."""
 
 
-__all__ = ["Task", "TaskInactiveError"]
+__all__ = ["Task", "TaskInactiveError", "TaskStateObserver"]

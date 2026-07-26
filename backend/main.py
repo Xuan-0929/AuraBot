@@ -1,7 +1,10 @@
 """AuraBot backend application entry point."""
 
-import asyncio
+from __future__ import annotations
+
+from collections.abc import Callable, Mapping
 from contextlib import asynccontextmanager
+from typing import Any
 
 from fastapi import FastAPI
 
@@ -9,30 +12,51 @@ from .config import config, initialize_config
 
 initialize_config()
 
-from .app.gateway.chat_routes import router as chat_router
-from .app.gateway.debug_routes import router as debug_router
+from .app.gateway.errors import application_error_handler
+from .app.gateway.health_routes import router as health_router
 from .app.gateway.plan_tool_routes import router as plan_tool_router
-from .app.gateway.status_routes import health, router as status_router, services
+from .app.gateway.registry_routes import router as registry_router
+from .app.gateway.task_events import router as task_events_router
 from .app.gateway.task_routes import router as task_router
-from .agent.task.TaskManager import TaskManager
+from .app.runtime import BackendRuntime
+from .app.services.errors import ApplicationError
+
+RuntimeFactory = Callable[[Mapping[str, Any]], BackendRuntime]
 
 
-@asynccontextmanager
-async def lifespan(application: FastAPI):
-    manager = TaskManager()
-    manager.bind_event_loop(asyncio.get_running_loop())
-    try:
-        yield
-    finally:
-        manager.shutdown()
+def create_app(
+    *,
+    runtime_factory: RuntimeFactory | None = None,
+) -> FastAPI:
+    factory = runtime_factory or BackendRuntime.from_config
+
+    @asynccontextmanager
+    async def lifespan(application: FastAPI):
+        runtime = factory(config)
+        application.state.backend_runtime = runtime
+        runtime.bind_event_loop()
+        try:
+            yield
+        finally:
+            await runtime.aclose()
+            application.state.backend_runtime = None
+
+    application = FastAPI(
+        title="AuraBot Backend",
+        lifespan=lifespan,
+    )
+    application.add_exception_handler(
+        ApplicationError,
+        application_error_handler,
+    )
+    application.include_router(health_router)
+    application.include_router(task_events_router)
+    application.include_router(task_router)
+    application.include_router(plan_tool_router)
+    application.include_router(registry_router)
+    return application
 
 
-app = FastAPI(title="AuraBot Backend Gateway", lifespan=lifespan)
+app = create_app()
 
-app.include_router(status_router)
-app.include_router(chat_router)
-app.include_router(task_router)
-app.include_router(debug_router)
-app.include_router(plan_tool_router)
-
-__all__ = ["app", "config", "health", "services"]
+__all__ = ["app", "config", "create_app"]

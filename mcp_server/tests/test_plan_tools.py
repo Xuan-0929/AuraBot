@@ -44,7 +44,7 @@ async def test_handler_uses_fixed_endpoint_and_flat_body():
 
     assert result["created"] is True
     assert len(requests) == 1
-    assert str(requests[0].url) == "http://127.0.0.1:6401/tool/create_plan"
+    assert str(requests[0].url) == "http://127.0.0.1:6401/tool/plan/create"
     assert requests[0].method == "POST"
     assert requests[0].read().decode() == (
         '{"task_name":"Unique task","goal":"Ship","steps":[{"id":"s1",'

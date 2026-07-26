@@ -2,6 +2,7 @@ import inspect
 from collections.abc import Callable, Mapping
 
 from ...LLMClient import LLMClient
+from ...capabilities.lease import CapabilitySession
 from ...tools.core.ToolCallGateway import ToolCallGateway
 from .Harness import Harness
 from .PlanAndSolveHarness import PlanAndSolveHarness
@@ -25,12 +26,20 @@ class HarnessFactory:
     def __init__(
         self,
         *,
-        llm_client: LLMClient,
+        task_llm_client: LLMClient | None = None,
+        llm_client: LLMClient | None = None,
         harness_types: Mapping[TaskType, HarnessType] | None = None,
         adaptor_registry: AdaptorRegistry | None = None,
         tool_call_gateway_factory: ToolCallGatewayFactory | None = None,
     ):
-        self._llm_client = llm_client
+        if task_llm_client is not None and llm_client is not None:
+            raise ValueError(
+                "provide task_llm_client, not both LLM client names"
+            )
+        selected_llm_client = task_llm_client or llm_client
+        if selected_llm_client is None:
+            raise TypeError("task_llm_client must be provided")
+        self._task_llm_client = selected_llm_client
         self._adaptor_registry = (
             adaptor_registry
             if adaptor_registry is not None
@@ -51,13 +60,24 @@ class HarnessFactory:
 
     @property
     def llm_client(self) -> LLMClient:
-        return self._llm_client
+        """Backward-compatible alias for the task-specific LLM client."""
+
+        return self._task_llm_client
+
+    @property
+    def task_llm_client(self) -> LLMClient:
+        return self._task_llm_client
 
     @property
     def adaptor_registry(self) -> AdaptorRegistry:
         return self._adaptor_registry
 
-    def create(self, task: Task) -> Harness:
+    def create(
+        self,
+        task: Task,
+        *,
+        capability_session: CapabilitySession | None = None,
+    ) -> Harness:
         """Construct a harness without performing async initialization."""
         if not isinstance(task, Task):
             raise TypeError("task must be a Task")
@@ -79,9 +99,10 @@ class HarnessFactory:
         )
         harness = harness_type(
             task=task,
-            llm_client=self._llm_client,
+            llm_client=self._task_llm_client,
             tool_call_gateway=tool_call_gateway,
             adaptor_registry=self._adaptor_registry,
+            capability_session=capability_session,
         )
         return harness
 

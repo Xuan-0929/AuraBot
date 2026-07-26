@@ -552,20 +552,6 @@ class PlanAndSolveRunTests(unittest.IsolatedAsyncioTestCase):
             self.assertIs(task.state, TaskState.Failed)
             self.assertIsNone(task._runner)
 
-    async def test_timeout_fails_and_unbinds(self):
-        class BlockingLLM(ScriptedLLMClient):
-            async def invoke(self, messages, *, tools=None, tool_choice=None):
-                await asyncio.Event().wait()
-
-        task = make_task(timeout_ms=10)
-        harness = make_harness(BlockingLLM(), task=task)
-
-        with self.assertRaises(TimeoutError):
-            await harness.run()
-
-        self.assertIs(task.state, TaskState.Failed)
-        self.assertIsNone(task._runner)
-
     async def test_rejects_second_run_without_rewriting_terminal_state(self):
         task = make_task()
         harness = make_harness(
@@ -587,7 +573,6 @@ class PlanAndSolveRunTests(unittest.IsolatedAsyncioTestCase):
                 started.set()
                 await asyncio.Event().wait()
 
-        TaskManager._instance = None
         manager = TaskManager()
         task = make_task()
         harness = make_harness(BlockingLLM(), task=task)
@@ -606,7 +591,6 @@ class PlanAndSolveRunTests(unittest.IsolatedAsyncioTestCase):
             ["system", "user"],
         )
         manager.shutdown()
-        TaskManager._instance = None
 
     async def test_interrupts_pushing_without_appending_late_tool_results(self):
         gateway_started = asyncio.Event()
@@ -637,7 +621,7 @@ class PlanAndSolveRunTests(unittest.IsolatedAsyncioTestCase):
             ["system", "user", "assistant"],
         )
 
-    async def test_deferred_initializing_interrupt_wins(self):
+    async def test_unstarted_interrupted_task_never_initializes_context(self):
         task = make_task()
         task.interrupt()
         harness = make_harness(
@@ -649,10 +633,7 @@ class PlanAndSolveRunTests(unittest.IsolatedAsyncioTestCase):
             await harness.run()
 
         self.assertIs(task.state, TaskState.Interrupted)
-        self.assertEqual(
-            [message["role"] for message in task.messages],
-            ["system", "user"],
-        )
+        self.assertEqual(task.messages, [])
 
     def test_plan_specific_limits_are_frozen(self):
         self.assertEqual(PlanAndSolveHarness.MAX_PLAN_ROUNDS, 60)
