@@ -1,7 +1,6 @@
 import asyncio
 from abc import ABC, abstractmethod
 from collections.abc import Mapping, Sequence
-from types import MappingProxyType
 from typing import Any
 
 from ...LLMClient import ChatCompletionChoice, LLMClient, Message
@@ -9,7 +8,6 @@ from ...capabilities.lease import CapabilitySession
 from ...integration.mcp import MCPClient
 from ...tools.Tool import Tool
 from ...tools.ToolGroup import ToolGroup
-from ...tools.core.OpenAIChatToolProtocol import OpenAIChatToolProtocol
 from ...tools.core.ToolCallEntity import (
     ResolvedToolCall,
     ToolCall,
@@ -20,8 +18,9 @@ from ...tools.core.ToolCallGateway import ToolCallGateway
 from ...tools.native import create_native_tool_groups
 from ..Task import Task
 from ..TaskEntity import TaskState
-from .adaptors.Adaptor import Adaptor, AdaptorRouteError
+from .adaptors.Adaptor import Adaptor
 from .adaptors.AdaptorRegistry import AdaptorRegistry
+from .tool_execution_pipeline import ToolExecutionPipeline
 
 
 class HarnessInterruptedError(asyncio.CancelledError):
@@ -48,14 +47,14 @@ class Harness(ABC):
     ):
         self._task = task
         self._llm_client = llm_client
-        self._tool_call_gateway = (
+        gateway = (
             tool_call_gateway
             if tool_call_gateway is not None
             else ToolCallGateway(
                 MCPClient(timeout_seconds=task.timeout_ms / 1000)
             )
         )
-        self._adaptor_registry = (
+        registry = (
             adaptor_registry
             if adaptor_registry is not None
             else AdaptorRegistry()
@@ -68,10 +67,11 @@ class Harness(ABC):
                 "capability_session must be a CapabilitySession or None"
             )
         self._capability_session = capability_session
-        self._adaptors: dict[str, Adaptor] = {}
-        self._adaptor_pipelines: dict[str, tuple[Adaptor, ...]] = {}
-        self._adaptor_routes_built = False
-        self._built_tool_groups: object | None = None
+        self._tool_execution_pipeline = ToolExecutionPipeline(
+            task=task,
+            tool_call_gateway=gateway,
+            adaptor_registry=registry,
+        )
         self._install_required_tool_groups()
 
     @property
@@ -84,11 +84,15 @@ class Harness(ABC):
 
     @property
     def tool_call_gateway(self) -> ToolCallGateway:
-        return self._tool_call_gateway
+        return self.tool_execution_pipeline.tool_call_gateway
 
     @property
     def adaptor_registry(self) -> AdaptorRegistry:
-        return self._adaptor_registry
+        return self.tool_execution_pipeline.adaptor_registry
+
+    @property
+    def tool_execution_pipeline(self) -> ToolExecutionPipeline:
+        return self._tool_execution_pipeline
 
     @property
     def capability_session(self) -> CapabilitySession | None:
@@ -98,7 +102,7 @@ class Harness(ABC):
     def adaptors(self) -> Mapping[str, Adaptor]:
         """Return Task-local Adaptor instances built for current Tools."""
 
-        return MappingProxyType(self._adaptors)
+        return self.tool_execution_pipeline.adaptors
 
     @abstractmethod
     def build_system_prompt(self) -> str:
@@ -251,36 +255,7 @@ class Harness(ABC):
         )
 
     def build_openai_tools(self) -> list[dict[str, Any]]:
-        """Atomically build OpenAI definitions and required Adaptors."""
-
-        definitions = OpenAIChatToolProtocol.encode_tools(
-            self.task.tool_groups
-        )
-        adaptor_names = tuple(
-            dict.fromkeys(
-                adaptor_name
-                for group in self.task.tool_groups
-                for tool in group.tools
-                for adaptor_name in tool.adaptor_names
-            )
-        )
-        candidate_adaptors = self.adaptor_registry.create_many(
-            adaptor_names,
-            self.task,
-        )
-        candidate_pipelines = {
-            tool.name: tuple(
-                candidate_adaptors[name] for name in tool.adaptor_names
-            )
-            for group in self.task.tool_groups
-            for tool in group.tools
-        }
-
-        self._adaptors = candidate_adaptors
-        self._adaptor_pipelines = candidate_pipelines
-        self._adaptor_routes_built = True
-        self._built_tool_groups = self.task.tool_groups
-        return definitions
+        return self.tool_execution_pipeline.build_openai_tools()
 
     def parse_completion(
         self,
@@ -288,46 +263,21 @@ class Harness(ABC):
     ) -> ToolProtocolResponse:
         """Parse one OpenAI Chat choice without executing its calls."""
 
-        return OpenAIChatToolProtocol.parse_completion(
-            choice.message,
-            choice.finish_reason,
-        )
+        return self.tool_execution_pipeline.parse_completion(choice)
 
     def resolve_and_adapt_tool_calls(
         self,
         tool_calls: Sequence[ToolCall],
     ) -> list[ResolvedToolCall]:
-        """Resolve calls, then apply each Tool's Adaptor pipeline in order."""
+        return self.tool_execution_pipeline.resolve_and_adapt_tool_calls(
+            tool_calls
+        )
 
-        resolved_calls = self.task.tool_call_resolver.resolve(tool_calls)
-        if not self._adaptor_routes_built:
-            raise AdaptorRouteError(
-                "build_openai_tools() must run before adapting tool calls"
-            )
-        if self._built_tool_groups is not self.task.tool_groups:
-            raise AdaptorRouteError(
-                "build_openai_tools() must rebuild routes after "
-                "Task.update_tool_groups()"
-            )
-        adapted_calls: list[ResolvedToolCall] = []
-
-        for resolved_call in resolved_calls:
-            pipeline = self._adaptor_pipelines.get(resolved_call.tool.name)
-            if pipeline is None:
-                raise AdaptorRouteError(
-                    f"Adaptor pipeline is not built for tool "
-                    f"{resolved_call.tool.name!r}"
-                )
-            adapted_call = resolved_call
-            for adaptor in pipeline:
-                adapted_call = adaptor.adapt(adapted_call)
-                if not isinstance(adapted_call, ResolvedToolCall):
-                    raise TypeError(
-                        "Adaptor.adapt() must return ResolvedToolCall"
-                    )
-            adapted_calls.append(adapted_call)
-
-        return adapted_calls
+    async def execute_tool_calls(
+        self,
+        tool_calls: Sequence[ToolCall],
+    ) -> list[ToolExecutionResult]:
+        return await self.tool_execution_pipeline.execute_calls(tool_calls)
 
     def build_tool_result_messages(
         self,
@@ -335,7 +285,9 @@ class Harness(ABC):
     ) -> list[Message]:
         """Build ordered role=tool messages for the next model round."""
 
-        return OpenAIChatToolProtocol.encode_tool_messages(results)
+        return self.tool_execution_pipeline.build_tool_result_messages(
+            results
+        )
 
     @abstractmethod
     async def run(self) -> object:

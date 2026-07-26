@@ -121,8 +121,7 @@ class ReActHarness(Harness):
                     f"({self.MAX_TOOL_CALLS})"
                 )
 
-            resolved_calls = self.resolve_and_adapt_tool_calls(response.calls)
-            results = await self.tool_call_gateway.execute_many(resolved_calls)
+            results = await self.execute_tool_calls(response.calls)
             self._require_task_state(TaskState.Pushing)
             self.task.messages.extend(
                 self.build_tool_result_messages(results)
