@@ -1,8 +1,13 @@
-"""Idempotent interruption of queued and running Tasks."""
+"""
+负责对排队中或运行中的 Task 执行幂等中断。
+
+controller 从 registry 定位 record，协调 scheduler 取消、Task 状态迁移、事件发布和
+retention；它不解析 HTTP 请求，也不决定 Harness 的内部退出算法。
+"""
 
 from datetime import UTC, datetime
 
-from .model import TaskState
+from .domain import TaskState
 from .retention import TaskRetentionController
 from .runtime import InterruptTaskOutcome, InterruptTaskResult
 from .runtime_registry import TaskRuntimeRegistry

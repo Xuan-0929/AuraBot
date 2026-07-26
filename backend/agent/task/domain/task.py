@@ -1,4 +1,9 @@
-"""Task domain model and stable lifecycle enums."""
+"""
+负责定义 Task runtime context 实体、稳定生命周期枚举及原子状态转换。
+
+Harness 与 runtime controller 通过 Task 保存授权能力、消息历史并执行 CAS 状态迁移；
+本模块依赖 agent 的消息、SkillGroup 与 ToolGroup 抽象，但不负责调度、持久化或传输。
+"""
 
 from collections.abc import Callable, Collection, Sequence
 from contextlib import contextmanager
@@ -6,10 +11,10 @@ from enum import Enum
 from threading import RLock
 from typing import Iterator
 
-from ..llm_client import Message
-from ..skills.skill_group import SkillGroup
-from ..tools.tool_group import ToolGroup
-from ..tools.core.resolver import ToolCallResolver
+from ...llm_client import Message
+from ...skills.skill_group import SkillGroup
+from ...tools.tool_group import ToolGroup
+from ...tools.core.resolver import ToolCallResolver
 
 
 class TaskType(Enum):
@@ -225,6 +230,7 @@ class Task:
             except Exception:
                 # State commits must not be rolled back by diagnostics.
                 continue
+
 
 class TaskInactiveError(RuntimeError):
     """Raised by the generic state guard after a Task reaches a terminal state."""

@@ -1,3 +1,9 @@
+"""
+验证 ReAct Harness 与真实 MCP 子进程的端到端工具调用及失败收敛。
+
+测试覆盖进程、socket 和 Task 状态边界，不负责 Plan 领域行为或 TaskManager 调度。
+"""
+
 from __future__ import annotations
 
 import asyncio
@@ -14,7 +20,7 @@ from mcp.types import Tool as MCPTool
 
 from backend.agent.llm_client import ChatCompletionChoice, LLMClient
 from backend.agent.integration.mcp import MCPClient, MCPClientError
-from backend.agent.task.model import Task, TaskState, TaskType
+from backend.agent.task.domain import Task, TaskState, TaskType
 from backend.agent.task.harness.react import ReActHarness
 from backend.agent.tools.tool import Tool
 from backend.agent.tools.tool_group import ToolGroup

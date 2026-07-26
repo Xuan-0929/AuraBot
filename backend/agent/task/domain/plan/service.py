@@ -1,17 +1,21 @@
-"""Task-local planning runtime and the narrow Harness protocol it exposes."""
+"""
+负责把一个 Plan 聚合绑定到所属 Task，并在 Task active guard 内串行推进其生命周期。
+
+PlanningRuntime 对 Harness 与应用服务提供 create/read/update/complete_step，协调 Task
+状态与 Plan 不变量；本模块不定义 Harness 协议、不调度 Task，也不依赖事件或 transport。
+"""
 
 from __future__ import annotations
 
 from collections.abc import Sequence
 from threading import RLock
-from typing import Protocol, runtime_checkable
 
-from ..model import Task, TaskInactiveError
-from .plan import (
+from ..task import Task, TaskInactiveError
+from .aggregate import Plan
+from .errors import PlanOperationError
+from .models import (
     CompletePlanStepResult,
     CreatePlanResult,
-    Plan,
-    PlanOperationError,
     PlanSnapshot,
     PlanStepDefinition,
     UpdatePlanResult,
@@ -103,19 +107,6 @@ class PlanningRuntime:
             raise PlanOperationError("invalid_task_state") from exc
 
 
-@runtime_checkable
-class PlanningHarness(Protocol):
-    """Specialized capability contract implemented by planning Harnesses."""
-
-    @property
-    def task(self) -> Task:
-        ...
-
-    @property
-    def planning_runtime(self) -> PlanningRuntime:
-        ...
-
-
 def _normalize_definitions(
     steps: Sequence[PlanStepDefinition],
 ) -> tuple[PlanStepDefinition, ...]:
@@ -131,4 +122,4 @@ def _require_current_step_id(plan: PlanSnapshot) -> str:
     return plan.current_step_id
 
 
-__all__ = ["PlanningHarness", "PlanningRuntime"]
+__all__ = ["PlanningRuntime"]

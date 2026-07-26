@@ -1,4 +1,9 @@
-"""Native Plan ToolGroup factory."""
+"""
+负责构造 Backend 原生 Plan ToolGroup，并公开与 MCP 副本一致的 JSON schema。
+
+runtime 按需读取配置后，本模块为每个定义创建独立 Tool 实例并绑定 PlanContextAdaptor；
+它不实现 Plan 聚合、不处理 Task 生命周期，也不执行 MCP 请求。
+"""
 
 from copy import deepcopy
 

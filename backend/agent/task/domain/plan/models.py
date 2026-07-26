@@ -1,4 +1,9 @@
-"""Immutable values exposed by the Plan aggregate."""
+"""
+负责定义 Plan 聚合跨领域与应用边界流动的不可变 value object 和 operation result。
+
+Plan aggregate 构造 frozen、slots dataclass 快照，Harness 与应用服务只读取这些值；
+本模块不执行 Plan 状态转换、不绑定 Task 生命周期，也不定义传输 schema。
+"""
 
 from dataclasses import dataclass, field
 from typing import Literal

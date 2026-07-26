@@ -6,7 +6,7 @@ from concurrent.futures import ThreadPoolExecutor
 
 import backend.agent.task as task_package
 from backend.agent.skills.skill_group import SkillGroup
-from backend.agent.task.model import Task, TaskState, TaskType
+from backend.agent.task.domain import Task, TaskState, TaskType
 from backend.agent.tools.tool import Tool
 from backend.agent.tools.tool_group import ToolGroup
 from backend.agent.tools.core.model import ToolCall

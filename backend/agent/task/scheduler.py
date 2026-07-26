@@ -1,4 +1,9 @@
-"""FIFO execution-slot scheduler for Task runtime records."""
+"""
+负责 Task runtime record 的 FIFO 排队、并发 slot 分配与 runner 收尾。
+
+准入 controller 提交 record 后，本模块创建 CapabilitySession 和 Harness runner，
+并把启动、settled 与队列变化回调给 runtime；它不拥有公开查询 API 或事件序列化。
+"""
 
 from __future__ import annotations
 
@@ -9,7 +14,7 @@ from datetime import UTC, datetime
 from typing import Any
 
 from ..capabilities.lease import CapabilitySession
-from .model import TaskState
+from .domain import TaskState
 from .harness.harness import Harness
 from .runtime import _TaskRuntimeRecord
 

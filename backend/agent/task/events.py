@@ -1,4 +1,9 @@
-"""In-memory Task event stream with snapshot-plus-delta semantics."""
+"""
+负责进程内 Task 事件广播，以及 runtime snapshot 到传输字典的当前投影。
+
+runtime 发布快照和队列变化后，本模块按 revision 扇出至订阅队列；gateway 消费这些
+事件形成 SSE。本模块暂不持久化历史，也不拥有 Task 调度或生命周期状态。
+"""
 
 from __future__ import annotations
 
@@ -9,7 +14,7 @@ from typing import Any
 from uuid import uuid4
 
 from .runtime import TaskSnapshot
-from .model import TaskType
+from .domain import TaskType
 
 _CLOSED = object()
 

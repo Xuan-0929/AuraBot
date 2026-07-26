@@ -1,3 +1,9 @@
+"""
+验证 HarnessFactory 按 TaskType 选择 builder 并注入构建上下文。
+
+测试检查真实 Harness 类型与能力租约关联，不运行完整 agent loop 或 Task scheduler。
+"""
+
 import unittest
 from unittest.mock import patch
 
@@ -11,7 +17,7 @@ from backend.agent.task.harness.react import ReActHarness
 from backend.agent.task.harness.adaptors.registry import (
     AdaptorRegistry,
 )
-from backend.agent.task.model import Task, TaskType
+from backend.agent.task.domain import Task, TaskType
 from backend.agent.capabilities.lease import CapabilitySession
 from backend.agent.skills.manager import SkillGroupManager
 from backend.agent.tools.manager import ToolGroupManager

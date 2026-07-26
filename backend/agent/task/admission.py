@@ -1,10 +1,16 @@
-"""Task name reservation and runtime admission."""
+"""
+负责 Task 名称预留、启动参数归一化与 runtime 准入。
+
+TaskManager 提交 TaskStartSpec 后，本模块创建领域 Task 与 runtime record，再交给
+registry、scheduler 和事件发布器；本模块不运行 Harness，也不负责保留期清理。
+"""
 
 from collections.abc import Callable
 from datetime import UTC, datetime
 
 from .errors import DuplicateTaskNameError, TaskManagerClosedError
-from .model import Task, TaskStateObserver
+from .domain import Task
+from .domain.task import TaskStateObserver
 from .runtime import (
     TaskSnapshot,
     TaskStartSpec,

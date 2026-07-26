@@ -1,9 +1,14 @@
-"""Inject trusted Task routing context into MCP request metadata."""
+"""
+负责把可信 Task 名称注入 Plan MCP 调用的私有 metadata。
+
+工具执行管线传入已解析调用后，本 adaptor 复制 metadata 并写入 aurabot namespace；
+它依赖 Task 领域实体，但不修改模型参数、不调用 MCP，也不管理 Plan 生命周期。
+"""
 
 from __future__ import annotations
 
 from ....tools.core.model import ResolvedToolCall
-from ...model import Task
+from ...domain import Task
 from .adaptor import Adaptor, AdaptorRouteError
 
 

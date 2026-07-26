@@ -1,6 +1,8 @@
+"""验证 adaptor registry 的 factory 路由与 Task-local 实例化，不覆盖工具执行或 runtime 调度。"""
+
 import unittest
 
-from backend.agent.task.model import Task, TaskType
+from backend.agent.task.domain import Task, TaskType
 from backend.agent.task.harness.adaptors.adaptor import (
     Adaptor,
     AdaptorRouteError,

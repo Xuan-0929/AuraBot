@@ -1,3 +1,10 @@
+"""
+验证 Task gateway 的请求校验、应用错误映射与 SSE 编码。
+
+测试通过真实 FastAPI TestClient 和最小 runtime fixture 覆盖传输边界，不负责 Harness
+算法、外部网络或持久化。
+"""
+
 import os
 import asyncio
 import unittest
@@ -15,7 +22,7 @@ os.environ.setdefault(
 
 from backend.app.gateway.task_events import encode_sse_event
 from backend.app.services.errors import ApplicationError
-from backend.agent.task.model import TaskState, TaskType
+from backend.agent.task.domain import TaskState, TaskType
 from backend.agent.task.runtime import TaskListSnapshot, TaskSnapshot
 from backend.config import config as global_config
 from backend.main import create_app

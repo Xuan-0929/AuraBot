@@ -1,4 +1,9 @@
-"""Shared Harness orchestration contract."""
+"""
+负责 Harness 的公共编排契约、状态迁移与工具执行基础流程。
+
+具体策略继承 Harness，使用 Task 领域实体、LLM client、CapabilitySession 和工具管线
+运行 agent loop；本模块不选择策略、不调度 Task，也不实现 Plan 聚合行为。
+"""
 
 import asyncio
 from abc import ABC, abstractmethod
@@ -17,7 +22,7 @@ from ...tools.core.model import (
 )
 from ...tools.core.gateway import ToolCallGateway
 from ...tools.native import create_native_tool_groups
-from ..model import Task, TaskState
+from ..domain import Task, TaskState
 from .adaptors.adaptor import Adaptor
 from .adaptors.registry import AdaptorRegistry
 from .required_tool_groups import inject_required_tool_groups

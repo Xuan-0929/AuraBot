@@ -1,12 +1,17 @@
-"""Immutable Plan aggregate with its operation protocol."""
+"""
+负责 Plan 聚合的不变量校验、不可变快照构造与有序步骤生命周期。
+
+领域 service 和 Harness 通过 create、update、complete_step 推进唯一当前步骤，结果以
+models 中的 frozen value object 返回；本模块不绑定 Task 状态、不调度 Harness 或处理传输。
+"""
 
 from __future__ import annotations
 
 import re
 from typing import Sequence
 
-from .plan_errors import PLAN_ERROR_MESSAGES, PlanOperationError
-from .plan_models import (
+from .errors import PLAN_ERROR_MESSAGES, PlanOperationError
+from .models import (
     CompletePlanStepResult,
     CreatePlanResult,
     PlanSnapshot,

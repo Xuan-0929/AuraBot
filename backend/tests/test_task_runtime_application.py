@@ -1,10 +1,16 @@
+"""
+验证 Task 应用服务、TaskManager 与 HarnessFactory 的组合运行行为。
+
+测试覆盖不同 TaskType、能力组注入和应用查询，不负责 HTTP 序列化或真实外部服务。
+"""
+
 import asyncio
 import unittest
 
 from backend.agent.llm_client import ChatCompletionChoice
 from backend.agent.capabilities.lease import CapabilitySession
 from backend.agent.skills.manager import SkillGroupManager
-from backend.agent.task.model import TaskState, TaskType
+from backend.agent.task.domain import TaskState, TaskType
 from backend.agent.task.manager import TaskManager
 from backend.agent.task.events import TaskEventBroker
 from backend.agent.task.harness.factory import HarnessFactory

@@ -1,7 +1,13 @@
+"""
+验证 Harness-required ToolGroup 的注入、保留名称冲突和 resolver 更新。
+
+测试使用真实 Task 与 ToolGroup，不执行 MCP 调用或 Task runtime 调度。
+"""
+
 import unittest
 from unittest.mock import patch
 
-from backend.agent.task.model import Task, TaskType
+from backend.agent.task.domain import Task, TaskType
 from backend.agent.task.harness.plan_and_solve import (
     PlanAndSolveHarness,
 )

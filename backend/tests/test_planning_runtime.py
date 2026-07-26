@@ -1,8 +1,14 @@
+"""
+验证 PlanningRuntime 与 Task 生命周期的锁定、幂等创建及结构化 Harness 协议。
+
+测试直接驱动领域 service 与应用服务，不覆盖 Harness agent loop 或 HTTP/MCP transport。
+"""
+
 import unittest
 
-from backend.agent.task.model import Task, TaskType
-from backend.agent.task.harness.plan import PlanStepDefinition
-from backend.agent.task.harness.planning import (
+from backend.agent.task.domain import Task, TaskType
+from backend.agent.task.domain.plan import (
+    PlanStepDefinition,
     PlanningHarness,
     PlanningRuntime,
 )

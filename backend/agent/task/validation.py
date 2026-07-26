@@ -1,9 +1,14 @@
-"""Validation for public Task admission specifications."""
+"""
+负责校验 TaskManager 配置与公开 TaskStartSpec 的输入约束。
+
+准入层在创建领域 Task 前调用这些纯校验函数，失败时返回稳定的 Python 异常；
+本模块不创建 runtime record、不调度 Harness，也不执行传输层数据转换。
+"""
 
 import re
 from collections.abc import Callable
 
-from .model import TaskType
+from .domain import TaskType
 from .runtime import TaskStartSpec
 
 _TASK_NAME_CONTROL_PATTERN = re.compile(r"[\x00-\x1f\x7f]")

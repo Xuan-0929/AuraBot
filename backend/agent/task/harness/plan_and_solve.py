@@ -1,4 +1,9 @@
-"""Plan-and-Solve Harness implementation."""
+"""
+负责 Plan-and-Solve Harness 的分步规划、工具执行与最终状态收敛。
+
+策略围绕 Task 领域状态和 task-local PlanningRuntime 循环推进 Plan，并复用 Harness
+工具管线；它不实现 Plan 业务约束、不管理 Task 调度，也不处理 HTTP/MCP transport。
+"""
 
 import asyncio
 from collections.abc import Sequence
@@ -13,20 +18,18 @@ from ...tools.native.plan import (
     PLAN_TOOL_GROUP_NAME,
     PLAN_TOOL_NAMES,
 )
-from ..model import TaskState
-from .harness import Harness, HarnessInterruptedError
-from .plan import (
+from ..domain import TaskState
+from ..domain.plan import (
     CompletePlanStepResult,
     CreatePlanResult,
+    PlanAndSolveFinalResponseError,
     PlanSnapshot,
     PlanStepDefinition,
+    PlanningRuntime,
     UpdatePlanResult,
-)
-from .planning import PlanningRuntime
-from .plan_response import (
-    PlanAndSolveFinalResponseError,
     parse_plan_final_status,
 )
+from .harness import Harness, HarnessInterruptedError
 from .prompts import system_prompt_PlanAndSolve
 from .utils import build_common_prompt_values
 

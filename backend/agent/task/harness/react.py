@@ -1,10 +1,15 @@
-"""ReAct Harness implementation."""
+"""
+负责 ReAct Harness 的有界思考、工具调用与最终响应循环。
+
+策略使用 Task 领域状态和 Harness 公共工具管线推进消息历史，输出完成或等待结果；
+它不选择 Harness 类型、不管理 Task runtime，也不维护 Plan 聚合。
+"""
 
 import asyncio
 
 from ...llm_client import OpenAITool
 from ...tools.core.model import FinalResponse, ToolCallBatch
-from ..model import TaskState
+from ..domain import TaskState
 from .harness import Harness, HarnessInterruptedError
 from .prompts import system_prompt_ReAct
 from .utils import build_common_prompt_values

@@ -1,4 +1,9 @@
-"""Internal native Plan Tool use cases."""
+"""
+负责内部 Plan Tool 的应用用例编排与安全业务错误映射。
+
+loopback route 提交 Task 名称和 Plan value object 后，本服务从 TaskManager 取得
+PlanningHarness 并调用 task-local PlanningRuntime；它不实现 Plan 规则或 HTTP schema。
+"""
 
 from __future__ import annotations
 
@@ -6,9 +11,12 @@ from dataclasses import asdict
 from typing import Any
 
 from ...agent.task.manager import TaskManager
-from ...agent.task.model import TaskType
-from ...agent.task.harness.plan import PlanOperationError, PlanStepDefinition
-from ...agent.task.harness.planning import PlanningHarness
+from ...agent.task.domain import TaskType
+from ...agent.task.domain.plan import (
+    PlanOperationError,
+    PlanStepDefinition,
+    PlanningHarness,
+)
 from .errors import ApplicationError
 
 

@@ -1,6 +1,12 @@
+"""
+验证 Harness 工具执行管线的解析、adaptor 路由、gateway 调用与结果归一化。
+
+测试使用真实 Task/Tool 对象与内存 fake gateway，不运行完整 agent loop 或外部 MCP。
+"""
+
 import unittest
 
-from backend.agent.task.model import Task, TaskType
+from backend.agent.task.domain import Task, TaskType
 from backend.agent.task.harness.adaptors.adaptor import Adaptor
 from backend.agent.task.harness.adaptors.registry import (
     AdaptorRegistry,

@@ -1,4 +1,9 @@
-"""Tool protocol, routing, adaptation and execution for one Task runtime."""
+"""
+负责单个 Task 内工具调用的协议解析、路由、adaptor 处理和结果归一化。
+
+Harness 传入模型 choice 后，本管线使用 Task 授权、ToolCallGateway 与 adaptor registry
+完成调用并生成消息；它不决定 Harness 循环、不管理 Task 状态或 Plan 聚合。
+"""
 
 from __future__ import annotations
 
@@ -15,7 +20,7 @@ from ...tools.core.model import (
     ToolProtocolResponse,
 )
 from ...tools.core.gateway import ToolCallGateway
-from ..model import Task
+from ..domain import Task
 from .adaptors.adaptor import Adaptor, AdaptorRouteError
 from .adaptors.registry import AdaptorRegistry
 

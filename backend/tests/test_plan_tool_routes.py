@@ -1,10 +1,16 @@
+"""
+验证内部 Plan HTTP routes 到应用服务和 PlanningHarness 的端到端映射。
+
+测试使用进程内 FastAPI 与真实领域对象，不监听真实端口或启动外部 MCP server。
+"""
+
 import unittest
 from unittest.mock import patch
 
 from fastapi import FastAPI
 from fastapi.testclient import TestClient
 
-from backend.agent.task.model import Task, TaskState, TaskType
+from backend.agent.task.domain import Task, TaskState, TaskType
 from backend.agent.task.manager import TaskManager
 from backend.agent.task.harness.plan_and_solve import (
     PlanAndSolveHarness,

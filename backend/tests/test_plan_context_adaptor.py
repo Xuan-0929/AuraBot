@@ -1,6 +1,8 @@
+"""验证 PlanContextAdaptor 安全注入 Task 名称且保留调用参数，不执行 MCP 或 Plan 操作。"""
+
 import unittest
 
-from backend.agent.task.model import Task, TaskType
+from backend.agent.task.domain import Task, TaskType
 from backend.agent.task.harness.adaptors.adaptor import AdaptorRouteError
 from backend.agent.task.harness.adaptors.plan_context import (
     PlanContextAdaptor,

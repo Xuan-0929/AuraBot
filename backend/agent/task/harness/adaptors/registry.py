@@ -1,11 +1,16 @@
-"""Create Task-local adaptors from declarative Tool metadata."""
+"""
+负责把 Tool 元数据中的 adaptor 名称解析为 Task-local adaptor 实例。
+
+Harness 的工具执行管线通过不可变 factory registry 创建文件系统与 Plan 上下文 adaptor；
+本模块依赖 Task 领域实体，但不执行工具调用，也不管理 Task runtime。
+"""
 
 from __future__ import annotations
 
 from collections.abc import Callable, Mapping, Sequence
 from types import MappingProxyType
 
-from ...model import Task
+from ...domain import Task
 from .adaptor import Adaptor, AdaptorRouteError
 from .file_system import FileSystemAdaptor
 from .plan_context import PlanContextAdaptor

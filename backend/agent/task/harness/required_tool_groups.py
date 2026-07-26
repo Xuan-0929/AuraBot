@@ -1,10 +1,15 @@
-"""Installation policy for Harness-required ToolGroups."""
+"""
+负责把 Harness 强制依赖的 canonical ToolGroup 安装到 Task 授权快照。
+
+factory 构造策略时调用本模块校验保留名称、去重并原子更新 Task resolver；它不执行
+工具调用、不创建 ToolGroup，也不管理 Task runtime。
+"""
 
 from collections.abc import Sequence
 
 from ...tools.tool import Tool
 from ...tools.tool_group import ToolGroup
-from ..model import Task
+from ..domain import Task
 
 
 def inject_required_tool_groups(

@@ -1,12 +1,18 @@
+"""
+验证 Plan-and-Solve agent loop 的轮次、工具进度、最终响应与中断收敛。
+
+测试以脚本化 LLM 和内存工具驱动真实 Harness，不覆盖外部网络或生产调度并发。
+"""
+
 import asyncio
 import unittest
 from unittest.mock import patch
 
 from backend.agent.llm_client import ChatCompletionChoice
-from backend.agent.task.model import Task, TaskState, TaskType
+from backend.agent.task.domain import Task, TaskState, TaskType
 from backend.agent.task.manager import TaskManager
 from backend.agent.task.runtime import InterruptTaskOutcome
-from backend.agent.task.harness.plan import PlanStepDefinition
+from backend.agent.task.domain.plan import PlanStepDefinition
 from backend.agent.task.harness.plan_and_solve import (
     PlanAndSolveFinalResponseError,
     PlanAndSolveHarness,

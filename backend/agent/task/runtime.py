@@ -1,4 +1,9 @@
-"""Task startup specifications and retained runtime records."""
+"""
+负责定义 Task runtime 启动 DTO、不可变查询快照及内部可变 record。
+
+manager 与 lifecycle controller 围绕 _TaskRuntimeRecord 协作，并通过 snapshot_task
+向应用层暴露副本；本模块不调度 Harness，也不发布事件或处理传输协议。
+"""
 
 from __future__ import annotations
 
@@ -11,7 +16,7 @@ from enum import Enum
 from typing import Any
 
 from ..capabilities.lease import CapabilitySession
-from .model import Task, TaskState, TaskType
+from .domain import Task, TaskState, TaskType
 from .harness.harness import Harness
 
 

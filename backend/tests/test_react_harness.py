@@ -1,3 +1,9 @@
+"""
+验证 ReAct Harness 的提示词、轮次限制、状态迁移和中断结果。
+
+测试使用脚本化 LLM 与真实 Task/工具对象，不覆盖 TaskManager 调度或外部 MCP 进程。
+"""
+
 import asyncio
 import tempfile
 import unittest
@@ -7,7 +13,7 @@ from string import Formatter
 from backend.agent.llm_client import ChatCompletionChoice
 from backend.agent.skills.skill import Skill
 from backend.agent.skills.skill_group import SkillGroup
-from backend.agent.task.model import Task, TaskState, TaskType
+from backend.agent.task.domain import Task, TaskState, TaskType
 from backend.agent.task.harness.harness import Harness
 from backend.agent.task.harness.react import (
     ReActHarness,

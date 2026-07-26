@@ -1,4 +1,9 @@
-"""Plan-and-Solve final-response protocol."""
+"""
+负责解析 Plan-and-Solve 最终响应首行的稳定状态协议。
+
+Harness 将 LLM 文本交给 parser，得到 completed、failed 或 waiting_for_info 状态；
+本模块不生成提示词、不改变 Task/Plan 状态，也不处理 HTTP 或 MCP transport。
+"""
 
 from typing import Literal
 

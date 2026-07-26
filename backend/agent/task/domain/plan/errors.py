@@ -1,4 +1,9 @@
-"""Stable Plan business-error semantics shared across application layers."""
+"""
+负责定义 Plan 操作的稳定错误码、安全消息及领域异常。
+
+Plan aggregate 与 service 以 PlanOperationError 表达可预期业务失败，应用层再映射为
+传输错误；本模块不捕获系统异常、不执行状态变更，也不依赖 Harness 或 transport。
+"""
 
 from types import MappingProxyType
 

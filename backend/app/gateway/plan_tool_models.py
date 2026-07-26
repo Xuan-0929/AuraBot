@@ -1,10 +1,15 @@
-"""Strict internal HTTP models for native Plan tools."""
+"""
+负责内部 Plan Tool HTTP 请求体的严格 Pydantic 校验。
+
+loopback routes 将这些 body 转换为 Plan 领域 value object，再交给应用服务；
+本模块复用领域 step-id 约束，但不执行 Plan 操作、不访问 TaskManager 或 MCP。
+"""
 
 from __future__ import annotations
 
 from pydantic import BaseModel, ConfigDict, Field
 
-from ...agent.tools.native.plan import STEP_ID_PATTERN
+from ...agent.task.domain.plan import STEP_ID_PATTERN
 
 
 class InternalModel(BaseModel):

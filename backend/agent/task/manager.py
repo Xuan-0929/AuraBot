@@ -1,4 +1,9 @@
-"""Application-owned Task admission, observation and retention."""
+"""
+负责应用级 Task 生命周期门面，统一准入、观察、中断、保留和关闭。
+
+调用方通过 TaskManager 访问稳定 DTO；内部组合领域 Task、Harness factory、scheduler、
+registry 与事件组件。本模块不实现 Harness 算法，也不负责 HTTP/SSE 序列化。
+"""
 
 from __future__ import annotations
 
@@ -10,7 +15,7 @@ from ..capabilities.lease import CapabilitySession
 from .admission import TaskAdmissionController
 from .errors import DuplicateTaskNameError, TaskManagerClosedError
 from .interruption import TaskInterruptionController
-from .model import Task, TaskState
+from .domain import Task, TaskState
 from .events import TaskEventBroker, TaskEventSubscription
 from .harness.harness import Harness
 from .harness.factory import HarnessFactory

@@ -1,6 +1,8 @@
+"""验证 Task 上下文到 Harness 提示词字段的确定性格式化，不覆盖 LLM 调用或模板策略。"""
+
 import unittest
 
-from backend.agent.task.model import Task, TaskType
+from backend.agent.task.domain import Task, TaskType
 from backend.agent.task.harness.utils.prompt import (
     build_common_prompt_values,
     format_optional,

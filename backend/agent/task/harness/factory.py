@@ -1,4 +1,9 @@
-"""Builder registry for Task-specific Harness runtimes."""
+"""
+负责按 TaskType 选择 builder，并组装 Task-local Harness。
+
+runtime 提供 Task、LLM、工具 gateway、adaptor registry 与 CapabilitySession 后，factory
+构造对应执行策略；本模块不运行 agent loop，也不拥有 Task 生命周期或 Plan 状态。
+"""
 
 from __future__ import annotations
 
@@ -8,7 +13,7 @@ from dataclasses import dataclass
 from ...llm_client import LLMClient
 from ...capabilities.lease import CapabilitySession
 from ...tools.core.gateway import ToolCallGateway
-from ..model import Task, TaskType
+from ..domain import Task, TaskType
 from .harness import Harness
 from .plan_and_solve import PlanAndSolveHarness
 from .react import ReActHarness

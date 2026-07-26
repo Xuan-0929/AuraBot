@@ -1,10 +1,16 @@
+"""
+验证 Plan-and-Solve Harness 的 Plan 生命周期代理、并发保护与错误语义。
+
+测试直接驱动真实 Task/Plan 领域对象，不覆盖外部 MCP 服务、网络或 scheduler。
+"""
+
 import unittest
 from concurrent.futures import ThreadPoolExecutor
 from unittest.mock import patch
 
-from backend.agent.task.model import Task, TaskState, TaskType
+from backend.agent.task.domain import Task, TaskState, TaskType
 from backend.agent.task.harness.harness import Harness
-from backend.agent.task.harness.plan import (
+from backend.agent.task.domain.plan import (
     PlanOperationError,
     PlanStepDefinition,
 )

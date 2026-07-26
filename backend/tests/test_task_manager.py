@@ -1,3 +1,9 @@
+"""
+验证 TaskManager 的准入、FIFO 调度、中断、保留、事件和关闭语义。
+
+测试使用真实 Task/runtime 组件与内存 Harness，不覆盖 HTTP gateway 或外部 MCP 网络。
+"""
+
 import asyncio
 import unittest
 from dataclasses import FrozenInstanceError
@@ -5,7 +11,7 @@ from dataclasses import FrozenInstanceError
 from backend.agent.capabilities.lease import CapabilitySession
 from backend.agent.skills.skill_group import SkillGroup
 from backend.agent.skills.manager import SkillGroupManager
-from backend.agent.task.model import Task, TaskState, TaskType
+from backend.agent.task.domain import Task, TaskState, TaskType
 from backend.agent.task.manager import (
     DuplicateTaskNameError,
     TaskManager,

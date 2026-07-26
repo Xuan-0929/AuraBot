@@ -1,4 +1,9 @@
-"""Loopback-only HTTP transport for AuraBot native Plan tools."""
+"""
+负责 AuraBot 原生 Plan Tool 的 loopback-only HTTP 路由。
+
+route 将严格请求模型转换为 PlanStepDefinition 并委托应用服务，返回领域结果字典；
+本模块不实现 Plan 生命周期、不查找 Task runtime，也不暴露公开用户 API。
+"""
 
 from __future__ import annotations
 
@@ -6,7 +11,7 @@ from typing import Annotated
 
 from fastapi import APIRouter, Depends
 
-from ...agent.task.harness.plan import PlanStepDefinition
+from ...agent.task.domain.plan import PlanStepDefinition
 from ..services.plan_tool_service import PlanToolApplicationService
 from .dependencies import get_plan_tool_service
 from .plan_tool_models import (

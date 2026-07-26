@@ -1,4 +1,9 @@
-"""Strict public Task HTTP request and response models."""
+"""
+负责 Task 公共 HTTP 请求校验与 runtime snapshot 响应模型。
+
+gateway route 使用这些 Pydantic 模型在传输边界转换 TaskType 和不可变 DTO；本模块
+依赖稳定 Task domain/runtime 类型，但不执行业务操作、调度或事件发布。
+"""
 
 from __future__ import annotations
 
@@ -8,7 +13,7 @@ from typing import Any, Literal
 
 from pydantic import BaseModel, ConfigDict, Field, field_validator
 
-from ...agent.task.model import TaskType
+from ...agent.task.domain import TaskType
 from ...agent.task.runtime import (
     TaskListSnapshot,
     TaskSnapshot,

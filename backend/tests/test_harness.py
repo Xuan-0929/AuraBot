@@ -1,8 +1,14 @@
+"""
+验证 Harness 基类的状态迁移、消息保留、工具协议与中断语义。
+
+测试使用真实 Task 和内存 fake 依赖驱动公共编排，不覆盖具体策略选择或 TaskManager 调度。
+"""
+
 import json
 import unittest
 
 from backend.agent.llm_client import ChatCompletionChoice
-from backend.agent.task.model import Task, TaskState, TaskType
+from backend.agent.task.domain import Task, TaskState, TaskType
 from backend.agent.task.harness.harness import (
     Harness,
     HarnessInterruptedError,

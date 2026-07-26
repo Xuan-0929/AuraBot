@@ -1,11 +1,16 @@
-"""Deterministic values for Harness prompt formatting."""
+"""
+负责把 Task 的工作目录、约束、SkillGroup 与 ToolGroup 格式化为稳定提示词字段。
+
+ReAct 和 Plan-and-Solve Harness 在渲染模板前读取这些纯函数输出；本模块只消费
+Task 领域只读视图，不修改授权、不执行工具调用，也不管理 runtime。
+"""
 
 from __future__ import annotations
 
 from collections.abc import Mapping
 
 from ....tools.tool_group import ToolGroup
-from ...model import Task
+from ...domain import Task
 
 
 _COMMON_PROMPT_FIELDS = frozenset(

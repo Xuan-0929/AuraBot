@@ -4,8 +4,8 @@
 import unittest
 from dataclasses import FrozenInstanceError
 
-from backend.agent.task.harness import plan as plan_module
-from backend.agent.task.harness.plan import (
+from backend.agent.task.domain import plan as plan_module
+from backend.agent.task.domain.plan import (
     Plan,
     PlanOperationError,
     PlanStep,
@@ -35,14 +35,19 @@ class PlanDomainTests(unittest.TestCase):
                 "MIN_PLAN_STEPS",
                 "PLAN_ERROR_MESSAGES",
                 "Plan",
+                "PlanAndSolveFinalResponseError",
+                "PlanFinalStatus",
                 "PlanOperationError",
                 "PlanSnapshot",
                 "PlanStep",
                 "PlanStepDefinition",
                 "PlanStepStatus",
+                "PlanningHarness",
+                "PlanningRuntime",
                 "STEP_ID_PATTERN",
                 "UpdatePlanResult",
                 "build_snapshot",
+                "parse_plan_final_status",
                 "validate_plan_definition",
             },
         )

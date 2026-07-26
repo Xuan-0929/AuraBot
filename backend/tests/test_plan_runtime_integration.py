@@ -13,7 +13,7 @@ from jsonschema import validate
 from mcp.types import CallToolResult, TextContent
 
 from backend.agent.llm_client import ChatCompletionChoice
-from backend.agent.task.model import Task, TaskState, TaskType
+from backend.agent.task.domain import Task, TaskState, TaskType
 from backend.agent.task.manager import TaskManager
 from backend.agent.task.harness.factory import HarnessFactory
 from backend.agent.tools.core.model import ToolCall
