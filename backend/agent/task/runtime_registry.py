@@ -1,0 +1,55 @@
+"""Identity registry for queued, running and retained Task runtimes."""
+
+from __future__ import annotations
+
+from .runtime import TaskRuntimeRecord
+
+
+class TaskRuntimeRegistry:
+    def __init__(self):
+        self._by_id: dict[int, TaskRuntimeRecord] = {}
+        self._by_name: dict[str, TaskRuntimeRecord] = {}
+        self._next_id = 1
+
+    def allocate_id(self) -> int:
+        task_id = self._next_id
+        self._next_id += 1
+        return task_id
+
+    def add(self, record: TaskRuntimeRecord) -> None:
+        task = record.task
+        if task.task_id in self._by_id:
+            raise ValueError(f"Task ID is already registered: {task.task_id}")
+        if task.task_title in self._by_name:
+            raise ValueError(
+                f"Task name is already registered: {task.task_title!r}"
+            )
+        self._by_id[task.task_id] = record
+        self._by_name[task.task_title] = record
+        self._next_id = max(self._next_id, task.task_id + 1)
+
+    def get(self, task_name: str) -> TaskRuntimeRecord | None:
+        return self._by_name.get(task_name)
+
+    def list(self) -> tuple[TaskRuntimeRecord, ...]:
+        return tuple(self._by_id.values())
+
+    def owns(self, record: TaskRuntimeRecord) -> bool:
+        task = record.task
+        return (
+            self._by_id.get(task.task_id) is record
+            and self._by_name.get(task.task_title) is record
+        )
+
+    def remove(self, record: TaskRuntimeRecord) -> bool:
+        if not self.owns(record):
+            return False
+        self._by_id.pop(record.task.task_id, None)
+        self._by_name.pop(record.task.task_title, None)
+        return True
+
+    def names(self) -> tuple[str, ...]:
+        return tuple(self._by_name)
+
+
+__all__ = ["TaskRuntimeRegistry"]

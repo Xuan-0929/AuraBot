@@ -201,6 +201,17 @@ class TaskManagerTests(unittest.IsolatedAsyncioTestCase):
         self.assertIsNot(other, self.manager)
         await other.aclose(grace_seconds=0)
 
+    async def test_mutations_are_confined_to_the_bound_event_loop(self):
+        async def mutate_from_foreign_loop():
+            self.manager.start_task(spec("foreign-loop"))
+
+        with self.assertRaisesRegex(RuntimeError, "another event loop"):
+            await asyncio.to_thread(
+                lambda: asyncio.run(mutate_from_foreign_loop())
+            )
+
+        self.assertIsNone(self.manager.get_record("foreign-loop"))
+
     async def test_fifo_admission_constructs_capabilities_and_harness_only_on_slot(self):
         first = self.manager.start_task(spec("first", tool_groups=("files",)))
         second = self.manager.start_task(spec("second", tool_groups=("shell",)))

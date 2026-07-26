@@ -4,11 +4,9 @@ from __future__ import annotations
 
 import asyncio
 import re
-from collections import deque
 from collections.abc import Callable, Iterator
 from contextlib import contextmanager
 from datetime import UTC, datetime
-from threading import RLock
 from typing import Any
 
 from ..capabilities.lease import CapabilitySession
@@ -24,20 +22,10 @@ from .events import TaskEventBroker, TaskEventSubscription
 from .harness.Harness import Harness
 from .harness.HarnessFactory import HarnessFactory
 from .runtime import TaskRuntimeRecord, TaskStartSpec
+from .runtime_registry import TaskRuntimeRegistry
+from .scheduler import TERMINAL_STATES, TaskScheduler
 
 
-TERMINAL_STATES = {
-    TaskState.Completed,
-    TaskState.Failed,
-    TaskState.Interrupted,
-}
-ACTIVE_STATES = {
-    TaskState.Initializing,
-    TaskState.Thinking,
-    TaskState.Pushing,
-    TaskState.Planning,
-    TaskState.Concluding,
-}
 _TASK_NAME_CONTROL_PATTERN = re.compile(r"[\x00-\x1f\x7f]")
 
 
@@ -103,24 +91,25 @@ class TaskManager:
         ):
             raise TypeError("capability_session_factory must be callable")
 
-        self._harness_factory = harness_factory
-        self._capability_session_factory = capability_session_factory
         self._event_broker = event_broker or TaskEventBroker()
-        self._max_running = max_running
         self._default_timeout_ms = default_timeout_ms
         self._max_timeout_ms = max_timeout_ms
         self._retention_seconds = float(retention_seconds)
 
-        self._records_by_id: dict[int, TaskRuntimeRecord] = {}
-        self._records_by_name: dict[str, TaskRuntimeRecord] = {}
-        self._ready: deque[TaskRuntimeRecord] = deque()
-        self._running_names: set[str] = set()
+        self._registry = TaskRuntimeRegistry()
+        self._scheduler = TaskScheduler(
+            max_running=max_running,
+            harness_factory=harness_factory,
+            capability_session_factory=capability_session_factory,
+            is_retained=self._registry.owns,
+            on_started=self._on_runtime_started,
+            on_settled=self._on_runtime_settled,
+            on_queue_changed=self._publish_queue,
+        )
         self._cleanup_handles: dict[str, asyncio.TimerHandle] = {}
-        self._next_task_id = 1
         self._main_loop: asyncio.AbstractEventLoop | None = None
         self._closing = False
         self._close_task: asyncio.Task[None] | None = None
-        self._lock = RLock()
 
     @property
     def retention_seconds(self) -> float:
@@ -132,22 +121,19 @@ class TaskManager:
     def running_count(self) -> int:
         """返回当前占用执行 slot 的 Harness runner 数量。"""
 
-        with self._lock:
-            return len(self._running_names)
+        return self._scheduler.running_count
 
     @property
     def queued_count(self) -> int:
         """返回当前 FIFO ready queue 中等待执行的 Task 数量。"""
 
-        with self._lock:
-            return len(self._ready)
+        return self._scheduler.queued_count
 
     @property
     def closing(self) -> bool:
         """返回 Manager 是否已经停止接收新 Task 并进入关闭流程。"""
 
-        with self._lock:
-            return self._closing
+        return self._closing
 
     def bind_event_loop(self, loop: asyncio.AbstractEventLoop) -> None:
         """绑定创建 runner、retention timer 和 shutdown task 的主事件循环。
@@ -158,8 +144,22 @@ class TaskManager:
 
         if not isinstance(loop, asyncio.AbstractEventLoop):
             raise TypeError("loop must be an asyncio event loop")
-        with self._lock:
-            self._main_loop = loop
+        self._main_loop = loop
+
+    def _require_main_loop(self) -> asyncio.AbstractEventLoop:
+        try:
+            running_loop = asyncio.get_running_loop()
+        except RuntimeError as exc:
+            raise RuntimeError(
+                "TaskManager mutations require its asyncio event loop"
+            ) from exc
+        if self._main_loop is None:
+            self._main_loop = running_loop
+        elif self._main_loop is not running_loop:
+            raise RuntimeError(
+                "TaskManager cannot be used from another event loop"
+            )
+        return running_loop
 
     def start_task(self, spec: TaskStartSpec) -> TaskRuntimeRecord:
         """接收一份启动规格并返回新建的 retained runtime record。
@@ -190,41 +190,38 @@ class TaskManager:
             raise ValueError(
                 f"timeout_ms must be between 1 and {self._max_timeout_ms}"
             )
-        with self._lock:
-            if self._closing:
-                raise TaskManagerClosedError("TaskManager is closing")
-            if spec.task_name in self._records_by_name:
-                raise DuplicateTaskNameError(
-                    f"Task name is already reserved: {spec.task_name!r}"
-                )
-            task_id = self._next_task_id
-            self._next_task_id += 1
-            task = Task(
-                task_id=task_id,
-                task_title=spec.task_name,
-                parent_session_id=spec.parent_session_id,
-                task_type=spec.task_type,
-                task_prompt=spec.task_prompt,
-                workdir=spec.workdir,
-                constraints=spec.constraints,
-                timeout_ms=timeout_ms,
+        self._require_main_loop()
+        if self._closing:
+            raise TaskManagerClosedError("TaskManager is closing")
+        if self._registry.get(spec.task_name) is not None:
+            raise DuplicateTaskNameError(
+                f"Task name is already reserved: {spec.task_name!r}"
             )
-            record = TaskRuntimeRecord(
-                task=task,
-                start_spec=spec,
-                created_at=_utc_now(),
-            )
-            record.unsubscribe_state = task.add_state_observer(
-                self._on_state_change
-            )
-            self._records_by_id[task_id] = record
-            self._records_by_name[spec.task_name] = record
-            self._ready.append(record)
-            self._refresh_queue_positions_locked()
-            self._publish_locked("task.created", record)
-            self._publish_queue_locked()
-            self._drain_ready_locked()
-            return record
+        task_id = self._registry.allocate_id()
+        task = Task(
+            task_id=task_id,
+            task_title=spec.task_name,
+            parent_session_id=spec.parent_session_id,
+            task_type=spec.task_type,
+            task_prompt=spec.task_prompt,
+            workdir=spec.workdir,
+            constraints=spec.constraints,
+            timeout_ms=timeout_ms,
+        )
+        record = TaskRuntimeRecord(
+            task=task,
+            start_spec=spec,
+            created_at=_utc_now(),
+        )
+        record.unsubscribe_state = task.add_state_observer(
+            self._on_state_change
+        )
+        self._registry.add(record)
+        self._scheduler.enqueue(record)
+        self._publish("task.created", record)
+        self._publish_queue()
+        self._scheduler.drain()
+        return record
 
     def get_record(self, task_name: str) -> TaskRuntimeRecord | None:
         """按公开 ``task_name`` 查找当前 queued/live/retained record。
@@ -233,8 +230,7 @@ class TaskManager:
         适合 Application Service 查询，不应由调用方直接修改。
         """
 
-        with self._lock:
-            return self._records_by_name.get(task_name)
+        return self._registry.get(task_name)
 
     def list_records(self) -> tuple[TaskRuntimeRecord, ...]:
         """返回当前全部 queued/live/retained record 的不可变容器快照。
@@ -243,8 +239,7 @@ class TaskManager:
         更新。需要稳定的 HTTP/SSE 表示时应使用 :meth:`record_view`。
         """
 
-        with self._lock:
-            return tuple(self._records_by_id.values())
+        return self._registry.list()
 
     def record_view(self, record: TaskRuntimeRecord) -> dict[str, Any]:
         """把仍由本 Manager 注册的 record 编码为安全的对外字典。
@@ -253,11 +248,9 @@ class TaskManager:
         ``LookupError``。响应不会暴露 Harness、runner、capability lease 或异常正文。
         """
 
-        with self._lock:
-            current = self._records_by_name.get(record.task.task_title)
-            if current is not record:
-                raise LookupError("Task runtime is no longer registered")
-            return self._record_view_locked(record)
+        if not self._registry.owns(record):
+            raise LookupError("Task runtime is no longer registered")
+        return self._record_view(record)
 
     def get_runtime(self, task_name: str) -> Harness | None:
         """返回指定 Task 已构造的 Harness runtime，未找到或尚在排队则返回 ``None``。
@@ -276,12 +269,11 @@ class TaskManager:
         仍会返回，直到 record 被 clear、timer 清理或 backend shutdown。
         """
 
-        with self._lock:
-            return tuple(
-                record.harness
-                for record in self._records_by_id.values()
-                if record.harness is not None
-            )
+        return tuple(
+            record.harness
+            for record in self._registry.list()
+            if record.harness is not None
+        )
 
     def subscribe_events(self) -> TaskEventSubscription:
         """创建 Task 状态事件订阅，并把当前原子快照作为第一条事件排队。
@@ -290,15 +282,14 @@ class TaskManager:
         subscription；慢订阅者队列溢出时 broker 会主动结束该订阅。
         """
 
-        with self._lock:
-            return self._event_broker.subscribe(
-                tasks=[
-                    self._record_view_locked(record)
-                    for record in self._records_by_id.values()
-                ],
-                running_count=len(self._running_names),
-                queued_count=len(self._ready),
-            )
+        return self._event_broker.subscribe(
+            tasks=[
+                self._record_view(record)
+                for record in self._registry.list()
+            ],
+            running_count=self.running_count,
+            queued_count=self.queued_count,
+        )
 
     def peek_task(self, task_name: str) -> PeekTaskResult:
         """读取 Task 的轻量诊断信息，不修改状态也不延长保留时间。
@@ -332,31 +323,22 @@ class TaskManager:
         runner。已终态和不存在的 Task 通过 outcome 表达，不抛业务异常。
         """
 
-        with self._lock:
-            record = self._records_by_name.get(task_name)
-            if record is None:
-                return InterruptTaskResult(
-                    task_name=task_name,
-                    outcome=InterruptTaskOutcome.NotFound,
-                    task_id=None,
-                    previous_state=None,
-                    state=None,
-                )
-            task = record.task
-            was_queued = record in self._ready
-            if was_queued:
-                self._ready.remove(record)
-                record.queue_position = None
-                self._refresh_queue_positions_locked()
+        self._require_main_loop()
+        record = self._registry.get(task_name)
+        if record is None:
+            return InterruptTaskResult(
+                task_name=task_name,
+                outcome=InterruptTaskOutcome.NotFound,
+                task_id=None,
+                previous_state=None,
+                state=None,
+            )
+        task = record.task
+        was_queued = self._scheduler.remove_queued(record)
 
         previous_state, current_state = task.interrupt()
-        runner = record.runner
-        if (
-            current_state is TaskState.Interrupted
-            and runner is not None
-            and runner is not asyncio.current_task()
-        ):
-            runner.cancel()
+        if current_state is TaskState.Interrupted:
+            self._scheduler.cancel(record)
         if previous_state is TaskState.Interrupted:
             outcome = InterruptTaskOutcome.AlreadyInterrupted
         elif current_state is TaskState.Interrupted:
@@ -364,13 +346,12 @@ class TaskManager:
         else:
             outcome = InterruptTaskOutcome.AlreadySettled
 
-        with self._lock:
-            if was_queued and current_state is TaskState.Interrupted:
-                record.settled_at = _utc_now()
-                self._publish_locked("task.settled", record)
-                self._publish_queue_locked()
-                self._schedule_cleanup_locked(record)
-                self._drain_ready_locked()
+        if was_queued and current_state is TaskState.Interrupted:
+            record.settled_at = _utc_now()
+            self._publish("task.settled", record)
+            self._publish_queue()
+            self._schedule_cleanup(record)
+            self._scheduler.drain()
         return InterruptTaskResult(
             task_name=task_name,
             outcome=outcome,
@@ -386,16 +367,16 @@ class TaskManager:
         Task 不存在、仍在运行或尚未进入终态时返回 ``False``。
         """
 
-        with self._lock:
-            record = self._records_by_name.get(task_name)
-            if (
-                record is None
-                or record.task.state not in TERMINAL_STATES
-                or record.runner is not None
-            ):
-                return False
-            self._remove_record_locked(record, publish=True)
-            return True
+        self._require_main_loop()
+        record = self._registry.get(task_name)
+        if (
+            record is None
+            or record.task.state not in TERMINAL_STATES
+            or record.runner is not None
+        ):
+            return False
+        self._remove_record(record, publish=True)
+        return True
 
     def register_runtime(self, harness: Harness) -> Harness:
         """注册一个已经由调用方构造的 Harness，供低层测试和兼容路径使用。
@@ -409,34 +390,30 @@ class TaskManager:
             raise TypeError("runtime must be a Harness")
         task = harness.task
         _validate_task_name(task.task_title)
-        with self._lock:
-            if task.task_id in self._records_by_id:
-                raise ValueError(f"Task ID is already registered: {task.task_id}")
-            if task.task_title in self._records_by_name:
-                raise DuplicateTaskNameError(
-                    f"Task name is already registered: {task.task_title!r}"
-                )
-            spec = TaskStartSpec(
-                task_name=task.task_title,
-                parent_session_id=task.parent_session_id,
-                task_type=task.task_type,
-                task_prompt=task.task_prompt,
-                workdir=task.workdir,
-                constraints=task.constraints,
-                timeout_ms=task.timeout_ms,
-            )
-            record = TaskRuntimeRecord(
-                task=task,
-                start_spec=spec,
-                harness=harness,
-                created_at=_utc_now(),
-            )
-            record.unsubscribe_state = task.add_state_observer(
-                self._on_state_change
-            )
-            self._records_by_id[task.task_id] = record
-            self._records_by_name[task.task_title] = record
-            self._next_task_id = max(self._next_task_id, task.task_id + 1)
+        spec = TaskStartSpec(
+            task_name=task.task_title,
+            parent_session_id=task.parent_session_id,
+            task_type=task.task_type,
+            task_prompt=task.task_prompt,
+            workdir=task.workdir,
+            constraints=task.constraints,
+            timeout_ms=task.timeout_ms,
+        )
+        record = TaskRuntimeRecord(
+            task=task,
+            start_spec=spec,
+            harness=harness,
+            created_at=_utc_now(),
+        )
+        record.unsubscribe_state = task.add_state_observer(
+            self._on_state_change
+        )
+        try:
+            self._registry.add(record)
+        except ValueError as exc:
+            if self._registry.get(task.task_title) is not None:
+                raise DuplicateTaskNameError(str(exc)) from exc
+            raise
         return harness
 
     @contextmanager
@@ -452,26 +429,20 @@ class TaskManager:
         try:
             yield harness
         except BaseException:
-            with self._lock:
-                record = self._records_by_name.get(
-                    harness.task.task_title
-                )
-                if record is not None:
-                    if record.task.state in TERMINAL_STATES:
-                        self._schedule_cleanup_locked(record)
-                    else:
-                        self._remove_record_locked(record, publish=False)
+            record = self._registry.get(harness.task.task_title)
+            if record is not None:
+                if record.task.state in TERMINAL_STATES:
+                    self._schedule_cleanup(record)
+                else:
+                    self._remove_record(record, publish=False)
             raise
         else:
-            with self._lock:
-                record = self._records_by_name.get(
-                    harness.task.task_title
-                )
-                if record is not None:
-                    if record.task.state in TERMINAL_STATES:
-                        self._schedule_cleanup_locked(record)
-                    else:
-                        self._remove_record_locked(record, publish=False)
+            record = self._registry.get(harness.task.task_title)
+            if record is not None:
+                if record.task.state in TERMINAL_STATES:
+                    self._schedule_cleanup(record)
+                else:
+                    self._remove_record(record, publish=False)
 
     async def aclose(self, *, grace_seconds: float = 5.0) -> None:
         """异步停止准入并完整关闭所有 Task runtime。
@@ -484,62 +455,45 @@ class TaskManager:
 
         if grace_seconds < 0:
             raise ValueError("grace_seconds must be non-negative")
-        with self._lock:
-            close_task = self._close_task
-            if close_task is None:
-                loop = asyncio.get_running_loop()
-                close_task = loop.create_task(
-                    self._aclose_impl(grace_seconds),
-                    name="aurabot-task-manager-close",
-                )
-                self._close_task = close_task
+        self._require_main_loop()
+        close_task = self._close_task
+        if close_task is None:
+            loop = asyncio.get_running_loop()
+            close_task = loop.create_task(
+                self._aclose_impl(grace_seconds),
+                name="aurabot-task-manager-close",
+            )
+            self._close_task = close_task
         await asyncio.shield(close_task)
 
     async def _aclose_impl(self, grace_seconds: float) -> None:
-        with self._lock:
-            self._closing = True
-            try:
-                self._event_broker.publish(
-                    "runtime.closing",
-                    {},
-                    running_count=len(self._running_names),
-                    queued_count=len(self._ready),
-                )
-            except RuntimeError:
-                pass
-            names = tuple(self._records_by_name)
+        self._closing = True
+        try:
+            self._event_broker.publish(
+                "runtime.closing",
+                {},
+                running_count=self.running_count,
+                queued_count=self.queued_count,
+            )
+        except RuntimeError:
+            pass
+        names = self._registry.names()
         cleanup_error: BaseException | None = None
         try:
             for name in names:
                 self.interrupt_task(name)
-            with self._lock:
-                runners = tuple(
-                    record.runner
-                    for record in self._records_by_id.values()
-                    if record.runner is not None
-                )
-            if runners:
-                _, pending = await asyncio.wait(
-                    runners,
-                    timeout=grace_seconds,
-                )
-                for runner in pending:
-                    runner.cancel()
-                if pending:
-                    await asyncio.gather(*pending, return_exceptions=True)
+            await self._scheduler.wait_for_runners(grace_seconds)
         except BaseException as exc:
             cleanup_error = exc
         finally:
-            with self._lock:
-                for record in tuple(self._records_by_id.values()):
-                    try:
-                        self._remove_record_locked(record, publish=False)
-                    except BaseException as exc:
-                        if cleanup_error is None:
-                            cleanup_error = exc
-                self._ready.clear()
-                self._running_names.clear()
-                self._main_loop = None
+            for record in self._registry.list():
+                try:
+                    self._remove_record(record, publish=False)
+                except BaseException as exc:
+                    if cleanup_error is None:
+                        cleanup_error = exc
+            self._scheduler.clear()
+            self._main_loop = None
             self._event_broker.close()
         if cleanup_error is not None:
             raise cleanup_error
@@ -551,115 +505,20 @@ class TaskManager:
         :meth:`aclose`。FastAPI/BackendRuntime shutdown 必须始终调用异步关闭接口。
         """
 
-        with self._lock:
-            self._closing = True
-            for record in tuple(self._records_by_id.values()):
-                if record.runner is not None:
-                    record.runner.cancel()
-                self._remove_record_locked(record, publish=False)
-            self._ready.clear()
-            self._running_names.clear()
-            self._main_loop = None
+        self._closing = True
+        for record in self._registry.list():
+            self._scheduler.cancel(record)
+            self._remove_record(record, publish=False)
+        self._scheduler.clear()
+        self._main_loop = None
         self._event_broker.close()
 
-    def _drain_ready_locked(self) -> None:
-        if self._closing or self._harness_factory is None:
-            return
-        while self._ready and len(self._running_names) < self._max_running:
-            record = self._ready.popleft()
-            record.queue_position = None
-            if record.task.state is not TaskState.Initializing:
-                continue
-            self._activate_locked(record)
-        self._refresh_queue_positions_locked()
+    def _on_runtime_started(self, record: TaskRuntimeRecord) -> None:
+        self._publish("task.started", record)
 
-    def _activate_locked(self, record: TaskRuntimeRecord) -> None:
-        session: CapabilitySession | None = None
-        try:
-            if self._capability_session_factory is None:
-                raise RuntimeError(
-                    "TaskManager requires a capability session factory"
-                )
-            session = self._capability_session_factory()
-            if not isinstance(session, CapabilitySession):
-                raise TypeError(
-                    "capability session factory must return CapabilitySession"
-                )
-            record.capabilities = session
-            tool_groups = session.acquire_tool_groups(
-                record.start_spec.tool_group_names
-            )
-            skill_groups = session.acquire_skill_groups(
-                record.start_spec.skill_group_names
-            )
-            record.task.update_tool_groups(tool_groups)
-            record.task.update_skill_groups(skill_groups)
-            harness = self._harness_factory.create(
-                record.task,
-                capability_session=session,
-            )
-        except Exception:
-            if session is not None:
-                try:
-                    session.close()
-                except BaseException:
-                    # Initialization already failed. Cleanup is best-effort:
-                    # the Task still settles instead of reserving its name.
-                    pass
-            record.capabilities = None
-            record.error = {
-                "code": "task_initialization_failed",
-                "message": "Task capabilities could not be initialized.",
-            }
-            record.task.compare_and_set_state(
-                TaskState.Initializing,
-                TaskState.Failed,
-            )
-            record.settled_at = _utc_now()
-            self._publish_locked("task.settled", record)
-            self._schedule_cleanup_locked(record)
-            return
-
-        record.harness = harness
-        record.started_at = _utc_now()
-        self._running_names.add(record.task.task_title)
-        loop = self._main_loop
-        if loop is None or loop.is_closed():
-            loop = asyncio.get_running_loop()
-            self._main_loop = loop
-        record.runner = loop.create_task(
-            self._execute_record(record),
-            name=f"aurabot-task:{record.task.task_title}",
-        )
-        self._publish_locked("task.started", record)
-
-    async def _execute_record(self, record: TaskRuntimeRecord) -> None:
-        try:
-            if record.harness is None:
-                raise RuntimeError("Task runtime has no Harness")
-            async with asyncio.timeout(record.task.timeout_ms / 1000):
-                record.result = await record.harness.run()
-        except asyncio.CancelledError:
-            if record.task.state not in TERMINAL_STATES:
-                record.task.interrupt()
-        except Exception:
-            record.task.compare_and_set_state(
-                ACTIVE_STATES,
-                TaskState.Failed,
-            )
-            record.error = {
-                "code": "task_execution_failed",
-                "message": "Task execution failed.",
-            }
-        finally:
-            with self._lock:
-                record.runner = None
-                record.settled_at = record.settled_at or _utc_now()
-                self._running_names.discard(record.task.task_title)
-                self._publish_locked("task.settled", record)
-                self._schedule_cleanup_locked(record)
-                self._drain_ready_locked()
-                self._publish_queue_locked()
+    def _on_runtime_settled(self, record: TaskRuntimeRecord) -> None:
+        self._publish("task.settled", record)
+        self._schedule_cleanup(record)
 
     def _on_state_change(
         self,
@@ -667,20 +526,19 @@ class TaskManager:
         previous_state: TaskState,
         current_state: TaskState,
     ) -> None:
-        with self._lock:
-            record = self._records_by_name.get(task.task_title)
-            if record is None or record.task is not task:
-                return
-            self._publish_locked(
-                "task.state_changed",
-                record,
-                extra={
-                    "previous_state": previous_state.value.lower(),
-                    "state": current_state.value.lower(),
-                },
-            )
+        record = self._registry.get(task.task_title)
+        if record is None or record.task is not task:
+            return
+        self._publish(
+            "task.state_changed",
+            record,
+            extra={
+                "previous_state": previous_state.value.lower(),
+                "state": current_state.value.lower(),
+            },
+        )
 
-    def _schedule_cleanup_locked(self, record: TaskRuntimeRecord) -> None:
+    def _schedule_cleanup(self, record: TaskRuntimeRecord) -> None:
         if record.task.state not in TERMINAL_STATES:
             return
         loop = self._main_loop
@@ -702,30 +560,24 @@ class TaskManager:
         task_name: str,
         expected: TaskRuntimeRecord,
     ) -> None:
-        with self._lock:
-            record = self._records_by_name.get(task_name)
-            if (
-                record is expected
-                and record.task.state in TERMINAL_STATES
-                and record.runner is None
-            ):
-                self._remove_record_locked(record, publish=True)
+        record = self._registry.get(task_name)
+        if (
+            record is expected
+            and record.task.state in TERMINAL_STATES
+            and record.runner is None
+        ):
+            self._remove_record(record, publish=True)
 
-    def _remove_record_locked(
+    def _remove_record(
         self,
         record: TaskRuntimeRecord,
         *,
         publish: bool,
     ) -> None:
         name = record.task.task_title
-        if self._records_by_name.get(name) is not record:
+        if not self._registry.remove(record):
             return
-        if record in self._ready:
-            self._ready.remove(record)
-        self._records_by_name.pop(name, None)
-        if self._records_by_id.get(record.task.task_id) is record:
-            self._records_by_id.pop(record.task.task_id, None)
-        self._running_names.discard(name)
+        self._scheduler.remove(record)
         handle = self._cleanup_handles.pop(name, None)
         if handle is not None:
             handle.cancel()
@@ -735,23 +587,18 @@ class TaskManager:
         if record.capabilities is not None:
             record.capabilities.close()
             record.capabilities = None
-        self._refresh_queue_positions_locked()
         if publish and not self._closing:
-            self._publish_locked(
+            self._publish(
                 "task.removed",
                 None,
                 extra={"task_name": name, "task_id": record.task.task_id},
             )
-            self._publish_queue_locked()
+            self._publish_queue()
 
-    def _refresh_queue_positions_locked(self) -> None:
-        for position, record in enumerate(self._ready, start=1):
-            record.queue_position = position
-
-    def _publish_queue_locked(self) -> None:
+    def _publish_queue(self) -> None:
         if self._closing:
             return
-        self._publish_locked(
+        self._publish(
             "task.queue_changed",
             None,
             extra={
@@ -760,12 +607,12 @@ class TaskManager:
                         "task_name": record.task.task_title,
                         "queue_position": record.queue_position,
                     }
-                    for record in self._ready
+                    for record in self._scheduler.ready
                 ]
             },
         )
 
-    def _publish_locked(
+    def _publish(
         self,
         event: str,
         record: TaskRuntimeRecord | None,
@@ -776,19 +623,19 @@ class TaskManager:
             return
         payload = dict(extra or {})
         if record is not None:
-            payload["task"] = self._record_view_locked(record)
+            payload["task"] = self._record_view(record)
         try:
             self._event_broker.publish(
                 event,
                 payload,
-                running_count=len(self._running_names),
-                queued_count=len(self._ready),
+                running_count=self.running_count,
+                queued_count=self.queued_count,
             )
         except RuntimeError:
             pass
 
     @staticmethod
-    def _record_view_locked(
+    def _record_view(
         record: TaskRuntimeRecord,
     ) -> dict[str, Any]:
         return {
