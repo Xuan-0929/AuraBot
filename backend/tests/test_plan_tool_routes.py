@@ -187,7 +187,7 @@ class PlanToolRouteTests(unittest.TestCase):
             "plan_already_exists",
         )
 
-        harness.task.current_state = TaskState.Interrupted
+        harness.task.interrupt()
         terminal = self.client.post(
             "/tool/plan/read",
             json={"task_name": "Plan task"},

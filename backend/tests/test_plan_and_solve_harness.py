@@ -267,7 +267,7 @@ class PlanAndSolveHarnessTests(unittest.TestCase):
     def test_terminal_task_rejects_plan_operations(self):
         harness = make_harness()
         harness.create_plan("Ship", (definition("s1"),))
-        harness.task.current_state = TaskState.Interrupted
+        harness.task.interrupt()
 
         for operation in (
             harness.read_plan,

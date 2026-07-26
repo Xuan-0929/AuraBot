@@ -314,7 +314,6 @@ class TaskManager:
                 task_id=None,
                 task_type=None,
                 state=None,
-                checkpoint=None,
             )
         task = record.task
         return PeekTaskResult(
@@ -323,7 +322,6 @@ class TaskManager:
             task_id=task.task_id,
             task_type=task.task_type,
             state=task.state,
-            checkpoint=task.checkpoint,
         )
 
     def interrupt_task(self, task_name: str) -> InterruptTaskResult:
@@ -351,7 +349,14 @@ class TaskManager:
                 record.queue_position = None
                 self._refresh_queue_positions_locked()
 
-        previous_state, current_state, _ = task.interrupt()
+        previous_state, current_state = task.interrupt()
+        runner = record.runner
+        if (
+            current_state is TaskState.Interrupted
+            and runner is not None
+            and runner is not asyncio.current_task()
+        ):
+            runner.cancel()
         if previous_state is TaskState.Interrupted:
             outcome = InterruptTaskOutcome.AlreadyInterrupted
         elif current_state is TaskState.Interrupted:
@@ -588,7 +593,7 @@ class TaskManager:
                 record.start_spec.skill_group_names
             )
             record.task.update_tool_groups(tool_groups)
-            record.task.skill_groups = list(skill_groups)
+            record.task.update_skill_groups(skill_groups)
             harness = self._harness_factory.create(
                 record.task,
                 capability_session=session,

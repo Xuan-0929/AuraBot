@@ -238,7 +238,7 @@ class ReActHarnessRunTests(unittest.IsolatedAsyncioTestCase):
         result = await harness.run()
 
         self.assertEqual(result, "All checks passed.")
-        self.assertIs(task.messages, original_messages)
+        self.assertEqual(original_messages, ())
         self.assertEqual(
             [message["role"] for message in task.messages],
             ["system", "user", "assistant"],
@@ -253,7 +253,6 @@ class ReActHarnessRunTests(unittest.IsolatedAsyncioTestCase):
                 TaskState.Completed,
             ],
         )
-        self.assertEqual(llm_client.message_list_ids, [id(task.messages)])
         self.assertIsNone(llm_client.requests[0]["tools"])
         self.assertIsNone(llm_client.requests[0]["tool_choice"])
 
@@ -439,7 +438,7 @@ class ReActHarnessRunTests(unittest.IsolatedAsyncioTestCase):
             await harness.run()
 
         self.assertIs(task.state, TaskState.Interrupted)
-        self.assertEqual(task.messages, [])
+        self.assertEqual(task.messages, ())
 
     async def test_cancels_an_in_flight_tool_batch_when_interrupted(self):
         gateway_started = asyncio.Event()
@@ -472,6 +471,7 @@ class ReActHarnessRunTests(unittest.IsolatedAsyncioTestCase):
 
         self.assertIs(task.state, TaskState.Pushing)
         task.interrupt()
+        run.cancel()
 
         with self.assertRaises(ReActInterruptedError):
             await run

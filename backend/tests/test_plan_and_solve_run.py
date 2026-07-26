@@ -355,6 +355,7 @@ class PlanAndSolveRunTests(unittest.IsolatedAsyncioTestCase):
 
         self.assertIs(task.state, TaskState.Thinking)
         task.interrupt()
+        running.cancel()
         with self.assertRaises(PlanAndSolveInterruptedError):
             await running
         self.assertIs(task.state, TaskState.Interrupted)
@@ -412,7 +413,6 @@ class PlanAndSolveRunTests(unittest.IsolatedAsyncioTestCase):
             await harness.run()
 
         self.assertIs(task.state, TaskState.Failed)
-        self.assertIsNone(task._runner)
 
     async def test_reminder_starts_on_sixth_request_and_read_resets_it(self):
         task = make_task(ordinary=True)
@@ -539,7 +539,6 @@ class PlanAndSolveRunTests(unittest.IsolatedAsyncioTestCase):
             with self.assertRaises(PlanAndSolveLimitError):
                 await harness.run()
             self.assertIs(task.state, TaskState.Failed)
-            self.assertIsNone(task._runner)
 
         with self.subTest(case="model error"):
             task = make_task()
@@ -550,7 +549,6 @@ class PlanAndSolveRunTests(unittest.IsolatedAsyncioTestCase):
             with self.assertRaisesRegex(RuntimeError, "model offline"):
                 await harness.run()
             self.assertIs(task.state, TaskState.Failed)
-            self.assertIsNone(task._runner)
 
     async def test_rejects_second_run_without_rewriting_terminal_state(self):
         task = make_task()
@@ -578,6 +576,9 @@ class PlanAndSolveRunTests(unittest.IsolatedAsyncioTestCase):
         harness = make_harness(BlockingLLM(), task=task)
         manager.register_runtime(harness)
         running = asyncio.create_task(harness.run())
+        record = manager.get_record(task.task_title)
+        self.assertIsNotNone(record)
+        record.runner = running
         await started.wait()
 
         outcome = manager.interrupt_task(task.task_title)
@@ -585,6 +586,7 @@ class PlanAndSolveRunTests(unittest.IsolatedAsyncioTestCase):
         self.assertIs(outcome.outcome, InterruptTaskOutcome.Interrupted)
         with self.assertRaises(PlanAndSolveInterruptedError):
             await running
+        record.runner = None
         self.assertIs(task.state, TaskState.Interrupted)
         self.assertEqual(
             [message["role"] for message in task.messages],
@@ -613,6 +615,7 @@ class PlanAndSolveRunTests(unittest.IsolatedAsyncioTestCase):
 
         self.assertIs(task.state, TaskState.Pushing)
         task.interrupt()
+        running.cancel()
         with self.assertRaises(PlanAndSolveInterruptedError):
             await running
         self.assertIs(task.state, TaskState.Interrupted)
@@ -633,7 +636,7 @@ class PlanAndSolveRunTests(unittest.IsolatedAsyncioTestCase):
             await harness.run()
 
         self.assertIs(task.state, TaskState.Interrupted)
-        self.assertEqual(task.messages, [])
+        self.assertEqual(task.messages, ())
 
     def test_plan_specific_limits_are_frozen(self):
         self.assertEqual(PlanAndSolveHarness.MAX_PLAN_ROUNDS, 60)

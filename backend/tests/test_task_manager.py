@@ -58,22 +58,16 @@ class ControlledHarness(Harness):
         return "controlled"
 
     async def run(self) -> str:
-        runner = asyncio.current_task()
-        if runner is None or not self.task.bind_runner(runner):
-            raise RuntimeError("already running")
-        try:
-            self._transition_task_state(
-                TaskState.Initializing,
-                TaskState.Thinking,
-            )
-            await self._release.wait()
-            self._transition_task_state(
-                TaskState.Thinking,
-                TaskState.Completed,
-            )
-            return f"result:{self.task.task_title}"
-        finally:
-            self.task.unbind_runner(runner)
+        self._transition_task_state(
+            TaskState.Initializing,
+            TaskState.Thinking,
+        )
+        await self._release.wait()
+        self._transition_task_state(
+            TaskState.Thinking,
+            TaskState.Completed,
+        )
+        return f"result:{self.task.task_title}"
 
 
 class ControlledHarnessFactory:
@@ -123,23 +117,17 @@ class StubbornHarness(ControlledHarness):
         super().__init__(**kwargs)
 
     async def run(self) -> str:
-        runner = asyncio.current_task()
-        if runner is None or not self.task.bind_runner(runner):
-            raise RuntimeError("already running")
+        self._transition_task_state(
+            TaskState.Initializing,
+            TaskState.Thinking,
+        )
+        self._started.set()
         try:
-            self._transition_task_state(
-                TaskState.Initializing,
-                TaskState.Thinking,
-            )
-            self._started.set()
-            try:
-                await asyncio.Event().wait()
-            except asyncio.CancelledError:
-                self._cancelled.set()
-                await self._finish_cancel.wait()
-                raise
-        finally:
-            self.task.unbind_runner(runner)
+            await asyncio.Event().wait()
+        except asyncio.CancelledError:
+            self._cancelled.set()
+            await self._finish_cancel.wait()
+            raise
 
 
 class StubbornHarnessFactory:

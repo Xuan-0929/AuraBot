@@ -93,11 +93,27 @@ class TaskTests(unittest.TestCase):
     def test_interrupting_unstarted_initializing_task_is_immediate(self):
         task = Task(1, "Queued", "session", TaskType.ReAct, "Work")
 
-        previous, current, deferred = task.interrupt()
+        previous, current = task.interrupt()
 
         self.assertIs(previous, TaskState.Initializing)
         self.assertIs(current, TaskState.Interrupted)
-        self.assertFalse(deferred)
+
+    def test_message_history_is_mutated_only_through_task_operations(self):
+        task = Task(1, "Chat", "session", TaskType.ReAct, "Work")
+
+        task.initialize_messages(
+            (
+                {"role": "system", "content": "System"},
+                {"role": "user", "content": "Work"},
+            )
+        )
+        first_snapshot = task.messages
+        task.append_message({"role": "assistant", "content": "Done"})
+
+        self.assertIsInstance(first_snapshot, tuple)
+        self.assertEqual(len(first_snapshot), 2)
+        self.assertEqual(len(task.messages), 3)
+        self.assertIsNot(first_snapshot, task.messages)
 
     def test_constructor_accepts_multiple_skill_and_tool_groups(self):
         skill_groups = [
@@ -141,7 +157,7 @@ class TaskTests(unittest.TestCase):
             tool_groups=tool_groups,
         )
 
-        self.assertEqual(task.skill_groups, skill_groups)
+        self.assertEqual(task.skill_groups, tuple(skill_groups))
         self.assertEqual(task.tool_groups, tuple(tool_groups))
         self.assertIsNotNone(task.tool_call_resolver)
 
@@ -149,7 +165,7 @@ class TaskTests(unittest.TestCase):
         first = Task(1, "First", "session-1", TaskType.ReAct, "First task")
         second = Task(2, "Second", "session-1", TaskType.ReAct, "Second task")
 
-        first.skill_groups.append(SkillGroup("research", []))
+        first.update_skill_groups((SkillGroup("research", []),))
         first.update_tool_groups(
             [
                 ToolGroup(
@@ -167,7 +183,7 @@ class TaskTests(unittest.TestCase):
             ]
         )
 
-        self.assertEqual(second.skill_groups, [])
+        self.assertEqual(second.skill_groups, ())
         self.assertEqual(second.tool_groups, ())
 
     def test_empty_tool_group_creates_an_empty_authorization_index(self):

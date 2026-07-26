@@ -38,10 +38,6 @@ class ReActHarness(Harness):
         if self.task.state is not TaskState.Initializing:
             raise RuntimeError("ReActHarness.run() can only execute a new Task")
 
-        runner = asyncio.current_task()
-        if runner is None or not self.task.bind_runner(runner):
-            raise RuntimeError("ReAct Task already has an active Harness")
-
         try:
             openai_tools = self.build_openai_tools()
             self._initialize_context()
@@ -72,17 +68,14 @@ class ReActHarness(Harness):
                 TaskState.Failed,
             )
             raise
-        finally:
-            self.task.unbind_runner(runner)
-
         return result
 
     def _initialize_context(self) -> None:
-        self.task.messages.extend(
-            [
+        self.task.initialize_messages(
+            (
                 {"role": "system", "content": self.build_system_prompt()},
                 {"role": "user", "content": self.build_user_prompt()},
-            ]
+            )
         )
 
     async def _run_react_loop(
@@ -94,7 +87,7 @@ class ReActHarness(Harness):
         for _ in range(self.MAX_REACT_ROUNDS):
             self._require_task_state(TaskState.Thinking)
             choice = await self.llm_client.invoke(
-                self.task.messages,
+                self.task.request_messages(),
                 tools=openai_tools or None,
                 tool_choice="auto" if openai_tools else None,
             )
@@ -102,7 +95,7 @@ class ReActHarness(Harness):
                 TaskState.Thinking,
                 TaskState.Pushing,
             )
-            self.task.messages.append(dict(choice.message))
+            self.task.append_message(dict(choice.message))
             response = self.parse_completion(choice)
 
             if isinstance(response, FinalResponse):
@@ -123,7 +116,7 @@ class ReActHarness(Harness):
 
             results = await self.execute_tool_calls(response.calls)
             self._require_task_state(TaskState.Pushing)
-            self.task.messages.extend(
+            self.task.append_messages(
                 self.build_tool_result_messages(results)
             )
             self._transition_task_state(

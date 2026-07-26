@@ -1,9 +1,9 @@
-import asyncio
 from collections.abc import Callable, Collection, Sequence
 from contextlib import contextmanager
 from threading import RLock
 from typing import Iterator
 
+from ..LLMClient import Message
 from ..skills.SkillGroup import SkillGroup
 from ..tools.ToolGroup import ToolGroup
 from ..tools.core.ToolCallResolver import ToolCallResolver
@@ -33,24 +33,33 @@ class Task:
         self.workdir = workdir
         self.constraints = constraints
 
-        self.skill_groups = skill_groups if skill_groups is not None else []
+        self._skill_groups: tuple[SkillGroup, ...] = ()
+        self.update_skill_groups(skill_groups or ())
         self._tool_groups: tuple[ToolGroup, ...]
         self._tool_call_resolver: ToolCallResolver
         self.update_tool_groups(tool_groups or ())
 
         self._state_lock = RLock()
         self._state_observers: set[TaskStateObserver] = set()
-        self._runner: asyncio.Task[object] | None = None
-        self.current_state : TaskState = TaskState.Initializing
+        self._state = TaskState.Initializing
 
-        self.messages = []
-        self.checkpoint : str = None
+        self._messages: list[Message] = []
         self.timeout_ms = timeout_ms
 
     @property
     def state(self) -> TaskState:
         with self._state_lock:
-            return self.current_state
+            return self._state
+
+    @property
+    def messages(self) -> tuple[Message, ...]:
+        """Return a stable copy of the retained model conversation."""
+
+        return tuple(dict(message) for message in self._messages)
+
+    @property
+    def skill_groups(self) -> tuple[SkillGroup, ...]:
+        return self._skill_groups
 
     @property
     def tool_groups(self) -> tuple[ToolGroup, ...]:
@@ -64,6 +73,15 @@ class Task:
 
         return self._tool_call_resolver
 
+    def update_skill_groups(
+        self,
+        skill_groups: Sequence[SkillGroup],
+    ) -> None:
+        snapshot = tuple(skill_groups)
+        if any(not isinstance(group, SkillGroup) for group in snapshot):
+            raise TypeError("skill_groups must contain SkillGroup values")
+        self._skill_groups = snapshot
+
     def update_tool_groups(self, tool_groups: Sequence[ToolGroup]) -> None:
         """Atomically replace the task's authorized groups and resolver."""
 
@@ -71,6 +89,32 @@ class Task:
         resolver = ToolCallResolver.from_tool_groups(snapshot)
         self._tool_groups = snapshot
         self._tool_call_resolver = resolver
+
+    def initialize_messages(
+        self,
+        messages: Sequence[Message],
+    ) -> None:
+        if self._messages:
+            raise RuntimeError("Task message history is already initialized")
+        self.append_messages(messages)
+
+    def append_message(self, message: Message) -> None:
+        if not isinstance(message, dict):
+            raise TypeError("message must be a mapping")
+        self._messages.append(dict(message))
+
+    def append_messages(self, messages: Sequence[Message]) -> None:
+        for message in messages:
+            self.append_message(message)
+
+    def request_messages(
+        self,
+        extra: Sequence[Message] = (),
+    ) -> list[Message]:
+        return [
+            *(dict(message) for message in self._messages),
+            *(dict(message) for message in extra),
+        ]
 
     def compare_and_set_state(
         self,
@@ -86,10 +130,10 @@ class Task:
         )
         previous_state: TaskState
         with self._state_lock:
-            if self.current_state not in expected_states:
+            if self._state not in expected_states:
                 return False
-            previous_state = self.current_state
-            self.current_state = target
+            previous_state = self._state
+            self._state = target
         self._notify_state_observers(previous_state, target)
         return True
 
@@ -98,38 +142,34 @@ class Task:
         """Hold the Task state lock while an owner mutates related runtime state."""
 
         with self._state_lock:
-            if self.current_state in {
+            if self._state in {
                 TaskState.Completed,
                 TaskState.Failed,
                 TaskState.Interrupted,
             }:
                 raise TaskInactiveError(
-                    f"Task is not active: {self.current_state.value}"
+                    f"Task is not active: {self._state.value}"
                 )
-            yield self.current_state
+            yield self._state
 
-    def interrupt(self) -> tuple[TaskState, TaskState, bool]:
+    def interrupt(self) -> tuple[TaskState, TaskState]:
         """Atomically apply an external interrupt when the task is active."""
 
-        runner: asyncio.Task[object] | None = None
         changed = False
         with self._state_lock:
-            previous_state = self.current_state
+            previous_state = self._state
             if previous_state not in {
                 TaskState.Completed,
                 TaskState.Failed,
                 TaskState.Interrupted,
             }:
-                self.current_state = TaskState.Interrupted
-                runner = self._runner
+                self._state = TaskState.Interrupted
                 changed = True
-            current_state = self.current_state
+            current_state = self._state
 
         if changed:
             self._notify_state_observers(previous_state, current_state)
-        if runner is not None and runner is not self._current_asyncio_task():
-            runner.get_loop().call_soon_threadsafe(runner.cancel)
-        return previous_state, current_state, False
+        return previous_state, current_state
 
     def add_state_observer(
         self,
@@ -148,20 +188,6 @@ class Task:
 
         return unsubscribe
 
-    def bind_runner(self, runner: asyncio.Task[object]) -> bool:
-        """Bind the one asyncio runner allowed to execute this Task."""
-
-        with self._state_lock:
-            if self._runner is not None:
-                return False
-            self._runner = runner
-            return True
-
-    def unbind_runner(self, runner: asyncio.Task[object]) -> None:
-        with self._state_lock:
-            if self._runner is runner:
-                self._runner = None
-
     def _notify_state_observers(
         self,
         previous_state: TaskState,
@@ -177,14 +203,6 @@ class Task:
             except Exception:
                 # State commits must not be rolled back by diagnostics.
                 continue
-
-    @staticmethod
-    def _current_asyncio_task() -> asyncio.Task[object] | None:
-        try:
-            return asyncio.current_task()
-        except RuntimeError:
-            return None
-
 
 class TaskInactiveError(RuntimeError):
     """Raised by the generic state guard after a Task reaches a terminal state."""

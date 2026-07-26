@@ -22,7 +22,6 @@ class TaskState(Enum):
 
 class InterruptTaskOutcome(Enum):
     NotFound = "NotFound"
-    Deferred = "Deferred"
     Interrupted = "Interrupted"
     AlreadyInterrupted = "AlreadyInterrupted"
     AlreadySettled = "AlreadySettled"
@@ -44,7 +43,6 @@ class PeekTaskResult:
     task_id: int | None
     task_type: TaskType | None
     state: TaskState | None
-    checkpoint: str | None
 
 
 __all__ = [

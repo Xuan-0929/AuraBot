@@ -103,12 +103,6 @@ class PlanAndSolveHarness(Harness):
                 "PlanAndSolveHarness.run() can only execute a new Task"
             )
 
-        runner = asyncio.current_task()
-        if runner is None or not self.task.bind_runner(runner):
-            raise RuntimeError(
-                "Plan-and-Solve Task already has an active Harness"
-            )
-
         try:
             openai_tools = self.build_openai_tools()
             self._initialize_context()
@@ -139,17 +133,14 @@ class PlanAndSolveHarness(Harness):
                 TaskState.Failed,
             )
             raise
-        finally:
-            self.task.unbind_runner(runner)
-
         return result
 
     def _initialize_context(self) -> None:
-        self.task.messages.extend(
-            [
+        self.task.initialize_messages(
+            (
                 {"role": "system", "content": self.build_system_prompt()},
                 {"role": "user", "content": self.build_user_prompt()},
-            ]
+            )
         )
 
     async def _run_plan_loop(
@@ -176,7 +167,7 @@ class PlanAndSolveHarness(Harness):
                 reasoning_state,
                 TaskState.Pushing,
             )
-            self.task.messages.append(dict(choice.message))
+            self.task.append_message(dict(choice.message))
             response = self.parse_completion(choice)
 
             if isinstance(response, FinalResponse):
@@ -218,7 +209,7 @@ class PlanAndSolveHarness(Harness):
 
             results = await self.execute_tool_calls(response.calls)
             self._require_task_state(TaskState.Pushing)
-            self.task.messages.extend(
+            self.task.append_messages(
                 self.build_tool_result_messages(results)
             )
 
@@ -252,20 +243,21 @@ class PlanAndSolveHarness(Harness):
     ) -> list[Message]:
         plan = self.plan
         if plan is not None and plan.is_complete:
-            return self.task.messages
+            return self.task.request_messages()
         if (
             not force_plan_reminder
             and rounds_without_successful_plan_tool
             < self.PLAN_PROGRESS_GRACE_ROUNDS
         ):
-            return self.task.messages
-        return [
-            *self.task.messages,
-            {
+            return self.task.request_messages()
+        return self.task.request_messages(
+            (
+                {
                 "role": "system",
                 "content": self._build_plan_progress_reminder(plan),
-            },
-        ]
+                },
+            )
+        )
 
     @staticmethod
     def _build_plan_progress_reminder(
