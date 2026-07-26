@@ -1,8 +1,9 @@
 """
-负责进程内 Task 事件广播，以及 runtime snapshot 到传输字典的当前投影。
+负责进程内 Task 事件的有序广播、订阅队列管理及关闭语义。
 
-runtime 发布快照和队列变化后，本模块按 revision 扇出至订阅队列；gateway 消费这些
-事件形成 SSE。本模块暂不持久化历史，也不拥有 Task 调度或生命周期状态。
+runtime publisher 调用本模块发布已构造的事件 payload，gateway 的订阅消费者按 revision
+读取快照和增量；本模块用有界队列保护慢消费者，并在溢出或关闭时终止订阅。本模块不将
+runtime 快照投影为 wire 数据、不保存重放历史，也不拥有 Task 生命周期状态。
 """
 
 from __future__ import annotations
@@ -12,9 +13,6 @@ from datetime import UTC, datetime
 from threading import RLock
 from typing import Any
 from uuid import uuid4
-
-from .runtime import TaskSnapshot
-from .domain import TaskType
 
 _CLOSED = object()
 
@@ -185,34 +183,6 @@ class TaskEventBroker:
         }
 
 
-def task_snapshot_payload(snapshot: TaskSnapshot) -> dict[str, Any]:
-    """Project an immutable Task snapshot into the SSE wire representation."""
-
-    return {
-        "task_id": snapshot.task_id,
-        "task_name": snapshot.task_name,
-        "task_type": {
-            TaskType.ReAct: "react",
-            TaskType.PlanAndSolve: "plan_and_solve",
-            TaskType.Goal: "goal",
-        }[snapshot.task_type],
-        "state": snapshot.state.value.lower(),
-        "queue_position": snapshot.queue_position,
-        "created_at": _iso(snapshot.created_at),
-        "started_at": _iso(snapshot.started_at),
-        "settled_at": _iso(snapshot.settled_at),
-        "result": snapshot.result,
-        "error": (
-            {
-                "code": snapshot.error.code,
-                "message": snapshot.error.message,
-            }
-            if snapshot.error is not None
-            else None
-        ),
-    }
-
-
 def _replace_queue_with_closed(
     queue: asyncio.Queue[dict[str, Any] | object],
 ) -> None:
@@ -233,16 +203,4 @@ def _append_closed(
         _replace_queue_with_closed(queue)
 
 
-def _iso(value: datetime | None) -> str | None:
-    return (
-        value.isoformat().replace("+00:00", "Z")
-        if value is not None
-        else None
-    )
-
-
-__all__ = [
-    "TaskEventBroker",
-    "TaskEventSubscription",
-    "task_snapshot_payload",
-]
+__all__ = ["TaskEventBroker", "TaskEventSubscription"]

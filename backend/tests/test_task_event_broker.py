@@ -2,11 +2,65 @@
 不负责 SSE HTTP 序列化、TaskManager 生命周期或持久化。"""
 
 import unittest
+from dataclasses import dataclass
+from datetime import UTC, datetime
 
-from backend.agent.task.events import TaskEventBroker
+from backend.agent.task.domain import TaskState, TaskType
+from backend.agent.task.events import (
+    TaskEventBroker,
+    task_snapshot_payload,
+)
+
+
+@dataclass(frozen=True)
+class SnapshotViewFixture:
+    """提供独立于 runtime 的只读投影视图夹具，验证 events 投影只依赖结构字段。"""
+
+    task_id: int
+    task_name: str
+    task_type: TaskType
+    state: TaskState
+    queue_position: int | None
+    created_at: datetime | None
+    started_at: datetime | None
+    settled_at: datetime | None
+    result: object
+    error: object
 
 
 class TaskEventBrokerTests(unittest.IsolatedAsyncioTestCase):
+    async def test_projection_accepts_a_runtime_independent_snapshot_view(self):
+        payload = task_snapshot_payload(
+            SnapshotViewFixture(
+                task_id=7,
+                task_name="projected",
+                task_type=TaskType.ReAct,
+                state=TaskState.Initializing,
+                queue_position=1,
+                created_at=datetime(2026, 7, 27, tzinfo=UTC),
+                started_at=None,
+                settled_at=None,
+                result={"source": "fixture"},
+                error=None,
+            )
+        )
+
+        self.assertEqual(
+            payload,
+            {
+                "task_id": 7,
+                "task_name": "projected",
+                "task_type": "react",
+                "state": "initializing",
+                "queue_position": 1,
+                "created_at": "2026-07-27T00:00:00Z",
+                "started_at": None,
+                "settled_at": None,
+                "result": {"source": "fixture"},
+                "error": None,
+            },
+        )
+
     async def test_subscription_starts_with_snapshot_then_receives_deltas(self):
         broker = TaskEventBroker(queue_size=4, stream_id="stream-test")
         subscription = broker.subscribe(

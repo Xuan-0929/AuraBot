@@ -1,4 +1,10 @@
-"""SSE transport for Task snapshot-plus-delta observation."""
+"""
+负责将 Task 事件订阅转换为 SSE 响应，并编码快照加增量的传输边界。
+
+本路由从应用服务取得 events 包公开的订阅对象，持续读取事件并使用运行时配置发送
+keepalive；TaskEventBroker 负责事件次序和关闭，TaskEventPublisher 负责构造 payload。
+本模块不维护订阅状态、不投影 runtime record，也不调度或持久化 Task。
+"""
 
 from __future__ import annotations
 
@@ -10,6 +16,7 @@ from typing import Annotated, Any
 from fastapi import APIRouter, Depends
 from fastapi.responses import StreamingResponse
 
+from ...agent.task.events import TaskEventSubscription
 from ..runtime import BackendRuntime
 from ..services.task_service import TaskApplicationService
 from .dependencies import get_backend_runtime, get_task_service
@@ -27,7 +34,7 @@ async def task_events(
     service: TaskServiceDependency,
     runtime: RuntimeDependency,
 ) -> StreamingResponse:
-    subscription = service.subscribe()
+    subscription: TaskEventSubscription = service.subscribe()
 
     async def generate() -> AsyncIterator[str]:
         try:
