@@ -24,28 +24,27 @@ async def create_task(
     service: TaskServiceDependency,
 ):
     try:
-        return service.start(body.to_spec())
+        return TaskView.from_snapshot(service.start(body.to_spec()))
     except (TypeError, ValueError) as exc:
         raise ApplicationError(
             "invalid_task_request",
             "The Task request is not valid for this runtime.",
-            400,
         ) from exc
 
 
 @router.get("", response_model=TaskListResponse)
 async def list_tasks(service: TaskServiceDependency):
-    return service.list()
+    return TaskListResponse.from_snapshot(service.list())
 
 
 @router.get("/{task_name}", response_model=TaskView)
 async def get_task(task_name: str, service: TaskServiceDependency):
-    return service.get(task_name)
+    return TaskView.from_snapshot(service.get(task_name))
 
 
 @router.post("/{task_name}/interrupt", response_model=TaskView)
 async def interrupt_task(task_name: str, service: TaskServiceDependency):
-    return service.interrupt(task_name)
+    return TaskView.from_snapshot(service.interrupt(task_name))
 
 
 @router.delete("/{task_name}", status_code=status.HTTP_204_NO_CONTENT)

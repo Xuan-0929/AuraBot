@@ -4,8 +4,8 @@ from unittest.mock import patch
 
 from backend.agent.LLMClient import ChatCompletionChoice
 from backend.agent.task.Task import Task, TaskState, TaskType
-from backend.agent.task.TaskEntity import InterruptTaskOutcome
 from backend.agent.task.TaskManager import TaskManager
+from backend.agent.task.runtime import InterruptTaskOutcome
 from backend.agent.task.harness.Plan import PlanStepDefinition
 from backend.agent.task.harness.PlanAndSolveHarness import (
     PlanAndSolveFinalResponseError,

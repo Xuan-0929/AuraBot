@@ -11,17 +11,20 @@ from typing import Any
 
 from ..capabilities.lease import CapabilitySession
 from .Task import Task
-from .TaskEntity import (
-    InterruptTaskOutcome,
-    InterruptTaskResult,
-    PeekTaskResult,
-    TaskState,
-    TaskType,
-)
+from .TaskEntity import TaskState, TaskType
 from .events import TaskEventBroker, TaskEventSubscription
 from .harness.Harness import Harness
 from .harness.HarnessFactory import HarnessFactory
-from .runtime import TaskRuntimeRecord, TaskStartSpec
+from .runtime import (
+    InterruptTaskOutcome,
+    InterruptTaskResult,
+    PeekTaskResult,
+    TaskListSnapshot,
+    TaskSnapshot,
+    TaskStartSpec,
+    _TaskRuntimeRecord,
+    snapshot_task,
+)
 from .runtime_registry import TaskRuntimeRegistry
 from .scheduler import TERMINAL_STATES, TaskScheduler
 
@@ -161,7 +164,7 @@ class TaskManager:
             )
         return running_loop
 
-    def start_task(self, spec: TaskStartSpec) -> TaskRuntimeRecord:
+    def start_task(self, spec: TaskStartSpec) -> TaskSnapshot:
         """接收一份启动规格并返回新建的 retained runtime record。
 
         该方法原子保留 ``task_name``、生成内部 ``task_id``、构造通用 Task 并
@@ -208,7 +211,7 @@ class TaskManager:
             constraints=spec.constraints,
             timeout_ms=timeout_ms,
         )
-        record = TaskRuntimeRecord(
+        record = _TaskRuntimeRecord(
             task=task,
             start_spec=spec,
             created_at=_utc_now(),
@@ -221,9 +224,9 @@ class TaskManager:
         self._publish("task.created", record)
         self._publish_queue()
         self._scheduler.drain()
-        return record
+        return snapshot_task(record)
 
-    def get_record(self, task_name: str) -> TaskRuntimeRecord | None:
+    def get_record(self, task_name: str) -> _TaskRuntimeRecord | None:
         """按公开 ``task_name`` 查找当前 queued/live/retained record。
 
         未找到时返回 ``None``。返回对象仍是 Manager 所有的内部 runtime record，
@@ -232,7 +235,21 @@ class TaskManager:
 
         return self._registry.get(task_name)
 
-    def list_records(self) -> tuple[TaskRuntimeRecord, ...]:
+    def get_task(self, task_name: str) -> TaskSnapshot | None:
+        record = self._registry.get(task_name)
+        return snapshot_task(record) if record is not None else None
+
+    def list_tasks(self) -> TaskListSnapshot:
+        return TaskListSnapshot(
+            running_count=self.running_count,
+            queued_count=self.queued_count,
+            tasks=tuple(
+                snapshot_task(record)
+                for record in self._registry.list()
+            ),
+        )
+
+    def list_records(self) -> tuple[_TaskRuntimeRecord, ...]:
         """返回当前全部 queued/live/retained record 的不可变容器快照。
 
         tuple 本身是快照，其中的 record 仍为活动对象，其字段可能随 Task 执行继续
@@ -241,7 +258,7 @@ class TaskManager:
 
         return self._registry.list()
 
-    def record_view(self, record: TaskRuntimeRecord) -> dict[str, Any]:
+    def record_view(self, record: _TaskRuntimeRecord) -> dict[str, Any]:
         """把仍由本 Manager 注册的 record 编码为安全的对外字典。
 
         record 已清理、来自其他 Manager 或被同名新 runtime 取代时抛出
@@ -399,7 +416,7 @@ class TaskManager:
             constraints=task.constraints,
             timeout_ms=task.timeout_ms,
         )
-        record = TaskRuntimeRecord(
+        record = _TaskRuntimeRecord(
             task=task,
             start_spec=spec,
             harness=harness,
@@ -513,10 +530,10 @@ class TaskManager:
         self._main_loop = None
         self._event_broker.close()
 
-    def _on_runtime_started(self, record: TaskRuntimeRecord) -> None:
+    def _on_runtime_started(self, record: _TaskRuntimeRecord) -> None:
         self._publish("task.started", record)
 
-    def _on_runtime_settled(self, record: TaskRuntimeRecord) -> None:
+    def _on_runtime_settled(self, record: _TaskRuntimeRecord) -> None:
         self._publish("task.settled", record)
         self._schedule_cleanup(record)
 
@@ -538,7 +555,7 @@ class TaskManager:
             },
         )
 
-    def _schedule_cleanup(self, record: TaskRuntimeRecord) -> None:
+    def _schedule_cleanup(self, record: _TaskRuntimeRecord) -> None:
         if record.task.state not in TERMINAL_STATES:
             return
         loop = self._main_loop
@@ -558,7 +575,7 @@ class TaskManager:
     def _expire_record(
         self,
         task_name: str,
-        expected: TaskRuntimeRecord,
+        expected: _TaskRuntimeRecord,
     ) -> None:
         record = self._registry.get(task_name)
         if (
@@ -570,7 +587,7 @@ class TaskManager:
 
     def _remove_record(
         self,
-        record: TaskRuntimeRecord,
+        record: _TaskRuntimeRecord,
         *,
         publish: bool,
     ) -> None:
@@ -615,7 +632,7 @@ class TaskManager:
     def _publish(
         self,
         event: str,
-        record: TaskRuntimeRecord | None,
+        record: _TaskRuntimeRecord | None,
         *,
         extra: dict[str, Any] | None = None,
     ) -> None:
@@ -636,7 +653,7 @@ class TaskManager:
 
     @staticmethod
     def _record_view(
-        record: TaskRuntimeRecord,
+        record: _TaskRuntimeRecord,
     ) -> dict[str, Any]:
         return {
             "task_id": record.task.task_id,

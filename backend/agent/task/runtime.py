@@ -4,13 +4,15 @@ from __future__ import annotations
 
 import asyncio
 from collections.abc import Callable
+from copy import deepcopy
 from dataclasses import dataclass, field
 from datetime import datetime
+from enum import Enum
 from typing import Any
 
 from ..capabilities.lease import CapabilitySession
 from .Task import Task
-from .TaskEntity import TaskType
+from .TaskEntity import TaskState, TaskType
 from .harness.Harness import Harness
 
 
@@ -27,8 +29,33 @@ class TaskStartSpec:
     timeout_ms: int | None = None
 
 
+class InterruptTaskOutcome(Enum):
+    NotFound = "NotFound"
+    Interrupted = "Interrupted"
+    AlreadyInterrupted = "AlreadyInterrupted"
+    AlreadySettled = "AlreadySettled"
+
+
+@dataclass(frozen=True, slots=True)
+class InterruptTaskResult:
+    task_name: str
+    outcome: InterruptTaskOutcome
+    task_id: int | None
+    previous_state: TaskState | None
+    state: TaskState | None
+
+
+@dataclass(frozen=True, slots=True)
+class PeekTaskResult:
+    task_name: str
+    found: bool
+    task_id: int | None
+    task_type: TaskType | None
+    state: TaskState | None
+
+
 @dataclass(slots=True)
-class TaskRuntimeRecord:
+class _TaskRuntimeRecord:
     task: Task
     start_spec: TaskStartSpec
     harness: Harness | None = None
@@ -46,4 +73,60 @@ class TaskRuntimeRecord:
     )
 
 
-__all__ = ["TaskRuntimeRecord", "TaskStartSpec"]
+@dataclass(frozen=True, slots=True)
+class TaskFailure:
+    code: str
+    message: str
+
+
+@dataclass(frozen=True, slots=True)
+class TaskSnapshot:
+    task_id: int
+    task_name: str
+    task_type: TaskType
+    state: TaskState
+    queue_position: int | None
+    created_at: datetime | None
+    started_at: datetime | None
+    settled_at: datetime | None
+    result: Any = None
+    error: TaskFailure | None = None
+
+
+@dataclass(frozen=True, slots=True)
+class TaskListSnapshot:
+    running_count: int
+    queued_count: int
+    tasks: tuple[TaskSnapshot, ...]
+
+
+def snapshot_task(record: _TaskRuntimeRecord) -> TaskSnapshot:
+    error = (
+        TaskFailure(**record.error)
+        if record.error is not None
+        else None
+    )
+    return TaskSnapshot(
+        task_id=record.task.task_id,
+        task_name=record.task.task_title,
+        task_type=record.task.task_type,
+        state=record.task.state,
+        queue_position=record.queue_position,
+        created_at=record.created_at,
+        started_at=record.started_at,
+        settled_at=record.settled_at,
+        result=deepcopy(record.result),
+        error=error,
+    )
+
+
+__all__ = [
+    "InterruptTaskOutcome",
+    "InterruptTaskResult",
+    "PeekTaskResult",
+    "TaskFailure",
+    "TaskListSnapshot",
+    "TaskSnapshot",
+    "TaskStartSpec",
+    "snapshot_task",
+]

@@ -1,15 +1,12 @@
 import asyncio
 import unittest
+from dataclasses import FrozenInstanceError
 
 from backend.agent.capabilities.lease import CapabilitySession
 from backend.agent.skills.SkillGroup import SkillGroup
 from backend.agent.skills.SkillGroupManager import SkillGroupManager
 from backend.agent.task.Task import Task
-from backend.agent.task.TaskEntity import (
-    InterruptTaskOutcome,
-    TaskState,
-    TaskType,
-)
+from backend.agent.task.TaskEntity import TaskState, TaskType
 from backend.agent.task.TaskManager import (
     DuplicateTaskNameError,
     TaskManager,
@@ -17,7 +14,12 @@ from backend.agent.task.TaskManager import (
 from backend.agent.task.events import TaskEventBroker
 from backend.agent.task.harness.Harness import Harness
 from backend.agent.task.harness.HarnessFactory import HarnessFactory
-from backend.agent.task.runtime import TaskStartSpec
+from backend.agent.task.runtime import (
+    InterruptTaskOutcome,
+    TaskFailure,
+    TaskSnapshot,
+    TaskStartSpec,
+)
 from backend.agent.tools.Tool import Tool
 from backend.agent.tools.ToolGroup import ToolGroup
 from backend.agent.tools.ToolGroupManager import ToolGroupManager
@@ -210,7 +212,7 @@ class TaskManagerTests(unittest.IsolatedAsyncioTestCase):
                 lambda: asyncio.run(mutate_from_foreign_loop())
             )
 
-        self.assertIsNone(self.manager.get_record("foreign-loop"))
+        self.assertIsNone(self.manager.get_task("foreign-loop"))
 
     async def test_fifo_admission_constructs_capabilities_and_harness_only_on_slot(self):
         first = self.manager.start_task(spec("first", tool_groups=("files",)))
@@ -218,8 +220,10 @@ class TaskManagerTests(unittest.IsolatedAsyncioTestCase):
         await asyncio.sleep(0)
 
         self.assertEqual(self.factory.created, ["first"])
-        self.assertIs(first.task.state, TaskState.Thinking)
-        self.assertIs(second.task.state, TaskState.Initializing)
+        first = self.manager.get_task("first")
+        second = self.manager.get_task("second")
+        self.assertIs(first.state, TaskState.Thinking)
+        self.assertIs(second.state, TaskState.Initializing)
         self.assertEqual(second.queue_position, 1)
         self.assertEqual(self.tool_manager.reference_count("files"), 1)
         self.assertEqual(self.tool_manager.reference_count("shell"), 0)
@@ -229,9 +233,20 @@ class TaskManagerTests(unittest.IsolatedAsyncioTestCase):
         await asyncio.sleep(0)
 
         self.assertEqual(self.factory.created, ["first", "second"])
-        self.assertIs(second.task.state, TaskState.Thinking)
+        second = self.manager.get_task("second")
+        self.assertIs(second.state, TaskState.Thinking)
         self.assertEqual(self.tool_manager.reference_count("files"), 1)
         self.assertEqual(self.tool_manager.reference_count("shell"), 1)
+
+    async def test_start_returns_immutable_public_snapshot(self):
+        snapshot = self.manager.start_task(spec("snapshot"))
+
+        self.assertIsInstance(snapshot, TaskSnapshot)
+        self.assertEqual(snapshot.task_name, "snapshot")
+        self.assertFalse(hasattr(snapshot, "runner"))
+        self.assertFalse(hasattr(snapshot, "harness"))
+        with self.assertRaises(FrozenInstanceError):
+            snapshot.state = TaskState.Failed
 
     async def test_duplicate_name_is_rejected_during_retention(self):
         self.manager.start_task(spec("same"))
@@ -247,28 +262,30 @@ class TaskManagerTests(unittest.IsolatedAsyncioTestCase):
         result = self.manager.interrupt_task("queued")
 
         self.assertIs(result.outcome, InterruptTaskOutcome.Interrupted)
-        self.assertIs(queued.task.state, TaskState.Interrupted)
+        queued = self.manager.get_task("queued")
+        self.assertIs(queued.state, TaskState.Interrupted)
         self.assertNotIn("queued", self.factory.created)
         self.assertEqual(queued.queue_position, None)
 
     async def test_runner_result_is_retained_then_capability_is_released(self):
-        record = self.manager.start_task(spec("retained", tool_groups=("files",)))
+        self.manager.start_task(spec("retained", tool_groups=("files",)))
         await asyncio.sleep(0)
         self.factory.releases["retained"].set()
         await asyncio.sleep(0)
         await asyncio.sleep(0)
 
-        self.assertIs(record.task.state, TaskState.Completed)
-        self.assertEqual(record.result, "result:retained")
+        snapshot = self.manager.get_task("retained")
+        self.assertIs(snapshot.state, TaskState.Completed)
+        self.assertEqual(snapshot.result, "result:retained")
         self.assertEqual(self.tool_manager.reference_count("files"), 1)
 
         await asyncio.sleep(0.04)
 
-        self.assertIsNone(self.manager.get_record("retained"))
+        self.assertIsNone(self.manager.get_task("retained"))
         self.assertEqual(self.tool_manager.reference_count("files"), 0)
 
     async def test_clear_rejects_active_and_releases_terminal_runtime(self):
-        record = self.manager.start_task(spec("clear", tool_groups=("files",)))
+        self.manager.start_task(spec("clear", tool_groups=("files",)))
         await asyncio.sleep(0)
         self.assertFalse(self.manager.clear_task("clear"))
 
@@ -277,32 +294,39 @@ class TaskManagerTests(unittest.IsolatedAsyncioTestCase):
         await asyncio.sleep(0)
 
         self.assertTrue(self.manager.clear_task("clear"))
-        self.assertIsNone(self.manager.get_record("clear"))
+        self.assertIsNone(self.manager.get_task("clear"))
         self.assertEqual(self.tool_manager.reference_count("files"), 0)
 
     async def test_timeout_is_validated_and_starts_with_actual_execution(self):
-        running = self.manager.start_task(spec("running"))
-        queued = self.manager.start_task(
+        self.manager.start_task(spec("running"))
+        self.manager.start_task(
             spec("short-timeout", timeout_ms=10)
         )
         await asyncio.sleep(0.03)
 
-        self.assertIs(running.task.state, TaskState.Thinking)
-        self.assertIs(queued.task.state, TaskState.Initializing)
+        self.assertIs(
+            self.manager.get_task("running").state,
+            TaskState.Thinking,
+        )
+        self.assertIs(
+            self.manager.get_task("short-timeout").state,
+            TaskState.Initializing,
+        )
 
         self.factory.releases["running"].set()
         for _ in range(20):
-            if queued.task.state is TaskState.Failed:
+            queued = self.manager.get_task("short-timeout")
+            if queued.state is TaskState.Failed:
                 break
             await asyncio.sleep(0.005)
 
-        self.assertIs(queued.task.state, TaskState.Failed)
+        self.assertIs(queued.state, TaskState.Failed)
         self.assertEqual(
             queued.error,
-            {
-                "code": "task_execution_failed",
-                "message": "Task execution failed.",
-            },
+            TaskFailure(
+                code="task_execution_failed",
+                message="Task execution failed.",
+            ),
         )
 
         with self.assertRaisesRegex(ValueError, "timeout"):
@@ -333,7 +357,11 @@ class TaskManagerTests(unittest.IsolatedAsyncioTestCase):
             max_timeout_ms=100,
         )
         manager.bind_event_loop(asyncio.get_running_loop())
-        records = [
+        task_names = [
+            task_type.value
+            for task_type in (TaskType.ReAct, TaskType.PlanAndSolve)
+        ]
+        for task_type in (TaskType.ReAct, TaskType.PlanAndSolve):
             manager.start_task(
                 TaskStartSpec(
                     task_name=task_type.value,
@@ -343,29 +371,30 @@ class TaskManagerTests(unittest.IsolatedAsyncioTestCase):
                     timeout_ms=10,
                 )
             )
-            for task_type in (TaskType.ReAct, TaskType.PlanAndSolve)
-        ]
 
         for _ in range(30):
             if all(
-                record.task.state is TaskState.Failed
-                for record in records
+                manager.get_task(task_name).state is TaskState.Failed
+                for task_name in task_names
             ):
                 break
             await asyncio.sleep(0.005)
 
         self.assertEqual(
-            [record.task.state for record in records],
+            [
+                manager.get_task(task_name).state
+                for task_name in task_names
+            ],
             [TaskState.Failed, TaskState.Failed],
         )
         self.assertTrue(
             all(
-                record.error
-                == {
-                    "code": "task_execution_failed",
-                    "message": "Task execution failed.",
-                }
-                for record in records
+                manager.get_task(task_name).error
+                == TaskFailure(
+                    code="task_execution_failed",
+                    message="Task execution failed.",
+                )
+                for task_name in task_names
             )
         )
         await manager.aclose(grace_seconds=0)
@@ -378,7 +407,10 @@ class TaskManagerTests(unittest.IsolatedAsyncioTestCase):
         self.assertEqual(self.manager.running_count, 1)
         self.assertEqual(self.manager.queued_count, 1)
         self.assertEqual(
-            tuple(record.task.task_title for record in self.manager.list_records()),
+            tuple(
+                snapshot.task_name
+                for snapshot in self.manager.list_tasks().tasks
+            ),
             ("running", "queued"),
         )
 
@@ -394,7 +426,7 @@ class TaskManagerTests(unittest.IsolatedAsyncioTestCase):
         )
         manager.bind_event_loop(asyncio.get_running_loop())
 
-        record = manager.start_task(
+        snapshot = manager.start_task(
             TaskStartSpec(
                 task_name="missing-skill",
                 parent_session_id="main",
@@ -405,8 +437,7 @@ class TaskManagerTests(unittest.IsolatedAsyncioTestCase):
             )
         )
 
-        self.assertIs(record.task.state, TaskState.Failed)
-        self.assertIsNone(record.capabilities)
+        self.assertIs(snapshot.state, TaskState.Failed)
         self.assertEqual(tool_manager.reference_count("files"), 0)
         await manager.aclose(grace_seconds=0)
 
@@ -425,7 +456,7 @@ class TaskManagerTests(unittest.IsolatedAsyncioTestCase):
         )
         manager.bind_event_loop(asyncio.get_running_loop())
 
-        record = manager.start_task(
+        snapshot = manager.start_task(
             TaskStartSpec(
                 task_name="bad-harness",
                 parent_session_id="main",
@@ -436,8 +467,7 @@ class TaskManagerTests(unittest.IsolatedAsyncioTestCase):
             )
         )
 
-        self.assertIs(record.task.state, TaskState.Failed)
-        self.assertIsNone(record.capabilities)
+        self.assertIs(snapshot.state, TaskState.Failed)
         self.assertEqual(tool_manager.reference_count("files"), 0)
         self.assertEqual(skill_manager.reference_count("research"), 0)
         await manager.aclose(grace_seconds=0)
@@ -445,7 +475,7 @@ class TaskManagerTests(unittest.IsolatedAsyncioTestCase):
     async def test_shutdown_survives_caller_cancellation_and_emits_closing_event(self):
         subscription = self.manager.subscribe_events()
         await subscription.next_event()
-        record = self.manager.start_task(spec("shutdown", tool_groups=("files",)))
+        self.manager.start_task(spec("shutdown", tool_groups=("files",)))
         await asyncio.sleep(0)
 
         closing = asyncio.create_task(
@@ -464,8 +494,7 @@ class TaskManagerTests(unittest.IsolatedAsyncioTestCase):
             except StopAsyncIteration:
                 break
         self.assertIn("runtime.closing", [event["event"] for event in events])
-        self.assertIs(record.task.state, TaskState.Interrupted)
-        self.assertEqual(self.manager.list_records(), ())
+        self.assertEqual(self.manager.list_tasks().tasks, ())
         self.assertEqual(self.tool_manager.reference_count("files"), 0)
 
     async def test_in_progress_shutdown_continues_when_awaiting_caller_is_cancelled(self):
@@ -489,11 +518,11 @@ class TaskManagerTests(unittest.IsolatedAsyncioTestCase):
         caller.cancel()
         with self.assertRaises(asyncio.CancelledError):
             await caller
-        self.assertNotEqual(manager.list_records(), ())
+        self.assertNotEqual(manager.list_tasks().tasks, ())
 
         factory.finish_cancel.set()
         await manager.aclose(grace_seconds=1)
-        self.assertEqual(manager.list_records(), ())
+        self.assertEqual(manager.list_tasks().tasks, ())
 
 
 if __name__ == "__main__":

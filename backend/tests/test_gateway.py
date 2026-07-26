@@ -1,6 +1,8 @@
 import os
 import asyncio
 import unittest
+from dataclasses import replace
+from datetime import UTC, datetime
 from pathlib import Path
 from types import SimpleNamespace
 
@@ -14,6 +16,8 @@ os.environ.setdefault(
 from backend.app.gateway.registry_routes import router as registry_router
 from backend.app.gateway.task_events import encode_sse_event
 from backend.app.services.errors import ApplicationError
+from backend.agent.task.TaskEntity import TaskState, TaskType
+from backend.agent.task.runtime import TaskListSnapshot, TaskSnapshot
 from backend.config import config as global_config
 from backend.main import create_app
 
@@ -31,6 +35,17 @@ TASK_VIEW = {
     "error": None,
 }
 
+TASK_SNAPSHOT = TaskSnapshot(
+    task_id=1,
+    task_name="Inspect repo",
+    task_type=TaskType.ReAct,
+    state=TaskState.Initializing,
+    queue_position=1,
+    created_at=datetime(2026, 7, 26, tzinfo=UTC),
+    started_at=None,
+    settled_at=None,
+)
+
 
 class FakeTaskService:
     def __init__(self):
@@ -40,26 +55,29 @@ class FakeTaskService:
     def start(self, spec):
         asyncio.get_running_loop()
         self.started.append(spec)
-        return TASK_VIEW
+        return TASK_SNAPSHOT
 
     def list(self):
-        return {
-            "running_count": 0,
-            "queued_count": 1,
-            "tasks": [TASK_VIEW],
-        }
+        return TaskListSnapshot(
+            running_count=0,
+            queued_count=1,
+            tasks=(TASK_SNAPSHOT,),
+        )
 
     def get(self, task_name):
         if task_name == "missing":
             raise ApplicationError(
                 "task_not_found",
                 "No Task has that name.",
-                404,
             )
-        return TASK_VIEW
+        return TASK_SNAPSHOT
 
     def interrupt(self, task_name):
-        return {**TASK_VIEW, "state": "interrupted", "queue_position": None}
+        return replace(
+            TASK_SNAPSHOT,
+            state=TaskState.Interrupted,
+            queue_position=None,
+        )
 
     def clear(self, task_name):
         self.cleared.append(task_name)

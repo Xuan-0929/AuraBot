@@ -11,7 +11,7 @@ from typing import Any
 from ..capabilities.lease import CapabilitySession
 from .TaskEntity import TaskState
 from .harness.Harness import Harness
-from .runtime import TaskRuntimeRecord
+from .runtime import _TaskRuntimeRecord
 
 
 TERMINAL_STATES = {
@@ -37,9 +37,9 @@ class TaskScheduler:
         capability_session_factory: (
             Callable[[], CapabilitySession] | None
         ) = None,
-        is_retained: Callable[[TaskRuntimeRecord], bool] | None = None,
-        on_started: Callable[[TaskRuntimeRecord], None] | None = None,
-        on_settled: Callable[[TaskRuntimeRecord], None] | None = None,
+        is_retained: Callable[[_TaskRuntimeRecord], bool] | None = None,
+        on_started: Callable[[_TaskRuntimeRecord], None] | None = None,
+        on_settled: Callable[[_TaskRuntimeRecord], None] | None = None,
         on_queue_changed: Callable[[], None] | None = None,
     ):
         if (
@@ -55,8 +55,8 @@ class TaskScheduler:
         self._on_started = on_started or (lambda record: None)
         self._on_settled = on_settled or (lambda record: None)
         self._on_queue_changed = on_queue_changed or (lambda: None)
-        self._ready: deque[TaskRuntimeRecord] = deque()
-        self._running: dict[str, TaskRuntimeRecord] = {}
+        self._ready: deque[_TaskRuntimeRecord] = deque()
+        self._running: dict[str, _TaskRuntimeRecord] = {}
 
     @property
     def running_count(self) -> int:
@@ -67,14 +67,14 @@ class TaskScheduler:
         return len(self._ready)
 
     @property
-    def ready(self) -> tuple[TaskRuntimeRecord, ...]:
+    def ready(self) -> tuple[_TaskRuntimeRecord, ...]:
         return tuple(self._ready)
 
-    def enqueue(self, record: TaskRuntimeRecord) -> None:
+    def enqueue(self, record: _TaskRuntimeRecord) -> None:
         self._ready.append(record)
         self._refresh_positions()
 
-    def take_ready(self) -> TaskRuntimeRecord | None:
+    def take_ready(self) -> _TaskRuntimeRecord | None:
         if (
             not self._ready
             or len(self._running) >= self._max_running
@@ -85,7 +85,7 @@ class TaskScheduler:
         self._refresh_positions()
         return record
 
-    def remove_queued(self, record: TaskRuntimeRecord) -> bool:
+    def remove_queued(self, record: _TaskRuntimeRecord) -> bool:
         match = next(
             (candidate for candidate in self._ready if candidate is record),
             None,
@@ -97,14 +97,14 @@ class TaskScheduler:
         self._refresh_positions()
         return True
 
-    def mark_running(self, record: TaskRuntimeRecord) -> None:
+    def mark_running(self, record: _TaskRuntimeRecord) -> None:
         self._running[record.task.task_title] = record
 
-    def mark_settled(self, record: TaskRuntimeRecord) -> None:
+    def mark_settled(self, record: _TaskRuntimeRecord) -> None:
         if self._running.get(record.task.task_title) is record:
             self._running.pop(record.task.task_title, None)
 
-    def remove(self, record: TaskRuntimeRecord) -> None:
+    def remove(self, record: _TaskRuntimeRecord) -> None:
         self.remove_queued(record)
         self.mark_settled(record)
 
@@ -128,7 +128,7 @@ class TaskScheduler:
         if changed:
             self._on_queue_changed()
 
-    def cancel(self, record: TaskRuntimeRecord) -> None:
+    def cancel(self, record: _TaskRuntimeRecord) -> None:
         runner = record.runner
         try:
             current = asyncio.current_task()
@@ -161,7 +161,7 @@ class TaskScheduler:
         if pending:
             await asyncio.gather(*pending, return_exceptions=True)
 
-    def _activate(self, record: TaskRuntimeRecord) -> None:
+    def _activate(self, record: _TaskRuntimeRecord) -> None:
         session: CapabilitySession | None = None
         try:
             if self._capability_session_factory is None:
@@ -222,7 +222,7 @@ class TaskScheduler:
         )
         self._on_started(record)
 
-    async def _execute(self, record: TaskRuntimeRecord) -> None:
+    async def _execute(self, record: _TaskRuntimeRecord) -> None:
         try:
             if record.harness is None:
                 raise RuntimeError("Task runtime has no Harness")
@@ -247,7 +247,7 @@ class TaskScheduler:
             self._on_settled(record)
             self.drain()
 
-    def _running_records(self) -> tuple[TaskRuntimeRecord, ...]:
+    def _running_records(self) -> tuple[_TaskRuntimeRecord, ...]:
         return tuple(self._running.values())
 
     def _refresh_positions(self) -> None:

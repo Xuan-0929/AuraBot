@@ -76,20 +76,26 @@ class TaskRuntimeApplicationTests(unittest.IsolatedAsyncioTestCase):
         )
 
         for _ in range(20):
+            snapshots = manager.list_tasks().tasks
             if all(
-                record.runner is None
-                for record in manager.list_records()
+                snapshot.state
+                in {
+                    TaskState.Completed,
+                    TaskState.Failed,
+                    TaskState.Interrupted,
+                }
+                for snapshot in snapshots
             ):
                 break
             await asyncio.sleep(0)
 
-        react = manager.get_record("react-runtime")
-        plan = manager.get_record("plan-runtime")
+        react = manager.get_task("react-runtime")
+        plan = manager.get_task("plan-runtime")
         self.assertIsNotNone(react)
         self.assertIsNotNone(plan)
-        self.assertIs(react.task.state, TaskState.Completed)
+        self.assertIs(react.state, TaskState.Completed)
         self.assertEqual(react.result, "ReAct finished")
-        self.assertIs(plan.task.state, TaskState.Failed)
+        self.assertIs(plan.state, TaskState.Failed)
         self.assertTrue(plan.result.startswith("Status: failed"))
         self.assertEqual(tool_manager.reference_count("Plan"), 1)
 

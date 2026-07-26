@@ -11,19 +11,6 @@ from ...agent.task.harness.Plan import PlanOperationError, PlanStepDefinition
 from ...agent.task.harness.planning import PlanningHarness
 from .errors import ApplicationError
 
-PLAN_ERROR_STATUS = {
-    "invalid_plan": 400,
-    "task_not_found": 404,
-    "plan_not_found": 404,
-    "step_not_found": 404,
-    "invalid_task_type": 409,
-    "invalid_task_state": 409,
-    "plan_already_exists": 409,
-    "completed_step_immutable": 409,
-    "step_not_current": 409,
-    "step_already_completed": 409,
-}
-
 
 class PlanToolApplicationService:
     def __init__(self, task_manager: TaskManager):
@@ -76,7 +63,6 @@ class PlanToolApplicationService:
             raise ApplicationError(
                 "task_not_found",
                 "No active or retained Task runtime has that name.",
-                404,
             )
         if (
             runtime.task.task_type is not TaskType.PlanAndSolve
@@ -85,7 +71,6 @@ class PlanToolApplicationService:
             raise ApplicationError(
                 "invalid_task_type",
                 "The requested Task runtime is not Plan-and-Solve.",
-                409,
             )
         try:
             return asdict(operation(runtime.planning_runtime))
@@ -93,8 +78,7 @@ class PlanToolApplicationService:
             raise ApplicationError(
                 exc.code,
                 exc.message,
-                PLAN_ERROR_STATUS[exc.code],
             ) from exc
 
 
-__all__ = ["PLAN_ERROR_STATUS", "PlanToolApplicationService"]
+__all__ = ["PlanToolApplicationService"]

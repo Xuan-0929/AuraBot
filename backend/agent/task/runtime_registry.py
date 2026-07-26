@@ -2,13 +2,13 @@
 
 from __future__ import annotations
 
-from .runtime import TaskRuntimeRecord
+from .runtime import _TaskRuntimeRecord
 
 
 class TaskRuntimeRegistry:
     def __init__(self):
-        self._by_id: dict[int, TaskRuntimeRecord] = {}
-        self._by_name: dict[str, TaskRuntimeRecord] = {}
+        self._by_id: dict[int, _TaskRuntimeRecord] = {}
+        self._by_name: dict[str, _TaskRuntimeRecord] = {}
         self._next_id = 1
 
     def allocate_id(self) -> int:
@@ -16,7 +16,7 @@ class TaskRuntimeRegistry:
         self._next_id += 1
         return task_id
 
-    def add(self, record: TaskRuntimeRecord) -> None:
+    def add(self, record: _TaskRuntimeRecord) -> None:
         task = record.task
         if task.task_id in self._by_id:
             raise ValueError(f"Task ID is already registered: {task.task_id}")
@@ -28,20 +28,20 @@ class TaskRuntimeRegistry:
         self._by_name[task.task_title] = record
         self._next_id = max(self._next_id, task.task_id + 1)
 
-    def get(self, task_name: str) -> TaskRuntimeRecord | None:
+    def get(self, task_name: str) -> _TaskRuntimeRecord | None:
         return self._by_name.get(task_name)
 
-    def list(self) -> tuple[TaskRuntimeRecord, ...]:
+    def list(self) -> tuple[_TaskRuntimeRecord, ...]:
         return tuple(self._by_id.values())
 
-    def owns(self, record: TaskRuntimeRecord) -> bool:
+    def owns(self, record: _TaskRuntimeRecord) -> bool:
         task = record.task
         return (
             self._by_id.get(task.task_id) is record
             and self._by_name.get(task.task_title) is record
         )
 
-    def remove(self, record: TaskRuntimeRecord) -> bool:
+    def remove(self, record: _TaskRuntimeRecord) -> bool:
         if not self.owns(record):
             return False
         self._by_id.pop(record.task.task_id, None)

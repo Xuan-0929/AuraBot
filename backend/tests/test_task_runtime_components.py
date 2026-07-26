@@ -3,19 +3,19 @@ from datetime import UTC, datetime
 
 from backend.agent.task.Task import Task
 from backend.agent.task.TaskEntity import TaskType
-from backend.agent.task.runtime import TaskRuntimeRecord, TaskStartSpec
+from backend.agent.task.runtime import _TaskRuntimeRecord, TaskStartSpec
 from backend.agent.task.runtime_registry import TaskRuntimeRegistry
 from backend.agent.task.scheduler import TaskScheduler
 
 
-def record(task_id: int, name: str) -> TaskRuntimeRecord:
+def record(task_id: int, name: str) -> _TaskRuntimeRecord:
     spec = TaskStartSpec(
         task_name=name,
         parent_session_id="main",
         task_type=TaskType.ReAct,
         task_prompt="Work",
     )
-    return TaskRuntimeRecord(
+    return _TaskRuntimeRecord(
         task=Task(
             task_id,
             name,

@@ -3,12 +3,17 @@
 from __future__ import annotations
 
 import re
+from datetime import datetime
 from typing import Any, Literal
 
 from pydantic import BaseModel, ConfigDict, Field, field_validator
 
 from ...agent.task.TaskEntity import TaskType
-from ...agent.task.runtime import TaskStartSpec
+from ...agent.task.runtime import (
+    TaskListSnapshot,
+    TaskSnapshot,
+    TaskStartSpec,
+)
 
 _CONTROL_PATTERN = re.compile(r"[\x00-\x1f\x7f]")
 
@@ -95,11 +100,59 @@ class TaskView(GatewayModel):
     result: Any = None
     error: dict[str, str] | None = None
 
+    @classmethod
+    def from_snapshot(cls, snapshot: TaskSnapshot) -> "TaskView":
+        return cls(
+            task_id=snapshot.task_id,
+            task_name=snapshot.task_name,
+            task_type={
+                TaskType.ReAct: "react",
+                TaskType.PlanAndSolve: "plan_and_solve",
+                TaskType.Goal: "goal",
+            }[snapshot.task_type],
+            state=snapshot.state.value.lower(),
+            queue_position=snapshot.queue_position,
+            created_at=_iso(snapshot.created_at),
+            started_at=_iso(snapshot.started_at),
+            settled_at=_iso(snapshot.settled_at),
+            result=snapshot.result,
+            error=(
+                {
+                    "code": snapshot.error.code,
+                    "message": snapshot.error.message,
+                }
+                if snapshot.error is not None
+                else None
+            ),
+        )
+
 
 class TaskListResponse(GatewayModel):
     running_count: int
     queued_count: int
     tasks: list[TaskView]
+
+    @classmethod
+    def from_snapshot(
+        cls,
+        snapshot: TaskListSnapshot,
+    ) -> "TaskListResponse":
+        return cls(
+            running_count=snapshot.running_count,
+            queued_count=snapshot.queued_count,
+            tasks=[
+                TaskView.from_snapshot(task)
+                for task in snapshot.tasks
+            ],
+        )
+
+
+def _iso(value: datetime | None) -> str | None:
+    return (
+        value.isoformat().replace("+00:00", "Z")
+        if value is not None
+        else None
+    )
 
 
 __all__ = [
