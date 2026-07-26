@@ -142,7 +142,7 @@ class PlanRuntimeIntegrationTests(unittest.IsolatedAsyncioTestCase):
             "Ship the runtime",
         )
         factory = HarnessFactory(
-            llm_client=FakeLLMClient(),
+            task_llm_client=FakeLLMClient(),
             tool_call_gateway_factory=lambda task: ToolCallGateway(
                 self.mcp_client
             ),
@@ -270,7 +270,7 @@ class PlanRuntimeIntegrationTests(unittest.IsolatedAsyncioTestCase):
             "Ship the runtime",
         )
         factory = HarnessFactory(
-            llm_client=llm_client,
+            task_llm_client=llm_client,
             tool_call_gateway_factory=lambda task: ToolCallGateway(
                 self.mcp_client
             ),

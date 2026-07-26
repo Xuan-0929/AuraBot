@@ -9,8 +9,8 @@ from ...tools.core.ToolCallEntity import (
     ToolExecutionResult,
 )
 from ...tools.native.PlanToolGroup import (
+    PLAN_TOOL_GROUP_NAME,
     PLAN_TOOL_NAMES,
-    create_plan_tool_group,
 )
 from ..TaskEntity import TaskState
 from .Harness import Harness, HarnessInterruptedError
@@ -43,6 +43,7 @@ class PlanAndSolveHarness(Harness):
     MAX_PLAN_ROUNDS = 60
     MAX_TOOL_CALLS = 100
     PLAN_PROGRESS_GRACE_ROUNDS = 5
+    required_tool_group_names = (PLAN_TOOL_GROUP_NAME,)
 
     def __init__(self, **kwargs):
         super().__init__(**kwargs)
@@ -57,17 +58,6 @@ class PlanAndSolveHarness(Harness):
         """Return the latest immutable Plan snapshot."""
 
         return self.planning_runtime.plan
-
-    def inject_tool_group(self) -> None:
-        """Install the canonical native Plan tools required by this Harness."""
-
-        if self.capability_session is not None:
-            required = self.capability_session.acquire_tool_groups(("Plan",))
-        else:
-            required = (create_plan_tool_group(),)
-        self._inject_required_tool_groups(
-            required
-        )
 
     def create_plan(
         self,

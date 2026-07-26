@@ -17,6 +17,7 @@ from ...tools.core.ToolCallEntity import (
     ToolProtocolResponse,
 )
 from ...tools.core.ToolCallGateway import ToolCallGateway
+from ...tools.native import create_native_tool_groups
 from ..Task import Task
 from ..TaskEntity import TaskState
 from .adaptors.Adaptor import Adaptor, AdaptorRouteError
@@ -33,6 +34,8 @@ class HarnessStateTransitionError(RuntimeError):
 
 class Harness(ABC):
     """One task-local agent loop backed by a shared LLM client."""
+
+    required_tool_group_names: tuple[str, ...] = ()
 
     def __init__(
         self,
@@ -69,7 +72,7 @@ class Harness(ABC):
         self._adaptor_pipelines: dict[str, tuple[Adaptor, ...]] = {}
         self._adaptor_routes_built = False
         self._built_tool_groups: object | None = None
-        self.inject_tool_group()
+        self._install_required_tool_groups()
 
     @property
     def task(self) -> Task:
@@ -105,13 +108,24 @@ class Harness(ABC):
             "Harness subclasses must implement build_system_prompt()"
         )
 
-    @abstractmethod
-    def inject_tool_group(self) -> None:
-        """Install ToolGroups required by this concrete Harness algorithm."""
+    def _install_required_tool_groups(self) -> None:
+        """Install ToolGroups declared by the concrete Harness."""
 
-        raise NotImplementedError(
-            "Harness subclasses must implement inject_tool_group()"
+        names = self.required_tool_group_names
+        if (
+            not isinstance(names, tuple)
+            or any(not isinstance(name, str) or not name for name in names)
+            or len(set(names)) != len(names)
+        ):
+            raise TypeError(
+                "required_tool_group_names must be unique non-empty strings"
+            )
+        required = (
+            self.capability_session.acquire_tool_groups(names)
+            if self.capability_session is not None
+            else create_native_tool_groups(names)
         )
+        self._inject_required_tool_groups(required)
 
     def _inject_required_tool_groups(
         self,

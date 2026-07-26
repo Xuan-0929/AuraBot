@@ -2,7 +2,10 @@ import unittest
 from unittest.mock import patch
 
 from backend.agent.task.harness.Harness import Harness
-from backend.agent.task.harness.HarnessFactory import HarnessFactory
+from backend.agent.task.harness.HarnessFactory import (
+    HarnessBuildContext,
+    HarnessFactory,
+)
 from backend.agent.task.harness.PlanAndSolveHarness import PlanAndSolveHarness
 from backend.agent.task.harness.ReActHarness import ReActHarness
 from backend.agent.task.harness.adaptors.AdaptorRegistry import (
@@ -20,9 +23,6 @@ class FakeLLMClient:
 
 
 class GoalHarness(Harness):
-    def inject_tool_group(self) -> None:
-        self._inject_required_tool_groups(())
-
     def build_system_prompt(self) -> str:
         return "Goal"
 
@@ -32,6 +32,16 @@ class GoalHarness(Harness):
 
 class AbstractHarness(Harness):
     pass
+
+
+def goal_builder(context: HarnessBuildContext) -> Harness:
+    return GoalHarness(
+        task=context.task,
+        llm_client=context.task_llm_client,
+        tool_call_gateway=context.tool_call_gateway,
+        adaptor_registry=context.adaptor_registry,
+        capability_session=context.capability_session,
+    )
 
 
 def make_task(task_id: int, task_type: TaskType) -> Task:
@@ -55,7 +65,7 @@ class HarnessFactoryTests(unittest.TestCase):
         config_patcher.start()
         self.addCleanup(config_patcher.stop)
         self.llm_client = FakeLLMClient()
-        self.factory = HarnessFactory(llm_client=self.llm_client)
+        self.factory = HarnessFactory(task_llm_client=self.llm_client)
 
     def test_creates_react_harness_for_react_task(self):
         task = make_task(1, TaskType.ReAct)
@@ -123,7 +133,7 @@ class HarnessFactoryTests(unittest.TestCase):
         registry = AdaptorRegistry()
         gateway_calls = []
         factory = HarnessFactory(
-            llm_client=self.llm_client,
+            task_llm_client=self.llm_client,
             adaptor_registry=registry,
             tool_call_gateway_factory=lambda task: gateway_calls.append(task)
             or object(),
@@ -142,7 +152,7 @@ class HarnessFactoryTests(unittest.TestCase):
             self.factory.create(task)
 
     def test_registers_custom_harness(self):
-        self.factory.register(TaskType.Goal, GoalHarness)
+        self.factory.register(TaskType.Goal, goal_builder)
         task = make_task(5, TaskType.Goal)
 
         harness = self.factory.create(task)
@@ -152,12 +162,12 @@ class HarnessFactoryTests(unittest.TestCase):
 
     def test_rejects_duplicate_registration_without_replace(self):
         with self.assertRaisesRegex(ValueError, "already registered.*ReAct"):
-            self.factory.register(TaskType.ReAct, GoalHarness)
+            self.factory.register(TaskType.ReAct, goal_builder)
 
     def test_replaces_existing_registration_when_requested(self):
         self.factory.register(
             TaskType.ReAct,
-            GoalHarness,
+            goal_builder,
             replace=True,
         )
 
@@ -165,13 +175,15 @@ class HarnessFactoryTests(unittest.TestCase):
 
         self.assertIsInstance(harness, GoalHarness)
 
-    def test_rejects_non_harness_registration(self):
-        with self.assertRaisesRegex(TypeError, "must inherit from Harness"):
-            self.factory.register(TaskType.Goal, object)
+    def test_rejects_non_callable_builder(self):
+        with self.assertRaisesRegex(TypeError, "builder must be callable"):
+            self.factory.register(TaskType.Goal, object())
 
-    def test_rejects_abstract_harness_registration(self):
-        with self.assertRaisesRegex(TypeError, "must be a concrete Harness"):
-            self.factory.register(TaskType.Goal, AbstractHarness)
+    def test_rejects_builder_that_returns_non_harness(self):
+        self.factory.register(TaskType.Goal, lambda context: object())
+
+        with self.assertRaisesRegex(TypeError, "builder must return Harness"):
+            self.factory.create(make_task(7, TaskType.Goal))
 
     def test_rejects_non_task_input(self):
         with self.assertRaisesRegex(TypeError, "task must be a Task"):
