@@ -484,9 +484,10 @@ frontend/                        # Electron + Vue desktop app (npm)
     integration/
     e2e/
 
-backend/                         # Python FastAPI microservices
-  app/gateway/                   # gateway, health, service discovery
-  app/services/_template/        # feature service template for ports 6402+
+backend/                         # Python FastAPI backend runtime
+  main.py                        # process entry and application composition root
+  app/gateway/                   # HTTP routing and transport adapters
+  agent/                         # task, harness, LLM, and tool runtime
   pyproject.toml                 # Python dependencies
   tests/
 
