@@ -9,8 +9,8 @@ from datetime import UTC, datetime
 from typing import Any
 
 from ..capabilities.lease import CapabilitySession
-from .TaskEntity import TaskState
-from .harness.Harness import Harness
+from .model import TaskState
+from .harness.harness import Harness
 from .runtime import _TaskRuntimeRecord
 
 

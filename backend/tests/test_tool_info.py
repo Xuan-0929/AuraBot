@@ -5,8 +5,8 @@ from pathlib import Path
 from xml.etree import ElementTree
 from unittest.mock import patch
 
-from backend.agent.tools.Tool import Tool
-from backend.agent.tools.ToolGroup import ToolGroup
+from backend.agent.tools.tool import Tool
+from backend.agent.tools.tool_group import ToolGroup
 from backend.agent.tools.utils.formatter import (
     format_tool_group_intro,
     parse_optional_schema_json,

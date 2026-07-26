@@ -6,18 +6,18 @@ from collections.abc import Mapping, Sequence
 from types import MappingProxyType
 from typing import Any
 
-from ...LLMClient import ChatCompletionChoice, Message
-from ...tools.core.OpenAIChatToolProtocol import OpenAIChatToolProtocol
-from ...tools.core.ToolCallEntity import (
+from ...llm_client import ChatCompletionChoice, Message
+from ...tools.core.openai_chat_protocol import OpenAIChatToolProtocol
+from ...tools.core.model import (
     ResolvedToolCall,
     ToolCall,
     ToolExecutionResult,
     ToolProtocolResponse,
 )
-from ...tools.core.ToolCallGateway import ToolCallGateway
-from ..Task import Task
-from .adaptors.Adaptor import Adaptor, AdaptorRouteError
-from .adaptors.AdaptorRegistry import AdaptorRegistry
+from ...tools.core.gateway import ToolCallGateway
+from ..model import Task
+from .adaptors.adaptor import Adaptor, AdaptorRouteError
+from .adaptors.registry import AdaptorRegistry
 
 
 class ToolExecutionPipeline:

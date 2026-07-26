@@ -4,20 +4,20 @@ import unittest
 from pathlib import Path
 from string import Formatter
 
-from backend.agent.LLMClient import ChatCompletionChoice
-from backend.agent.skills.Skill import Skill
-from backend.agent.skills.SkillGroup import SkillGroup
-from backend.agent.task.Task import Task, TaskState, TaskType
-from backend.agent.task.harness.Harness import Harness
-from backend.agent.task.harness.ReActHarness import (
+from backend.agent.llm_client import ChatCompletionChoice
+from backend.agent.skills.skill import Skill
+from backend.agent.skills.skill_group import SkillGroup
+from backend.agent.task.model import Task, TaskState, TaskType
+from backend.agent.task.harness.harness import Harness
+from backend.agent.task.harness.react import (
     ReActHarness,
     ReActInterruptedError,
     ReActLimitError,
 )
 from backend.agent.task.harness.prompts import system_prompt_ReAct
-from backend.agent.tools.Tool import Tool
-from backend.agent.tools.ToolGroup import ToolGroup
-from backend.agent.tools.core.ToolCallEntity import ToolExecutionResult
+from backend.agent.tools.tool import Tool
+from backend.agent.tools.tool_group import ToolGroup
+from backend.agent.tools.core.model import ToolExecutionResult
 
 
 EMPTY_INPUT_SCHEMA = {"type": "object", "properties": {}}

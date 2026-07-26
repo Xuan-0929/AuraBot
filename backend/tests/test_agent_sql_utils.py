@@ -5,10 +5,10 @@ from pathlib import Path
 from unittest.mock import patch
 
 from backend.agent.integration.sql import utils
-from backend.agent.integration.sql.SkillGroupSQL import SkillGroupSQL
-from backend.agent.integration.sql.SkillSQL import SkillSQL
-from backend.agent.skills.Skill import Skill
-from backend.agent.skills.SkillGroup import SkillGroup
+from backend.agent.integration.sql.skill_group import SkillGroupSQL
+from backend.agent.integration.sql.skill import SkillSQL
+from backend.agent.skills.skill import Skill
+from backend.agent.skills.skill_group import SkillGroup
 
 
 class AgentSQLUtilsTests(unittest.TestCase):

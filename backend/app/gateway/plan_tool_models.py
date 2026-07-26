@@ -4,7 +4,7 @@ from __future__ import annotations
 
 from pydantic import BaseModel, ConfigDict, Field
 
-from ...agent.tools.native.PlanToolGroup import STEP_ID_PATTERN
+from ...agent.tools.native.plan import STEP_ID_PATTERN
 
 
 class InternalModel(BaseModel):

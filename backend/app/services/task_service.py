@@ -2,7 +2,7 @@
 
 from __future__ import annotations
 
-from ...agent.task.TaskManager import (
+from ...agent.task.manager import (
     DuplicateTaskNameError,
     TaskManager,
     TaskManagerClosedError,

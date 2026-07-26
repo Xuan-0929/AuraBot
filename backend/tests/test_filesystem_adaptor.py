@@ -2,17 +2,17 @@ import tempfile
 import unittest
 from pathlib import Path
 
-from backend.agent.task.harness.adaptors.Adaptor import (
+from backend.agent.task.harness.adaptors.adaptor import (
     Adaptor,
     AdaptorRouteError,
 )
-from backend.agent.task.harness.adaptors.FileSystemAdaptor import (
+from backend.agent.task.harness.adaptors.file_system import (
     FileSystemAdaptor,
     PathBuildError,
     PathOutOfSandboxError,
 )
-from backend.agent.tools.Tool import Tool
-from backend.agent.tools.core.ToolCallEntity import ResolvedToolCall
+from backend.agent.tools.tool import Tool
+from backend.agent.tools.core.model import ResolvedToolCall
 
 
 def make_call(

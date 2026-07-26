@@ -4,10 +4,10 @@ from pathlib import Path
 from unittest.mock import patch
 
 from backend.agent.integration.sql import utils
-from backend.agent.integration.sql.AdaptorSQL import AdaptorSQL
-from backend.agent.integration.sql.MCPServerSQL import MCPServerSQL
-from backend.agent.integration.sql.ToolGroupSQL import ToolGroupSQL
-from backend.agent.integration.sql.ToolSQL import ToolSQL
+from backend.agent.integration.sql.adaptor import AdaptorSQL
+from backend.agent.integration.sql.mcp_server import MCPServerSQL
+from backend.agent.integration.sql.tool_group import ToolGroupSQL
+from backend.agent.integration.sql.tool import ToolSQL
 
 
 class AdaptorSQLTests(unittest.TestCase):

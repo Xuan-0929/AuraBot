@@ -1,12 +1,12 @@
 import unittest
 
 from backend.agent.capabilities.lease import CapabilitySession
-from backend.agent.skills.Skill import Skill
-from backend.agent.skills.SkillGroup import SkillGroup
-from backend.agent.skills.SkillGroupManager import SkillGroupManager
-from backend.agent.tools.Tool import Tool
-from backend.agent.tools.ToolGroup import ToolGroup
-from backend.agent.tools.ToolGroupManager import ToolGroupManager
+from backend.agent.skills.skill import Skill
+from backend.agent.skills.skill_group import SkillGroup
+from backend.agent.skills.manager import SkillGroupManager
+from backend.agent.tools.tool import Tool
+from backend.agent.tools.tool_group import ToolGroup
+from backend.agent.tools.manager import ToolGroupManager
 
 
 def tool_group(name: str) -> ToolGroup:

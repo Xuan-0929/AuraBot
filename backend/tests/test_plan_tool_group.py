@@ -2,7 +2,7 @@ import unittest
 
 from jsonschema import Draft202012Validator
 
-from backend.agent.tools.native.PlanToolGroup import (
+from backend.agent.tools.native.plan import (
     PLAN_CONTEXT_ADAPTOR,
     PLAN_TOOL_DEFINITIONS,
     PLAN_TOOL_NAMES,

@@ -12,12 +12,12 @@ from pathlib import Path
 
 from mcp.types import Tool as MCPTool
 
-from backend.agent.LLMClient import ChatCompletionChoice, LLMClient
+from backend.agent.llm_client import ChatCompletionChoice, LLMClient
 from backend.agent.integration.mcp import MCPClient, MCPClientError
-from backend.agent.task.Task import Task, TaskState, TaskType
-from backend.agent.task.harness.ReActHarness import ReActHarness
-from backend.agent.tools.Tool import Tool
-from backend.agent.tools.ToolGroup import ToolGroup
+from backend.agent.task.model import Task, TaskState, TaskType
+from backend.agent.task.harness.react import ReActHarness
+from backend.agent.tools.tool import Tool
+from backend.agent.tools.tool_group import ToolGroup
 from backend.config import Config
 
 

@@ -1,10 +1,10 @@
 import unittest
 
-from backend.agent.tools.Tool import Tool
-from backend.agent.tools.ToolGroup import ToolGroup
-from backend.agent.tools.core.ToolCallEntity import ToolCall
-from backend.agent.tools.core.ToolCallResolver import ToolCallResolver
-from backend.agent.tools.core.ToolExceptions import (
+from backend.agent.tools.tool import Tool
+from backend.agent.tools.tool_group import ToolGroup
+from backend.agent.tools.core.model import ToolCall
+from backend.agent.tools.core.resolver import ToolCallResolver
+from backend.agent.tools.core.errors import (
     DuplicateToolNameError,
     ToolNotAuthorizedError,
 )

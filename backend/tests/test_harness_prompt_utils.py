@@ -1,13 +1,13 @@
 import unittest
 
-from backend.agent.task.Task import Task, TaskType
+from backend.agent.task.model import Task, TaskType
 from backend.agent.task.harness.utils.prompt import (
     build_common_prompt_values,
     format_optional,
     format_tool_group_summary,
 )
-from backend.agent.tools.Tool import Tool
-from backend.agent.tools.ToolGroup import ToolGroup
+from backend.agent.tools.tool import Tool
+from backend.agent.tools.tool_group import ToolGroup
 
 
 EMPTY_INPUT_SCHEMA = {"type": "object", "properties": {}}

@@ -6,8 +6,8 @@ from collections.abc import Sequence
 from threading import RLock
 from typing import Protocol, runtime_checkable
 
-from ..Task import Task, TaskInactiveError
-from .Plan import (
+from ..model import Task, TaskInactiveError
+from .plan import (
     CompletePlanStepResult,
     CreatePlanResult,
     Plan,

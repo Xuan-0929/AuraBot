@@ -4,12 +4,12 @@ from unittest.mock import patch
 from fastapi import FastAPI
 from fastapi.testclient import TestClient
 
-from backend.agent.task.Task import Task, TaskState, TaskType
-from backend.agent.task.TaskManager import TaskManager
-from backend.agent.task.harness.PlanAndSolveHarness import (
+from backend.agent.task.model import Task, TaskState, TaskType
+from backend.agent.task.manager import TaskManager
+from backend.agent.task.harness.plan_and_solve import (
     PlanAndSolveHarness,
 )
-from backend.agent.task.harness.ReActHarness import ReActHarness
+from backend.agent.task.harness.react import ReActHarness
 from backend.app.gateway.plan_tool_routes import (
     router,
 )
@@ -17,6 +17,7 @@ from backend.app.gateway.dependencies import get_plan_tool_service
 from backend.app.gateway.errors import application_error_handler
 from backend.app.services.errors import ApplicationError
 from backend.app.services.plan_tool_service import PlanToolApplicationService
+from backend.tests.task_runtime_helpers import retain_test_harness
 
 
 class FakeLLMClient:
@@ -75,7 +76,7 @@ class PlanToolRouteTests(unittest.TestCase):
 
     def test_complete_internal_api_flow_returns_frozen_protocol(self):
         harness = runtime()
-        self.manager.register_runtime(harness)
+        retain_test_harness(self.manager, harness)
 
         created = self.client.post(
             "/tool/plan/create",
@@ -143,7 +144,7 @@ class PlanToolRouteTests(unittest.TestCase):
         self.assertEqual(missing.json()["error"]["code"], "task_not_found")
 
         wrong = runtime(TaskType.ReAct, name="Wrong")
-        self.manager.register_runtime(wrong)
+        retain_test_harness(self.manager, wrong)
         invalid_type = self.client.post(
             "/tool/plan/read",
             json={"task_name": "Wrong"},
@@ -156,7 +157,7 @@ class PlanToolRouteTests(unittest.TestCase):
 
         plan = runtime(name="No plan")
         plan.task.task_id = 2
-        self.manager.register_runtime(plan)
+        retain_test_harness(self.manager, plan)
         not_found = self.client.post(
             "/tool/plan/read",
             json={"task_name": "No plan"},
@@ -169,7 +170,7 @@ class PlanToolRouteTests(unittest.TestCase):
 
     def test_terminal_task_and_conflicts_return_409_without_leaks(self):
         harness = runtime()
-        self.manager.register_runtime(harness)
+        retain_test_harness(self.manager, harness)
         create_body = {
             "task_name": "Plan task",
             "goal": "Ship",

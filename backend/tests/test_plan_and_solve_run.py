@@ -2,20 +2,21 @@ import asyncio
 import unittest
 from unittest.mock import patch
 
-from backend.agent.LLMClient import ChatCompletionChoice
-from backend.agent.task.Task import Task, TaskState, TaskType
-from backend.agent.task.TaskManager import TaskManager
+from backend.agent.llm_client import ChatCompletionChoice
+from backend.agent.task.model import Task, TaskState, TaskType
+from backend.agent.task.manager import TaskManager
 from backend.agent.task.runtime import InterruptTaskOutcome
-from backend.agent.task.harness.Plan import PlanStepDefinition
-from backend.agent.task.harness.PlanAndSolveHarness import (
+from backend.agent.task.harness.plan import PlanStepDefinition
+from backend.agent.task.harness.plan_and_solve import (
     PlanAndSolveFinalResponseError,
     PlanAndSolveHarness,
     PlanAndSolveInterruptedError,
     PlanAndSolveLimitError,
 )
-from backend.agent.tools.Tool import Tool
-from backend.agent.tools.ToolGroup import ToolGroup
-from backend.agent.tools.core.ToolCallEntity import ToolExecutionResult
+from backend.agent.tools.tool import Tool
+from backend.agent.tools.tool_group import ToolGroup
+from backend.agent.tools.core.model import ToolExecutionResult
+from backend.tests.task_runtime_helpers import retain_test_harness
 
 
 SERVER_URL = "http://127.0.0.1:6410/mcp"
@@ -574,10 +575,8 @@ class PlanAndSolveRunTests(unittest.IsolatedAsyncioTestCase):
         manager = TaskManager()
         task = make_task()
         harness = make_harness(BlockingLLM(), task=task)
-        manager.register_runtime(harness)
+        record = retain_test_harness(manager, harness)
         running = asyncio.create_task(harness.run())
-        record = manager.get_record(task.task_title)
-        self.assertIsNotNone(record)
         record.runner = running
         await started.wait()
 

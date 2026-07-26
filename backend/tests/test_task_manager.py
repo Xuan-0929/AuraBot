@@ -3,27 +3,26 @@ import unittest
 from dataclasses import FrozenInstanceError
 
 from backend.agent.capabilities.lease import CapabilitySession
-from backend.agent.skills.SkillGroup import SkillGroup
-from backend.agent.skills.SkillGroupManager import SkillGroupManager
-from backend.agent.task.Task import Task
-from backend.agent.task.TaskEntity import TaskState, TaskType
-from backend.agent.task.TaskManager import (
+from backend.agent.skills.skill_group import SkillGroup
+from backend.agent.skills.manager import SkillGroupManager
+from backend.agent.task.model import Task, TaskState, TaskType
+from backend.agent.task.manager import (
     DuplicateTaskNameError,
     TaskManager,
 )
 from backend.agent.task.events import TaskEventBroker
-from backend.agent.task.harness.Harness import Harness
-from backend.agent.task.harness.HarnessFactory import HarnessFactory
+from backend.agent.task.harness.harness import Harness
+from backend.agent.task.harness.factory import HarnessFactory
 from backend.agent.task.runtime import (
     InterruptTaskOutcome,
     TaskFailure,
     TaskSnapshot,
     TaskStartSpec,
 )
-from backend.agent.tools.Tool import Tool
-from backend.agent.tools.ToolGroup import ToolGroup
-from backend.agent.tools.ToolGroupManager import ToolGroupManager
-from backend.agent.tools.native.PlanToolGroup import create_plan_tool_group
+from backend.agent.tools.tool import Tool
+from backend.agent.tools.tool_group import ToolGroup
+from backend.agent.tools.manager import ToolGroupManager
+from backend.agent.tools.native.plan import create_plan_tool_group
 
 
 def make_tool_group(name: str) -> ToolGroup:

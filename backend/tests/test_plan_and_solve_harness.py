@@ -2,18 +2,18 @@ import unittest
 from concurrent.futures import ThreadPoolExecutor
 from unittest.mock import patch
 
-from backend.agent.task.Task import Task, TaskState, TaskType
-from backend.agent.task.harness.Harness import Harness
-from backend.agent.task.harness.Plan import (
+from backend.agent.task.model import Task, TaskState, TaskType
+from backend.agent.task.harness.harness import Harness
+from backend.agent.task.harness.plan import (
     PlanOperationError,
     PlanStepDefinition,
 )
-from backend.agent.task.harness.PlanAndSolveHarness import (
+from backend.agent.task.harness.plan_and_solve import (
     PlanAndSolveHarness,
 )
-from backend.agent.task.harness.ReActHarness import ReActHarness
-from backend.agent.tools.Tool import Tool
-from backend.agent.tools.ToolGroup import ToolGroup
+from backend.agent.task.harness.react import ReActHarness
+from backend.agent.tools.tool import Tool
+from backend.agent.tools.tool_group import ToolGroup
 
 
 class FakeLLMClient:

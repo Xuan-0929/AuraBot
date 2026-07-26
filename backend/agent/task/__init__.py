@@ -1,5 +1,5 @@
-from .Task import Task, TaskInactiveError
-from .TaskManager import (
+from .model import Task, TaskInactiveError, TaskState, TaskType
+from .manager import (
     DuplicateTaskNameError,
     TaskManager,
     TaskManagerClosedError,
@@ -7,21 +7,15 @@ from .TaskManager import (
 from .runtime import (
     InterruptTaskOutcome,
     InterruptTaskResult,
-    PeekTaskResult,
     TaskListSnapshot,
     TaskSnapshot,
     TaskStartSpec,
-)
-from .TaskEntity import (
-    TaskState,
-    TaskType,
 )
 
 __all__ = [
     "DuplicateTaskNameError",
     "InterruptTaskOutcome",
     "InterruptTaskResult",
-    "PeekTaskResult",
     "Task",
     "TaskInactiveError",
     "TaskListSnapshot",

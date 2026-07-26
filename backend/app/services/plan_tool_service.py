@@ -5,9 +5,9 @@ from __future__ import annotations
 from dataclasses import asdict
 from typing import Any
 
-from ...agent.task.TaskManager import TaskManager
-from ...agent.task.TaskEntity import TaskType
-from ...agent.task.harness.Plan import PlanOperationError, PlanStepDefinition
+from ...agent.task.manager import TaskManager
+from ...agent.task.model import TaskType
+from ...agent.task.harness.plan import PlanOperationError, PlanStepDefinition
 from ...agent.task.harness.planning import PlanningHarness
 from .errors import ApplicationError
 

@@ -12,15 +12,15 @@ from backend.agent.integration.mcp import (
     MCPTimeoutError,
     MCPToolCallError,
 )
-from backend.agent.task.harness.adaptors.FileSystemAdaptor import (
+from backend.agent.task.harness.adaptors.file_system import (
     FileSystemAdaptor,
 )
-from backend.agent.tools.Tool import Tool
-from backend.agent.tools.core.ToolCallEntity import (
+from backend.agent.tools.tool import Tool
+from backend.agent.tools.core.model import (
     ResolvedToolCall,
     ToolExecutionResult,
 )
-from backend.agent.tools.core.ToolCallGateway import ToolCallGateway
+from backend.agent.tools.core.gateway import ToolCallGateway
 
 
 class FakeMCPClient:

@@ -4,8 +4,8 @@ from __future__ import annotations
 
 from collections.abc import Mapping
 
-from ....tools.ToolGroup import ToolGroup
-from ...Task import Task
+from ....tools.tool_group import ToolGroup
+from ...model import Task
 
 
 _COMMON_PROMPT_FIELDS = frozenset(

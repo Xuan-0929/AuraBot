@@ -28,10 +28,10 @@ from __future__ import annotations
 from collections.abc import Callable, Sequence
 from threading import RLock
 
-from ..skills.SkillGroup import SkillGroup
-from ..skills.SkillGroupManager import SkillGroupManager
-from ..tools.ToolGroup import ToolGroup
-from ..tools.ToolGroupManager import ToolGroupManager
+from ..skills.skill_group import SkillGroup
+from ..skills.manager import SkillGroupManager
+from ..tools.tool_group import ToolGroup
+from ..tools.manager import ToolGroupManager
 
 
 class CapabilitySession:

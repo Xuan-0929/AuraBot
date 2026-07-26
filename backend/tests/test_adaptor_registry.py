@@ -1,17 +1,17 @@
 import unittest
 
-from backend.agent.task.Task import Task, TaskType
-from backend.agent.task.harness.adaptors.Adaptor import (
+from backend.agent.task.model import Task, TaskType
+from backend.agent.task.harness.adaptors.adaptor import (
     Adaptor,
     AdaptorRouteError,
 )
-from backend.agent.task.harness.adaptors.AdaptorRegistry import (
+from backend.agent.task.harness.adaptors.registry import (
     AdaptorRegistry,
 )
-from backend.agent.task.harness.adaptors.FileSystemAdaptor import (
+from backend.agent.task.harness.adaptors.file_system import (
     FileSystemAdaptor,
 )
-from backend.agent.task.harness.adaptors.PlanContextAdaptor import (
+from backend.agent.task.harness.adaptors.plan_context import (
     PlanContextAdaptor,
 )
 

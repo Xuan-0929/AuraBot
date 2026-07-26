@@ -4,8 +4,8 @@ from __future__ import annotations
 
 from threading import RLock
 
-from ..skills.SkillGroupManager import SkillGroupManager
-from ..tools.ToolGroupManager import ToolGroupManager
+from ..skills.manager import SkillGroupManager
+from ..tools.manager import ToolGroupManager
 from .lease import CapabilitySession
 
 

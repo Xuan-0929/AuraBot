@@ -2,7 +2,7 @@ import tempfile
 import unittest
 from pathlib import Path
 
-from backend.agent.skills.Skill import Skill
+from backend.agent.skills.skill import Skill
 
 
 class SkillTests(unittest.TestCase):

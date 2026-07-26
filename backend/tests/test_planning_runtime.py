@@ -1,8 +1,7 @@
 import unittest
 
-from backend.agent.task.Task import Task
-from backend.agent.task.TaskEntity import TaskType
-from backend.agent.task.harness.Plan import PlanStepDefinition
+from backend.agent.task.model import Task, TaskType
+from backend.agent.task.harness.plan import PlanStepDefinition
 from backend.agent.task.harness.planning import (
     PlanningHarness,
     PlanningRuntime,

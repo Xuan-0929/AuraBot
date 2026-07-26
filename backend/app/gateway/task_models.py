@@ -8,7 +8,7 @@ from typing import Any, Literal
 
 from pydantic import BaseModel, ConfigDict, Field, field_validator
 
-from ...agent.task.TaskEntity import TaskType
+from ...agent.task.model import TaskType
 from ...agent.task.runtime import (
     TaskListSnapshot,
     TaskSnapshot,

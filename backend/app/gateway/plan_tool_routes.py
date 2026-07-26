@@ -6,7 +6,7 @@ from typing import Annotated
 
 from fastapi import APIRouter, Depends
 
-from ...agent.task.harness.Plan import PlanStepDefinition
+from ...agent.task.harness.plan import PlanStepDefinition
 from ..services.plan_tool_service import PlanToolApplicationService
 from .dependencies import get_plan_tool_service
 from .plan_tool_models import (

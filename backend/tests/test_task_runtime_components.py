@@ -1,8 +1,7 @@
 import unittest
 from datetime import UTC, datetime
 
-from backend.agent.task.Task import Task
-from backend.agent.task.TaskEntity import TaskType
+from backend.agent.task.model import Task, TaskType
 from backend.agent.task.runtime import _TaskRuntimeRecord, TaskStartSpec
 from backend.agent.task.runtime_registry import TaskRuntimeRegistry
 from backend.agent.task.scheduler import TaskScheduler

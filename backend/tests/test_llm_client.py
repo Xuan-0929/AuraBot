@@ -9,7 +9,7 @@ from backend.agent import (
     ChatCompletionChoice as ExportedChatCompletionChoice,
 )
 from backend.agent import LLMClient as ExportedLLMClient
-from backend.agent.LLMClient import ChatCompletionChoice, LLMClient
+from backend.agent.llm_client import ChatCompletionChoice, LLMClient
 
 
 def make_client(
@@ -81,7 +81,7 @@ class LLMClientTests(unittest.IsolatedAsyncioTestCase):
             }
         ]
 
-        with patch("backend.agent.LLMClient.httpx.post", return_value=response) as post:
+        with patch("backend.agent.llm_client.httpx.post", return_value=response) as post:
             client = LLMClient(
                 base_url="https://api.example.com/v1",
                 api_key="test-key",

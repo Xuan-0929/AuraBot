@@ -8,15 +8,15 @@ from dataclasses import dataclass
 from functools import partial
 from typing import Any
 
-from ..agent.LLMClient import LLMClient
+from ..agent.llm_client import LLMClient
 from ..agent.capabilities.registry import CapabilitySessionRegistry
-from ..agent.skills.SkillGroupManager import SkillGroupManager
-from ..agent.task.TaskManager import TaskManager
+from ..agent.skills.manager import SkillGroupManager
+from ..agent.task.manager import TaskManager
 from ..agent.task.events import TaskEventBroker
-from ..agent.task.harness.HarnessFactory import HarnessFactory
-from ..agent.task.harness.adaptors.AdaptorRegistry import AdaptorRegistry
-from ..agent.tools.ToolGroupManager import ToolGroupManager
-from ..agent.tools.native.PlanToolGroup import (
+from ..agent.task.harness.factory import HarnessFactory
+from ..agent.task.harness.adaptors.registry import AdaptorRegistry
+from ..agent.tools.manager import ToolGroupManager
+from ..agent.tools.native.plan import (
     PLAN_TOOL_GROUP_NAME,
     create_plan_tool_group,
 )

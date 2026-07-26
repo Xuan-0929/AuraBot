@@ -9,17 +9,18 @@ from fastapi import FastAPI
 from jsonschema import validate
 from mcp.types import CallToolResult, TextContent
 
-from backend.agent.LLMClient import ChatCompletionChoice
-from backend.agent.task.Task import Task, TaskState, TaskType
-from backend.agent.task.TaskManager import TaskManager
-from backend.agent.task.harness.HarnessFactory import HarnessFactory
-from backend.agent.tools.core.ToolCallEntity import ToolCall
-from backend.agent.tools.core.ToolCallGateway import ToolCallGateway
+from backend.agent.llm_client import ChatCompletionChoice
+from backend.agent.task.model import Task, TaskState, TaskType
+from backend.agent.task.manager import TaskManager
+from backend.agent.task.harness.factory import HarnessFactory
+from backend.agent.tools.core.model import ToolCall
+from backend.agent.tools.core.gateway import ToolCallGateway
 from backend.app.gateway.dependencies import get_plan_tool_service
 from backend.app.gateway.errors import application_error_handler
 from backend.app.gateway.plan_tool_routes import router
 from backend.app.services.errors import ApplicationError
 from backend.app.services.plan_tool_service import PlanToolApplicationService
+from backend.tests.task_runtime_helpers import retain_test_harness
 
 
 MCP_SERVER_ROOT = Path(__file__).resolve().parents[2] / "mcp_server"
@@ -154,7 +155,7 @@ class PlanRuntimeIntegrationTests(unittest.IsolatedAsyncioTestCase):
             },
         ):
             harness = factory.create(task)
-        self.manager.register_runtime(harness)
+        retain_test_harness(self.manager, harness)
 
         openai_tools = harness.build_openai_tools()
         self.assertEqual(
@@ -283,8 +284,8 @@ class PlanRuntimeIntegrationTests(unittest.IsolatedAsyncioTestCase):
         ):
             harness = factory.create(task)
 
-        with self.manager.runtime(harness):
-            response = await harness.run()
+        retain_test_harness(self.manager, harness)
+        response = await harness.run()
 
         self.assertTrue(response.startswith("Status: completed"))
         self.assertIs(task.state, TaskState.Completed)

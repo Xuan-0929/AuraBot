@@ -1,17 +1,16 @@
 import unittest
 
-from backend.agent.task.Task import Task
-from backend.agent.task.TaskEntity import TaskType
-from backend.agent.task.harness.adaptors.Adaptor import Adaptor
-from backend.agent.task.harness.adaptors.AdaptorRegistry import (
+from backend.agent.task.model import Task, TaskType
+from backend.agent.task.harness.adaptors.adaptor import Adaptor
+from backend.agent.task.harness.adaptors.registry import (
     AdaptorRegistry,
 )
 from backend.agent.task.harness.tool_execution_pipeline import (
     ToolExecutionPipeline,
 )
-from backend.agent.tools.Tool import Tool
-from backend.agent.tools.ToolGroup import ToolGroup
-from backend.agent.tools.core.ToolCallEntity import (
+from backend.agent.tools.tool import Tool
+from backend.agent.tools.tool_group import ToolGroup
+from backend.agent.tools.core.model import (
     ResolvedToolCall,
     ToolCall,
     ToolExecutionResult,

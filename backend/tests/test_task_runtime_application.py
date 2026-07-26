@@ -1,16 +1,16 @@
 import asyncio
 import unittest
 
-from backend.agent.LLMClient import ChatCompletionChoice
+from backend.agent.llm_client import ChatCompletionChoice
 from backend.agent.capabilities.lease import CapabilitySession
-from backend.agent.skills.SkillGroupManager import SkillGroupManager
-from backend.agent.task.TaskEntity import TaskState, TaskType
-from backend.agent.task.TaskManager import TaskManager
+from backend.agent.skills.manager import SkillGroupManager
+from backend.agent.task.model import TaskState, TaskType
+from backend.agent.task.manager import TaskManager
 from backend.agent.task.events import TaskEventBroker
-from backend.agent.task.harness.HarnessFactory import HarnessFactory
+from backend.agent.task.harness.factory import HarnessFactory
 from backend.agent.task.runtime import TaskStartSpec
-from backend.agent.tools.ToolGroupManager import ToolGroupManager
-from backend.agent.tools.native.PlanToolGroup import create_plan_tool_group
+from backend.agent.tools.manager import ToolGroupManager
+from backend.agent.tools.native.plan import create_plan_tool_group
 from backend.app.services.task_service import TaskApplicationService
 
 

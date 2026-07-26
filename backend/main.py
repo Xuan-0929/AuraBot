@@ -15,7 +15,6 @@ initialize_config()
 from .app.gateway.errors import application_error_handler
 from .app.gateway.health_routes import router as health_router
 from .app.gateway.plan_tool_routes import router as plan_tool_router
-from .app.gateway.registry_routes import router as registry_router
 from .app.gateway.task_events import router as task_events_router
 from .app.gateway.task_routes import router as task_router
 from .app.runtime import BackendRuntime
@@ -53,7 +52,6 @@ def create_app(
     application.include_router(task_events_router)
     application.include_router(task_router)
     application.include_router(plan_tool_router)
-    application.include_router(registry_router)
     return application
 
 

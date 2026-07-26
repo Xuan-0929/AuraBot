@@ -1,17 +1,17 @@
 import json
 import unittest
 
-from backend.agent.tools.Tool import Tool
-from backend.agent.tools.ToolGroup import ToolGroup
-from backend.agent.tools.core.OpenAIChatToolProtocol import (
+from backend.agent.tools.tool import Tool
+from backend.agent.tools.tool_group import ToolGroup
+from backend.agent.tools.core.openai_chat_protocol import (
     OpenAIChatToolProtocol,
 )
-from backend.agent.tools.core.ToolCallEntity import (
+from backend.agent.tools.core.model import (
     FinalResponse,
     ToolCallBatch,
     ToolExecutionResult,
 )
-from backend.agent.tools.core.ToolExceptions import (
+from backend.agent.tools.core.errors import (
     DuplicateToolNameError,
     ToolCallParseError,
 )

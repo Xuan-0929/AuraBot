@@ -1,12 +1,12 @@
 import unittest
 from concurrent.futures import ThreadPoolExecutor
 
-from backend.agent.skills.SkillGroup import SkillGroup
-from backend.agent.task.Task import Task, TaskState, TaskType
-from backend.agent.tools.Tool import Tool
-from backend.agent.tools.ToolGroup import ToolGroup
-from backend.agent.tools.core.ToolCallEntity import ToolCall
-from backend.agent.tools.core.ToolExceptions import (
+from backend.agent.skills.skill_group import SkillGroup
+from backend.agent.task.model import Task, TaskState, TaskType
+from backend.agent.tools.tool import Tool
+from backend.agent.tools.tool_group import ToolGroup
+from backend.agent.tools.core.model import ToolCall
+from backend.agent.tools.core.errors import (
     DuplicateToolNameError,
     ToolNotAuthorizedError,
 )

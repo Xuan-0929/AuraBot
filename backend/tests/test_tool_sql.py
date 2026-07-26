@@ -7,12 +7,12 @@ from pathlib import Path
 from unittest.mock import patch
 
 from backend.agent.integration.sql import utils
-from backend.agent.integration.sql.AdaptorSQL import AdaptorSQL
-from backend.agent.integration.sql.MCPServerSQL import MCPServerSQL
-from backend.agent.integration.sql.ToolGroupSQL import ToolGroupSQL
-from backend.agent.integration.sql.ToolSQL import ToolSQL
-from backend.agent.tools.Tool import Tool
-from backend.agent.tools.ToolGroup import ToolGroup
+from backend.agent.integration.sql.adaptor import AdaptorSQL
+from backend.agent.integration.sql.mcp_server import MCPServerSQL
+from backend.agent.integration.sql.tool_group import ToolGroupSQL
+from backend.agent.integration.sql.tool import ToolSQL
+from backend.agent.tools.tool import Tool
+from backend.agent.tools.tool_group import ToolGroup
 
 
 @contextmanager

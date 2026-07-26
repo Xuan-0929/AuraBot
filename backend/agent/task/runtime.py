@@ -11,9 +11,8 @@ from enum import Enum
 from typing import Any
 
 from ..capabilities.lease import CapabilitySession
-from .Task import Task
-from .TaskEntity import TaskState, TaskType
-from .harness.Harness import Harness
+from .model import Task, TaskState, TaskType
+from .harness.harness import Harness
 
 
 @dataclass(frozen=True, slots=True)
@@ -42,15 +41,6 @@ class InterruptTaskResult:
     outcome: InterruptTaskOutcome
     task_id: int | None
     previous_state: TaskState | None
-    state: TaskState | None
-
-
-@dataclass(frozen=True, slots=True)
-class PeekTaskResult:
-    task_name: str
-    found: bool
-    task_id: int | None
-    task_type: TaskType | None
     state: TaskState | None
 
 
@@ -123,7 +113,6 @@ def snapshot_task(record: _TaskRuntimeRecord) -> TaskSnapshot:
 __all__ = [
     "InterruptTaskOutcome",
     "InterruptTaskResult",
-    "PeekTaskResult",
     "TaskFailure",
     "TaskListSnapshot",
     "TaskSnapshot",

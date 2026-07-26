@@ -1,7 +1,7 @@
 import unittest
 from dataclasses import FrozenInstanceError
 
-from backend.agent.task.harness.Plan import (
+from backend.agent.task.harness.plan import (
     Plan,
     PlanOperationError,
     PlanStep,

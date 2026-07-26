@@ -127,13 +127,13 @@ async def verify_gateway(
     read_input_schema: dict[str, Any],
 ) -> None:
     sys.path.insert(0, str(PROJECT_ROOT))
-    from backend.agent.integration.mcp.MCPClient import MCPClient
-    from backend.agent.task.harness.adaptors.FileSystemAdaptor import (
+    from backend.agent.integration.mcp.client import MCPClient
+    from backend.agent.task.harness.adaptors.file_system import (
         FileSystemAdaptor,
     )
-    from backend.agent.tools.Tool import Tool
-    from backend.agent.tools.core.ToolCallEntity import ResolvedToolCall
-    from backend.agent.tools.core.ToolCallGateway import ToolCallGateway
+    from backend.agent.tools.tool import Tool
+    from backend.agent.tools.core.model import ResolvedToolCall
+    from backend.agent.tools.core.gateway import ToolCallGateway
 
     tool = Tool(
         name="read_file",

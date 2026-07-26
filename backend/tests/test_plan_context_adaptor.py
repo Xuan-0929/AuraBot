@@ -1,12 +1,12 @@
 import unittest
 
-from backend.agent.task.Task import Task, TaskType
-from backend.agent.task.harness.adaptors.Adaptor import AdaptorRouteError
-from backend.agent.task.harness.adaptors.PlanContextAdaptor import (
+from backend.agent.task.model import Task, TaskType
+from backend.agent.task.harness.adaptors.adaptor import AdaptorRouteError
+from backend.agent.task.harness.adaptors.plan_context import (
     PlanContextAdaptor,
 )
-from backend.agent.tools.Tool import Tool
-from backend.agent.tools.core.ToolCallEntity import ResolvedToolCall
+from backend.agent.tools.tool import Tool
+from backend.agent.tools.core.model import ResolvedToolCall
 
 
 def make_call(meta=None):

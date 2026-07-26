@@ -13,10 +13,9 @@ os.environ.setdefault(
     str(Path(__file__).parent / "fixtures" / "runtime_config.yaml"),
 )
 
-from backend.app.gateway.registry_routes import router as registry_router
 from backend.app.gateway.task_events import encode_sse_event
 from backend.app.services.errors import ApplicationError
-from backend.agent.task.TaskEntity import TaskState, TaskType
+from backend.agent.task.model import TaskState, TaskType
 from backend.agent.task.runtime import TaskListSnapshot, TaskSnapshot
 from backend.config import config as global_config
 from backend.main import create_app
@@ -213,14 +212,6 @@ class GatewayEndpointTests(unittest.TestCase):
                 "/debug/events",
             ):
                 self.assertEqual(client.get(path).status_code, 404)
-
-    def test_registry_router_is_an_empty_namespace_placeholder(self):
-        self.assertEqual(registry_router.prefix, "/registry")
-        self.assertEqual(registry_router.routes, [])
-        schema = self.app.openapi()
-        self.assertFalse(
-            any(path.startswith("/registry") for path in schema["paths"])
-        )
 
     def test_sse_encoding_has_id_event_and_compact_json(self):
         encoded = encode_sse_event(

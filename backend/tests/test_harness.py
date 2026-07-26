@@ -1,27 +1,27 @@
 import json
 import unittest
 
-from backend.agent.LLMClient import ChatCompletionChoice
-from backend.agent.task.Task import Task, TaskState, TaskType
-from backend.agent.task.harness.Harness import (
+from backend.agent.llm_client import ChatCompletionChoice
+from backend.agent.task.model import Task, TaskState, TaskType
+from backend.agent.task.harness.harness import (
     Harness,
     HarnessInterruptedError,
     HarnessStateTransitionError,
 )
-from backend.agent.task.harness.adaptors.Adaptor import (
+from backend.agent.task.harness.adaptors.adaptor import (
     Adaptor,
     AdaptorRouteError,
 )
-from backend.agent.task.harness.adaptors.AdaptorRegistry import (
+from backend.agent.task.harness.adaptors.registry import (
     AdaptorRegistry,
 )
-from backend.agent.task.harness.adaptors.FileSystemAdaptor import (
+from backend.agent.task.harness.adaptors.file_system import (
     FileSystemAdaptor,
 )
 from backend.agent.task.harness.utils import build_common_prompt_values
-from backend.agent.tools.Tool import Tool
-from backend.agent.tools.ToolGroup import ToolGroup
-from backend.agent.tools.core.ToolCallEntity import (
+from backend.agent.tools.tool import Tool
+from backend.agent.tools.tool_group import ToolGroup
+from backend.agent.tools.core.model import (
     FinalResponse,
     ResolvedToolCall,
     ToolCall,

@@ -2,8 +2,8 @@
 
 from collections.abc import Callable, Sequence
 
-from ..ToolGroup import ToolGroup
-from .PlanToolGroup import (
+from ..tool_group import ToolGroup
+from .plan import (
     PLAN_TOOL_DEFINITIONS,
     PLAN_TOOL_GROUP_NAME,
     PLAN_TOOL_NAMES,
