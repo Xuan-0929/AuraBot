@@ -1,3 +1,9 @@
+"""
+验证 MCP Plan tool handlers 的 metadata 校验、HTTP 转发与错误转换。
+
+测试使用受控 httpx transport 观察真实 handler 行为，不启动 Backend 或持有 Plan aggregate。
+"""
+
 from __future__ import annotations
 
 import httpx

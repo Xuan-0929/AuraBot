@@ -1,3 +1,9 @@
+"""
+验证 ToolCallGateway 的 MCP 调用、内容归一化与错误结果转换。
+
+测试在 transport 边界使用受控 MCP client 和真实 ResolvedToolCall，不覆盖 resolver 授权。
+"""
+
 import tempfile
 import unittest
 from pathlib import Path

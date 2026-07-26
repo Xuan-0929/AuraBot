@@ -13,10 +13,10 @@ from collections.abc import Callable
 from datetime import UTC, datetime
 from typing import Any
 
-from ..capabilities.lease import CapabilitySession
-from .domain import TaskState
-from .harness.harness import Harness
-from .runtime import _TaskRuntimeRecord
+from ...capabilities.lease import CapabilitySession
+from ..domain import TaskState
+from ..harness import Harness
+from .records import _TaskRuntimeRecord
 
 
 TERMINAL_STATES = {

@@ -1,3 +1,9 @@
+"""
+验证 Skill 领域模型的输入约束、文件加载与提示词表示。
+
+测试使用临时 SKILL.md fixture 读取真实内容，不覆盖 SkillGroup 聚合或 manager 租约。
+"""
+
 import tempfile
 import unittest
 from pathlib import Path

@@ -1,17 +1,9 @@
 """
-这里放Task Agents的系统提示词。
+集中保存 ReAct 与 Plan-and-Solve Harness 使用的系统提示词模板。
 
-
-后续可以直接来这里改。
-
+具体策略把 prompting.context 生成的工作目录、约束和授权摘要填入模板，再交给 LLM；
+本模块只保存静态提示词文本，不读取 Task、不执行工具，也不决定 agent loop 行为。
 """
-
-
-
-
-
-
-
 
 system_prompt_ReAct = """
 You are a task-local ReAct agent. Work autonomously within the authority supplied below and

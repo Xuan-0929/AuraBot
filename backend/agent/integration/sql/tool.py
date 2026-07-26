@@ -1,4 +1,9 @@
-"""SQLite persistence for tools."""
+"""
+负责 Tool 声明及其 schema、server 与 adaptor 关联的 SQL 持久化。
+
+ToolGroup adapter 在共享 transaction 中调用本模块读写成员 Tool，并把多表结果映射为
+领域对象；本模块不执行工具、不发起 MCP 请求，也不做 Task 授权判断。
+"""
 
 import sqlite3
 

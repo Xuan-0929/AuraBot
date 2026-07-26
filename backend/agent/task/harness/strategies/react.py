@@ -7,12 +7,12 @@
 
 import asyncio
 
-from ...llm_client import OpenAITool
-from ...tools.core.model import FinalResponse, ToolCallBatch
-from ..domain import TaskState
-from .harness import Harness, HarnessInterruptedError
-from .prompts import system_prompt_ReAct
-from .utils import build_common_prompt_values
+from ....llm_client import OpenAITool
+from ....tools.core.model import FinalResponse, ToolCallBatch
+from ...domain import TaskState
+from ..core.base import Harness, HarnessInterruptedError
+from ..prompting.templates import system_prompt_ReAct
+from ..prompting.context import build_common_prompt_values
 
 
 class ReActLimitError(RuntimeError):

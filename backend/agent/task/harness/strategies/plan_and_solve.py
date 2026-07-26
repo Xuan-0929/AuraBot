@@ -8,18 +8,18 @@
 import asyncio
 from collections.abc import Sequence
 
-from ...llm_client import Message, OpenAITool
-from ...tools.core.model import (
+from ....llm_client import Message, OpenAITool
+from ....tools.core.model import (
     FinalResponse,
     ToolCallBatch,
     ToolExecutionResult,
 )
-from ...tools.native.plan import (
+from ....tools.native.plan import (
     PLAN_TOOL_GROUP_NAME,
     PLAN_TOOL_NAMES,
 )
-from ..domain import TaskState
-from ..domain.plan import (
+from ...domain import TaskState
+from ...domain.plan import (
     CompletePlanStepResult,
     CreatePlanResult,
     PlanAndSolveFinalResponseError,
@@ -29,9 +29,9 @@ from ..domain.plan import (
     UpdatePlanResult,
     parse_plan_final_status,
 )
-from .harness import Harness, HarnessInterruptedError
-from .prompts import system_prompt_PlanAndSolve
-from .utils import build_common_prompt_values
+from ..core.base import Harness, HarnessInterruptedError
+from ..prompting.templates import system_prompt_PlanAndSolve
+from ..prompting.context import build_common_prompt_values
 
 
 class PlanAndSolveLimitError(RuntimeError):

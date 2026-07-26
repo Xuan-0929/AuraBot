@@ -1,4 +1,9 @@
-"""LLM client contracts and OpenAI-compatible implementation."""
+"""
+定义 Harness 使用的 LLM client 契约及 OpenAI-compatible 实现。
+
+具体 Harness 提交消息、工具 schema 与模型参数，本模块调用 chat completions endpoint
+并返回稳定 choice 值；它不解释工具调用语义，也不管理 Task 或 Harness 生命周期。
+"""
 
 import asyncio
 import json

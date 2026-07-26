@@ -1,11 +1,16 @@
-"""Coordinated cleanup for all retained Task runtimes."""
+"""
+负责 Task runtime 在异步关闭与同步兜底路径中的集中清理。
+
+BackendRuntime 关闭时先广播 closing、幂等中断全部 Task、等待 runner，再移除 record；
+异常兜底路径直接取消并释放资源。本模块不创建 Task，也不决定单个 Harness 的退出策略。
+"""
 
 from collections.abc import Callable
 
-from .runtime import InterruptTaskResult, _TaskRuntimeRecord
-from .runtime_registry import TaskRuntimeRegistry
-from .scheduler import TaskScheduler
-from .task_event_publisher import TaskEventPublisher
+from ..records import InterruptTaskResult, _TaskRuntimeRecord
+from ..registry import TaskRuntimeRegistry
+from ..scheduler import TaskScheduler
+from ..event_publisher import TaskEventPublisher
 
 
 async def close_task_runtime(

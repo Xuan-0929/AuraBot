@@ -1,4 +1,9 @@
-"""SQLite persistence for adaptor declarations."""
+"""
+负责 adaptor 声明表的 SQL 持久化与领域值映射。
+
+调用方通过共享 connection/transaction helper 查询、写入和删除 adaptor 配置，本模块
+在单次方法边界内完成行转换；它不创建运行时 Adaptor 实例，也不参与工具执行路由。
+"""
 
 import sqlite3
 from typing import TypedDict

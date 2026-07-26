@@ -1,3 +1,9 @@
+"""
+验证 adaptor 声明 SQL adapter 的 CRUD、约束与关联清理行为。
+
+测试使用临时数据库和真实映射，仅在连接注入处 patch，不覆盖运行时 adaptor 实例化。
+"""
+
 import tempfile
 import unittest
 from pathlib import Path

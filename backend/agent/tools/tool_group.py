@@ -1,4 +1,9 @@
-"""Tool-group domain model."""
+"""
+定义 ToolGroup 聚合与面向 Harness 的稳定说明表示。
+
+ToolGroupManager 加载共享聚合，CapabilitySession 把其只读引用交给 Task，resolver 再
+以此建立授权快照；本模块不执行工具、不访问持久化，也不维护租约计数。
+"""
 
 from .tool import Tool
 from .utils.formatter import format_tool_group_intro

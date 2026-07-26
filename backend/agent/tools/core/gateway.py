@@ -1,4 +1,9 @@
-"""Execute authorized calls through MCP and normalize results."""
+"""
+负责把已授权的工具调用交给 MCP client 并归一化成功或失败结果。
+
+Harness pipeline 先完成协议解析、resolver 授权与 adaptor 注入，再由 gateway 调用远端
+工具并构造 ToolExecutionResult；本模块不选择工具，也不改变 Task 状态。
+"""
 
 from collections.abc import Sequence
 from typing import Any

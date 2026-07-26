@@ -11,11 +11,11 @@ from fastapi import FastAPI
 from fastapi.testclient import TestClient
 
 from backend.agent.task.domain import Task, TaskState, TaskType
-from backend.agent.task.manager import TaskManager
-from backend.agent.task.harness.plan_and_solve import (
+from backend.agent.task import TaskManager
+from backend.agent.task.harness.strategies.plan_and_solve import (
     PlanAndSolveHarness,
 )
-from backend.agent.task.harness.react import ReActHarness
+from backend.agent.task.harness import ReActHarness
 from backend.app.gateway.plan_tool_routes import (
     router,
 )

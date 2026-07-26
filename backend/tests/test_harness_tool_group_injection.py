@@ -8,10 +8,10 @@ import unittest
 from unittest.mock import patch
 
 from backend.agent.task.domain import Task, TaskType
-from backend.agent.task.harness.plan_and_solve import (
+from backend.agent.task.harness.strategies.plan_and_solve import (
     PlanAndSolveHarness,
 )
-from backend.agent.task.harness.react import ReActHarness
+from backend.agent.task.harness import ReActHarness
 from backend.agent.tools.tool import Tool
 from backend.agent.tools.tool_group import ToolGroup
 from backend.agent.tools.core.errors import DuplicateToolNameError

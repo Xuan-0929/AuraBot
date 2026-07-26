@@ -21,7 +21,7 @@ from mcp.types import Tool as MCPTool
 from backend.agent.llm_client import ChatCompletionChoice, LLMClient
 from backend.agent.integration.mcp import MCPClient, MCPClientError
 from backend.agent.task.domain import Task, TaskState, TaskType
-from backend.agent.task.harness.react import ReActHarness
+from backend.agent.task.harness import ReActHarness
 from backend.agent.tools.tool import Tool
 from backend.agent.tools.tool_group import ToolGroup
 from backend.config import Config

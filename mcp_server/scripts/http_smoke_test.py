@@ -1,8 +1,8 @@
-"""Exercise the real MCP HTTP endpoint and backend ToolCallGateway.
+"""
+通过真实 HTTP 端点冒烟验证 MCP Server 与 Backend ToolCallGateway 的集成。
 
-The test creates and edits one file in a temporary directory, verifies the
-result through both MCP and the local filesystem, and always removes all test
-artifacts before returning.
+脚本在临时目录创建并编辑文件，从 MCP 响应和本地文件系统两侧核对结果，最后清理
+所有测试产物；它不使用进程内 ASGI transport，也不修改服务端持久业务数据。
 """
 
 from __future__ import annotations

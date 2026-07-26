@@ -1,4 +1,9 @@
-"""AuraBot project-native ToolGroup definitions."""
+"""
+提供 AuraBot 进程内声明的 canonical native ToolGroup 工厂。
+
+Harness core 根据策略的 required group 名称从这里取得稳定声明并注入 Task 授权快照；
+本包不执行工具、不持有 Task，也不替代 MCP Server 侧实现。
+"""
 
 from collections.abc import Callable, Sequence
 

@@ -1,10 +1,17 @@
-"""White-box helpers for tests that exercise an already-built Harness."""
+"""
+提供 runtime 测试在已构造 Harness 上安装和结束 record 的白盒辅助函数。
+
+这些 helper 只用于建立确定性 fixture，不属于生产 API，也不替代 TaskManager 行为测试。
+"""
 
 from datetime import UTC, datetime
 
-from backend.agent.task.manager import TaskManager
-from backend.agent.task.harness.harness import Harness
-from backend.agent.task.runtime import TaskStartSpec, _TaskRuntimeRecord
+from backend.agent.task import TaskManager
+from backend.agent.task.harness import Harness
+from backend.agent.task.runtime.records import (
+    TaskStartSpec,
+    _TaskRuntimeRecord,
+)
 
 
 def retain_test_harness(

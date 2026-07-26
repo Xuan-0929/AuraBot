@@ -1,3 +1,9 @@
+"""
+验证 OpenAI Chat 工具 schema 编码与 completion tool-call 解析。
+
+测试使用手写协议 payload 检查真实 parser 输出，不覆盖授权 resolver、adaptor 或执行。
+"""
+
 import json
 import unittest
 

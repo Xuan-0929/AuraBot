@@ -10,7 +10,7 @@ from __future__ import annotations
 from dataclasses import asdict
 from typing import Any
 
-from ...agent.task.manager import TaskManager
+from ...agent.task import TaskManager
 from ...agent.task.domain import TaskType
 from ...agent.task.domain.plan import (
     PlanOperationError,

@@ -1,3 +1,9 @@
+"""
+验证 SkillGroup/ToolGroup manager 与 CapabilitySession 的租约和释放语义。
+
+测试使用内存 loader 观察共享实例引用计数，不覆盖 SQL adapter、Harness 或 Task 调度。
+"""
+
 import unittest
 
 from backend.agent.capabilities.lease import CapabilitySession

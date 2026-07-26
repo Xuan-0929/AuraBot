@@ -1,4 +1,9 @@
-"""AuraBot backend application entry point."""
+"""
+创建 AuraBot Backend 的 FastAPI 应用并绑定进程生命周期。
+
+lifespan 启动 BackendRuntime、注册 gateway routes，并在退出时集中关闭应用资源；
+本模块只负责装配入口，不实现 Task、Harness、Plan 或工具业务逻辑。
+"""
 
 from __future__ import annotations
 

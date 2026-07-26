@@ -14,13 +14,13 @@ from backend.agent.llm_client import ChatCompletionChoice
 from backend.agent.skills.skill import Skill
 from backend.agent.skills.skill_group import SkillGroup
 from backend.agent.task.domain import Task, TaskState, TaskType
-from backend.agent.task.harness.harness import Harness
-from backend.agent.task.harness.react import (
+from backend.agent.task.harness import Harness
+from backend.agent.task.harness.strategies.react import (
     ReActHarness,
     ReActInterruptedError,
     ReActLimitError,
 )
-from backend.agent.task.harness.prompts import system_prompt_ReAct
+from backend.agent.task.harness.prompting.templates import system_prompt_ReAct
 from backend.agent.tools.tool import Tool
 from backend.agent.tools.tool_group import ToolGroup
 from backend.agent.tools.core.model import ToolExecutionResult

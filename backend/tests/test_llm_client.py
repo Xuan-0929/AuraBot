@@ -1,3 +1,9 @@
+"""
+验证 OpenAI-compatible LLMClient 的请求构造、响应解析与错误处理。
+
+测试在 HTTP transport 边界使用受控响应，不调用真实模型，也不覆盖 Harness 策略。
+"""
+
 import asyncio
 import json
 import unittest

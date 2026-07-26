@@ -1,3 +1,9 @@
+"""
+验证 Backend native Plan ToolGroup 的名称、schema、说明与 adaptor 配置。
+
+测试对 canonical 声明做真实 JSON Schema 校验，不执行 PlanningRuntime 或 MCP handler。
+"""
+
 import unittest
 
 from jsonschema import Draft202012Validator

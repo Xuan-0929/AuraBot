@@ -1,3 +1,9 @@
+"""
+验证 MCP server 声明 SQL adapter 的 CRUD、唯一约束与事务行为。
+
+测试使用临时数据库和真实行映射，不启动 MCP server，也不发起网络调用。
+"""
+
 import tempfile
 import unittest
 from contextlib import contextmanager

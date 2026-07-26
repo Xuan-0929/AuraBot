@@ -3,6 +3,7 @@
 
 # superpowers
 **/superpowers
+docs/superpowers
 
 node_modules/
 out/
@@ -31,3 +32,5 @@ __pycache__/
 config.yaml
 # Added by code-review-graph
 .code-review-graph/
+
+

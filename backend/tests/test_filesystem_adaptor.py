@@ -1,8 +1,14 @@
+"""
+验证 FileSystemAdaptor 的路径规范化、目录包含校验与错误路由。
+
+测试在临时目录使用真实 ResolvedToolCall，不执行文件工具，也不覆盖 MCP gateway。
+"""
+
 import tempfile
 import unittest
 from pathlib import Path
 
-from backend.agent.task.harness.adaptors.adaptor import (
+from backend.agent.task.harness.adaptors.base import (
     Adaptor,
     AdaptorRouteError,
 )

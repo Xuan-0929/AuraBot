@@ -1,4 +1,9 @@
-"""SQLite persistence for MCP server declarations."""
+"""
+负责 MCP server 声明表的 SQL CRUD 与记录映射。
+
+Tool/集成配置层通过本 adapter 在显式 transaction 中保存 server URL 等元数据，
+再构造稳定领域值；本模块不启动远端 server，也不发送 MCP 请求。
+"""
 
 import sqlite3
 from typing import TypedDict

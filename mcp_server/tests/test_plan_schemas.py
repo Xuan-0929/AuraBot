@@ -1,3 +1,9 @@
+"""
+验证 MCP Server Plan schema 自身合法，并与 Backend 独立副本保持一致。
+
+测试加载两个进程各自的静态声明逐项比较，不共享生产类，也不执行 Plan tools。
+"""
+
 from __future__ import annotations
 
 import sys

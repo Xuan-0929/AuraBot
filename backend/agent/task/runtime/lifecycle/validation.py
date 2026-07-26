@@ -8,8 +8,8 @@
 import re
 from collections.abc import Callable
 
-from .domain import TaskType
-from .runtime import TaskStartSpec
+from ...domain import TaskType
+from ..records import TaskStartSpec
 
 _TASK_NAME_CONTROL_PATTERN = re.compile(r"[\x00-\x1f\x7f]")
 

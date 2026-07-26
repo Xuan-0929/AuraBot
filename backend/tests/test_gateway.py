@@ -23,7 +23,7 @@ os.environ.setdefault(
 from backend.app.gateway.task_events import encode_sse_event
 from backend.app.services.errors import ApplicationError
 from backend.agent.task.domain import TaskState, TaskType
-from backend.agent.task.runtime import TaskListSnapshot, TaskSnapshot
+from backend.agent.task import TaskListSnapshot, TaskSnapshot
 from backend.config import config as global_config
 from backend.main import create_app
 

@@ -9,12 +9,12 @@ import unittest
 
 from backend.agent.llm_client import ChatCompletionChoice
 from backend.agent.task.domain import Task, TaskState, TaskType
-from backend.agent.task.harness.harness import (
+from backend.agent.task.harness import (
     Harness,
     HarnessInterruptedError,
     HarnessStateTransitionError,
 )
-from backend.agent.task.harness.adaptors.adaptor import (
+from backend.agent.task.harness.adaptors.base import (
     Adaptor,
     AdaptorRouteError,
 )
@@ -24,7 +24,7 @@ from backend.agent.task.harness.adaptors.registry import (
 from backend.agent.task.harness.adaptors.file_system import (
     FileSystemAdaptor,
 )
-from backend.agent.task.harness.utils import build_common_prompt_values
+from backend.agent.task.harness.prompting import build_common_prompt_values
 from backend.agent.tools.tool import Tool
 from backend.agent.tools.tool_group import ToolGroup
 from backend.agent.tools.core.model import (

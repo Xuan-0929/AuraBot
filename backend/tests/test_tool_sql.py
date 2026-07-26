@@ -1,3 +1,9 @@
+"""
+验证 Tool 与 ToolGroup SQL adapters 的 CRUD、关联映射和事务一致性。
+
+测试使用临时 SQLite 数据库执行真实查询，不调用 MCP，也不覆盖运行时 manager 缓存。
+"""
+
 import json
 import sqlite3
 import tempfile

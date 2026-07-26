@@ -14,7 +14,7 @@ from typing import Any, Literal
 from pydantic import BaseModel, ConfigDict, Field, field_validator
 
 from ...agent.task.domain import TaskType
-from ...agent.task.runtime import (
+from ...agent.task import (
     TaskListSnapshot,
     TaskSnapshot,
     TaskStartSpec,

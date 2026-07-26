@@ -1,4 +1,9 @@
-"""OpenAI-compatible chat response values and parsers."""
+"""
+定义 OpenAI-compatible chat 响应值对象与严格解析函数。
+
+LLMClient 把远端 JSON 交给本模块验证并转换为不可变 choice/message/tool-call 结构，
+供 Harness 工具协议继续处理；本模块不发起网络请求，也不执行任何工具。
+"""
 
 import json
 from dataclasses import dataclass

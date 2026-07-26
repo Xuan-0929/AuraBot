@@ -1,4 +1,9 @@
-"""Human-facing descriptions for native Plan tools."""
+"""
+集中保存 native Plan tools 面向模型的组、工具与字段说明文本。
+
+plan_protocol 将这些静态文案与 schema 组合成 Tool 声明，Harness 再编码给 LLM；
+本模块不定义 JSON schema、不执行 Plan 操作，也不处理错误转换。
+"""
 
 CREATE_PLAN_DESCRIPTION = (
     "为当前 Plan-and-Solve Task 创建唯一的初始执行计划。计划包含一个目标和 1 至 "

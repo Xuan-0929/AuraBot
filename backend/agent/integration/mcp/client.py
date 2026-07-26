@@ -1,4 +1,9 @@
-"""Stateless client for Streamable HTTP MCP servers."""
+"""
+负责以无状态 Streamable HTTP 请求调用一个 MCP server。
+
+ToolCallGateway 传入 server URL、工具名、参数和可信 metadata，本客户端完成握手与调用
+并返回原始 MCP 结果；它不做 Task 授权、adaptor 注入或领域错误转换。
+"""
 
 import asyncio
 from typing import Any

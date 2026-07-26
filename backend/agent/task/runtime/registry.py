@@ -1,8 +1,13 @@
-"""Identity registry for queued, running and retained Task runtimes."""
+"""
+负责按 Task ID 与公开名称保存排队、运行和保留期内的 runtime record。
+
+TaskManager 与 lifecycle controller 通过本 registry 分配 ID、定位和移除同一 record；
+本模块不调度 runner、不改变 Task 状态，也不向应用层暴露内部可变记录。
+"""
 
 from __future__ import annotations
 
-from .runtime import _TaskRuntimeRecord
+from .records import _TaskRuntimeRecord
 
 
 class TaskRuntimeRegistry:

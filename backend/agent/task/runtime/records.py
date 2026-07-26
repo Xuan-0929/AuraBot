@@ -15,9 +15,9 @@ from datetime import datetime
 from enum import Enum
 from typing import Any
 
-from ..capabilities.lease import CapabilitySession
-from .domain import Task, TaskState, TaskType
-from .harness.harness import Harness
+from ...capabilities.lease import CapabilitySession
+from ..domain import Task, TaskState, TaskType
+from ..harness import Harness
 
 
 @dataclass(frozen=True, slots=True)

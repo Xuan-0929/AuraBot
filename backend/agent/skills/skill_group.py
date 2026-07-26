@@ -1,4 +1,9 @@
-"""Skill-group domain model."""
+"""
+定义一组 Skill 的领域聚合与稳定提示词摘要。
+
+SkillGroupManager 从持久化层加载聚合，Task capability snapshot 持有只读引用并由
+prompt formatter 消费；本模块不执行技能、不访问数据库，也不处理租约计数。
+"""
 
 from html import escape
 

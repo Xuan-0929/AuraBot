@@ -1,3 +1,9 @@
+"""
+验证 agent SQL connection、transaction 与 schema 初始化辅助函数。
+
+测试以临时 SQLite 数据库观察真实提交/回滚及 adapter 交互，不覆盖领域 manager 缓存。
+"""
+
 import sqlite3
 import tempfile
 import unittest

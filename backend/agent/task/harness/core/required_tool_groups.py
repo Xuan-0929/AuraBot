@@ -7,9 +7,9 @@ factory 构造策略时调用本模块校验保留名称、去重并原子更新
 
 from collections.abc import Sequence
 
-from ...tools.tool import Tool
-from ...tools.tool_group import ToolGroup
-from ..domain import Task
+from ....tools.tool import Tool
+from ....tools.tool_group import ToolGroup
+from ...domain import Task
 
 
 def inject_required_tool_groups(

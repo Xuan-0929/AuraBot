@@ -7,13 +7,12 @@
 import unittest
 from unittest.mock import patch
 
-from backend.agent.task.harness.harness import Harness
-from backend.agent.task.harness.factory import (
+from backend.agent.task.harness import Harness
+from backend.agent.task.harness.core.factory import (
     HarnessBuildContext,
     HarnessFactory,
 )
-from backend.agent.task.harness.plan_and_solve import PlanAndSolveHarness
-from backend.agent.task.harness.react import ReActHarness
+from backend.agent.task.harness import PlanAndSolveHarness, ReActHarness
 from backend.agent.task.harness.adaptors.registry import (
     AdaptorRegistry,
 )

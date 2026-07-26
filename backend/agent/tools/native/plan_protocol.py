@@ -1,4 +1,9 @@
-"""Composed native Plan tool declarations."""
+"""
+把 Plan 工具名称、说明和 JSON schema 组合为稳定的 native Tool 声明。
+
+plan ToolGroup factory 消费这里的不可变协议数据，Harness 将其编码到模型请求；
+本模块不调用 PlanningRuntime，也不负责 Backend/MCP schema 一致性判断。
+"""
 
 from .plan_descriptions import (
     COMPLETE_PLAN_STEP_DESCRIPTION,

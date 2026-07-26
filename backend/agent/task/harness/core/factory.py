@@ -10,14 +10,14 @@ from __future__ import annotations
 from collections.abc import Callable, Mapping
 from dataclasses import dataclass
 
-from ...llm_client import LLMClient
-from ...capabilities.lease import CapabilitySession
-from ...tools.core.gateway import ToolCallGateway
-from ..domain import Task, TaskType
-from .harness import Harness
-from .plan_and_solve import PlanAndSolveHarness
-from .react import ReActHarness
-from .adaptors.registry import AdaptorRegistry
+from ....llm_client import LLMClient
+from ....capabilities.lease import CapabilitySession
+from ....tools.core.gateway import ToolCallGateway
+from ...domain import Task, TaskType
+from .base import Harness
+from ..strategies.plan_and_solve import PlanAndSolveHarness
+from ..strategies.react import ReActHarness
+from ..adaptors.registry import AdaptorRegistry
 
 
 ToolCallGatewayFactory = Callable[[Task], ToolCallGateway]

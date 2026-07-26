@@ -44,22 +44,18 @@ def relative_import_roots(init_file: Path) -> set[str]:
 
 
 class TaskPackageBoundaryTests(unittest.TestCase):
-    @unittest.expectedFailure
     def test_task_root_contains_only_the_final_subpackages(self):
         self.assertEqual(package_entries(TASK_ROOT), EXPECTED_TASK_ROOT)
 
-    @unittest.expectedFailure
     def test_harness_root_contains_only_the_final_subpackages(self):
         self.assertEqual(package_entries(HARNESS_ROOT), EXPECTED_HARNESS_ROOT)
 
-    @unittest.expectedFailure
     def test_task_public_facade_imports_only_domain_and_runtime(self):
         self.assertEqual(
             relative_import_roots(TASK_ROOT / "__init__.py"),
             {"domain", "runtime"},
         )
 
-    @unittest.expectedFailure
     def test_harness_public_facade_imports_only_core_and_strategies(self):
         harness_init = HARNESS_ROOT / "__init__.py"
         self.assertTrue(harness_init.is_file())

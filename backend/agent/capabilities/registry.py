@@ -1,4 +1,9 @@
-"""Application-owned lifecycle registry for agent capability sessions."""
+"""
+负责由应用进程统一拥有 SkillGroup 与 ToolGroup manager 的生命周期。
+
+BackendRuntime 启动时构造 registry，Task 准入通过它创建独立 CapabilitySession，
+关闭时按所有权顺序释放共享 manager；本模块不选择 Harness 或修改 Task 状态。
+"""
 
 from __future__ import annotations
 

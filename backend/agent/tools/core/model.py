@@ -1,4 +1,9 @@
-"""Harness-neutral tool-call entities."""
+"""
+定义与具体 Harness 算法无关的工具调用值对象和结果变体。
+
+OpenAI 协议层产生 ToolCall，resolver 转为 ResolvedToolCall，gateway 再返回不可变
+执行结果供策略追加消息；本模块只承载数据，不负责解析、授权或网络执行。
+"""
 
 from dataclasses import dataclass, field
 from typing import Any, Literal, TypeAlias

@@ -1,9 +1,13 @@
-"""验证 Task 上下文到 Harness 提示词字段的确定性格式化，不覆盖 LLM 调用或模板策略。"""
+"""
+验证 Task 上下文到 Harness 提示词字段的确定性格式化。
+
+测试直接调用纯 prompting helper 并核对文本，不覆盖 LLM 调用、模板内容或策略循环。
+"""
 
 import unittest
 
 from backend.agent.task.domain import Task, TaskType
-from backend.agent.task.harness.utils.prompt import (
+from backend.agent.task.harness.prompting.context import (
     build_common_prompt_values,
     format_optional,
     format_tool_group_summary,

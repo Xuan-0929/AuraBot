@@ -11,7 +11,7 @@ from collections.abc import Callable, Mapping, Sequence
 from types import MappingProxyType
 
 from ...domain import Task
-from .adaptor import Adaptor, AdaptorRouteError
+from .base import Adaptor, AdaptorRouteError
 from .file_system import FileSystemAdaptor
 from .plan_context import PlanContextAdaptor
 

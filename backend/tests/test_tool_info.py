@@ -1,3 +1,9 @@
+"""
+验证 Tool 领域模型的 schema 约束、文件构造与说明序列化。
+
+测试以临时 fixture 读取真实定义，不覆盖 ToolGroup manager、resolver 或工具执行。
+"""
+
 import tempfile
 import unittest
 from json import JSONDecodeError

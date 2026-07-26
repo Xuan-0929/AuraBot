@@ -12,14 +12,13 @@ from backend.agent.capabilities.lease import CapabilitySession
 from backend.agent.skills.skill_group import SkillGroup
 from backend.agent.skills.manager import SkillGroupManager
 from backend.agent.task.domain import Task, TaskState, TaskType
-from backend.agent.task.manager import (
+from backend.agent.task import (
     DuplicateTaskNameError,
     TaskManager,
 )
 from backend.agent.task.events import TaskEventBroker
-from backend.agent.task.harness.harness import Harness
-from backend.agent.task.harness.factory import HarnessFactory
-from backend.agent.task.runtime import (
+from backend.agent.task.harness import Harness, HarnessFactory
+from backend.agent.task.runtime.records import (
     InterruptTaskOutcome,
     TaskFailure,
     TaskSnapshot,

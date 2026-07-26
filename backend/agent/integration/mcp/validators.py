@@ -1,4 +1,9 @@
-"""Input validation at the MCP transport boundary."""
+"""
+负责 MCP transport 边界输入值与调用参数的纯校验。
+
+MCPClient 在建立 session 前调用这些函数拒绝无效 URL、名称或 metadata；
+本模块不规范化业务结果、不发起网络请求，也不访问 Task runtime。
+"""
 
 from typing import Any
 from urllib.parse import urlsplit

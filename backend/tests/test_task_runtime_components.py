@@ -6,9 +6,12 @@ from datetime import UTC, datetime
 
 import backend.agent.task.runtime as task_runtime
 from backend.agent.task.domain import Task, TaskType
-from backend.agent.task.runtime import _TaskRuntimeRecord, TaskStartSpec
-from backend.agent.task.runtime_registry import TaskRuntimeRegistry
-from backend.agent.task.scheduler import TaskScheduler
+from backend.agent.task.runtime.records import (
+    TaskStartSpec,
+    _TaskRuntimeRecord,
+)
+from backend.agent.task.runtime.registry import TaskRuntimeRegistry
+from backend.agent.task.runtime.scheduler import TaskScheduler
 
 
 def record(task_id: int, name: str) -> _TaskRuntimeRecord:

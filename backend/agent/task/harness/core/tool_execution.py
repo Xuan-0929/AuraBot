@@ -11,18 +11,18 @@ from collections.abc import Mapping, Sequence
 from types import MappingProxyType
 from typing import Any
 
-from ...llm_client import ChatCompletionChoice, Message
-from ...tools.core.openai_chat_protocol import OpenAIChatToolProtocol
-from ...tools.core.model import (
+from ....llm_client import ChatCompletionChoice, Message
+from ....tools.core.openai_chat_protocol import OpenAIChatToolProtocol
+from ....tools.core.model import (
     ResolvedToolCall,
     ToolCall,
     ToolExecutionResult,
     ToolProtocolResponse,
 )
-from ...tools.core.gateway import ToolCallGateway
-from ..domain import Task
-from .adaptors.adaptor import Adaptor, AdaptorRouteError
-from .adaptors.registry import AdaptorRegistry
+from ....tools.core.gateway import ToolCallGateway
+from ...domain import Task
+from ..adaptors.base import Adaptor, AdaptorRouteError
+from ..adaptors.registry import AdaptorRegistry
 
 
 class ToolExecutionPipeline:

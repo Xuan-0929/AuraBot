@@ -7,12 +7,12 @@ retention；它不解析 HTTP 请求，也不决定 Harness 的内部退出算�
 
 from datetime import UTC, datetime
 
-from .domain import TaskState
+from ...domain import TaskState
 from .retention import TaskRetentionController
-from .runtime import InterruptTaskOutcome, InterruptTaskResult
-from .runtime_registry import TaskRuntimeRegistry
-from .scheduler import TaskScheduler
-from .task_event_publisher import TaskEventPublisher
+from ..records import InterruptTaskOutcome, InterruptTaskResult
+from ..registry import TaskRuntimeRegistry
+from ..scheduler import TaskScheduler
+from ..event_publisher import TaskEventPublisher
 
 
 class TaskInterruptionController:

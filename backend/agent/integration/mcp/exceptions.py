@@ -1,4 +1,9 @@
-"""Stable exception taxonomy for AuraBot MCP calls."""
+"""
+定义 AuraBot MCP transport、会话与工具调用的稳定异常分类。
+
+client/session/validator 在各自边界抛出具体子类，ToolCallGateway 再统一转换执行结果；
+本模块只表达错误语义，不发送请求，也不决定重试或 Task 状态。
+"""
 
 
 class MCPClientError(RuntimeError):

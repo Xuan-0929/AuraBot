@@ -1,4 +1,9 @@
-"""Temporary MCP ClientSession lifecycle and pagination helpers."""
+"""
+负责单次 MCP 调用所需 ClientSession 生命周期与分页辅助流程。
+
+MCPClient 提供 transport 后，本模块完成初始化、请求和临时 session 清理，并汇总分页结果；
+它不持久化连接、不解析 Task 授权，也不执行 Harness 状态迁移。
+"""
 
 from collections.abc import AsyncIterator
 from contextlib import AsyncExitStack, asynccontextmanager

@@ -1,3 +1,9 @@
+"""
+验证 BackendRuntime 的集中依赖所有权、启动、关闭与幂等生命周期。
+
+测试组合真实 managers 和 Task runtime，隔离外部网络，不覆盖 FastAPI route 序列化。
+"""
+
 import asyncio
 import unittest
 

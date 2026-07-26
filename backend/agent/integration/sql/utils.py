@@ -1,3 +1,10 @@
+"""
+提供 agent SQL adapters 共用的连接读取、transaction 与初始化辅助函数。
+
+具体 adapter 把 connection 交给本模块建立提交/回滚边界，再执行自身的表级映射；
+本模块不包含 Skill/Tool 业务规则，也不管理 manager 缓存。
+"""
+
 import sqlite3
 from collections.abc import Iterator
 from contextlib import closing, contextmanager

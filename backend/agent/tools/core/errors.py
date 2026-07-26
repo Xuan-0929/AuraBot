@@ -1,4 +1,9 @@
-"""Tool protocol and execution errors."""
+"""
+定义工具协议解析、授权解析与执行边界使用的稳定错误类型。
+
+OpenAIChatToolProtocol、ToolCallResolver 与 gateway 在各自层抛出这些语义错误，
+上层 Harness 再归一化为工具结果；本模块不解析请求，也不执行任何工具。
+"""
 
 """Exceptions raised while parsing and resolving tool calls."""
 

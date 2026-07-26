@@ -1,4 +1,9 @@
-"""Backend process health and Task admission status."""
+"""
+提供 Backend 进程健康状态与 Task 准入可用性的只读 HTTP route。
+
+route 从应用依赖读取 BackendRuntime 当前生命周期状态并构造轻量响应；
+本模块不启动或关闭 runtime，也不执行 Task 查询和调度。
+"""
 
 from __future__ import annotations
 

@@ -1,4 +1,9 @@
-"""Public Task HTTP transport."""
+"""
+提供 Task 启动、列表、详情与中断的公共 HTTP transport。
+
+route 使用 Pydantic model 校验输入，调用 TaskApplicationService，再把不可变 snapshot
+映射为响应；本模块不访问内部 record、不调度 Harness，也不拥有错误业务语义。
+"""
 
 from __future__ import annotations
 

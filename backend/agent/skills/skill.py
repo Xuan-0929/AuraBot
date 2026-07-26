@@ -1,4 +1,9 @@
-"""Domain model for one Skill."""
+"""
+定义单个 Skill 的领域模型及可供提示词使用的说明表示。
+
+持久化 adapter 或配置层构造 Skill，SkillGroup 汇总其名称、描述与正文供 Harness 使用；
+本模块不加载文件、不运行指令，也不管理共享实例生命周期。
+"""
 
 from html import escape
 from pathlib import Path

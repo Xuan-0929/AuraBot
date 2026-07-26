@@ -1,4 +1,9 @@
-"""Canonical backend copy of the native Plan JSON schemas."""
+"""
+保存 Backend 进程使用的 native Plan tool JSON schema 副本。
+
+plan_protocol 把这些静态 schema 绑定到工具声明，schema parity 测试再与 MCP Server
+副本逐项比较；本模块不共享跨进程类，也不执行业务校验或 Plan 操作。
+"""
 
 from __future__ import annotations
 

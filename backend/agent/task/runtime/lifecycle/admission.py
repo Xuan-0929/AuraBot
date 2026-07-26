@@ -9,17 +9,17 @@ from collections.abc import Callable
 from datetime import UTC, datetime
 
 from .errors import DuplicateTaskNameError, TaskManagerClosedError
-from .domain import Task
-from .domain.task import TaskStateObserver
-from .runtime import (
+from ...domain import Task
+from ...domain.task import TaskStateObserver
+from ..records import (
     TaskSnapshot,
     TaskStartSpec,
     _TaskRuntimeRecord,
     snapshot_task,
 )
-from .runtime_registry import TaskRuntimeRegistry
-from .scheduler import TaskScheduler
-from .task_event_publisher import TaskEventPublisher
+from ..registry import TaskRuntimeRegistry
+from ..scheduler import TaskScheduler
+from ..event_publisher import TaskEventPublisher
 from .validation import validate_start_spec
 
 

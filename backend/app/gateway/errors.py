@@ -1,4 +1,9 @@
-"""HTTP mapping for stable Application Service failures."""
+"""
+负责把稳定 ApplicationError 语义转换为 HTTP 错误响应。
+
+gateway route 捕获 service 层错误后交给本模块选择状态码和结构化 payload；
+本模块不捕获领域异常、不执行业务操作，也不泄漏内部 runtime record。
+"""
 
 from __future__ import annotations
 

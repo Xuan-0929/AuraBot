@@ -10,23 +10,23 @@ from abc import ABC, abstractmethod
 from collections.abc import Mapping, Sequence
 from typing import Any
 
-from ...llm_client import ChatCompletionChoice, LLMClient, Message
-from ...capabilities.lease import CapabilitySession
-from ...integration.mcp import MCPClient
-from ...tools.tool_group import ToolGroup
-from ...tools.core.model import (
+from ....llm_client import ChatCompletionChoice, LLMClient, Message
+from ....capabilities.lease import CapabilitySession
+from ....integration.mcp import MCPClient
+from ....tools.tool_group import ToolGroup
+from ....tools.core.model import (
     ResolvedToolCall,
     ToolCall,
     ToolExecutionResult,
     ToolProtocolResponse,
 )
-from ...tools.core.gateway import ToolCallGateway
-from ...tools.native import create_native_tool_groups
-from ..domain import Task, TaskState
-from .adaptors.adaptor import Adaptor
-from .adaptors.registry import AdaptorRegistry
+from ....tools.core.gateway import ToolCallGateway
+from ....tools.native import create_native_tool_groups
+from ...domain import Task, TaskState
+from ..adaptors.base import Adaptor
+from ..adaptors.registry import AdaptorRegistry
 from .required_tool_groups import inject_required_tool_groups
-from .tool_execution_pipeline import ToolExecutionPipeline
+from .tool_execution import ToolExecutionPipeline
 
 
 class HarnessInterruptedError(asyncio.CancelledError):

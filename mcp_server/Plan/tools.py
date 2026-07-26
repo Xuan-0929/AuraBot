@@ -1,4 +1,9 @@
-"""Safe HTTP proxy handlers for AuraBot native Plan tools."""
+"""
+负责 MCP Server 进程中 native Plan tools 的安全 HTTP 代理处理。
+
+handler 校验可信 runtime metadata、调用 Backend Plan HTTP API，并把各层错误转换为
+MCP 工具结果；本模块不持有 Plan aggregate，也不与 Backend 共享进程内类声明。
+"""
 
 from __future__ import annotations
 

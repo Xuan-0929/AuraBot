@@ -1,3 +1,9 @@
+"""
+验证 SkillGroup 聚合的成员约束、查找与说明格式。
+
+测试组合真实 Skill 值对象，不覆盖 SQL 持久化、CapabilitySession 或 Harness prompt。
+"""
+
 import tempfile
 import unittest
 from pathlib import Path

@@ -1,4 +1,9 @@
-"""Domain model for one Tool."""
+"""
+定义单个 Tool 的领域模型、协议 schema 与 adaptor 路由元数据。
+
+持久化层或 native factory 构造 Tool，ToolGroup 聚合后交给 resolver 与协议编码器使用；
+本模块不执行调用、不访问 MCP，也不管理 Task 授权生命周期。
+"""
 
 from collections.abc import Sequence
 

@@ -1,19 +1,22 @@
-"""Task use cases presented to HTTP and future transports."""
+"""
+负责向 HTTP gateway 与未来 transport 提供稳定的 Task application use cases。
+
+service 把传输层输入交给 TaskManager，并把准入、中断和缺失错误转换为 ApplicationError；
+它只返回公开 snapshot/订阅 DTO，不接触内部 runtime record，也不实现 HTTP 编码。
+"""
 
 from __future__ import annotations
 
-from ...agent.task.manager import (
+from ...agent.task import (
     DuplicateTaskNameError,
-    TaskManager,
-    TaskManagerClosedError,
-)
-from ...agent.task.events import TaskEventSubscription
-from ...agent.task.runtime import (
     InterruptTaskOutcome,
     TaskListSnapshot,
+    TaskManager,
+    TaskManagerClosedError,
     TaskSnapshot,
     TaskStartSpec,
 )
+from ...agent.task.events import TaskEventSubscription
 from .errors import ApplicationError
 
 

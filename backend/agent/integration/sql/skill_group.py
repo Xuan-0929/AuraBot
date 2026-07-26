@@ -1,4 +1,9 @@
-"""SQLite persistence for skill groups."""
+"""
+负责 SkillGroup 聚合及其成员关系的 SQL 持久化。
+
+manager 通过本 adapter 在 transaction 边界内加载或写入 group 与关联 Skill 记录，
+再还原领域聚合；本模块不缓存共享实例，也不参与 Task 能力租约。
+"""
 
 import sqlite3
 import warnings

@@ -1,4 +1,9 @@
-"""Backend process composition root."""
+"""
+负责 Backend 进程内 agent 能力、Task runtime 与 application service 的集中所有权。
+
+启动时按依赖树创建 managers、CapabilityRegistry、HarnessFactory 和 TaskManager，
+关闭时逆序释放它们；本模块不实现领域行为，也不处理 HTTP/MCP 协议。
+"""
 
 from __future__ import annotations
 
@@ -11,9 +16,9 @@ from typing import Any
 from ..agent.llm_client import LLMClient
 from ..agent.capabilities.registry import CapabilitySessionRegistry
 from ..agent.skills.manager import SkillGroupManager
-from ..agent.task.manager import TaskManager
+from ..agent.task import TaskManager
 from ..agent.task.events import TaskEventBroker
-from ..agent.task.harness.factory import HarnessFactory
+from ..agent.task.harness import HarnessFactory
 from ..agent.task.harness.adaptors.registry import AdaptorRegistry
 from ..agent.tools.manager import ToolGroupManager
 from ..agent.tools.native.plan import (

@@ -1,4 +1,9 @@
-"""Lazy lifecycle manager for shared ToolGroup objects."""
+"""
+负责共享 ToolGroup 的惰性加载、引用计数与集中关闭。
+
+CapabilitySession 按名称租用 group，manager 复用已加载聚合并在最后一个租约结束时
+释放缓存；本模块不解析或执行 tool_call，也不决定 Task 授权集合。
+"""
 
 from __future__ import annotations
 

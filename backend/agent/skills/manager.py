@@ -1,4 +1,9 @@
-"""Lazy lifecycle manager for shared SkillGroup objects."""
+"""
+负责共享 SkillGroup 的惰性加载、引用计数与集中关闭。
+
+CapabilitySession 按名称向 manager 租用 group，最后一个租约释放后回收缓存实例；
+本模块不执行 Skill 内容，也不决定 Task 使用哪些技能组。
+"""
 
 from __future__ import annotations
 

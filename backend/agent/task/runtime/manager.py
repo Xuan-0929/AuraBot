@@ -11,15 +11,14 @@ import asyncio
 from collections.abc import Callable
 from typing import Any
 
-from ..capabilities.lease import CapabilitySession
-from .admission import TaskAdmissionController
-from .errors import DuplicateTaskNameError, TaskManagerClosedError
-from .interruption import TaskInterruptionController
-from .domain import Task, TaskState
-from .events import TaskEventBroker, TaskEventSubscription
-from .harness.harness import Harness
-from .harness.factory import HarnessFactory
-from .runtime import (
+from ...capabilities.lease import CapabilitySession
+from .lifecycle.admission import TaskAdmissionController
+from .lifecycle.errors import DuplicateTaskNameError, TaskManagerClosedError
+from .lifecycle.interruption import TaskInterruptionController
+from ..domain import Task, TaskState
+from ..events import TaskEventBroker, TaskEventSubscription
+from ..harness import Harness, HarnessFactory
+from .records import (
     InterruptTaskResult,
     TaskListSnapshot,
     TaskSnapshot,
@@ -27,12 +26,12 @@ from .runtime import (
     _TaskRuntimeRecord,
     snapshot_task,
 )
-from .runtime_registry import TaskRuntimeRegistry
-from .retention import TaskRetentionController
+from .registry import TaskRuntimeRegistry
+from .lifecycle.retention import TaskRetentionController
 from .scheduler import TERMINAL_STATES, TaskScheduler
-from .shutdown import close_task_runtime, shutdown_task_runtime
-from .task_event_publisher import TaskEventPublisher
-from .validation import validate_manager_options
+from .lifecycle.shutdown import close_task_runtime, shutdown_task_runtime
+from .event_publisher import TaskEventPublisher
+from .lifecycle.validation import validate_manager_options
 
 
 class TaskManager:
@@ -297,8 +296,4 @@ class TaskManager:
         )
 
 
-__all__ = [
-    "DuplicateTaskNameError",
-    "TaskManager",
-    "TaskManagerClosedError",
-]
+__all__ = ["DuplicateTaskNameError", "TaskManager", "TaskManagerClosedError"]

@@ -9,7 +9,7 @@ from __future__ import annotations
 
 from ....tools.core.model import ResolvedToolCall
 from ...domain import Task
-from .adaptor import Adaptor, AdaptorRouteError
+from .base import Adaptor, AdaptorRouteError
 
 
 class PlanContextAdaptor(Adaptor):

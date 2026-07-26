@@ -7,11 +7,11 @@
 import unittest
 
 from backend.agent.task.domain import Task, TaskType
-from backend.agent.task.harness.adaptors.adaptor import Adaptor
+from backend.agent.task.harness.adaptors.base import Adaptor
 from backend.agent.task.harness.adaptors.registry import (
     AdaptorRegistry,
 )
-from backend.agent.task.harness.tool_execution_pipeline import (
+from backend.agent.task.harness.core.tool_execution import (
     ToolExecutionPipeline,
 )
 from backend.agent.tools.tool import Tool

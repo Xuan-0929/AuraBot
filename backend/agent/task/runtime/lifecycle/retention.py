@@ -1,12 +1,17 @@
-"""Terminal Task retention and resource cleanup."""
+"""
+负责终态 Task 的保留计时、registry 移除与 task-local 资源清理。
+
+TaskManager 在 runner settled 后把内部 record 交给本 controller；到期后它取消 timer、
+解除状态观察并关闭 CapabilitySession，再发布移除事件。本模块不运行 Harness 或处理 HTTP。
+"""
 
 import asyncio
 from collections.abc import Callable
 
-from .runtime import _TaskRuntimeRecord
-from .runtime_registry import TaskRuntimeRegistry
-from .scheduler import TERMINAL_STATES, TaskScheduler
-from .task_event_publisher import TaskEventPublisher
+from ..records import _TaskRuntimeRecord
+from ..registry import TaskRuntimeRegistry
+from ..scheduler import TERMINAL_STATES, TaskScheduler
+from ..event_publisher import TaskEventPublisher
 
 
 class TaskRetentionController:

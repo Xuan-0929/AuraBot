@@ -1,3 +1,9 @@
+"""
+验证 ToolCallResolver 对授权 ToolGroup 的名称解析、歧义与拒绝语义。
+
+测试使用真实 Tool/ToolGroup 和手写调用，不经过 LLM parser、adaptor 或 MCP gateway。
+"""
+
 import unittest
 
 from backend.agent.tools.tool import Tool

@@ -1,4 +1,9 @@
-"""OpenAI Chat Completions tool protocol."""
+"""
+负责 OpenAI Chat Completions 工具 schema 编码与模型响应解析。
+
+Harness 把授权 ToolGroup 转为 API 定义，并将 LLM choice 解析为 final response 或
+ToolCallBatch；本模块不做工具授权、不应用 adaptor，也不执行调用。
+"""
 
 from __future__ import annotations
 

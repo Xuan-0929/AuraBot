@@ -1,4 +1,9 @@
-"""Formatting and parsing helpers shared by Tool runtime and persistence code."""
+"""
+提供 Tool/ToolGroup 文件解析和面向提示词的说明格式化函数。
+
+领域构造与持久化边界复用这些纯函数处理 metadata、schema 和文本表示；
+本模块不解析模型 tool_call、不做授权判断，也不执行工具。
+"""
 
 import json
 from html import escape

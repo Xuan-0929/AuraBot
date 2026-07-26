@@ -1,4 +1,9 @@
-"""SQLite persistence for tool groups."""
+"""
+负责 ToolGroup 聚合和成员关系的 SQL CRUD 与领域映射。
+
+ToolGroupManager 通过本 adapter 在显式 transaction 中加载、保存或删除 group 及 Tool
+关联；本模块不维护运行时缓存、不解析 tool_call，也不执行远端工具。
+"""
 
 import sqlite3
 import warnings

@@ -1,4 +1,9 @@
-"""SQLite persistence for skills."""
+"""
+负责 Skill 表记录的 SQL CRUD 与 Skill 领域对象转换。
+
+SkillGroup 持久化层在共享 transaction 中调用本 adapter 维护成员 Skill，并由本模块
+统一完成列值映射；它不读取 SKILL.md、不执行技能，也不管理 SkillGroup 生命周期。
+"""
 
 import sqlite3
 import warnings

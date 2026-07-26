@@ -1,4 +1,9 @@
-"""Resolve parsed calls against an authorization snapshot."""
+"""
+负责把模型产生的 ToolCall 解析到 Task 授权快照中的唯一 Tool。
+
+ToolExecutionPipeline 提供当前 ToolGroup 集合，本 resolver 校验名称唯一性与授权并
+生成 ResolvedToolCall；它不修改参数、不调用 MCP，也不管理 Task 状态。
+"""
 
 from collections.abc import Mapping, Sequence
 

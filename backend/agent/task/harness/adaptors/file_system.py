@@ -1,10 +1,15 @@
-"""Adapt FileSystem paths to one Task working directory."""
+"""
+负责把 FileSystem 工具参数约束到单个 Task 的工作目录。
+
+ToolExecutionPipeline 在 gateway 执行前把 ResolvedToolCall 交给本 adaptor，路径经解析、
+规范化和目录包含校验后写回副本；本模块不访问文件内容，也不执行最终工具调用。
+"""
 
 from pathlib import Path
 from urllib.parse import unquote, urlsplit
 
 from ....tools.core.model import ResolvedToolCall
-from .adaptor import Adaptor, AdaptorRouteError
+from .base import Adaptor, AdaptorRouteError
 
 
 class PathBuildError(ValueError):

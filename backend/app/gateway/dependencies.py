@@ -1,4 +1,9 @@
-"""FastAPI dependency access to the application-owned runtime."""
+"""
+提供 FastAPI route 获取应用所拥有 BackendRuntime 与 service 的依赖函数。
+
+gateway 在请求边界从 app.state 读取已启动的组合根并返回窄依赖对象；本模块不创建
+runtime、不处理业务错误，也不负责进程启动和关闭。
+"""
 
 from __future__ import annotations
 
