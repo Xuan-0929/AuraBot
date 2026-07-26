@@ -2,6 +2,7 @@ import asyncio
 import unittest
 
 from backend.agent.LLMClient import ChatCompletionChoice
+from backend.agent.capabilities.lease import CapabilitySession
 from backend.agent.skills.SkillGroupManager import SkillGroupManager
 from backend.agent.task.TaskEntity import TaskState, TaskType
 from backend.agent.task.TaskManager import TaskManager
@@ -46,8 +47,10 @@ class TaskRuntimeApplicationTests(unittest.IsolatedAsyncioTestCase):
             harness_factory=HarnessFactory(
                 task_llm_client=TaskTypeAwareLLM()
             ),
-            tool_group_manager=tool_manager,
-            skill_group_manager=SkillGroupManager(loader=lambda name: None),
+            capability_session_factory=lambda: CapabilitySession(
+                tool_manager,
+                SkillGroupManager(loader=lambda name: None),
+            ),
             event_broker=TaskEventBroker(),
             max_running=2,
             retention_seconds=100,

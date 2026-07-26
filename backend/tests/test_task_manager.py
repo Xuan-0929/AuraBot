@@ -39,6 +39,13 @@ def make_tool_group(name: str) -> ToolGroup:
     )
 
 
+def capability_session_factory(
+    tool_manager: ToolGroupManager,
+    skill_manager: SkillGroupManager,
+):
+    return lambda: CapabilitySession(tool_manager, skill_manager)
+
+
 class ControlledHarness(Harness):
     def __init__(self, *, release: asyncio.Event, **kwargs):
         self._release = release
@@ -179,8 +186,10 @@ class TaskManagerTests(unittest.IsolatedAsyncioTestCase):
         self.broker = TaskEventBroker(queue_size=32, stream_id="tests")
         self.manager = TaskManager(
             harness_factory=self.factory,
-            tool_group_manager=self.tool_manager,
-            skill_group_manager=self.skill_manager,
+            capability_session_factory=capability_session_factory(
+                self.tool_manager,
+                self.skill_manager,
+            ),
             event_broker=self.broker,
             max_running=1,
             default_timeout_ms=300_000,
@@ -195,8 +204,10 @@ class TaskManagerTests(unittest.IsolatedAsyncioTestCase):
     async def test_manager_instances_are_owned_by_runtime_not_global_singletons(self):
         other = TaskManager(
             harness_factory=self.factory,
-            tool_group_manager=self.tool_manager,
-            skill_group_manager=self.skill_manager,
+            capability_session_factory=capability_session_factory(
+                self.tool_manager,
+                self.skill_manager,
+            ),
             event_broker=TaskEventBroker(),
         )
         self.assertIsNot(other, self.manager)
@@ -311,9 +322,11 @@ class TaskManagerTests(unittest.IsolatedAsyncioTestCase):
             harness_factory=HarnessFactory(
                 task_llm_client=BlockingLLMClient()
             ),
-            tool_group_manager=tool_manager,
-            skill_group_manager=SkillGroupManager(
-                loader=lambda name: SkillGroup(name, [])
+            capability_session_factory=capability_session_factory(
+                tool_manager,
+                SkillGroupManager(
+                    loader=lambda name: SkillGroup(name, [])
+                ),
             ),
             event_broker=TaskEventBroker(),
             max_running=2,
@@ -374,8 +387,10 @@ class TaskManagerTests(unittest.IsolatedAsyncioTestCase):
         tool_manager = ToolGroupManager(loader=make_tool_group)
         manager = TaskManager(
             harness_factory=self.factory,
-            tool_group_manager=tool_manager,
-            skill_group_manager=SkillGroupManager(loader=lambda name: None),
+            capability_session_factory=capability_session_factory(
+                tool_manager,
+                SkillGroupManager(loader=lambda name: None),
+            ),
             event_broker=TaskEventBroker(),
         )
         manager.bind_event_loop(asyncio.get_running_loop())
@@ -403,8 +418,10 @@ class TaskManagerTests(unittest.IsolatedAsyncioTestCase):
         )
         manager = TaskManager(
             harness_factory=FailingHarnessFactory(),
-            tool_group_manager=tool_manager,
-            skill_group_manager=skill_manager,
+            capability_session_factory=capability_session_factory(
+                tool_manager,
+                skill_manager,
+            ),
             event_broker=TaskEventBroker(),
         )
         manager.bind_event_loop(asyncio.get_running_loop())
@@ -456,9 +473,11 @@ class TaskManagerTests(unittest.IsolatedAsyncioTestCase):
         factory = StubbornHarnessFactory()
         manager = TaskManager(
             harness_factory=factory,
-            tool_group_manager=ToolGroupManager(loader=make_tool_group),
-            skill_group_manager=SkillGroupManager(
-                loader=lambda name: SkillGroup(name, [])
+            capability_session_factory=capability_session_factory(
+                ToolGroupManager(loader=make_tool_group),
+                SkillGroupManager(
+                    loader=lambda name: SkillGroup(name, [])
+                ),
             ),
             event_broker=TaskEventBroker(),
         )

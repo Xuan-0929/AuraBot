@@ -9,7 +9,7 @@ from functools import partial
 from typing import Any
 
 from ..agent.LLMClient import LLMClient
-from ..agent.capabilities.lease import CapabilitySession
+from ..agent.capabilities.registry import CapabilitySessionRegistry
 from ..agent.skills.SkillGroupManager import SkillGroupManager
 from ..agent.task.TaskManager import TaskManager
 from ..agent.task.events import TaskEventBroker
@@ -86,6 +86,7 @@ class BackendRuntime:
         adaptor_registry: AdaptorRegistry,
         tool_group_manager: ToolGroupManager,
         skill_group_manager: SkillGroupManager,
+        capability_sessions: CapabilitySessionRegistry,
         harness_factory: HarnessFactory,
         task_manager: TaskManager,
         task_service: TaskApplicationService,
@@ -96,6 +97,7 @@ class BackendRuntime:
         self.adaptor_registry = adaptor_registry
         self.tool_group_manager = tool_group_manager
         self.skill_group_manager = skill_group_manager
+        self.capability_sessions = capability_sessions
         self.harness_factory = harness_factory
         self.task_manager = task_manager
         self.task_service = task_service
@@ -103,7 +105,6 @@ class BackendRuntime:
         self._closed = False
         self._closing = False
         self._close_task: asyncio.Task[None] | None = None
-        self._capability_sessions: set[CapabilitySession] = set()
 
     @classmethod
     def from_config(
@@ -137,6 +138,10 @@ class BackendRuntime:
             }
         )
         skill_group_manager = SkillGroupManager()
+        capability_sessions = CapabilitySessionRegistry(
+            tool_group_manager,
+            skill_group_manager,
+        )
         harness_factory = HarnessFactory(
             task_llm_client=task_llm_client,
             adaptor_registry=adaptor_registry,
@@ -146,8 +151,7 @@ class BackendRuntime:
         )
         task_manager = TaskManager(
             harness_factory=harness_factory,
-            tool_group_manager=tool_group_manager,
-            skill_group_manager=skill_group_manager,
+            capability_session_factory=capability_sessions.create,
             event_broker=broker,
             max_running=settings.max_running,
             default_timeout_ms=settings.default_timeout_ms,
@@ -160,6 +164,7 @@ class BackendRuntime:
             adaptor_registry=adaptor_registry,
             tool_group_manager=tool_group_manager,
             skill_group_manager=skill_group_manager,
+            capability_sessions=capability_sessions,
             harness_factory=harness_factory,
             task_manager=task_manager,
             task_service=TaskApplicationService(task_manager),
@@ -173,17 +178,6 @@ class BackendRuntime:
         self.task_manager.bind_event_loop(
             loop or asyncio.get_running_loop()
         )
-
-    def new_capability_session(self) -> CapabilitySession:
-        if self._closed or self._closing:
-            raise RuntimeError("BackendRuntime is closed")
-        session = CapabilitySession(
-            self.tool_group_manager,
-            self.skill_group_manager,
-            on_close=self._capability_sessions.discard,
-        )
-        self._capability_sessions.add(session)
-        return session
 
     async def aclose(self) -> None:
         close_task = self._close_task
@@ -204,12 +198,11 @@ class BackendRuntime:
             )
         except BaseException as exc:
             first_error = exc
-        for session in tuple(self._capability_sessions):
-            try:
-                session.close()
-            except BaseException as exc:
-                if first_error is None:
-                    first_error = exc
+        try:
+            self.capability_sessions.close()
+        except BaseException as exc:
+            if first_error is None:
+                first_error = exc
         for manager in (
             self.tool_group_manager,
             self.skill_group_manager,

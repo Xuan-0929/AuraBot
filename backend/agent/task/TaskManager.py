@@ -5,15 +5,13 @@ from __future__ import annotations
 import asyncio
 import re
 from collections import deque
-from collections.abc import Iterator
+from collections.abc import Callable, Iterator
 from contextlib import contextmanager
 from datetime import UTC, datetime
 from threading import RLock
 from typing import Any
 
 from ..capabilities.lease import CapabilitySession
-from ..skills.SkillGroupManager import SkillGroupManager
-from ..tools.ToolGroupManager import ToolGroupManager
 from .Task import Task
 from .TaskEntity import (
     InterruptTaskOutcome,
@@ -60,8 +58,9 @@ class TaskManager:
         self,
         *,
         harness_factory: HarnessFactory | Any | None = None,
-        tool_group_manager: ToolGroupManager | None = None,
-        skill_group_manager: SkillGroupManager | None = None,
+        capability_session_factory: (
+            Callable[[], CapabilitySession] | None
+        ) = None,
         event_broker: TaskEventBroker | None = None,
         max_running: int = 8,
         default_timeout_ms: int = 300_000,
@@ -98,12 +97,14 @@ class TaskManager:
             )
         if retention_seconds < 0:
             raise ValueError("retention_seconds must be non-negative")
+        if (
+            capability_session_factory is not None
+            and not callable(capability_session_factory)
+        ):
+            raise TypeError("capability_session_factory must be callable")
 
         self._harness_factory = harness_factory
-        self._tool_group_manager = tool_group_manager or ToolGroupManager()
-        self._skill_group_manager = (
-            skill_group_manager or SkillGroupManager()
-        )
+        self._capability_session_factory = capability_session_factory
         self._event_broker = event_broker or TaskEventBroker()
         self._max_running = max_running
         self._default_timeout_ms = default_timeout_ms
@@ -568,12 +569,18 @@ class TaskManager:
         self._refresh_queue_positions_locked()
 
     def _activate_locked(self, record: TaskRuntimeRecord) -> None:
-        session = CapabilitySession(
-            self._tool_group_manager,
-            self._skill_group_manager,
-        )
-        record.capabilities = session
+        session: CapabilitySession | None = None
         try:
+            if self._capability_session_factory is None:
+                raise RuntimeError(
+                    "TaskManager requires a capability session factory"
+                )
+            session = self._capability_session_factory()
+            if not isinstance(session, CapabilitySession):
+                raise TypeError(
+                    "capability session factory must return CapabilitySession"
+                )
+            record.capabilities = session
             tool_groups = session.acquire_tool_groups(
                 record.start_spec.tool_group_names
             )
@@ -587,13 +594,13 @@ class TaskManager:
                 capability_session=session,
             )
         except Exception:
-            try:
-                session.close()
-            except BaseException:
-                # Initialization already failed. Cleanup is best-effort here:
-                # the Task must still settle deterministically instead of
-                # escaping from start_task() with a permanently reserved name.
-                pass
+            if session is not None:
+                try:
+                    session.close()
+                except BaseException:
+                    # Initialization already failed. Cleanup is best-effort:
+                    # the Task still settles instead of reserving its name.
+                    pass
             record.capabilities = None
             record.error = {
                 "code": "task_initialization_failed",

@@ -93,7 +93,7 @@ class BackendRuntimeTests(unittest.IsolatedAsyncioTestCase):
 
         self.assertIsNone(runtime.tool_group_manager.get_cached("Plan"))
 
-        session = runtime.new_capability_session()
+        session = runtime.capability_sessions.create()
         group = session.acquire_tool_groups(("Plan",))[0]
 
         self.assertEqual(group.name, "Plan")
@@ -112,11 +112,12 @@ class BackendRuntimeTests(unittest.IsolatedAsyncioTestCase):
             RUNTIME_CONFIG,
             task_llm_client=FakeLLMClient(),
         )
-        session = runtime.new_capability_session()
+        session = runtime.capability_sessions.create()
         session.acquire_tool_groups(("Plan",))
 
         await runtime.aclose()
 
+        self.assertTrue(runtime.capability_sessions.closed)
         self.assertTrue(session.closed)
         self.assertEqual(runtime.tool_group_manager.reference_count("Plan"), 0)
         with self.assertRaisesRegex(RuntimeError, "closed"):
