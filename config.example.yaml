@@ -1,52 +1,19 @@
-# AuraBot local configuration example.
+# AuraBot Python Backend configuration example.
 #
-# Copy this file to the runtime configuration location used by your
-# environment, then export the API key environment variables referenced below.
-# Do not put real secrets in this repository.
+# Copy this file to config.yaml. The current Backend is health-only; the model
+# sections are retained for future chat/Memory integration and are not used by
+# a Task runtime.
 
 ports:
   frontend: 6400
   backend_gateway: 6401
-  
-
-local_mcp_server: "http://127.0.0.1:6410/mcp"
-
-task_runtime:
-  # At most this many Harness runners execute concurrently. Extra Tasks wait
-  # FIFO in Initializing state.
-  max_running: 8
-  default_timeout_ms: 300000
-  max_timeout_ms: 1800000
-  # Complete Harness runtimes and capability leases remain inspectable for
-  # this period before automatic cleanup.
-  terminal_retention_seconds: 100
-  sse_subscriber_queue_size: 256
-  sse_keepalive_seconds: 15
-  shutdown_grace_seconds: 5
-
-
-
-# -----------------------------------------------------
-# LLM Model Configuration
-# -----------------------------------------------------
 
 chat_model:
-  # The model to use for chat.
-  # Better use a model that is not too large, as it will be used for all chat messages, make fluent responses.
-  base_url: "api.deepseek.com/v1"
+  base_url: "https://api.deepseek.com/v1"
   model_name: "deepseek-v4-flash"
-  api_key: "${AURABOT_CHAT_MODEL_API_KEY}"
+  api_key: "${AURABOT_CHAT_MODEL_API_KEY:-}"
 
 gateway_model:
-  # The model to use for the gateway.
-  # Just need to be immediately fast.
-  base_url: "api.deepseek.com/v1"
+  base_url: "https://api.deepseek.com/v1"
   model_name: "deepseek-v4-flash"
-  api_key: "${AURABOT_GATEWAY_MODEL_API_KEY}"
-
-task_model:
-  # The model to use for task execution.
-  # Need to be smart enough to understand the task and execute it correctly.
-  base_url: "api.deepseek.com/v1"
-  model_name: "deepseek-v4-pro"
-  api_key: "${AURABOT_TASK_MODEL_API_KEY}"
+  api_key: "${AURABOT_GATEWAY_MODEL_API_KEY:-}"

@@ -1,4 +1,12 @@
-"""Process-wide runtime configuration loaded from the project YAML file."""
+"""Load the retained process-wide YAML configuration for the Backend shell.
+
+The health-only Backend initializes this module once during import. Only the
+ports and the surviving chat/gateway model roles cross this boundary; obsolete
+Task and MCP sections are discarded before environment expansion so legacy
+files cannot make the current process depend on removed runtime secrets. The
+module exposes the filtered values as a shared mapping to ``backend.main`` and
+any retained Python services.
+"""
 
 from __future__ import annotations
 
@@ -15,6 +23,7 @@ import yaml
 PROJECT_ROOT = Path(__file__).resolve().parent.parent
 DEFAULT_CONFIG_PATH = PROJECT_ROOT / "config.yaml"
 CONFIG_PATH_ENV = "AURABOT_CONFIG_PATH"
+RETAINED_TOP_LEVEL_KEYS = frozenset({"ports", "chat_model", "gateway_model"})
 ENV_REFERENCE_PATTERN = re.compile(
     r"\$\{([A-Za-z_][A-Za-z0-9_]*)(?::-(.*?))?\}"
 )
@@ -89,7 +98,10 @@ class Config(Mapping[str, Any]):
             if not all(isinstance(key, str) for key in loaded):
                 raise ConfigError("AuraBot configuration top-level keys must all be strings.")
 
-            self._data = _expand_environment_references(loaded)
+            retained = {
+                key: value for key, value in loaded.items() if key in RETAINED_TOP_LEVEL_KEYS
+            }
+            self._data = _expand_environment_references(retained)
             self._path = resolved_path
             return self
 

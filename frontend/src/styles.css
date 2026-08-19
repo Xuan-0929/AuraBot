@@ -1,3 +1,8 @@
+/*
+ * AuraBot Renderer 全局样式：定义桌宠、主聊天、设置与 Live2D 表面的共享设计 token
+ * 和响应式布局。样式只覆盖当前保留 UI，并与 Vue 组件的语义 class 对齐；旧 Task
+ * 卡片、侧栏、状态和 runner 设置样式已移除。
+ */
 :root {
   --aura-warm-bg: #fffaf5;
   --aura-paper: #f6ece3;
@@ -198,10 +203,6 @@ textarea {
   filter: drop-shadow(0 22px 24px rgba(196, 126, 94, 0.24));
 }
 
-.desktop-pet[data-agent-status="tasking"] .desktop-pet-model-shell {
-  filter: drop-shadow(0 22px 24px rgba(120, 106, 97, 0.22));
-}
-
 .desktop-pet[data-agent-status="listening"] .desktop-pet-model-shell {
   filter: drop-shadow(0 22px 24px rgba(143, 121, 109, 0.2));
 }
@@ -360,185 +361,6 @@ textarea {
   opacity: 1;
   pointer-events: auto;
   transform: translate(-50%, 0);
-}
-
-.desktop-pet-sticky-notes,
-.task-sticky-notes-pet {
-  position: absolute;
-  top: 14px;
-  right: 14px;
-  width: min(132px, 34vw);
-  z-index: 2;
-}
-
-.task-sticky-notes {
-  display: grid;
-  gap: 8px;
-}
-
-.task-sticky-notes-console {
-  display: flex;
-  align-items: center;
-  width: max-content;
-  min-width: max-content;
-  max-width: none;
-  height: 100%;
-  max-height: none;
-  gap: 8px;
-  pointer-events: auto;
-}
-
-.task-sticky-notes-pet {
-  pointer-events: none;
-}
-
-.task-sticky-notes-header {
-  display: grid;
-  gap: 2px;
-  padding: 0 2px;
-}
-
-.task-sticky-notes-header strong {
-  color: var(--aura-ink);
-  font-size: 11px;
-  font-weight: 700;
-  line-height: 1.2;
-}
-
-.task-sticky-notes-header span {
-  color: var(--aura-muted);
-  font-size: 10px;
-  line-height: 1.35;
-}
-
-.task-sticky-note {
-  display: grid;
-  gap: 4px;
-  padding: 10px 11px;
-  border: 1px solid var(--aura-border);
-  border-radius: 16px;
-  background: rgba(255, 250, 244, 0.78);
-  box-shadow: var(--aura-shadow);
-  backdrop-filter: blur(10px);
-}
-
-.task-sticky-note-copy {
-  display: grid;
-  gap: 4px;
-}
-
-.task-sticky-note strong {
-  color: var(--aura-ink);
-  font-size: 12px;
-  line-height: 1.35;
-}
-
-.task-sticky-note span {
-  color: var(--aura-muted);
-  font-size: 10px;
-  line-height: 1.35;
-}
-
-.task-sticky-note-actions {
-  display: flex;
-  flex-wrap: wrap;
-  gap: 4px;
-  justify-content: flex-end;
-  margin-top: 2px;
-}
-
-.task-sticky-note-action {
-  min-height: 24px;
-  padding: 0 8px;
-  border: 1px solid rgba(132, 101, 86, 0.16);
-  border-radius: 999px;
-  background: rgba(255, 255, 255, 0.56);
-  color: var(--aura-muted);
-  cursor: pointer;
-  font-size: 10px;
-  font-weight: 700;
-  letter-spacing: 0;
-  white-space: nowrap;
-}
-
-.task-sticky-note-action:hover {
-  background: rgba(255, 255, 255, 0.8);
-  color: var(--aura-ink);
-}
-
-.task-sticky-note-action-cancel {
-  color: #8a6d61;
-}
-
-.task-sticky-note-action-delete {
-  color: #9b5a55;
-}
-
-.task-sticky-notes-console .task-sticky-notes-header {
-  padding: 0 1px;
-}
-
-.task-sticky-notes-console .task-sticky-notes-header strong {
-  font-size: 10px;
-  font-weight: 800;
-  letter-spacing: 0.04em;
-  text-transform: uppercase;
-}
-
-.task-sticky-notes-console .task-sticky-note {
-  display: flex;
-  flex-direction: row;
-  align-items: center;
-  justify-content: space-between;
-  gap: 8px;
-  flex: 0 0 auto;
-  width: 138px;
-  height: 90%;
-  min-height: 0;
-  padding: 8px 9px;
-  border-radius: 13px;
-  background:
-    linear-gradient(180deg, rgba(255, 255, 255, 0.94), rgba(255, 249, 244, 0.9)),
-    rgba(255, 252, 248, 0.92);
-  box-shadow: 0 9px 18px rgba(123, 96, 81, 0.08);
-}
-
-.task-sticky-notes-console .task-sticky-note-copy {
-  min-width: 0;
-  flex: 1 1 auto;
-  gap: 3px;
-}
-
-.task-sticky-notes-console .task-sticky-note strong {
-  font-size: 10px;
-  line-height: 1.26;
-  overflow: hidden;
-  text-overflow: ellipsis;
-  white-space: nowrap;
-}
-
-.task-sticky-notes-console .task-sticky-note span {
-  display: -webkit-box;
-  overflow: hidden;
-  color: rgba(138, 109, 97, 0.92);
-  font-size: 8px;
-  line-height: 1.3;
-  text-overflow: ellipsis;
-  -webkit-box-orient: vertical;
-  -webkit-line-clamp: 2;
-}
-
-.task-sticky-notes-console .task-sticky-note-actions {
-  align-self: center;
-  justify-content: flex-end;
-  margin-top: 0;
-  flex: 0 0 auto;
-}
-
-.task-sticky-notes-console .task-sticky-note-action {
-  min-height: 17px;
-  padding: 0 6px;
-  font-size: 8px;
 }
 
 .pet-action-button {
@@ -704,8 +526,7 @@ textarea {
 }
 
 .status-dot-thinking,
-.status-dot-typing,
-.status-dot-tasking {
+.status-dot-typing {
   background: #c66f44;
 }
 
@@ -731,61 +552,37 @@ textarea {
   min-height: 0;
 }
 
-.console-task-sticky-layer {
-  display: flex;
-  flex-direction: column;
-  justify-content: center;
-  gap: 6px;
-  min-width: 0;
-  min-height: 100%;
-}
-
-.console-task-panel-meta {
-  display: flex;
-  align-items: center;
-  justify-content: space-between;
-  gap: 8px;
-  padding: 0 4px;
-}
-
-.console-task-panel-meta strong {
-  color: var(--aura-ink);
-  font-size: 15px;
-  font-weight: 800;
-}
-
-.console-task-panel-meta span {
-  color: var(--aura-muted);
-  font-size: 13px;
-  font-weight: 700;
-}
-
-.console-task-viewport {
+.console-settings-button {
+  position: absolute;
+  z-index: 3;
+  top: 28px;
+  right: 30px;
   display: grid;
-  height: 96px;
-  padding: 10px;
-  width: 100%;
-  min-width: 0;
-  border: 1px solid rgba(132, 101, 86, 0.14);
-  border-radius: 22px;
-  background:
-    linear-gradient(180deg, rgba(255, 255, 255, 0.94), rgba(255, 248, 242, 0.92)),
-    rgba(255, 252, 248, 0.92);
-  box-shadow: 0 14px 24px rgba(123, 96, 81, 0.08);
-  backdrop-filter: blur(12px);
+  width: 32px;
+  height: 32px;
+  padding: 0;
+  place-items: center;
+  border: 1px solid var(--console-border);
+  border-radius: 50%;
+  background: var(--console-surface-strong);
+  color: var(--console-text-muted);
+  cursor: pointer;
 }
 
-.console-task-viewport-list {
-  min-height: 0;
-  height: 100%;
-  overflow-x: auto;
-  overflow-y: hidden;
-  padding-bottom: 2px;
+.console-settings-button:hover,
+.console-settings-button:focus-visible {
+  border-color: var(--console-border-strong);
+  color: var(--console-blue);
+  outline: none;
 }
 
-.console-task-viewport-empty {
-  display: block;
-  height: 100%;
+.console-settings-button:focus-visible {
+  box-shadow: 0 0 0 3px var(--console-focus);
+}
+
+.console-settings-button svg {
+  width: 16px;
+  height: 16px;
 }
 
 .console-header {
@@ -796,40 +593,6 @@ textarea {
   gap: 6px;
   margin-bottom: 14px;
   min-height: 144px;
-}
-
-.console-task-settings-button {
-  display: inline-grid;
-  width: 30px;
-  height: 30px;
-  place-items: center;
-  border: 1px solid var(--aura-border);
-  border-radius: 10px;
-  background: rgba(255, 255, 255, 0.76);
-  color: var(--aura-ink);
-  box-shadow: 0 8px 14px rgba(123, 96, 81, 0.08);
-  cursor: pointer;
-  transition:
-    transform 140ms ease,
-    border-color 140ms ease,
-    background 140ms ease,
-    box-shadow 140ms ease;
-}
-
-.console-task-settings-button svg {
-  width: 16px;
-  height: 16px;
-  stroke: currentColor;
-  stroke-width: 1.8;
-  stroke-linecap: round;
-  stroke-linejoin: round;
-}
-
-.console-task-settings-button:hover {
-  transform: translateY(-1px);
-  border-color: rgba(132, 101, 86, 0.24);
-  background: rgba(255, 255, 255, 0.94);
-  box-shadow: 0 10px 18px rgba(123, 96, 81, 0.1);
 }
 
 .console-header-copy {
@@ -1456,11 +1219,6 @@ textarea {
   gap: 10px;
 }
 
-.settings-task-cli-list {
-  display: grid;
-  gap: 10px;
-}
-
 .settings-model-card {
   display: grid;
   gap: 8px;
@@ -1595,35 +1353,6 @@ textarea {
   transform: translateY(-1px);
 }
 
-.settings-task-cli-card {
-  display: grid;
-  grid-template-columns: minmax(140px, 1fr) minmax(128px, auto) minmax(148px, auto);
-  gap: 8px 12px;
-  align-items: center;
-  padding: 14px;
-  border: 1px solid var(--settings-border);
-  border-radius: 8px;
-  background: var(--settings-surface);
-}
-
-.settings-task-cli-card p {
-  grid-column: 1 / -1;
-  min-width: 0;
-  margin: 0;
-  color: var(--settings-muted);
-  font-size: 12px;
-  overflow-wrap: anywhere;
-}
-
-.settings-task-cli-priority input {
-  width: 68px;
-}
-
-.settings-task-cli-timeout input {
-  width: 82px;
-  text-align: right;
-}
-
 .settings-proactive-wait input {
   width: 82px;
   text-align: right;
@@ -1642,9 +1371,6 @@ textarea {
     grid-template-columns: minmax(0, 1fr);
   }
 
-  .settings-task-cli-card {
-    grid-template-columns: minmax(0, 1fr);
-  }
 }
 
 .console-chat {
@@ -1991,26 +1717,6 @@ textarea {
     min-height: 0;
   }
 
-  .console-task-sticky-layer {
-    width: 100%;
-  }
-
-  .console-task-viewport {
-    height: 90px;
-    padding: 10px;
-  }
-
-  .console-task-panel-meta strong {
-    font-size: 14px;
-  }
-
-  .console-task-panel-meta span {
-    font-size: 12px;
-  }
-
-  .task-sticky-notes-console .task-sticky-note {
-    width: 126px;
-  }
 }
 
 .console-window {
@@ -2088,11 +1794,6 @@ textarea {
   height: 30px;
 }
 
-.console-task-glass {
-  width: 100%;
-  height: 96px;
-}
-
 .console-composer-glass {
   width: 100%;
   min-height: 78px;
@@ -2103,32 +1804,6 @@ textarea {
   gap: clamp(14px, 1.8vw, 24px);
   margin-bottom: clamp(14px, 1.6vw, 22px);
   min-height: 148px;
-}
-
-.console-task-settings-button {
-  border-color: var(--console-border);
-  background:
-    linear-gradient(180deg, rgba(255, 255, 255, 0.2), transparent),
-    var(--console-glass);
-  color: var(--console-text);
-  box-shadow: var(--console-shadow-soft);
-  backdrop-filter: blur(22px) saturate(135%);
-  transition:
-    transform 180ms ease,
-    border-color 180ms ease,
-    background 180ms ease,
-    box-shadow 180ms ease;
-}
-
-.console-task-settings-button:hover {
-  border-color: var(--console-border-strong);
-  background: var(--console-surface-strong);
-  box-shadow: var(--console-shadow);
-  transform: translateY(-1px);
-}
-
-.console-task-settings-button:active {
-  transform: translateY(0) scale(0.98);
 }
 
 .console-header-copy {
@@ -2179,137 +1854,9 @@ textarea {
 }
 
 .console-window .status-dot-thinking,
-.console-window .status-dot-typing,
-.console-window .status-dot-tasking {
+.console-window .status-dot-typing {
   background: var(--console-orange);
   box-shadow: 0 0 0 3px color-mix(in srgb, var(--console-orange) 18%, transparent);
-}
-
-.console-task-sticky-layer {
-  gap: 9px;
-}
-
-.console-task-panel-meta {
-  padding: 0 6px;
-}
-
-.console-task-panel-meta strong {
-  color: var(--console-text);
-  font-size: 15px;
-  font-weight: 760;
-  text-wrap: balance;
-}
-
-.console-task-panel-meta span {
-  color: var(--console-text-muted);
-  font-size: 12px;
-  font-weight: 620;
-}
-
-.console-task-viewport {
-  height: 100%;
-  padding: 10px;
-  border: none;
-  border-radius: 24px;
-  background: transparent;
-  box-shadow: none;
-  backdrop-filter: none;
-}
-
-.console-task-viewport-empty {
-  position: relative;
-  height: 100%;
-  overflow: hidden;
-  border-radius: 18px;
-}
-
-.console-task-viewport-empty::before,
-.console-task-viewport-empty::after {
-  content: "";
-  position: absolute;
-  left: 12px;
-  right: 12px;
-  height: 1px;
-  background: linear-gradient(90deg, transparent, var(--console-border-strong), transparent);
-  opacity: 0.46;
-}
-
-.console-task-viewport-empty::before {
-  top: 34%;
-}
-
-.console-task-viewport-empty::after {
-  top: 64%;
-  opacity: 0.28;
-}
-
-.console-task-viewport-list {
-  scrollbar-width: thin;
-  scrollbar-color: var(--console-border-strong) transparent;
-}
-
-.console-window .task-sticky-notes-console {
-  gap: 10px;
-}
-
-.console-window .task-sticky-notes-console .task-sticky-note {
-  width: 152px;
-  height: 100%;
-  padding: 10px 11px;
-  border: 1px solid var(--console-border);
-  border-radius: 18px;
-  background:
-    linear-gradient(160deg, rgba(255, 255, 255, 0.2), transparent 42%),
-    var(--console-surface-strong);
-  box-shadow:
-    inset 0 1px 0 rgba(255, 255, 255, 0.18),
-    0 12px 28px rgba(89, 66, 49, 0.08);
-  backdrop-filter: blur(22px) saturate(145%);
-  transition:
-    transform 220ms cubic-bezier(0.2, 0.8, 0.2, 1),
-    border-color 220ms ease,
-    box-shadow 220ms ease;
-}
-
-.console-window .task-sticky-notes-console .task-sticky-note:hover {
-  border-color: var(--console-border-strong);
-  box-shadow:
-    inset 0 1px 0 rgba(255, 255, 255, 0.22),
-    0 18px 36px rgba(89, 66, 49, 0.14);
-  transform: translateY(-2px);
-}
-
-.console-window .task-sticky-notes-console .task-sticky-note strong {
-  color: var(--console-text);
-  font-size: 12px;
-  font-weight: 720;
-}
-
-.console-window .task-sticky-notes-console .task-sticky-note span {
-  color: var(--console-text-muted);
-  font-size: 10px;
-  font-weight: 560;
-}
-
-.console-window .task-sticky-notes-console .task-sticky-note-action {
-  min-height: 19px;
-  padding: 0 7px;
-  border: 1px solid var(--console-border);
-  background: var(--console-glass-strong);
-  color: var(--console-text-muted);
-  font-size: 9px;
-  font-weight: 650;
-}
-
-.console-window .task-sticky-notes-console .task-sticky-note-action:hover {
-  border-color: var(--console-border-strong);
-  background: var(--console-surface-strong);
-  color: var(--console-text);
-}
-
-.console-window .task-sticky-note-action-cancel,
-.console-window .task-sticky-note-action-delete {
-  color: var(--console-red);
 }
 
 .console-chat {
@@ -2324,189 +1871,6 @@ textarea {
     inset 0 1px 0 rgba(255, 255, 255, 0.22),
     var(--console-shadow);
   backdrop-filter: blur(30px) saturate(150%);
-}
-
-.task-detail-panel {
-  flex: 0 0 min(360px, 36vw);
-  display: flex;
-  flex-direction: column;
-  gap: 13px;
-  min-width: 280px;
-  min-height: 0;
-  padding: 16px;
-  border: 1px solid var(--console-border);
-  border-radius: 30px;
-  background:
-    linear-gradient(180deg, rgba(255, 255, 255, 0.16), transparent 36%),
-    var(--console-surface);
-  color: var(--console-text);
-  box-shadow:
-    inset 0 1px 0 rgba(255, 255, 255, 0.2),
-    var(--console-shadow);
-  backdrop-filter: blur(30px) saturate(150%);
-}
-
-.task-detail-header {
-  display: flex;
-  align-items: flex-start;
-  justify-content: space-between;
-  gap: 12px;
-}
-
-.task-detail-header div {
-  display: grid;
-  gap: 4px;
-  min-width: 0;
-}
-
-.task-detail-header span,
-.task-detail-section h2,
-.task-detail-error strong {
-  color: var(--console-text-muted);
-  font-size: 11px;
-  font-weight: 700;
-}
-
-.task-detail-header strong {
-  overflow: hidden;
-  color: var(--console-text);
-  font-size: 15px;
-  font-weight: 700;
-  line-height: 1.3;
-  text-overflow: ellipsis;
-  white-space: nowrap;
-}
-
-.task-detail-close {
-  min-height: 28px;
-  padding: 0 10px;
-  border: 1px solid var(--console-border);
-  border-radius: 999px;
-  background: var(--console-glass-strong);
-  color: var(--console-text-muted);
-  cursor: pointer;
-  font-size: 11px;
-  font-weight: 650;
-}
-
-.task-detail-grid,
-.task-detail-section {
-  display: grid;
-  gap: 10px;
-}
-
-.task-detail-grid dl {
-  display: grid;
-  gap: 8px;
-  margin: 0;
-}
-
-.task-detail-grid dl div {
-  display: grid;
-  grid-template-columns: 92px minmax(0, 1fr);
-  gap: 8px;
-}
-
-.task-detail-grid dt {
-  color: var(--console-text-muted);
-  font-size: 11px;
-}
-
-.task-detail-grid dd {
-  min-width: 0;
-  margin: 0;
-  overflow: hidden;
-  color: var(--console-text);
-  font-size: 11px;
-  text-overflow: ellipsis;
-  white-space: nowrap;
-}
-
-.task-detail-error {
-  display: grid;
-  gap: 6px;
-  padding: 10px;
-  border: 1px solid color-mix(in srgb, var(--console-red) 24%, transparent);
-  border-radius: 14px;
-  background: color-mix(in srgb, var(--console-red) 8%, transparent);
-}
-
-.task-detail-error p,
-.task-detail-empty {
-  margin: 0;
-  color: var(--console-text-muted);
-  font-size: 11px;
-  line-height: 1.45;
-}
-
-.task-detail-section {
-  min-height: 0;
-}
-
-.task-detail-section h2 {
-  margin: 0;
-}
-
-.task-detail-artifacts,
-.task-detail-timeline,
-.task-detail-payload {
-  display: grid;
-  gap: 8px;
-  margin: 0;
-  padding: 0;
-  list-style: none;
-}
-
-.task-detail-artifacts li,
-.task-detail-timeline li {
-  display: grid;
-  gap: 4px;
-  padding: 9px 10px;
-  border: 1px solid var(--console-border);
-  border-radius: 14px;
-  background: var(--console-glass);
-}
-
-.task-detail-artifacts span,
-.task-detail-timeline strong {
-  overflow: hidden;
-  color: var(--console-text);
-  font-size: 11px;
-  font-weight: 650;
-  line-height: 1.35;
-  text-overflow: ellipsis;
-  white-space: nowrap;
-}
-
-.task-detail-artifacts small,
-.task-detail-timeline time,
-.task-detail-timeline span,
-.task-detail-payload li {
-  color: var(--console-text-muted);
-  font-size: 10px;
-}
-
-.task-detail-payload {
-  gap: 3px;
-}
-
-.task-detail-payload li {
-  overflow: hidden;
-  text-overflow: ellipsis;
-  white-space: nowrap;
-}
-
-.task-detail-timeline {
-  overflow-y: auto;
-  padding-right: 2px;
-}
-
-.task-detail-timeline li div {
-  display: flex;
-  align-items: center;
-  justify-content: space-between;
-  gap: 8px;
-  min-width: 0;
 }
 
 .console-window .message-list {
@@ -2914,7 +2278,6 @@ textarea {
 
 @media (prefers-reduced-motion: reduce) {
   .console-window .composer button,
-  .console-window .task-sticky-note-action,
   .console-window .message,
   .console-window .empty-state::before {
     animation: none !important;
@@ -2933,14 +2296,6 @@ textarea {
     min-height: 0;
   }
 
-  .console-task-glass {
-    height: 90px;
-  }
-
-  .console-window .task-sticky-notes-console .task-sticky-note {
-    width: 128px;
-  }
-
   .console-chat {
     padding: 13px;
     border-radius: 24px;
@@ -2948,13 +2303,6 @@ textarea {
 
   .console-body {
     flex-direction: column;
-  }
-
-  .task-detail-panel {
-    flex: 0 0 auto;
-    min-width: 0;
-    max-height: 42vh;
-    border-radius: 24px;
   }
 
   .console-window .message {
@@ -3222,206 +2570,6 @@ textarea {
   }
 }
 
-/* Console task rail: the conversation remains primary, tasks stay nearby. */
-.console-window .console-body {
-  display: grid;
-  grid-template-columns: minmax(0, 1fr) 292px;
-  gap: 16px;
-  min-height: 0;
-}
-
-.console-window .console-chat {
-  min-width: 0;
-}
-
-.console-task-sidebar {
-  display: flex;
-  width: 100%;
-  min-width: 0;
-  min-height: 0;
-  overflow: hidden;
-  border: 1px solid var(--console-border);
-  border-radius: 22px;
-  background:
-    linear-gradient(180deg, rgba(255, 255, 255, 0.2), transparent 40%),
-    var(--console-glass);
-  box-shadow: var(--console-shadow-soft);
-  backdrop-filter: blur(20px) saturate(135%);
-  transition: flex-basis 180ms ease, width 180ms ease;
-}
-
-.console-task-sidebar-collapsed {
-  width: 100%;
-}
-
-.console-window-task-sidebar-collapsed .console-body {
-  grid-template-columns: minmax(0, 1fr) 48px;
-}
-
-.console-task-sidebar-rail {
-  display: flex;
-  flex: 0 0 48px;
-  flex-direction: column;
-  align-items: center;
-  gap: 7px;
-  padding: 11px 7px;
-  border-right: 1px solid var(--console-border);
-}
-
-.console-task-sidebar-toggle {
-  display: grid;
-  width: 32px;
-  height: 32px;
-  padding: 0;
-  place-items: center;
-  border: 1px solid var(--console-border);
-  border-radius: 10px;
-  background: var(--console-glass-strong);
-  color: var(--console-text-muted);
-  cursor: pointer;
-}
-
-.console-task-sidebar-toggle:hover {
-  border-color: var(--console-border-strong);
-  background: var(--console-surface-strong);
-  color: var(--console-blue);
-}
-
-.console-task-sidebar-toggle svg { width: 17px; height: 17px; }
-
-.console-task-sidebar-count {
-  display: grid;
-  min-width: 18px;
-  height: 18px;
-  padding: 0 4px;
-  place-items: center;
-  border-radius: 999px;
-  background: color-mix(in srgb, var(--console-blue) 18%, transparent);
-  color: var(--console-blue);
-  font-size: 10px;
-  font-weight: 750;
-}
-
-.console-task-sidebar-content {
-  display: grid;
-  grid-template-rows: auto minmax(0, 1fr);
-  flex: 1 1 auto;
-  min-width: 0;
-  min-height: 0;
-  padding: 16px 14px 14px;
-}
-
-.console-task-sidebar-header {
-  display: flex;
-  align-items: center;
-  justify-content: space-between;
-  gap: 8px;
-  padding: 0 0 13px;
-  border-bottom: 1px solid var(--console-border);
-}
-
-.console-task-sidebar-header strong {
-  color: var(--console-text);
-  font-size: 13px;
-  font-weight: 760;
-}
-
-.console-task-sidebar-header .console-task-settings-button {
-  width: 28px;
-  height: 28px;
-  box-shadow: none;
-}
-
-.console-task-sidebar-header .console-task-settings-button svg { width: 15px; height: 15px; }
-
-.console-task-sidebar-list {
-  min-height: 0;
-  overflow-y: auto;
-  padding: 14px 2px 4px 0;
-  scrollbar-width: thin;
-  scrollbar-color: var(--console-border-strong) transparent;
-}
-
-.console-task-sidebar .task-sticky-notes-console.task-sticky-notes-layout-vertical {
-  display: grid;
-  width: 100%;
-  min-width: 0;
-  height: auto;
-  gap: 10px;
-}
-
-.console-task-sidebar .task-sticky-notes-console .task-sticky-note {
-  display: grid;
-  width: 100%;
-  height: auto;
-  min-height: 88px;
-  padding: 12px;
-  border: 1px solid var(--console-border);
-  border-radius: 14px;
-  background:
-    linear-gradient(150deg, rgba(255, 255, 255, 0.2), transparent 48%),
-    var(--console-surface);
-  box-shadow: 0 8px 18px rgba(89, 66, 49, 0.06);
-}
-
-.console-task-sidebar .task-sticky-notes-console .task-sticky-note-copy {
-  display: grid;
-  gap: 5px;
-  min-width: 0;
-}
-
-.console-task-sidebar .task-sticky-notes-console .task-sticky-note strong {
-  overflow: visible;
-  color: var(--console-text);
-  font-size: 12px;
-  line-height: 1.45;
-  text-overflow: clip;
-  white-space: normal;
-}
-
-.console-task-sidebar .task-sticky-notes-console .task-sticky-note span {
-  display: block;
-  overflow: hidden;
-  color: var(--console-text-muted);
-  font-size: 10px;
-  line-height: 1.45;
-  -webkit-line-clamp: unset;
-}
-
-.console-task-sidebar .task-sticky-notes-console .task-sticky-note-actions {
-  justify-content: flex-start;
-  margin-top: 4px;
-}
-
-.console-task-sidebar .task-sticky-notes-console .task-sticky-note-action {
-  min-height: 23px;
-  padding: 0 7px;
-  border-color: var(--console-border);
-  background: var(--console-glass-strong);
-  color: var(--console-text-muted);
-  font-size: 9px;
-}
-
-.console-task-sidebar-empty {
-  position: relative;
-  margin: 0;
-  padding: 14px 0 14px 16px;
-  border-left: 2px solid color-mix(in srgb, var(--console-blue) 52%, transparent);
-  color: var(--console-text-muted);
-  font-size: 12px;
-  line-height: 1.6;
-}
-
-.console-task-sidebar .task-detail-panel {
-  min-width: 0;
-  overflow-y: auto;
-  padding: 14px 0 0;
-  border: 0;
-  border-radius: 0;
-  background: transparent;
-  box-shadow: none;
-}
-
 /* Status stays quiet and informative between the composer actions. */
 .console-window .composer-presence {
   gap: 7px;
@@ -3441,11 +2589,6 @@ textarea {
 .console-window .composer-status-dot-typing {
   background: var(--console-orange);
   box-shadow: 0 0 0 3px color-mix(in srgb, var(--console-orange) 18%, transparent);
-}
-
-.console-window .composer-status-dot-tasking {
-  background: var(--console-blue);
-  box-shadow: 0 0 0 3px color-mix(in srgb, var(--console-blue) 16%, transparent);
 }
 
 /* Liquid Glass V2: final scoped material system */
@@ -3537,13 +2680,7 @@ textarea {
   content: none;
 }
 
-.app-shell-console .console-window .console-body {
-  grid-template-columns: minmax(0, 1fr) 262px;
-  gap: 14px;
-}
-
-.app-shell-console .console-chat,
-.app-shell-console .console-task-sidebar {
+.app-shell-console .console-chat {
   isolation: isolate;
   overflow: hidden;
   border: 1px solid var(--edge-lit);
@@ -3558,63 +2695,6 @@ textarea {
   backdrop-filter: blur(22px) saturate(118%);
 }
 
-.app-shell-console .console-task-sidebar {
-  position: relative;
-  border-radius: 20px;
-  background: var(--surface-secondary-glass);
-  border-color: color-mix(in srgb, var(--edge-lit) 78%, transparent);
-  box-shadow: 0 10px 26px rgba(55, 75, 96, 0.08);
-  backdrop-filter: blur(14px) saturate(112%);
-}
-
-.app-shell-console .console-task-sidebar-rail {
-  flex-basis: 44px;
-  gap: 6px;
-  padding: 10px 6px;
-  border-right-color: var(--edge-subtle);
-}
-
-.app-shell-console .console-task-sidebar-toggle {
-  width: 30px;
-  height: 30px;
-  border-color: var(--edge-subtle);
-  border-radius: 9px;
-  background: transparent;
-  color: var(--text-secondary);
-}
-
-.app-shell-console .console-task-sidebar-toggle:hover {
-  border-color: color-mix(in srgb, var(--accent) 34%, var(--edge-subtle));
-  background: var(--surface-accent);
-  color: var(--accent);
-}
-
-.app-shell-console .console-window-task-sidebar-collapsed .console-body {
-  grid-template-columns: minmax(0, 1fr) 44px;
-}
-
-.app-shell-console .console-task-sidebar-content {
-  padding: 15px 13px 13px;
-}
-
-.app-shell-console .console-task-sidebar-header {
-  padding-bottom: 11px;
-  border-bottom-color: var(--edge-subtle);
-}
-
-.app-shell-console .console-task-sidebar-header strong {
-  color: var(--text-primary);
-  font-size: 12px;
-  font-weight: 700;
-}
-
-.app-shell-console .console-task-sidebar-list {
-  padding-top: 12px;
-}
-
-.app-shell-console .console-task-sidebar .task-sticky-notes-console .task-sticky-note,
-.app-shell-console .console-task-sidebar .task-sticky-notes-console .task-sticky-note-action,
-.app-shell-console .console-task-sidebar .task-detail-panel,
 .app-shell-console .console-window .message,
 .app-shell-console .console-window .message-attachment,
 .app-shell-console .console-window .composer-writing-surface,
@@ -3623,23 +2703,6 @@ textarea {
   background: var(--surface-raised);
   box-shadow: none;
   backdrop-filter: none;
-}
-
-.app-shell-console .console-task-sidebar .task-sticky-notes-console .task-sticky-note {
-  min-height: 76px;
-  padding: 11px;
-  border-color: var(--edge-subtle);
-  border-radius: 12px;
-}
-
-.app-shell-console .console-task-sidebar .task-sticky-notes-console .task-sticky-note-action {
-  border-color: var(--edge-subtle);
-}
-
-.app-shell-console .console-task-sidebar-empty {
-  padding: 10px 0 10px 12px;
-  border-left-color: color-mix(in srgb, var(--accent) 62%, transparent);
-  color: var(--text-secondary);
 }
 
 .app-shell-console .console-window .message-list {
@@ -3938,7 +3001,6 @@ textarea {
 .app-shell-settings .settings-v2-content .settings-page-field,
 .app-shell-settings .settings-v2-content .settings-page-toggle,
 .app-shell-settings .settings-v2-content .settings-model-card,
-.app-shell-settings .settings-v2-content .settings-task-cli-card,
 .app-shell-settings .settings-v2-content .settings-live2d-preview-card,
 .app-shell-settings .settings-v2-content .settings-live2d-list,
 .app-shell-settings .settings-v2-content .backend-status-panel,
@@ -3951,7 +3013,6 @@ textarea {
 .app-shell-settings .settings-v2-content .settings-page-field,
 .app-shell-settings .settings-v2-content .settings-page-toggle,
 .app-shell-settings .settings-v2-content .settings-model-card,
-.app-shell-settings .settings-v2-content .settings-task-cli-card,
 .app-shell-settings .settings-v2-content .settings-live2d-preview-card,
 .app-shell-settings .settings-v2-content .settings-live2d-list,
 .app-shell-settings .settings-v2-content .backend-status-panel,
@@ -4089,175 +3150,6 @@ textarea {
   .app-shell-settings .settings-page-enter-active,
   .app-shell-settings .settings-page-leave-active {
     animation: none;
-    transition: none;
-  }
-}
-
-/* Resizable task notes: preserve the chat reading width and preview from the rail. */
-.app-shell-console .console-window .console-body {
-  grid-template-columns: minmax(0, 1fr) 14px var(--task-sidebar-width, 262px);
-  gap: 0;
-  position: relative;
-}
-
-.app-shell-console .console-chat {
-  grid-column: 1;
-}
-
-.app-shell-console .console-task-sidebar-resize-handle {
-  display: grid;
-  grid-column: 2;
-  width: 14px;
-  min-height: 0;
-  place-items: center;
-  cursor: col-resize;
-  touch-action: none;
-  outline: none;
-}
-
-.app-shell-console .console-task-sidebar {
-  grid-column: 3;
-}
-
-.app-shell-console .console-task-sidebar-resize-handle > span {
-  width: 1px;
-  height: 48px;
-  border-radius: 999px;
-  background: color-mix(in srgb, var(--edge-lit) 72%, transparent);
-  transition: height 160ms ease, background 160ms ease, box-shadow 160ms ease;
-}
-
-.app-shell-console .console-task-sidebar-resize-handle:hover > span,
-.app-shell-console .console-task-sidebar-resize-handle:focus-visible > span,
-.app-shell-console .console-window-task-sidebar-resizing .console-task-sidebar-resize-handle > span {
-  height: 82px;
-  background: color-mix(in srgb, var(--accent) 68%, var(--edge-lit));
-  box-shadow: 0 0 0 3px color-mix(in srgb, var(--accent) 15%, transparent);
-}
-
-.app-shell-console .console-window-task-sidebar-rail-mode .console-body {
-  grid-template-columns: minmax(0, 1fr) 0 44px;
-}
-
-.app-shell-console .console-window-task-sidebar-closing .console-body,
-.app-shell-console .console-window-task-sidebar-layout-transitioning .console-body {
-  transition: grid-template-columns 280ms linear;
-}
-
-.app-shell-console .console-window-task-sidebar-resizing .console-body {
-  transition: none;
-}
-
-.app-shell-console .console-window-task-sidebar-rail-mode .console-task-sidebar {
-  overflow: visible;
-}
-
-.app-shell-console .console-window-task-sidebar-rail-mode .console-task-sidebar-rail {
-  position: relative;
-  z-index: 2;
-  border-right: 0;
-  border-radius: 20px;
-}
-
-.app-shell-console .console-window-task-sidebar-rail-mode .console-task-sidebar-content {
-  position: absolute;
-  z-index: 1;
-  top: 0;
-  right: 44px;
-  width: calc(var(--task-sidebar-width, 262px) - 44px);
-  height: 100%;
-  box-sizing: border-box;
-  border: 1px solid color-mix(in srgb, var(--edge-lit) 82%, transparent);
-  border-right: 0;
-  border-radius: 20px 0 0 20px;
-  background: var(--surface-secondary-glass);
-  box-shadow: -14px 12px 30px rgba(39, 56, 72, 0.14);
-  backdrop-filter: blur(18px) saturate(116%);
-}
-
-.app-shell-console .console-window-task-sidebar-layout-transitioning .console-task-sidebar {
-  overflow: hidden;
-}
-
-.app-shell-console .console-window-task-sidebar-rail-mode:not(.console-window-task-sidebar-layout-transitioning) .console-task-sidebar {
-  border-color: transparent;
-  background: transparent;
-  box-shadow: none;
-  backdrop-filter: none;
-}
-
-.app-shell-console .console-window:not(.console-window-task-sidebar-rail-mode) .console-task-sidebar-content,
-.app-shell-console .console-window-task-sidebar-layout-transitioning .console-task-sidebar-content {
-  position: absolute;
-  z-index: 1;
-  top: 0;
-  right: 0;
-  width: calc(var(--task-sidebar-width, 262px) - 44px);
-  height: 100%;
-  box-sizing: border-box;
-  border: 0;
-  border-radius: 0;
-  background: transparent;
-  box-shadow: none;
-  backdrop-filter: none;
-}
-
-.task-sidebar-preview-enter-active,
-.task-sidebar-preview-leave-active {
-  will-change: opacity;
-  transition: opacity 220ms ease;
-}
-
-.task-sidebar-preview-enter-from {
-  opacity: 0;
-}
-
-.task-sidebar-preview-leave-to {
-  opacity: 0;
-  transform: none;
-}
-
-.task-sidebar-preview-enter-to,
-.task-sidebar-preview-leave-from {
-  opacity: 1;
-}
-
-.app-shell-console .console-task-sidebar-toggle {
-  width: 28px;
-  height: 28px;
-  border-color: transparent;
-  border-radius: 50%;
-  background: transparent;
-}
-
-.app-shell-console .console-task-sidebar-toggle:hover,
-.app-shell-console .console-task-sidebar-toggle:focus-visible {
-  border-color: transparent;
-  background: color-mix(in srgb, var(--surface-accent) 82%, transparent);
-  color: var(--accent);
-  outline: none;
-}
-
-.app-shell-console .console-task-sidebar-toggle:focus-visible {
-  box-shadow: 0 0 0 2px var(--focus-ring);
-}
-
-html.is-task-sidebar-resizing,
-html.is-task-sidebar-resizing * {
-  cursor: col-resize !important;
-  user-select: none !important;
-}
-
-@media (prefers-reduced-motion: reduce) {
-  .app-shell-console .console-task-sidebar-resize-handle > span,
-  .task-sidebar-preview-enter-active,
-  .task-sidebar-preview-leave-active {
-    animation: none;
-    transition: none;
-  }
-
-  .app-shell-console .console-window-task-sidebar-closing .console-body,
-  .app-shell-console .console-window-task-sidebar-layout-transitioning .console-body {
     transition: none;
   }
 }

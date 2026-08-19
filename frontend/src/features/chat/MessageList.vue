@@ -1,3 +1,8 @@
+<!--
+  聊天消息列表：将通用消息拆成可读段落并在更新后滚动到底部。
+  附件仅作为普通聊天元数据展示名称；文件执行产物的打开/定位不再由本组件
+  或 preload 暴露，因为旧 Task artifact 协议已移除。
+-->
 <template>
   <div v-if="messages.length === 0" class="empty-state">
     <span class="empty-state-kicker">{{ t(displayLanguage, "mainConversation") }}</span>
@@ -23,22 +28,6 @@
       <div v-if="item.attachments.length > 0" class="message-attachments">
         <div v-for="attachment in item.attachments" :key="attachment.id" class="message-attachment">
           <span class="message-attachment-name">{{ attachment.name }}</span>
-          <span class="message-attachment-actions">
-            <button
-              v-if="attachment.taskId && attachment.path"
-              type="button"
-              @click="void window.aurabot.openTaskResultFile({ taskId: attachment.taskId, path: attachment.path })"
-            >
-              {{ t(displayLanguage, "openFile") }}
-            </button>
-            <button
-              v-if="attachment.taskId && attachment.path"
-              type="button"
-              @click="void window.aurabot.showTaskResultFileInFolder({ taskId: attachment.taskId, path: attachment.path })"
-            >
-              {{ t(displayLanguage, "showInFolder") }}
-            </button>
-          </span>
         </div>
       </div>
     </article>
@@ -47,7 +36,7 @@
 
 <script setup lang="ts">
 import { computed, nextTick, ref, watch } from "vue";
-import type { Message, MessageAttachment } from "@shared/schemas/message";
+import type { Message } from "@shared/schemas/message";
 import type { PetSettings } from "@shared/schemas/petSettings";
 import { t } from "../../i18n";
 import { getMessageDisplaySegments } from "./messageDisplay";
@@ -70,7 +59,7 @@ const displayItems = computed(() =>
       message,
       segment,
       isFirstSegment: index === 0,
-      attachments: index === segments.length - 1 ? message.attachments ?? [] : ([] as MessageAttachment[])
+      attachments: index === segments.length - 1 ? message.attachments ?? [] : []
     }));
   })
 );

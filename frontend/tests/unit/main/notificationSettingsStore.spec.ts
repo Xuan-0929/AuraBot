@@ -1,3 +1,7 @@
+/**
+ * 通知设置存储测试：覆盖保留字段的默认值、持久化和重新加载。
+ * 期望中不包含历史定时 Task reminder 设置。
+ */
 import { mkdtempSync, rmSync } from "node:fs";
 import { tmpdir } from "node:os";
 import { join } from "node:path";
@@ -14,7 +18,6 @@ describe("NotificationSettingsStore", () => {
       expect(store.get()).toMatchObject({
         systemNotificationsEnabled: true,
         followUpNotificationsEnabled: true,
-        timeReminderNotificationsEnabled: true,
         idleNudgeNotificationsEnabled: false
       });
     } finally {

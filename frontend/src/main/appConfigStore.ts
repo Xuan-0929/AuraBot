@@ -1,58 +1,24 @@
+/**
+ * 持久化 Renderer 可修改的模型 provider 与非 Task 主动能力设置。
+ *
+ * 写入时保留用户 JSON 中的未知字段（包括历史 taskRunner），但不读取、合并或更新
+ * 它们；返回值始终通过当前 AppConfig schema 校验。
+ */
+
 import { existsSync, mkdirSync, readFileSync, writeFileSync } from "node:fs";
 import { join } from "node:path";
-import { appConfigSchema, type AppConfig, type TaskCliRunnerConfig } from "@shared/schemas/config";
+import { appConfigSchema, type AppConfig } from "@shared/schemas/config";
 import type {
   ModelProviderSettingsPatch,
-  ProactiveSettingsPatch,
-  TaskRunnerSettingsPatch
+  ProactiveSettingsPatch
 } from "@shared/contracts/settings";
 
-type UserConfigFile = Partial<Omit<AppConfig, "taskRunner" | "proactive">> & {
-  taskRunner?: Partial<AppConfig["taskRunner"]>;
+type UserConfigFile = Record<string, unknown> & {
+  gateModel?: Partial<AppConfig["gateModel"]>;
+  chatModel?: Partial<AppConfig["chatModel"]>;
+  memoryModel?: Partial<AppConfig["memoryModel"]>;
   proactive?: Partial<AppConfig["proactive"]>;
 };
-
-export function updateUserTaskRunnerSettings(
-  userDataPath: string,
-  currentConfig: AppConfig,
-  patch: TaskRunnerSettingsPatch
-): AppConfig {
-  const configPath = join(userDataPath, "config.json");
-  const userConfig = readUserConfigFile(configPath);
-  const runners = currentConfig.taskRunner.runners.map((runner) => {
-    const updated = patch.runners.find((entry) => entry.id === runner.id);
-
-    return updated
-      ? {
-          ...runner,
-          enabled: updated.enabled,
-          priority: updated.priority,
-          timeoutMs: updated.timeoutMs ?? runner.timeoutMs
-        }
-      : runner;
-  });
-  const provider: AppConfig["taskRunner"]["provider"] = runners.some((runner) => runner.enabled)
-    ? "cli"
-    : "deterministic";
-  const taskRunner = {
-    ...currentConfig.taskRunner,
-    ...userConfig.taskRunner,
-    provider,
-    runners: mergePersistedRunnerDetails(runners, userConfig.taskRunner?.runners)
-  };
-  const nextUserConfig: UserConfigFile = {
-    ...userConfig,
-    taskRunner
-  };
-
-  mkdirSync(userDataPath, { recursive: true });
-  writeFileSync(configPath, `${JSON.stringify(nextUserConfig, null, 2)}\n`, "utf8");
-
-  return appConfigSchema.parse({
-    ...currentConfig,
-    taskRunner
-  });
-}
 
 export function updateUserModelProviderSettings(
   userDataPath: string,
@@ -61,26 +27,17 @@ export function updateUserModelProviderSettings(
 ): AppConfig {
   const configPath = join(userDataPath, "config.json");
   const userConfig = readUserConfigFile(configPath);
-  const currentRoleConfig = currentConfig[patch.role];
-  const persistedRoleConfig = userConfig[patch.role] ?? {};
   const roleConfig = {
-    ...currentRoleConfig,
-    ...persistedRoleConfig,
+    ...currentConfig[patch.role],
+    ...(userConfig[patch.role] ?? {}),
     provider: patch.provider,
     enabled: true
   };
-  const nextUserConfig: UserConfigFile = {
+  writeUserConfig(userDataPath, configPath, {
     ...userConfig,
     [patch.role]: roleConfig
-  };
-
-  mkdirSync(userDataPath, { recursive: true });
-  writeFileSync(configPath, `${JSON.stringify(nextUserConfig, null, 2)}\n`, "utf8");
-
-  return appConfigSchema.parse({
-    ...currentConfig,
-    [patch.role]: roleConfig
   });
+  return appConfigSchema.parse({ ...currentConfig, [patch.role]: roleConfig });
 }
 
 export function updateUserProactiveSettings(
@@ -92,49 +49,24 @@ export function updateUserProactiveSettings(
   const userConfig = readUserConfigFile(configPath);
   const proactive = {
     ...currentConfig.proactive,
-    ...userConfig.proactive,
+    ...(userConfig.proactive ?? {}),
     ...patch
   };
-  const nextUserConfig: UserConfigFile = {
-    ...userConfig,
-    proactive
-  };
-
-  mkdirSync(userDataPath, { recursive: true });
-  writeFileSync(configPath, `${JSON.stringify(nextUserConfig, null, 2)}\n`, "utf8");
-
-  return appConfigSchema.parse({
-    ...currentConfig,
-    proactive
-  });
+  writeUserConfig(userDataPath, configPath, { ...userConfig, proactive });
+  return appConfigSchema.parse({ ...currentConfig, proactive });
 }
 
 function readUserConfigFile(configPath: string): UserConfigFile {
-  if (!existsSync(configPath)) {
-    return {};
-  }
-
-  return JSON.parse(readFileSync(configPath, "utf8")) as UserConfigFile;
+  return existsSync(configPath)
+    ? (JSON.parse(readFileSync(configPath, "utf8")) as UserConfigFile)
+    : {};
 }
 
-function mergePersistedRunnerDetails(
-  runners: TaskCliRunnerConfig[],
-  persistedRunners: TaskCliRunnerConfig[] | undefined
-): TaskCliRunnerConfig[] {
-  return runners.map((runner) => {
-    const persisted = persistedRunners?.find((entry) => entry.id === runner.id);
-
-    return persisted
-      ? {
-          ...runner,
-          command: persisted.command ?? runner.command,
-          workingDirectory: persisted.workingDirectory ?? runner.workingDirectory,
-          model: persisted.model ?? runner.model,
-          sandbox: persisted.sandbox ?? runner.sandbox,
-          approvalPolicy: persisted.approvalPolicy ?? runner.approvalPolicy,
-          timeoutMs: runner.timeoutMs ?? persisted.timeoutMs,
-          extraArgs: persisted.extraArgs ?? runner.extraArgs
-        }
-      : runner;
-  });
+function writeUserConfig(
+  userDataPath: string,
+  configPath: string,
+  config: UserConfigFile
+): void {
+  mkdirSync(userDataPath, { recursive: true });
+  writeFileSync(configPath, `${JSON.stringify(config, null, 2)}\n`, "utf8");
 }

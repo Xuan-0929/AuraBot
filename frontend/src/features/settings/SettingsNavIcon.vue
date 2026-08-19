@@ -1,3 +1,7 @@
+<!--
+  设置导航图标：将保留的设置页面语义映射到内置 Solar 图标。
+  该组件只负责视觉映射，不再暴露 Task runner 专属图标名称。
+-->
 <template>
   <Icon
     class="settings-nav-icon"
@@ -17,7 +21,6 @@ export type SettingsNavIconName =
   | "general"
   | "pet"
   | "model"
-  | "task"
   | "persona"
   | "live2d"
   | "notifications"
@@ -32,7 +35,6 @@ const iconNames: Record<SettingsNavIconName, string> = {
   general: "solar:tuning-square-bold-duotone",
   pet: "solar:ghost-bold-duotone",
   model: "solar:people-nearby-bold-duotone",
-  task: "solar:layers-bold-duotone",
   persona: "solar:user-speak-rounded-bold-duotone",
   live2d: "solar:emoji-funny-square-bold-duotone",
   notifications: "solar:bell-bold-duotone",

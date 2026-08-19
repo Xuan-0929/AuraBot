@@ -1,21 +1,24 @@
+/**
+ * 调度仍保留的 Memory follow-up 与 idle nudge 主动触达。
+ *
+ * 引擎定时检查 Memory 和用户空闲时间，生成 PetActivity、系统通知与审计事件；它
+ * 不读取 Task 状态、不调度定时 Task，也不会因历史 active Task 抑制 idle nudge。
+ */
+
 import { randomUUID } from "node:crypto";
 import type { PetActivity } from "@shared/contracts/pet";
-import type { EventLogService } from "../telemetry/eventLogService";
+import type { Soul } from "@shared/schemas/profile";
 import type { MemoryService } from "../memory/memoryService";
 import type { ProfileService } from "../profiles/profileService";
-import type { Soul } from "@shared/schemas/profile";
-import type { Task } from "@shared/schemas/task";
-import type { TaskService } from "../tasks/taskService";
+import type { EventLogService } from "../telemetry/eventLogService";
 import type { VoiceAdapter } from "../voice/voiceAdapter";
 
 export interface ProactiveTriggerEngineDependencies {
   profileService: ProfileService;
   memoryService: MemoryService;
-  taskService: TaskService;
   eventLogService: EventLogService;
   voiceAdapter: VoiceAdapter;
   broadcastPetActivity(activity: PetActivity): void;
-  broadcastTaskChanged?(task: Task): void;
   deliverSystemNotification?(input: { kind: PetActivity["kind"]; message: string }): void;
 }
 
@@ -37,7 +40,7 @@ export class ProactiveTriggerEngine {
   private followUpLookaheadMs: number;
   private idleThresholdMs: number;
   private idleCooldownMs: number;
-  private lastUserActivityAtMs: number;
+  private lastUserActivityAtMs = Date.now();
   private lastIdleNudgeAtMs: number | undefined;
 
   constructor(
@@ -48,8 +51,6 @@ export class ProactiveTriggerEngine {
     this.followUpLookaheadMs = options.followUpLookaheadMs ?? 0;
     this.idleThresholdMs = options.idleThresholdMs ?? DEFAULT_IDLE_THRESHOLD_MS;
     this.idleCooldownMs = options.idleCooldownMs ?? DEFAULT_IDLE_COOLDOWN_MS;
-    this.lastUserActivityAtMs = Date.now();
-
     if (options.runImmediately) {
       this.runScheduledCheck();
     }
@@ -57,87 +58,61 @@ export class ProactiveTriggerEngine {
 
   updateOptions(options: ProactiveTriggerEngineOptions): void {
     const wasRunning = Boolean(this.timer);
-
     if (wasRunning) {
       this.stop();
     }
-
     this.pollIntervalMs = options.pollIntervalMs ?? this.pollIntervalMs;
     this.followUpLookaheadMs = options.followUpLookaheadMs ?? this.followUpLookaheadMs;
     this.idleThresholdMs = options.idleThresholdMs ?? this.idleThresholdMs;
     this.idleCooldownMs = options.idleCooldownMs ?? this.idleCooldownMs;
-
     if (wasRunning) {
       this.start();
     }
   }
 
   start(): void {
-    if (this.timer) {
-      return;
-    }
-
-    this.timer = setInterval(() => this.runScheduledCheck(), this.pollIntervalMs);
+    this.timer ??= setInterval(() => this.runScheduledCheck(), this.pollIntervalMs);
   }
 
   stop(): void {
-    if (!this.timer) {
-      return;
+    if (this.timer) {
+      clearInterval(this.timer);
+      this.timer = undefined;
     }
-
-    clearInterval(this.timer);
-    this.timer = undefined;
   }
 
   recordUserActivity(nowIso = new Date().toISOString()): void {
-    const nowMs = parseIsoToMs(nowIso) ?? Date.now();
-    this.lastUserActivityAtMs = nowMs;
-
-    this.dependencies.eventLogService.record("proactive.user_activity_recorded", {
-      at: nowIso
-    });
+    this.lastUserActivityAtMs = parseIsoToMs(nowIso) ?? Date.now();
+    this.dependencies.eventLogService.record("proactive.user_activity_recorded", { at: nowIso });
   }
 
   async checkTriggers(nowIso = new Date().toISOString()): Promise<PetActivity[]> {
     const profile = this.dependencies.profileService.getOrSeedActiveProfile();
-    const nowMs = parseIsoToMs(nowIso) ?? Date.now();
-    const emitted: PetActivity[] = [];
-
-    emitted.push(...(await this.checkDueFollowUps({ profileId: profile.id, nowIso })));
-    emitted.push(...(await this.checkDueReminderTasks({ profileId: profile.id, nowIso, soul: profile.soul })));
-
-    const idleActivity = await this.checkIdleNudge({
+    const emitted = await this.checkDueFollowUps(profile.id, nowIso);
+    const idle = await this.checkIdleNudge({
       profileId: profile.id,
+      soul: profile.soul,
       nowIso,
-      nowMs,
-      soul: profile.soul
+      nowMs: parseIsoToMs(nowIso) ?? Date.now()
     });
-
-    if (idleActivity) {
-      emitted.push(idleActivity);
-    }
-
-    return emitted;
+    return idle ? [...emitted, idle] : emitted;
   }
 
-  private async checkDueFollowUps(input: { profileId: string; nowIso: string }): Promise<PetActivity[]> {
+  private async checkDueFollowUps(profileId: string, nowIso: string): Promise<PetActivity[]> {
     const profile = this.dependencies.profileService.getOrSeedActiveProfile();
-    const dueFollowUps = this.dependencies.memoryService.retrieveDueFollowUps(
-      input.profileId,
-      input.nowIso,
+    const due = this.dependencies.memoryService.retrieveDueFollowUps(
+      profileId,
+      nowIso,
       this.followUpLookaheadMs
     );
-
     this.dependencies.eventLogService.record("proactive.trigger_evaluated", {
       trigger: "memory.follow_up",
-      profileId: input.profileId,
-      candidateCount: dueFollowUps.length
+      profileId,
+      candidateCount: due.length
     });
-
-    if (dueFollowUps.length === 0) {
+    if (due.length === 0) {
       return [];
     }
-
     const activity: PetActivity = {
       id: randomUUID(),
       kind: "memory_follow_up",
@@ -145,140 +120,46 @@ export class ProactiveTriggerEngine {
         scene: "memory.follow_up",
         channel: "pet_notice",
         soul: profile.soul,
-        facts: {
-          contents: dueFollowUps.map((memory) => memory.content)
-        }
+        facts: { contents: due.map((memory) => memory.content) }
       }),
-      createdAt: input.nowIso
+      createdAt: nowIso
     };
-    const nodeIds = dueFollowUps.map((memory) => memory.id);
-
-    this.emitActivity(activity, {
-      trigger: "memory.follow_up",
-      profileId: input.profileId,
-      nodeIds
-    });
-    this.dependencies.memoryService.completeFollowUps(input.profileId, nodeIds);
+    const nodeIds = due.map((memory) => memory.id);
+    this.emitActivity(activity, { trigger: "memory.follow_up", profileId, nodeIds });
+    this.dependencies.memoryService.completeFollowUps(profileId, nodeIds);
     this.dependencies.eventLogService.record("memory.follow_up_triggered", {
-      profileId: input.profileId,
+      profileId,
       trigger: "proactive_engine",
       nodeIds
     });
-
     return [activity];
-  }
-
-  private async checkDueReminderTasks(input: {
-    profileId: string;
-    nowIso: string;
-    soul?: Soul;
-  }): Promise<PetActivity[]> {
-    const dueTasks = this.dependencies.taskService.listDueReminderTasks(input.profileId, input.nowIso);
-
-    this.dependencies.eventLogService.record("proactive.trigger_evaluated", {
-      trigger: "task.time_reminder",
-      profileId: input.profileId,
-      candidateCount: dueTasks.length
-    });
-
-    if (dueTasks.length === 0) {
-      return [];
-    }
-
-    const activities: PetActivity[] = [];
-
-    for (const task of dueTasks) {
-      const message = await this.dependencies.voiceAdapter.render({
-        scene: "task.reminder_due",
-        channel: "pet_notice",
-        soul: input.soul,
-        facts: {
-          taskTitle: task.title,
-          dueAt: task.dueAt
-        }
-      });
-      const reminderMessage = this.isMissedReminder(task, input.nowIso)
-        ? `刚才错过了这个提醒：${message}`
-        : message;
-      const activity: PetActivity = {
-        id: randomUUID(),
-        kind: "task_reminder",
-        message: reminderMessage,
-        createdAt: input.nowIso
-      };
-
-      this.emitActivity(activity, {
-        trigger: "task.time_reminder",
-        profileId: input.profileId,
-        taskId: task.id,
-        dueAt: task.dueAt ?? null
-      });
-      const completedTask = this.dependencies.taskService.completeReminderTask({
-        profileId: input.profileId,
-        taskId: task.id,
-        summary: reminderMessage
-      });
-      if (completedTask) {
-        this.dependencies.broadcastTaskChanged?.(completedTask);
-      }
-      activities.push(activity);
-    }
-
-    return activities;
-  }
-
-  private isMissedReminder(task: Task, nowIso: string): boolean {
-    const dueMs = task.dueAt ? parseIsoToMs(task.dueAt) : undefined;
-    const nowMs = parseIsoToMs(nowIso);
-
-    return dueMs !== undefined && nowMs !== undefined && nowMs - dueMs > this.pollIntervalMs;
   }
 
   private async checkIdleNudge(input: {
     profileId: string;
+    soul?: Soul;
     nowIso: string;
     nowMs: number;
-    soul?: Soul;
   }): Promise<PetActivity | undefined> {
     const idleForMs = input.nowMs - this.lastUserActivityAtMs;
-    const activeTasks = this.dependencies.taskService
-      .listTasksForProfile(input.profileId)
-      .filter(
-        (task) =>
-          task.kind === "result_output" &&
-          (task.status === "queued" || task.status === "running" || task.status === "waiting")
-      );
     const cooldownRemainingMs =
       this.lastIdleNudgeAtMs === undefined
         ? 0
         : Math.max(this.idleCooldownMs - (input.nowMs - this.lastIdleNudgeAtMs), 0);
-
     this.dependencies.eventLogService.record("proactive.trigger_evaluated", {
       trigger: "idle_nudge",
       profileId: input.profileId,
       idleForMs,
-      activeTaskCount: activeTasks.length,
       cooldownRemainingMs
     });
-
     if (idleForMs < this.idleThresholdMs) {
-      this.recordSuppressed("idle_nudge", input.profileId, "idle_threshold", { idleForMs });
+      this.recordSuppressed(input.profileId, "idle_threshold", { idleForMs });
       return undefined;
     }
-
     if (cooldownRemainingMs > 0) {
-      this.recordSuppressed("idle_nudge", input.profileId, "cooldown", { cooldownRemainingMs });
+      this.recordSuppressed(input.profileId, "cooldown", { cooldownRemainingMs });
       return undefined;
     }
-
-    if (activeTasks.length > 0) {
-      this.recordSuppressed("idle_nudge", input.profileId, "active_task", {
-        activeTaskIds: activeTasks.map((task) => task.id)
-      });
-      return undefined;
-    }
-
-    const idleMinutes = Math.max(Math.floor(idleForMs / 60_000), 1);
     const activity: PetActivity = {
       id: randomUUID(),
       kind: "proactive_idle",
@@ -286,20 +167,16 @@ export class ProactiveTriggerEngine {
         scene: "proactive.idle_nudge",
         channel: "pet_notice",
         soul: input.soul,
-        facts: {
-          idleMinutes
-        }
+        facts: { idleMinutes: Math.max(Math.floor(idleForMs / 60_000), 1) }
       }),
       createdAt: input.nowIso
     };
-
     this.lastIdleNudgeAtMs = input.nowMs;
     this.emitActivity(activity, {
       trigger: "idle_nudge",
       profileId: input.profileId,
       idleForMs
     });
-
     return activity;
   }
 
@@ -318,13 +195,12 @@ export class ProactiveTriggerEngine {
   }
 
   private recordSuppressed(
-    trigger: string,
     profileId: string,
     reason: string,
-    extra: Record<string, unknown> = {}
+    extra: Record<string, unknown>
   ): void {
     this.dependencies.eventLogService.record("proactive.suppressed", {
-      trigger,
+      trigger: "idle_nudge",
       profileId,
       reason,
       ...extra
@@ -342,6 +218,5 @@ export class ProactiveTriggerEngine {
 
 function parseIsoToMs(value: string): number | undefined {
   const parsed = new Date(value).getTime();
-
   return Number.isFinite(parsed) ? parsed : undefined;
 }

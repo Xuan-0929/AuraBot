@@ -1,6 +1,6 @@
 """
-定义 AuraBot Backend 应用包的组合、service 与 gateway 边界。
+定义 AuraBot health-only Backend 的应用包边界。
 
-main 入口从本包创建 BackendRuntime 并注册 HTTP routes，各子包再依赖 agent 稳定门面；
-本模块不启动服务、不持有 runtime，也不导出领域内部实现。
+backend.main 从 gateway 子包挂载进程健康路由；本包不创建 service graph、不持有
+runtime，也不导出执行领域实现，Python Memory 继续作为独立顶层包保留。
 """

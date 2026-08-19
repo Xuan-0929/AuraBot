@@ -1,3 +1,7 @@
+<!--
+  通知设置页：管理全局桌面通知、Memory 跟进和 idle nudge 偏好。
+  修改通过 renderer store/IPC 写入主进程设置存储；定时 Task 提醒开关已移除。
+-->
 <template>
   <section class="settings-page-section" :aria-label="t(store.displayLanguage, 'notifications')">
     <div class="settings-page-section-header">
@@ -15,10 +19,6 @@
     <label class="settings-page-toggle">
       <input type="checkbox" :checked="store.notificationSettings?.followUpNotificationsEnabled ?? true" :aria-label="t(store.displayLanguage, 'enableFollowUpNotifications')" @change="void store.updateNotificationSettings({ followUpNotificationsEnabled: ($event.currentTarget as HTMLInputElement).checked })" />
       <span>{{ t(store.displayLanguage, "followUpNotifications") }}</span>
-    </label>
-    <label class="settings-page-toggle">
-      <input type="checkbox" :checked="store.notificationSettings?.timeReminderNotificationsEnabled ?? true" :aria-label="t(store.displayLanguage, 'enableTimeReminderNotifications')" @change="void store.updateNotificationSettings({ timeReminderNotificationsEnabled: ($event.currentTarget as HTMLInputElement).checked })" />
-      <span>{{ t(store.displayLanguage, "timeReminderNotifications") }}</span>
     </label>
     <label class="settings-page-toggle">
       <input type="checkbox" :checked="store.notificationSettings?.idleNudgeNotificationsEnabled ?? false" :aria-label="t(store.displayLanguage, 'enableIdleNudgeNotifications')" @change="void store.updateNotificationSettings({ idleNudgeNotificationsEnabled: ($event.currentTarget as HTMLInputElement).checked })" />

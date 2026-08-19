@@ -1,7 +1,9 @@
+/**
+ * 桌宠活动测试：验证聊天、Memory 与 idle 主动活动到展示消息的映射。
+ * 用例只覆盖当前 PetActivity 契约，不构造已删除的执行完成或定时提醒活动。
+ */
 import { describe, expect, test } from "vitest";
-import { buildAssistantMessagePetActivities, buildPetActivity } from "../../../src/main/registerIpc";
-import type { AppServices } from "@core/bootstrap/createServices";
-import type { SendChatMessageResult } from "@shared/contracts/chat";
+import { buildAssistantMessagePetActivities } from "../../../src/main/registerIpc";
 import type { Message } from "@shared/schemas/message";
 
 describe("buildAssistantMessagePetActivities", () => {
@@ -106,32 +108,5 @@ describe("buildAssistantMessagePetActivities", () => {
 
     expect(buildAssistantMessagePetActivities(userMessage, { startIndex: 0 }).activities).toEqual([]);
     expect(buildAssistantMessagePetActivities(emptyAssistantMessage, { startIndex: 0 }).activities).toEqual([]);
-  });
-});
-
-describe("buildPetActivity", () => {
-  test("does not create a duplicate full voice reply bubble after sentence bubbles handle the assistant output", async () => {
-    const assistantMessage: Message = {
-      id: "assistant-voice-1",
-      sessionId: "session-1",
-      profileId: "profile-1",
-      role: "assistant",
-      content: "第一句。第二句。",
-      createdAt: "2026-05-05T00:00:00.000Z"
-    };
-    const result: SendChatMessageResult = {
-      userMessage: {
-        ...assistantMessage,
-        id: "user-voice-1",
-        role: "user",
-        content: "你说两句。"
-      },
-      assistantMessage,
-      agentStatus: "idle"
-    };
-
-    await expect(
-      buildPetActivity({} as AppServices, { content: "你说两句。", source: "pet_voice" }, result)
-    ).resolves.toBeUndefined();
   });
 });

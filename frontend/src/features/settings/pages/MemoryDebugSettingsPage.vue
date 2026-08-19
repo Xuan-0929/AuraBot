@@ -1,3 +1,9 @@
+<!--
+  展示 health-only Python Backend 状态并承载 Memory 调试快照。
+
+  页面只读取精简后的 ok/service 探测结果，使用桌面进程约定的固定 health 地址，
+  不再呈现已删除的服务注册表、Task runtime 或独立前端端点。
+-->
 <template>
   <section class="settings-page-section" :aria-label="t(store.displayLanguage, 'memoryDebug')">
     <div class="settings-page-section-header">
@@ -19,14 +25,6 @@
         <div>
           <dt>{{ t(store.displayLanguage, "backendGatewayEndpoint") }}</dt>
           <dd>{{ gatewayEndpoint }}</dd>
-        </div>
-        <div>
-          <dt>{{ t(store.displayLanguage, "backendFrontendEndpoint") }}</dt>
-          <dd>{{ store.backendStatus?.gateway?.frontend ?? "http://127.0.0.1:6400" }}</dd>
-        </div>
-        <div>
-          <dt>{{ t(store.displayLanguage, "backendRegisteredServices") }}</dt>
-          <dd>{{ store.backendStatus?.services.length ?? 0 }}</dd>
         </div>
         <div>
           <dt>{{ t(store.displayLanguage, "backendLastChecked") }}</dt>
@@ -58,11 +56,7 @@ const backendStatusLabel = computed(() => {
     ? t(store.displayLanguage, "backendStatusOnline")
     : t(store.displayLanguage, "backendStatusOffline");
 });
-const gatewayEndpoint = computed(() => {
-  const gateway = store.backendStatus?.gateway;
-
-  return gateway ? `${gateway.host}:${gateway.port}` : "127.0.0.1:6401";
-});
+const gatewayEndpoint = "http://127.0.0.1:6401/health";
 const lastCheckedLabel = computed(() => {
   if (!store.backendStatus?.checkedAt) {
     return t(store.displayLanguage, "notSet");

@@ -1,3 +1,7 @@
+/**
+ * Composer renderer 测试：覆盖发送、换行、自适应高度、状态指示与普通附件选择。
+ * Agent 状态只使用当前 chat 生命周期，不构造已删除的执行专属状态。
+ */
 // @vitest-environment jsdom
 
 import { createApp, nextTick } from "vue";
@@ -63,11 +67,11 @@ describe("Composer", () => {
 
   it("shows only the agent status light and label in the action rail", () => {
     const onSend = vi.fn(async () => undefined);
-    const app = createApp(Composer, { agentStatus: "tasking", displayLanguage: "en", onSend });
+    const app = createApp(Composer, { agentStatus: "thinking", displayLanguage: "en", onSend });
     app.mount(container);
 
-    expect(container.querySelector(".composer-status-dot-tasking")).not.toBeNull();
-    expect(container.querySelector(".composer-presence")?.textContent).toContain("tasking");
+    expect(container.querySelector(".composer-status-dot-thinking")).not.toBeNull();
+    expect(container.querySelector(".composer-presence")?.textContent).toContain("thinking");
     expect(container.querySelector(".composer-presence-mark")).toBeNull();
     app.unmount();
   });

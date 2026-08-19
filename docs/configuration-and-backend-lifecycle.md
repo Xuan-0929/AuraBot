@@ -1,73 +1,32 @@
-# 配置与后端生命周期
+# 配置与 Backend 生命周期
 
-## 目标
+## 当前配置
 
-让 AuraBot 的开发和桌面运行时明确知道：使用哪个 Python、读取哪份配置、后端何时
-启动、何时可用，以及失败后如何向用户和开发者反馈。本文覆盖迁移路线的 Phase 0，
-不改变 Main Agent、记忆或任务的业务所有权。
-
-## 当前事实与目标边界
-
-当前 `frontend/scripts/dev.mjs` 通过 `uv run --project backend` 启动 Uvicorn，并
-同时启动 Electron。uv 根据 `backend/.python-version` 选择 Python 3.12，并管理
-`backend/.venv`。`backend.main` 启动时读取根目录 `config.yaml`；Electron
-TypeScript core 仍使用 userData 目录下的 JSON 配置。
-
-Phase 0 不要求立即合并两种配置格式。它要求所有调用方显式知道自己读取哪份配置，
-并且 Python 后端不再依赖开发者猜测 shell PATH。
-
-## 配置所有权
-
-| 配置 | 当前 owner | 用途 | 规则 |
-| --- | --- | --- | --- |
-| `config.yaml` | Python runtime | 网关端口、Python 模型与后端模块配置 | 由 `backend.config` 启动时一次性加载。 |
-| `AURABOT_CONFIG_PATH` | Python runtime | 覆盖 YAML 路径 | 测试和部署使用；相对路径相对仓库根目录解析。 |
-| `backend/.python-version` | uv | 固定共享开发解释器 | 提交到仓库，当前为 Python 3.12。 |
-| `UV_PYTHON` | uv（可选） | 临时覆盖 Python 解释器 | 必须满足 `backend/pyproject.toml` 的 Python 版本约束。 |
-| `aurabot.config.json` / `config.json` | Electron legacy runtime | 现有 TypeScript 模型、任务和 UI 设置 | 只由 Electron 读取，不能被 Python 隐式读取。 |
-
-密钥只能通过环境变量或受控的本地配置读取。日志、健康接口和错误提示不得回显密钥。
-
-## 启动协议
-
-### 开发模式
-
-1. 启动器执行 `uv run --project backend`；uv 验证锁文件并同步项目环境。
-2. 启动器启动 `backend.main:app`，等待 `/health` 返回 `ok: true`。
-3. 后端健康后启动 Electron / Vite。
-4. Electron 通过 `/health` 和 `/services` 记录网关状态；业务页面只使用已声明可用的后端能力。
-
-当前 `npm run dev` 已并行启动进程；Phase 0 实现应将“后端已可连接”变为明确条件，
-而不是仅依赖子进程存在。
-
-### 退出模式
-
-1. Electron 请求退出或开发启动器收到 `SIGINT` / `SIGTERM` 时，先停止接受新后端请求。
-2. 向 Main Agent 和 task-manager 广播 shutdown，给受控任务一个短暂清理窗口。
-3. 停止 Uvicorn；未完成任务按其恢复策略持久化状态。
-4. 不在退出时删除用户数据、任务产物或记忆数据库。
-
-## 失败策略
-
-| 场景 | 启动器行为 | 用户可见状态 |
+| 配置 | owner | 用途 |
 | --- | --- | --- |
-| uv 不存在、锁文件过期或环境同步失败 | 不启动 Electron 业务运行时；输出 `uv sync --project backend --locked` 诊断命令 | “后端环境未准备好”，显示 uv 与锁文件恢复提示。 |
-| `config.yaml` 缺失 | 后端启动失败，不尝试写默认密钥配置 | “缺少后端配置”，提示从示例配置创建本地文件。 |
-| 必需环境变量缺失 | 后端启动失败，不显示变量值 | “缺少模型配置”，显示缺失变量名。 |
-| 端口 `6401` 被占用 | 探测现有服务；仅当其 `/health` 识别为 AuraBot 网关时复用 | “后端端口被占用”，提供停止或改端口的恢复建议。 |
-| 后端运行中退出 | Electron 保持窗口可见但禁用已迁移的后端操作 | “后端已断开”，提供重试与诊断入口。 |
+| config.yaml | Python Backend | ports 与仍保留的 Python 模型/Memory 配置。 |
+| AURABOT_CONFIG_PATH | Python Backend | 覆盖 YAML 路径。 |
+| backend/.python-version | uv | 共享开发 Python 版本。 |
+| config.json / aurabot.config.json | Electron | 模型、Live2D、通知等桌面设置。 |
 
-## 日志与健康
+旧 task_runtime、task_model、local_mcp_server 和 Electron taskRunner 字段不再读取。
+已有 JSON 文件不主动重写，未知旧字段被忽略。
 
-- 开发模式：启动器可将后端和 Electron 标准输出写入各自日志流，保留时间、进程名和退出码。
-- 生产模式：后端日志写入 userData 下的受控日志目录；避免写到仓库目录。
-- `/health` 只报告运行状态、版本和依赖健康摘要；`/services` 只报告已注册服务。
-- 业务诊断需要结构化 error code，格式以[运行时契约](backend-runtime-contract.md)为准。
+## 启动
 
-## 验收标准
+1. uv 根据 backend/pyproject.toml 与 backend/uv.lock 准备环境。
+2. backend.main 加载 YAML。
+3. Uvicorn 暴露 GET /health。
+4. 开发启动器等待 health 成功，再运行桌面环境。
 
-1. 执行 `uv sync --project backend --locked` 后，`npm run dev` 能使用 Python 3.12 启动 Uvicorn、Vite 与 Electron。
-2. uv 同步失败、缺少 YAML 配置或必需环境变量时，失败消息能指向恢复步骤且不泄露密钥。
-3. 后端健康前，Electron 不发送已迁移的业务请求。
-4. 后端异常退出后，Electron 能展示 offline 状态且不制造新的本地业务写入。
-5. 正常退出不会留下孤立的 Uvicorn 进程，也不会删除用户数据。
+Backend 不创建 Task Runtime，不启动 MCP，也不需要 Task model key。
+
+## 退出与失败
+
+- SIGINT/SIGTERM 由 Uvicorn 正常收口；没有 Task Worker 需要恢复或中断。
+- 配置缺失、YAML 无效或必需环境变量缺失时启动失败且不回显 secret。
+- port 6401 被占用时启动器必须报告诊断，不伪装健康。
+- /health 只返回 {"ok":true,"service":"backend"}。
+
+未来 Pi/Node 打包、PI_CODING_AGENT_DIR、Worker shutdown grace period 和孤儿 Task
+处理属于第二轮，见 [Pi Task Runtime](modules/task-agent.md)。

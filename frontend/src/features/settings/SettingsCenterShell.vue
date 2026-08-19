@@ -1,3 +1,7 @@
+<!--
+  设置中心导航：为紧凑布局呈现可选择的设置分组或页面。
+  它只消费 SettingsWindow 构造的通用导航条目，不定义 Task 或配置业务逻辑。
+-->
 <template>
   <div class="settings-center">
     <nav class="settings-center-nav" :aria-label="t(displayLanguage, 'settingsNavigation')">
@@ -31,7 +35,6 @@ export type SettingsPageKey =
   | "general"
   | "petBehavior"
   | "model"
-  | "taskCli"
   | "persona"
   | "live2dModel"
   | "notifications"

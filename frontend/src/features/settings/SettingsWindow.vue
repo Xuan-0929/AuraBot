@@ -1,3 +1,8 @@
+<!--
+  设置窗口：组织通用、陪伴和智能能力页面，并在宽屏/窄屏间切换导航布局。
+  页面从共享 store 读写仍生效的应用配置；Task CLI、runner 与提醒设置不再
+  出现在导航或动态组件映射中。
+-->
 <template>
   <main class="settings-window" :aria-label="t(store.displayLanguage, 'settings')">
     <div class="settings-window-shell">
@@ -92,10 +97,9 @@ import ModelSettingsPage from "./pages/ModelSettingsPage.vue";
 import NotificationSettingsPage from "./pages/NotificationSettingsPage.vue";
 import PersonaSettingsPage from "./pages/PersonaSettingsPage.vue";
 import PetBehaviorSettingsPage from "./pages/PetBehaviorSettingsPage.vue";
-import TaskCliSettingsPage from "./pages/TaskCliSettingsPage.vue";
 
 const store = useAuraBotStore();
-type SettingsSectionKey = "basics" | "companion" | "intelligence" | "automation";
+type SettingsSectionKey = "basics" | "companion" | "intelligence";
 
 type SettingsPageDefinition = SettingsNavItem & {
   key: SettingsPageKey;
@@ -122,7 +126,6 @@ const pageDefinitions = computed<Record<SettingsPageKey, SettingsPageDefinition>
   general: pageItem("general", "general", "generalSettingsHint", "general"),
   petBehavior: pageItem("petBehavior", "petBehavior", "petBehaviorSettingsHint", "pet"),
   model: pageItem("model", "model", "modelSettingsHint", "model"),
-  taskCli: pageItem("taskCli", "taskCli", "taskCliHint", "task"),
   persona: pageItem("persona", "persona", "personaSettingsHint", "persona"),
   live2dModel: pageItem("live2dModel", "live2dModel", "live2dModelSettingsHint", "live2d"),
   notifications: pageItem("notifications", "notifications", "notificationSettingsHint", "notifications"),
@@ -132,8 +135,7 @@ const pageDefinitions = computed<Record<SettingsPageKey, SettingsPageDefinition>
 const sectionItems = computed<SettingsSectionDefinition[]>(() => [
   sectionItem("basics", "settingsSectionBasics", "settingsSectionBasicsHint", "general", ["general", "notifications"]),
   sectionItem("companion", "settingsSectionCompanion", "settingsSectionCompanionHint", "pet", ["petBehavior", "persona", "live2dModel"]),
-  sectionItem("intelligence", "settingsSectionIntelligence", "settingsSectionIntelligenceHint", "model", ["model", "memoryDebug"]),
-  sectionItem("automation", "settingsSectionAutomation", "settingsSectionAutomationHint", "task", ["taskCli"])
+  sectionItem("intelligence", "settingsSectionIntelligence", "settingsSectionIntelligenceHint", "model", ["model", "memoryDebug"])
 ]);
 
 const currentSection = computed(() => sectionItems.value.find((section) => section.pages.includes(currentPage.value)));
@@ -161,7 +163,6 @@ const pageComponents: Record<SettingsPageKey, Component> = {
   general: GeneralSettingsPage,
   petBehavior: PetBehaviorSettingsPage,
   model: ModelSettingsPage,
-  taskCli: TaskCliSettingsPage,
   persona: PersonaSettingsPage,
   live2dModel: Live2DModelSettingsPage,
   notifications: NotificationSettingsPage,

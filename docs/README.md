@@ -1,27 +1,20 @@
 # AuraBot 文档
 
-本目录只保留当前开发和维护所需的资料。历史实施记录、视觉预览和已被替代的 v1 方案不再作为项目文档维护。
+本目录只维护当前事实与目标设计。旧 Task Runtime 不另建 archive，Git 历史即档案。
 
-## 当前文档
-
-| 文档 | 用途 |
+| 文档 | 信息所有权 |
 | --- | --- |
-| [产品需求](PRD-v2.md) | 产品定位、用户体验和非目标。 |
-| [运行时模块](modules-v2.md) | Python 后端主运行时与 Electron 前端的目标边界。 |
-| [后端迁移路线](backend-runtime-migration.md) | 从当前 TypeScript MVP 迁移到目标运行时的分阶段顺序。 |
-| [运行时契约](backend-runtime-contract.md) | 配置、HTTP、WebSocket、数据所有权与错误格式的 v1 契约。 |
-| [配置与后端生命周期](configuration-and-backend-lifecycle.md) | Python 解释器、配置、启动、退出、健康检查和失败恢复。 |
-| [Main Agent v0 实现规格](main-agent-v0-implementation.md) | 第一个后端主消息与记忆闭环的实现边界和测试矩阵。 |
-| [运行时数据所有权](runtime-data-ownership.md) | 迁移期间每类数据的唯一写入 owner、切换与回退规则。 |
-| [当前状态](aurabot-development-status.md) | 当前基线、已落地能力、风险和下一阶段入口。 |
-| [主 Agent](modules/main-agent.md) | 主对话 Agent 的职责、状态机和最小实现边界。 |
-| [任务 Agent](modules/task-agent.md) | runtime task agent、状态、事件和安全边界。 |
-| [TTS](modules/tts.md) | 语音合成选型和 dots.tts 接入策略。 |
-| [Windows 适配](windows-platform-adaptation.md) | Windows 打包和运行时适配范围。 |
+| [产品需求](PRD-v2.md) | 产品定位、目标能力和非目标。 |
+| [系统模块](modules-v2.md) | 进程与模块边界。 |
+| [Pi Task Runtime](modules/task-agent.md) | 未来 Task 架构的唯一事实源。 |
+| [Main Agent](modules/main-agent.md) | Main Agent 如何调用 Control Plane。 |
+| [后端契约](backend-runtime-contract.md) | 当前 health-only HTTP 边界。 |
+| [后端迁移](backend-runtime-migration.md) | 从当前空窗期到 Pi Runtime 的阶段。 |
+| [数据所有权](runtime-data-ownership.md) | 各类数据的唯一写入 owner。 |
+| [配置与生命周期](configuration-and-backend-lifecycle.md) | Python 配置、启动、健康与退出。 |
+| [当前状态](aurabot-development-status.md) | 可复核的实现事实和下一步。 |
+| [Windows 适配](windows-platform-adaptation.md) | 平台与打包边界。 |
+| [TTS](modules/tts.md) | TTS 选型与接入策略。 |
 
-## 文档规则
-
-1. README 只描述用户可运行的事实和最短启动路径。
-2. PRD 描述产品目标；模块文档描述目标边界；迁移路线描述当前到目标的实施顺序。
-3. 当前状态只记录可复核的事实、已验证命令和明确的下一步，不保存逐日开发日志。
-4. 新实现先更新对应契约或模块文档，再更新当前状态；不要重新引入独立的历史状态板。
+文档必须区分“已实现”“已删除”“目标但未实现”。README 只描述用户当前能运行的
+能力；Pi 细节不得复制到其他文档。

@@ -1,10 +1,11 @@
-import type {
-  AppConfig,
-  ModelRoleConfig,
-  ProactiveConfig,
-  TaskCliRunnerConfig,
-  TaskCliRunnerId
-} from "../schemas/config";
+/**
+ * 定义 Renderer 可见的非敏感设置与模型健康契约。
+ *
+ * Main process 从 AppConfig 投影模型和主动能力设置，隐藏 API key；该公共边界不再
+ * 暴露任何 Task runner、CLI command、sandbox 或 approval 配置。
+ */
+
+import type { AppConfig, ModelRoleConfig, ProactiveConfig } from "../schemas/config";
 
 export const MODEL_PROVIDER_OPTIONS = ["openai-compatible", "langchain-openai"] as const;
 export const MODEL_HEALTH_STATES = [
@@ -60,22 +61,7 @@ export interface PublicAppConfig {
   chatModel: PublicModelRoleConfig;
   gateModel: PublicModelRoleConfig;
   memoryModel: PublicModelRoleConfig;
-  taskRunner: PublicTaskRunnerConfig;
   proactive: PublicProactiveConfig;
-}
-
-export interface PublicTaskRunnerConfig {
-  runners: PublicTaskCliRunnerConfig[];
-}
-
-export interface PublicTaskCliRunnerConfig {
-  id: TaskCliRunnerId;
-  label: string;
-  enabled: boolean;
-  priority: number;
-  command?: string;
-  workingDirectory?: string;
-  timeoutMs?: number;
 }
 
 export type PublicProactiveConfig = Pick<
@@ -83,16 +69,9 @@ export type PublicProactiveConfig = Pick<
   "pollIntervalMs" | "followUpLookaheadMs" | "idleThresholdMs" | "idleCooldownMs"
 >;
 
-export interface TaskRunnerSettingsPatch {
-  runners: Array<{
-    id: TaskCliRunnerId;
-    enabled: boolean;
-    priority: number;
-    timeoutMs?: number;
-  }>;
-}
-
-export type ProactiveSettingsPatch = Partial<Pick<ProactiveConfig, "idleThresholdMs" | "idleCooldownMs">>;
+export type ProactiveSettingsPatch = Partial<
+  Pick<ProactiveConfig, "idleThresholdMs" | "idleCooldownMs">
+>;
 
 export interface ModelProviderSettingsPatch {
   role: ModelRoleKey;
@@ -108,19 +87,12 @@ export function createPublicAppConfig(config: AppConfig): PublicAppConfig {
     chatModel: createPublicModelRoleConfig(config.chatModel),
     gateModel: createPublicModelRoleConfig(config.gateModel),
     memoryModel: createPublicModelRoleConfig(config.memoryModel),
-    taskRunner: {
-      runners: config.taskRunner.runners.map(createPublicTaskCliRunnerConfig)
-    },
-    proactive: createPublicProactiveConfig(config.proactive)
-  };
-}
-
-function createPublicProactiveConfig(config: ProactiveConfig): PublicProactiveConfig {
-  return {
-    pollIntervalMs: config.pollIntervalMs,
-    followUpLookaheadMs: config.followUpLookaheadMs,
-    idleThresholdMs: config.idleThresholdMs,
-    idleCooldownMs: config.idleCooldownMs
+    proactive: {
+      pollIntervalMs: config.proactive.pollIntervalMs,
+      followUpLookaheadMs: config.proactive.followUpLookaheadMs,
+      idleThresholdMs: config.proactive.idleThresholdMs,
+      idleCooldownMs: config.proactive.idleCooldownMs
+    }
   };
 }
 
@@ -134,28 +106,4 @@ function createPublicModelRoleConfig(config: ModelRoleConfig): PublicModelRoleCo
     timeoutMs: config.timeoutMs,
     hasApiKey: Boolean(config.apiKey)
   };
-}
-
-function createPublicTaskCliRunnerConfig(config: TaskCliRunnerConfig): PublicTaskCliRunnerConfig {
-  return {
-    id: config.id,
-    label: getTaskCliRunnerLabel(config.id),
-    enabled: config.enabled,
-    priority: config.priority,
-    command: config.command,
-    workingDirectory: config.workingDirectory,
-    timeoutMs: config.timeoutMs
-  };
-}
-
-export function getTaskCliRunnerLabel(id: TaskCliRunnerId): string {
-  if (id === "codex") {
-    return "Codex";
-  }
-
-  if (id === "claude") {
-    return "Claude Code";
-  }
-
-  return "Hermes";
 }

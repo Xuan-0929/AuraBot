@@ -1,239 +1,65 @@
-
-> v0.2 版本产品需求分析
-
-
-# 产品需求分析
-
-> 当前产品需求基线。实现状态、迁移阶段和接口细节分别以
-> [当前状态](aurabot-development-status.md)、[后端迁移路线](backend-runtime-migration.md)
-> 和 [运行时契约](backend-runtime-contract.md) 为准。
-
+# AuraBot 产品需求
 
 ## 产品定义
 
-运行于桌面端的，带有live2D效果的陪伴机器人。
+AuraBot 是带 Live2D 桌宠界面的陪伴型桌面 AI。用户通过文字、语音或外部渠道与
+唯一 Main Agent 交互；Memory 提供连续关系，未来 Task Runtime 处理受控的外部工作。
 
-为用户带来快乐，以及可以让用户使用自然语言控制处理简单的任务（e.g. 你去帮我把桌面的图片转成jpg格式）。
+## 当前产品状态
 
+- Electron 提供桌宠、控制台、普通聊天、Memory、设置和非 Task 主动提醒。
+- Python Backend 当前仅提供健康检查。
+- Task 处于架构迁移空窗期，输入会得到固定不可用回复。
+- 旧自研 Harness/MCP/CLI runner 已删除；Pi Task Runtime 尚未实现。
 
-## 功能性需求
+## 目标能力
 
-### 接入QQ，微信
+### 交互与陪伴
 
-支持QQ，微信接入，用户可以在QQ，微信上和AuraBot聊天。但是不支持加入群聊。
+- Live2D 常驻桌面但不过度遮挡工作。
+- 主控制台显示唯一主对话历史。
+- 支持文字、未来 STT/TTS，以及 QQ、微信、Telegram 等 ingress。
+- Gate 对外部渠道碎片消息进行合并与回复时机判断。
+- Main Agent 串行处理对话，并独占长期 Memory 的业务读写。
 
-#### 门控
+### Task
 
-用户在QQ，微信上说话不一定每次都会唤醒AuraBot，因为用户会分多条消息来说。
+Main Agent 未来可创建、查询和中断 Task。Task 执行必须采用
+[Pi Task Runtime](modules/task-agent.md) 定义的 Control Plane / Execution Plane
+边界：AuraBot 管理产品状态和进程，Pi 管理 Agent Loop、模型、工具和上下文。
 
-所以需要一个门控系统来判断是否唤醒AuraBot。
+### 主动能力
 
+Memory follow-up 和 idle nudge 可主动触达用户。定时 Task、Task 完成提醒和 Task
+问答在新 Runtime 实现前均不可用。
 
-#### 断句
+## 目标进程模型
 
-Bot在给用户回复时，也不会是一长段。会做断句。
+~~~mermaid
+flowchart TB
+  INGRESS["Ingress / Media<br/>channels · VAD · STT · Gate"] --> CORE
+  subgraph CORE["Aura Core"]
+    MAIN["Main Agent"] --> MEMORY["Memory"]
+    MAIN -. "future" .-> TM["Python TaskManager"]
+  end
+  TM -. "one task / one RPC process" .-> PI["Pi Execution Plane"]
+  UI["Electron / Vue"] <--> CORE
+~~~
 
-
-### 接入前端
-
-前端采用 Electron + Vue + TypeScript。
-
-前端职责是桌面端展示、Live2D 渲染、用户交互、HTTP 请求和 WebSocket 实时事件接收。核心业务逻辑不放在 TypeScript 前端层中，后续以前后端接口文档为准进行重构。
-
-后端采用 Python 单服务进程，承载主对话、门控、记忆、任务管理、定时唤醒、语音适配、Skill / Tool 管理等业务。
-
-前端与后端通信方式：
-- HTTP：提交消息、查询历史、查询任务、修改设置等请求/响应场景
-- WebSocket：接收聊天流式输出、任务进度、Live2D 情绪动作信号、主动提醒等实时事件
-
-### 当前迁移约束
-
-当前 MVP 的聊天、记忆和任务写链路仍在 Electron 的 TypeScript core 中；Python
-网关目前主要承载配置和只读接口。后端迁移必须按垂直链路逐步完成，不能让两个
-运行时同时对同一业务对象写入。Python 成为唯一业务 owner 后，前端才只保留界面、
-窗口和网络职责。
-
-
-#### Live2D渲染
-
-- 渲染一个Live2D，会关注用户的鼠标。
-- Agent会输出情绪和动作控制信号，驱动Live2D模型做表情或动作。
-- 常驻屏幕，但是不让用户感觉到妨碍使用电脑。
-
-
-#### 对话界面，任务界面，待提醒界面
-
-- 一个app控制台
-- 查看历史主对话记录
-- 查看当前worker进程状态。
-- 查看待提醒事项
-
-
-#### 控制台(config panel)
-
-- 设置模型服务商
-- 设置Live2D模型
-- 各种配置
-
-
-### 对话交互
-
-#### TTS+STT / Type
-
-这里没有门控，一经发送，直接触发主Agent。
-
-- TTS+STT
-    1. 用户说话
-    2. 音频捕获，STT
-    3. 文字submit给主Agent
-    4. 主Agent打造回复语句
-    5. TTS并播放
-- Type
-    1. 用户直接在对话框里打字
-    2. 文字submit给主Agent
-    3. 主Agent打造回复语句
-
-
-#### SOUL
-
-Bot说话时，有自己的SOUL，会对语气做模仿。
-
-
-#### 会话管理
-
-用户只感觉到有一个session在运行，不需要手动开新的session。
-
-
-### 定时任务
-
-支持设置cron job
-
-#### 定时启动
-
-设置每天固定时间唤醒Agent的任务。
-
-#### 计时启动
-
-设置接下来多少时间后唤醒Agent的任务。
-
-
-### 主动搭话
-
-Bot会向用户主动发起对话。
-
-发起对话的情形有：
-- cron触发
-- 任务Agent返回结果
-- 任务Agent向用户发问
-- 用户设置的柏松随机事件（默认关闭，或者不做）
-
-主动搭话会推送在上一次用户和Bot交互的接口上。
-
+本轮不要求物理拆分 Ingress，但不同模块不得同时成为同一业务数据的写入 owner。
 
 ## 非功能性需求
 
-### 进程模型
+- 配置和错误不得泄露密钥。
+- 每类业务数据只有一个 owner。
+- Task Worker 故障不得拖垮 Main Agent 或 Memory。
+- Task 无 AuraBot 级自动重跑；重跑创建新执行尝试。
+- macOS 为主要开发平台，Windows 10/11 x64 为保留打包目标。
+- 前端通过明确的 HTTP/事件契约使用 Backend，不复制 Python 业务核心。
 
-AuraBot 采用单服务进程架构，而非多微服务常驻架构。
+## 非目标
 
-默认运行进程：
-- Electron + Vue + TypeScript 前端进程
-- Python 后端主进程
-
-可选或按需运行进程：
-- MCP 服务器：由用户配置，为 Agent 提供工具能力
-- 外部连接器或语音 worker：仅在 QQ、微信、本地重型 STT/TTS 等能力需要独立隔离时启用
-
-后端主进程内包含 HTTP API、WebSocket、connector hub、门控 Agent、主对话 Agent、记忆模块、任务管理模块、定时唤醒模块、语音模块、Skill / Tool 注册模块。
-
-前端和后端之间使用 HTTP + WebSocket。后端内部模块之间不通过 HTTP 或 WebSocket 互相调用，而是通过 Python 方法调用、队列、事件总线和后台任务协作。
-
-Runtime task agent 是后端主进程内的线程级运行时，不作为单独进程启动，也不由单独的 task-agent 进程管理。任务状态、进度和询问都通过后端主进程内的 task-manager 汇总，再由后端主进程持有的 WebSocket 推送给前端。
-
-### 三层Agent
-
-#### 门控Agent
-
-负责判断微信、QQ、飞书等外部渠道上的零散消息是否需要送入主对话。
-
-桌面端控制台和明确的文字输入可以跳过碎片化门控，一经发送直接提交主对话。
-
-在送入主对话前，还需要判断话题是否切换。如果切换，给上一段话题的结尾打上断点。
-
-#### 主对话Agent（也称为聊天Agent或主Agent）
-
-运行于 Python 后端主进程内。主对话 Agent 自身无并发。
-
-所有渠道唤醒主Agent都只是加入队列，加载器持续从队列中拿出最久未被处理的对话给主Agent处理。
-
-主对话Agent在后端主进程内持有唯一长期运行上下文。进行任何外部操作都需要调用对应的 Tool，如需要在控制台中回复用户时需要调用 SayToUser 工具。
-
-主对话只有一个，并且全程只有一个session，并且伴随应用生命周期长驻。
-
-主对话会给任务Agent发送任务请求，并可以查询任务Agent的执行进度或者打断任务Agent。
-
-主对话Agent直接对记忆库读写，也只有主Agent可以读写。
-
-#### 任务Agent
-
-负责处理用户交给AuraBot的任务。
-
-可以被打断，可以查询任务进度。任务完成后，返回任务结果给主对话Agent。
-
-任务Agent会向主Agent发问。
-
-任务 Agent 是即用即销毁的 runtime agent，不作为默认常驻服务。每个任务在后端主进程内创建独立线程级运行时，任务完成、失败或被中止后销毁。
-
-runtime task agent 的运行方式固定为线程级：
-- task-manager 运行于后端主进程内
-- 每个任务对应一个后端主进程内的工作线程
-- 任务线程负责执行 ReAct 循环、调用工具、等待结果和上报状态
-- 任务线程可以调用 MCP 服务器或外部工具进程，但不再额外启动一个 task-agent 管理进程
-- 前端 WebSocket 始终只连接后端主进程，由后端主进程统一推送任务事件
-
-### 流水线API请求
-
-有时候不需要一整句话出来就发API请求。
-对于`STT -> LLM -> STT`的流水线，如果语言回复拿到分句符（。？！等），直接发送下一阶段的API请求，来降低延迟。
-
-### 短期记忆
-
-**仅对于主对话**
-
-模型上下文级记忆，能记住最近的话题。
-
-部分短期记忆会写入长期记忆。
-
-短期记忆需要进行内存和磁盘级的记忆持久化。
-
-短期记忆模块运行于 Python 后端主进程内，不作为独立服务进程。
-
-### 长期记忆
-
-当短期记忆的上下文长度达到限制或记忆断点数量达到限制时，将最早的断点间片段送给主Agent，由主Agent总结并更新长期记忆库。
-可以快速查/写长期记忆库。
-- 写入接收对话记录自动提取记忆点
-- 查询时，返回一个记忆表，按照置信度排序
-
-长期记忆库可以选择性遗忘冲突的记忆点，但是不会因为记忆过旧或过新出现权重的更改。
-
-长期记忆需要进行磁盘级的记忆持久化。
-
-长期记忆模块运行于 Python 后端主进程内。只有主对话 Agent 可以直接读写长期记忆。
-
-### Skill和Tool
-
-Skill和Tools以技能组的形式存在。
-Skill库和Tool库都是作为一个二级目录。
-即为skill/tool group，每个group有若干个skill或者tool。
-
-产生和销毁
-- 技能由任务Agent提炼和存入，用户可以在config界面主动管理（增添/删除/修改）。
-- Tool由用户配置mcp服务器中有哪些工具。
-
-运行时
-- 由聊天Agent指派技能组和工具组给任务Agent。
-
-Skill / Tool 注册模块运行于 Python 后端主进程内。
-
-MCP 服务器作为外部工具能力进程存在，由用户配置。后端主进程负责连接或启动 MCP 服务器，并将可用工具分配给 runtime task agent。
+- 第一轮不实现 Pi、Node Worker、新 Task API/UI 或兼容层。
+- 不保留 ToolGroup、SkillGroup、Capability lease、Harness Adapter 或 AuraBot MCP
+  server。
+- 不承诺 true resume、第三方 Package 管理或 Task approval UI；这些属于第二轮后续。

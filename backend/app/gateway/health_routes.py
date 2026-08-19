@@ -1,32 +1,22 @@
 """
-提供 Backend 进程健康状态与 Task 准入可用性的只读 HTTP route。
+提供与 Task runtime 无关的 Backend 进程健康检查。
 
-route 从应用依赖读取 BackendRuntime 当前生命周期状态并构造轻量响应；
-本模块不启动或关闭 runtime，也不执行 Task 查询和调度。
+路由只返回稳定的服务身份与存活状态，由 backend.main 挂载；它不读取模型、Memory、
+TaskManager 或外部依赖健康，因此可作为桌面启动器的最小就绪信号。
 """
 
 from __future__ import annotations
 
-from typing import Annotated
-
-from fastapi import APIRouter, Depends
-
-from ..runtime import BackendRuntime
-from .dependencies import get_backend_runtime
+from fastapi import APIRouter
 
 router = APIRouter()
-RuntimeDependency = Annotated[BackendRuntime, Depends(get_backend_runtime)]
 
 
 @router.get("/health")
-async def health(runtime: RuntimeDependency) -> dict[str, object]:
-    return {
-        "ok": True,
-        "service": "backend",
-        "accepting_tasks": not runtime.task_manager.closing,
-        "running_count": runtime.task_manager.running_count,
-        "queued_count": runtime.task_manager.queued_count,
-    }
+async def health() -> dict[str, object]:
+    """Return the stable health-only response."""
+
+    return {"ok": True, "service": "backend"}
 
 
 __all__ = ["health", "router"]

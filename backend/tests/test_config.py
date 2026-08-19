@@ -1,3 +1,10 @@
+"""
+验证 Backend YAML 配置的加载、路径解析与环境变量展开。
+
+测试直接使用 backend.config 的公开 API 和临时文件，覆盖 health-only 进程所需配置；
+它不要求已删除的 Task model、MCP 或 runtime 字段。
+"""
+
 import os
 import tempfile
 import unittest
@@ -15,7 +22,7 @@ from backend.config import (
 
 
 class ConfigTests(unittest.TestCase):
-    def test_loads_complete_yaml_into_memory(self):
+    def test_loads_only_retained_top_level_sections(self):
         with tempfile.TemporaryDirectory() as directory:
             config_path = Path(directory) / "config.yaml"
             config_path.write_text(
@@ -37,22 +44,22 @@ optional_value: null
 
         self.assertEqual(runtime_config["ports"]["backend_gateway"], 6401)
         self.assertEqual(runtime_config.ports["frontend"], 6400)
-        self.assertEqual(runtime_config["features"]["names"], ["memory", "tasks"])
-        self.assertIsNone(runtime_config["optional_value"])
+        self.assertNotIn("features", runtime_config)
+        self.assertNotIn("optional_value", runtime_config)
         self.assertEqual(runtime_config.path, config_path.resolve())
 
     def test_initialization_is_idempotent_and_keeps_in_memory_values(self):
         with tempfile.TemporaryDirectory() as directory:
             config_path = Path(directory) / "config.yaml"
-            config_path.write_text("value: original\n", encoding="utf-8")
+            config_path.write_text("ports:\n  backend_gateway: 6401\n", encoding="utf-8")
             runtime_config = Config()
 
             first = runtime_config.initialize(config_path)
-            config_path.write_text("value: changed\n", encoding="utf-8")
+            config_path.write_text("ports:\n  backend_gateway: 7401\n", encoding="utf-8")
             second = runtime_config.initialize(config_path)
 
         self.assertIs(first, second)
-        self.assertEqual(runtime_config["value"], "original")
+        self.assertEqual(runtime_config["ports"]["backend_gateway"], 6401)
 
     def test_rejects_reinitialization_from_another_file(self):
         with tempfile.TemporaryDirectory() as directory:
@@ -95,8 +102,8 @@ optional_value: null
 chat_model:
   api_key: "${AURABOT_TEST_API_KEY}"
   base_url: "https://${AURABOT_TEST_API_HOST:-example.invalid}/v1"
-providers:
-  - token: "Bearer ${AURABOT_TEST_API_KEY}"
+gateway_model:
+  api_key: "Bearer ${AURABOT_TEST_API_KEY}"
 """.strip(),
                 encoding="utf-8",
             )
@@ -115,7 +122,7 @@ providers:
             "https://example.invalid/v1",
         )
         self.assertEqual(
-            runtime_config["providers"][0]["token"],
+            runtime_config.gateway_model["api_key"],
             "Bearer secret:#value",
         )
 
@@ -123,7 +130,7 @@ providers:
         with tempfile.TemporaryDirectory() as directory:
             config_path = Path(directory) / "config.yaml"
             config_path.write_text(
-                'api_key: "${AURABOT_REQUIRED_TEST_API_KEY}"\n',
+                'chat_model:\n  api_key: "${AURABOT_REQUIRED_TEST_API_KEY}"\n',
                 encoding="utf-8",
             )
 
@@ -138,11 +145,34 @@ providers:
 
         self.assertFalse(runtime_config.initialized)
 
-    def test_project_example_reads_each_model_api_key_from_environment(self):
+    def test_ignores_unresolved_environment_references_in_legacy_sections(self):
+        with tempfile.TemporaryDirectory() as directory:
+            config_path = Path(directory) / "config.yaml"
+            config_path.write_text(
+                """
+ports:
+  backend_gateway: 6401
+task_model:
+  api_key: "${AURABOT_TASK_MODEL_API_KEY}"
+local_mcp_server:
+  url: "${AURABOT_REMOVED_MCP_URL}"
+task_runtime:
+  retention_seconds: 600
+""".strip(),
+                encoding="utf-8",
+            )
+
+            with patch.dict(os.environ, {}, clear=False):
+                os.environ.pop("AURABOT_TASK_MODEL_API_KEY", None)
+                os.environ.pop("AURABOT_REMOVED_MCP_URL", None)
+                runtime_config = Config().initialize(config_path)
+
+        self.assertEqual(runtime_config.as_dict(), {"ports": {"backend_gateway": 6401}})
+
+    def test_project_example_reads_retained_model_api_keys_from_environment(self):
         environment = {
             "AURABOT_CHAT_MODEL_API_KEY": "chat-secret",
             "AURABOT_GATEWAY_MODEL_API_KEY": "gateway-secret",
-            "AURABOT_TASK_MODEL_API_KEY": "task-secret",
         }
 
         with patch.dict(os.environ, environment, clear=False):
@@ -150,7 +180,7 @@ providers:
 
         self.assertEqual(runtime_config.chat_model["api_key"], "chat-secret")
         self.assertEqual(runtime_config.gateway_model["api_key"], "gateway-secret")
-        self.assertEqual(runtime_config.task_model["api_key"], "task-secret")
+        self.assertNotIn("task_model", runtime_config)
 
 
 if __name__ == "__main__":

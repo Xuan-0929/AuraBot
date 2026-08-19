@@ -1,25 +1,8 @@
 ports:
   frontend: 6400
   backend_gateway: 6401
-  services_start: 6402
-
-local_mcp_server: http://127.0.0.1:6410/mcp
 
 chat_model:
   base_url: https://example.invalid/v1
   model_name: test-chat-model
   api_key: test-only
-
-task_model:
-  base_url: https://example.invalid/v1
-  model_name: test-task-model
-  api_key: test-only
-
-task_runtime:
-  max_running: 8
-  default_timeout_ms: 300000
-  max_timeout_ms: 1800000
-  terminal_retention_seconds: 100
-  sse_subscriber_queue_size: 256
-  sse_keepalive_seconds: 15
-  shutdown_grace_seconds: 0

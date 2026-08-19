@@ -1,31 +1,34 @@
+/**
+ * 定义 Electron Main、Preload 与 Renderer 的非 Task IPC 公共边界。
+ *
+ * API 覆盖聊天、Memory debug、模型/桌宠/通知设置、窗口与 Backend health；所有 Task
+ * channels、详情、debug、文件动作和事件订阅均已移除。
+ */
+
 import type { AppInitialState, SendChatMessageInput, SendChatMessageResult } from "./chat";
 import type { BackendStatus } from "./backend";
 import type { Live2DModelState } from "./live2dModel";
 import type { NotificationSettings } from "./notificationSettings";
-import type { PetActivity } from "./pet";
-import type { TaskDebugSnapshot, TaskDetail } from "./taskDetail";
-import type { Message } from "../schemas/message";
-import type { MemoryEdge, MemoryNode, MemorySummary } from "../schemas/memory";
-import type { PetSettings, PetSettingsPatch } from "../schemas/petSettings";
 import type { PersonaSettings } from "./personaSettings";
-import type { Profile } from "../schemas/profile";
-import type { Task } from "../schemas/task";
+import type { PetActivity } from "./pet";
 import type {
   ModelConnectionTestInput,
   ModelProviderSettingsPatch,
   ProactiveSettingsPatch,
   PublicAppConfig,
   PublicModelHealth,
-  PublicModelHealthMap,
-  TaskRunnerSettingsPatch
+  PublicModelHealthMap
 } from "./settings";
+import type { MemoryEdge, MemoryNode, MemorySummary } from "../schemas/memory";
+import type { Message } from "../schemas/message";
+import type { PetSettings, PetSettingsPatch } from "../schemas/petSettings";
+import type { Profile } from "../schemas/profile";
 
 export const IPC_CHANNELS = {
   getInitialState: "app:get-initial-state",
   openConsoleWindow: "window:open-console",
   openSettingsWindow: "window:open-settings",
   openConfigFile: "config:open-file",
-  updateTaskRunnerSettings: "config:update-task-runner-settings",
   updateModelProviderSettings: "config:update-model-provider-settings",
   getModelHealth: "config:get-model-health",
   testModelConnection: "config:test-model-connection",
@@ -50,15 +53,7 @@ export const IPC_CHANNELS = {
   chatMessageCreated: "chat:message-created",
   chatMessageUpdated: "chat:message-updated",
   sendChatMessage: "chat:send-message",
-  taskChanged: "task:changed",
-  taskDeleted: "task:deleted",
-  cancelTask: "task:cancel",
-  deleteTask: "task:delete",
-  openTaskResultFile: "task:open-result-file",
-  showTaskResultFileInFolder: "task:show-result-file-in-folder",
-  getTaskDetail: "task:get-detail",
   getEventLogs: "debug:get-event-logs",
-  getTaskDebugSnapshot: "debug:get-task-snapshot",
   getMemoryDebugSnapshot: "debug:get-memory-snapshot"
 } as const;
 
@@ -97,15 +92,6 @@ export interface MemoryDebugSnapshot {
   lastRecallTrace?: MemoryRecallDebugTrace;
 }
 
-export interface TaskResultFileActionInput {
-  taskId: string;
-  path: string;
-}
-
-export interface TaskDetailInput {
-  taskId: string;
-}
-
 export interface PetCursorPosition {
   screenX: number;
   screenY: number;
@@ -113,32 +99,14 @@ export interface PetCursorPosition {
   localY: number;
 }
 
-/** Edge or corner being dragged to resize the frameless pet window. */
 export type PetResizeDirection = "n" | "s" | "e" | "w" | "nw" | "ne" | "sw" | "se";
 export type PetResizeCorner = Extract<PetResizeDirection, "nw" | "ne" | "sw" | "se">;
-
-export interface TaskResultFileActionResult {
-  ok: boolean;
-  error?: string;
-}
-
-export interface TaskControlActionInput {
-  taskId: string;
-}
-
-export interface TaskControlActionResult {
-  ok: boolean;
-  task?: Task;
-  taskId?: string;
-  error?: string;
-}
 
 export interface AuraBotApi {
   getInitialState(): Promise<AppInitialState>;
   openConsoleWindow(): Promise<void>;
   openSettingsWindow(): Promise<void>;
   openConfigFile(): Promise<void>;
-  updateTaskRunnerSettings(patch: TaskRunnerSettingsPatch): Promise<PublicAppConfig>;
   updateModelProviderSettings(patch: ModelProviderSettingsPatch): Promise<PublicAppConfig>;
   getModelHealth(): Promise<PublicModelHealthMap>;
   testModelConnection(input: ModelConnectionTestInput): Promise<PublicModelHealth>;
@@ -155,7 +123,10 @@ export interface AuraBotApi {
   updatePetSettings(patch: PetSettingsPatch): Promise<PetSettings>;
   setPetMousePassthrough(enabled: boolean): Promise<void>;
   movePetWindowBy(delta: { x: number; y: number }): Promise<void>;
-  resizePetWindowCorner(direction: PetResizeDirection, movement: { x: number; y: number }): Promise<void>;
+  resizePetWindowCorner(
+    direction: PetResizeDirection,
+    movement: { x: number; y: number }
+  ): Promise<void>;
   onPetSettingsChanged(listener: (settings: PetSettings) => void): () => void;
   onPetActivity(listener: (activity: PetActivity) => void): () => void;
   onLive2DModelStateChanged(listener: (state: Live2DModelState) => void): () => void;
@@ -164,16 +135,8 @@ export interface AuraBotApi {
   onAgentStatusChanged(listener: (status: import("./chat").AgentStatus) => void): () => void;
   onChatMessageCreated(listener: (message: Message) => void): () => void;
   onChatMessageUpdated(listener: (message: Message) => void): () => void;
-  onTaskChanged(listener: (task: Task) => void): () => void;
-  onTaskDeleted(listener: (taskId: string) => void): () => void;
   sendChatMessage(input: SendChatMessageInput): Promise<SendChatMessageResult>;
   getPathForFile(file: File): string;
-  cancelTask(input: TaskControlActionInput): Promise<TaskControlActionResult>;
-  deleteTask(input: TaskControlActionInput): Promise<TaskControlActionResult>;
-  openTaskResultFile(input: TaskResultFileActionInput): Promise<TaskResultFileActionResult>;
-  showTaskResultFileInFolder(input: TaskResultFileActionInput): Promise<TaskResultFileActionResult>;
-  getTaskDetail(input: TaskDetailInput): Promise<TaskDetail | undefined>;
   getEventLogs(): Promise<EventLogRecord[]>;
-  getTaskDebugSnapshot(): Promise<TaskDebugSnapshot>;
   getMemoryDebugSnapshot(): Promise<MemoryDebugSnapshot>;
 }

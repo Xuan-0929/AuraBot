@@ -1,37 +1,32 @@
+/**
+ * 编排 Electron MVP 的普通主聊天、Gate、Memory 与模型恢复流程。
+ *
+ * 每次输入只写主 session；chat 意图执行原有 Memory/streaming 回复，最小 task 意图
+ * 写入固定不可用 assistant 消息，不创建 Task 数据、child session 或执行进程。
+ */
+
 import { randomUUID } from "node:crypto";
 import type { SendChatMessageInput, SendChatMessageResult } from "@shared/contracts/chat";
 import type { Message } from "@shared/schemas/message";
 import type { MemoryNode } from "@shared/schemas/memory";
-import type { Soul } from "@shared/schemas/profile";
-import type { Task } from "@shared/schemas/task";
-import { shouldAskMemoryRecall, type MemoryExtractor } from "../memory/memoryExtractor";
-import type { MemoryService } from "../memory/memoryService";
-import type { MessageRepository } from "../storage/repositories/messageRepository";
-import type { SessionRepository } from "../storage/repositories/sessionRepository";
-import type { TaskService } from "../tasks/taskService";
-import type { RunTaskInBackgroundInput } from "../tasks/taskService";
-import type { TaskInputAttachmentService } from "../tasks/taskInputAttachments";
-import type { ProfileService } from "../profiles/profileService";
-import type { EventLogService } from "../telemetry/eventLogService";
-import { parseTaskControlRequest, type TaskControlRequest, type TaskSelectionResult } from "../tasks/taskControlRouter";
-import { parseReminderRequest } from "../tasks/reminderParser";
-import type { GateModel } from "../llm/gateModel";
 import type { ChatModel } from "../llm/chatModel";
-import type { VoiceAdapter } from "../voice/voiceAdapter";
+import type { GateModel } from "../llm/gateModel";
 import {
   ModelConfigurationError,
   ModelInvocationError,
   summarizeModelError,
   type ModelRoleName
 } from "../llm/modelErrors";
-import {
-  buildTaskResultAttachments,
-  buildTaskSettledMessageDraft,
-  buildTaskSettledMessageDraftWithVoice,
-  buildTaskStatusResponseWithVoice
-} from "../tasks/taskPresentation";
+import { shouldAskMemoryRecall, type MemoryExtractor } from "../memory/memoryExtractor";
+import type { MemoryService } from "../memory/memoryService";
+import type { ProfileService } from "../profiles/profileService";
+import type { MessageRepository } from "../storage/repositories/messageRepository";
+import type { SessionRepository } from "../storage/repositories/sessionRepository";
+import type { EventLogService } from "../telemetry/eventLogService";
+import type { VoiceAdapter } from "../voice/voiceAdapter";
 
 const GATE_CONTEXT_MESSAGE_LIMIT = 10;
+export const TASK_UNAVAILABLE_MESSAGE = "Task 功能正在迁移，当前暂不可用。";
 
 export interface ChatOrchestratorDependencies {
   profileService: ProfileService;
@@ -39,13 +34,10 @@ export interface ChatOrchestratorDependencies {
   messageRepository: MessageRepository;
   memoryExtractor: MemoryExtractor;
   memoryService: MemoryService;
-  taskService: TaskService;
-  taskInputAttachmentService: TaskInputAttachmentService;
   eventLogService: EventLogService;
   gateModel: GateModel;
   chatModel: ChatModel;
   voiceAdapter: VoiceAdapter;
-  startTaskInBackground?: (input: RunTaskInBackgroundInput) => ReturnType<TaskService["runTaskInBackground"]>;
 }
 
 export interface SendChatMessageOptions {
@@ -53,15 +45,7 @@ export interface SendChatMessageOptions {
   onAssistantMessageUpdated?(message: Message): void;
 }
 
-interface PendingTaskControl {
-  profileId: string;
-  request: TaskControlRequest;
-  candidateIds: string[];
-}
-
 export class ChatOrchestrator {
-  private readonly pendingTaskControls = new Map<string, PendingTaskControl>();
-
   constructor(private readonly dependencies: ChatOrchestratorDependencies) {}
 
   updateModelDependencies(
@@ -75,16 +59,12 @@ export class ChatOrchestrator {
     Object.assign(this.dependencies, dependencies);
   }
 
-  setTaskBackgroundStarter(
-    startTaskInBackground: (input: RunTaskInBackgroundInput) => ReturnType<TaskService["runTaskInBackground"]>
-  ): void {
-    this.dependencies.startTaskInBackground = startTaskInBackground;
-  }
-
-  async sendMessage(input: SendChatMessageInput, options: SendChatMessageOptions = {}): Promise<SendChatMessageResult> {
+  async sendMessage(
+    input: SendChatMessageInput,
+    options: SendChatMessageOptions = {}
+  ): Promise<SendChatMessageResult> {
     const profile = this.dependencies.profileService.getOrSeedActiveProfile();
     const mainSession = this.dependencies.sessionRepository.getOrCreateMainSession(profile.id);
-
     const userMessage = this.dependencies.messageRepository.create({
       sessionId: mainSession.id,
       profileId: profile.id,
@@ -97,32 +77,11 @@ export class ChatOrchestrator {
         name: attachment.name
       }))
     });
-    const pendingTaskControlResult = await this.consumePendingTaskControlChoice({
-      profileId: profile.id,
-      sessionId: mainSession.id,
-      userMessageId: userMessage.id,
-      content: input.content,
-      soul: profile.soul
-    });
-
-    if (pendingTaskControlResult) {
-      return {
-        userMessage,
-        assistantMessage: pendingTaskControlResult.assistantMessage,
-        agentStatus: pendingTaskControlResult.updatedTask ? "tasking" : "idle",
-        updatedTask: pendingTaskControlResult.updatedTask,
-        deletedTaskId: pendingTaskControlResult.deletedTaskId
-      };
-    }
-
     const recentMessages = this.dependencies.messageRepository
       .listRecentBySession(mainSession.id, GATE_CONTEXT_MESSAGE_LIMIT + 1)
       .filter((message) => message.id !== userMessage.id)
       .slice(-GATE_CONTEXT_MESSAGE_LIMIT)
-      .map((message) => ({
-        role: message.role,
-        content: message.content
-      }));
+      .map((message) => ({ role: message.role, content: message.content }));
     const recentUserMessages = recentMessages
       .filter((message) => message.role === "user")
       .map((message) => message.content);
@@ -148,162 +107,41 @@ export class ChatOrchestrator {
       });
 
       if (gateDecision.replyDecision === "wait") {
-        this.dependencies.eventLogService.record("chat.message_persisted", {
+        this.recordPersistedMessage({
           profileId: profile.id,
           sessionId: mainSession.id,
           userMessageId: userMessage.id,
           assistantMessageId: null,
-          writtenMemoryIds: [],
-          gateDecision: gateDecision.replyDecision
+          gateDecision: "wait",
+          writtenMemoryIds: []
         });
-
-        return {
-          userMessage,
-          agentStatus: "listening",
-          gateDecision
-        };
+        return { userMessage, agentStatus: "listening", gateDecision };
       }
 
-      const semanticSegment = gateDecision.inputKind === "chat" ? gateDecision.coalescedText : input.content.trim();
       if (gateDecision.inputKind === "task") {
-        if (gateDecision.taskKind === "time_reminder") {
-          const reminder = parseReminderRequest({
-            message: semanticSegment,
-            nowIso: new Date().toISOString()
-          });
-
-          if (!reminder) {
-            assistantMessage = this.dependencies.messageRepository.create({
-              sessionId: mainSession.id,
-              profileId: profile.id,
-              role: "assistant",
-              content: await this.dependencies.voiceAdapter.render({
-                scene: "task.reminder_schedule_failed",
-                channel: "chat",
-                soul: profile.soul,
-                facts: {
-                  taskTitle: semanticSegment
-                }
-              })
-            });
-
-            this.dependencies.eventLogService.record("chat.message_persisted", {
-              profileId: profile.id,
-              sessionId: mainSession.id,
-              userMessageId: userMessage.id,
-              assistantMessageId: assistantMessage.id,
-              writtenMemoryIds: [],
-              gateDecision: gateDecision.replyDecision
-            });
-
-            return {
-              userMessage,
-              assistantMessage,
-              agentStatus: "idle",
-              gateDecision
-            };
-          }
-
-          const createdTask = this.dependencies.taskService.createTaskFromChat({
-            profileId: profile.id,
-            parentSessionId: mainSession.id,
-            title: reminder.content,
-            kind: "time_reminder",
-            dueAt: reminder.dueAt
-          });
-          assistantMessage = this.dependencies.messageRepository.create({
-            sessionId: mainSession.id,
-            profileId: profile.id,
-            role: "assistant",
-            content: await this.dependencies.voiceAdapter.render({
-              scene: "task.reminder_scheduled",
-              channel: "chat",
-              soul: profile.soul,
-              facts: {
-                taskTitle: reminder.content,
-                dueAt: reminder.dueAt
-              }
-            })
-          });
-
-          this.dependencies.eventLogService.record("chat.message_persisted", {
-            profileId: profile.id,
-            sessionId: mainSession.id,
-            userMessageId: userMessage.id,
-            assistantMessageId: assistantMessage.id,
-            writtenMemoryIds: [],
-            createdTaskId: createdTask.id,
-            gateDecision: gateDecision.replyDecision
-          });
-
-          return {
-            userMessage,
-            assistantMessage,
-            agentStatus: "idle",
-            gateDecision,
-            createdTask
-          };
-        }
-
-        const createdTask = this.dependencies.taskService.createTaskFromChat({
-          profileId: profile.id,
-          parentSessionId: mainSession.id,
-          title: semanticSegment,
-          kind: "result_output"
-        });
-        this.dependencies.taskInputAttachmentService.stageForTask(createdTask.id, input.attachments);
         assistantMessage = this.dependencies.messageRepository.create({
           sessionId: mainSession.id,
           profileId: profile.id,
           role: "assistant",
-          content: await this.dependencies.voiceAdapter.render({
-            scene: "task.accepted",
-            channel: "chat",
-            soul: profile.soul,
-            facts: {
-              taskTitle: semanticSegment
-            }
-          })
+          content: TASK_UNAVAILABLE_MESSAGE
         });
-
-        this.dependencies.eventLogService.record("chat.message_persisted", {
+        this.recordPersistedMessage({
           profileId: profile.id,
           sessionId: mainSession.id,
           userMessageId: userMessage.id,
           assistantMessageId: assistantMessage.id,
-          writtenMemoryIds: [],
-          createdTaskId: createdTask.id,
-          gateDecision: gateDecision.replyDecision
+          gateDecision: "reply",
+          writtenMemoryIds: []
         });
-
         return {
           userMessage,
           assistantMessage,
-          agentStatus: "tasking",
-          gateDecision,
-          createdTask
+          agentStatus: "idle",
+          gateDecision
         };
       }
 
-      if (gateDecision.inputKind === "task_control") {
-        const taskControlResult = await this.handleTaskControl({
-          profileId: profile.id,
-          sessionId: mainSession.id,
-          userMessageId: userMessage.id,
-          content: input.content,
-          soul: profile.soul
-        });
-
-        return {
-          userMessage,
-          assistantMessage: taskControlResult.assistantMessage,
-          agentStatus: taskControlResult.updatedTask ? "tasking" : "idle",
-          gateDecision,
-          updatedTask: taskControlResult.updatedTask,
-          deletedTaskId: taskControlResult.deletedTaskId
-        };
-      }
-
+      const semanticSegment = gateDecision.coalescedText;
       const writtenMemoryIds =
         gateDecision.memoryDecision === "write_now"
           ? await this.writeMemoriesFromMessage({
@@ -312,12 +150,17 @@ export class ChatOrchestrator {
               content: semanticSegment
             })
           : [];
-      const memoryContext = await this.dependencies.memoryService.retrieveRelevant(profile.id, semanticSegment);
+      const memoryContext = await this.dependencies.memoryService.retrieveRelevant(
+        profile.id,
+        semanticSegment
+      );
       const dueFollowUps = this.dependencies.memoryService.retrieveDueFollowUps(
         profile.id,
         new Date().toISOString()
       );
-      const writtenMemories = memoryContext.nodes.filter((node) => writtenMemoryIds.includes(node.id));
+      const writtenMemories = memoryContext.nodes.filter((node) =>
+        writtenMemoryIds.includes(node.id)
+      );
       const recalledMemories = dedupeMemoryNodes([
         ...dueFollowUps,
         ...memoryContext.nodes.filter((node) => !writtenMemoryIds.includes(node.id))
@@ -346,7 +189,9 @@ export class ChatOrchestrator {
           userContent: semanticSegment,
           soul: profile.soul,
           writtenMemories,
-          recalledMemories: shouldAskMemoryRecall(semanticSegment) ? memoryContext.nodes : recalledMemories,
+          recalledMemories: shouldAskMemoryRecall(semanticSegment)
+            ? memoryContext.nodes
+            : recalledMemories,
           dueFollowUps,
           gateDecision
         },
@@ -355,30 +200,27 @@ export class ChatOrchestrator {
             if (!delta) {
               return;
             }
-
             streamedContent += delta;
-            const updatedMessage = this.dependencies.messageRepository.updateContent({
+            const updated = this.dependencies.messageRepository.updateContent({
               messageId: assistantMessage!.id,
               content: streamedContent
             });
-
-            if (updatedMessage) {
-              assistantMessage = updatedMessage;
-              options.onAssistantMessageUpdated?.(assistantMessage);
+            if (updated) {
+              assistantMessage = updated;
+              options.onAssistantMessageUpdated?.(updated);
             }
           }
         }
       );
 
       if (finalReply !== assistantMessage.content) {
-        const updatedMessage = this.dependencies.messageRepository.updateContent({
+        const updated = this.dependencies.messageRepository.updateContent({
           messageId: assistantMessage.id,
           content: finalReply
         });
-
-        if (updatedMessage) {
-          assistantMessage = updatedMessage;
-          options.onAssistantMessageUpdated?.(assistantMessage);
+        if (updated) {
+          assistantMessage = updated;
+          options.onAssistantMessageUpdated?.(updated);
         }
       }
 
@@ -394,13 +236,13 @@ export class ChatOrchestrator {
         });
       }
 
-      this.dependencies.eventLogService.record("chat.message_persisted", {
+      this.recordPersistedMessage({
         profileId: profile.id,
         sessionId: mainSession.id,
         userMessageId: userMessage.id,
         assistantMessageId: assistantMessage.id,
-        writtenMemoryIds,
-        gateDecision: gateDecision.replyDecision
+        gateDecision: "reply",
+        writtenMemoryIds
       });
 
       return {
@@ -445,12 +287,10 @@ export class ChatOrchestrator {
         node: candidate.node,
         edges
       });
-
       writtenIds.push(nodeId);
       if (candidate.node.type === "event") {
         mostRecentEventId = nodeId;
       }
-
       this.dependencies.eventLogService.record("memory.write_completed", {
         profileId: input.profileId,
         sessionId: input.sessionId,
@@ -463,323 +303,15 @@ export class ChatOrchestrator {
     return writtenIds;
   }
 
-  private async handleTaskControl(input: {
+  private recordPersistedMessage(input: {
     profileId: string;
     sessionId: string;
     userMessageId: string;
-    content: string;
-    soul?: Soul;
-    request?: TaskControlRequest;
-    forcedTaskId?: string;
-  }) {
-    const request = input.request ?? parseTaskControlRequest(input.content);
-    const selection = input.forcedTaskId
-      ? this.buildForcedTaskSelection(input.profileId, input.forcedTaskId)
-      : this.dependencies.taskService.findTaskForChatControlWithReason({
-          profileId: input.profileId,
-          targetHint: request.targetHint,
-          activeOnly: request.action === "interrupt",
-          action: request.action
-        });
-    const selectedTask = selection.task;
-    let updatedTask;
-    let deletedTaskId: string | undefined;
-    let attachments: Message["attachments"] = [];
-    let responseContent: string;
-
-    if (selection.reason === "ambiguous") {
-      this.pendingTaskControls.set(input.sessionId, {
-        profileId: input.profileId,
-        request,
-        candidateIds: selection.candidates.map((task) => task.id)
-      });
-    } else {
-      this.pendingTaskControls.delete(input.sessionId);
-    }
-
-    if (selection.reason === "ambiguous") {
-      responseContent = buildAmbiguousTaskControlResponse(selection.candidates);
-    } else if (!selectedTask) {
-      responseContent = request.targetHint
-        ? await this.dependencies.voiceAdapter.render({
-            scene: "task.control_not_found",
-            channel: "chat",
-            soul: input.soul,
-            facts: {
-              targetHint: request.targetHint
-            }
-          })
-        : await this.dependencies.voiceAdapter.render({
-            scene: "task.control_not_found",
-            channel: "chat",
-            soul: input.soul,
-            facts: {}
-          });
-    } else if (request.action === "query") {
-      responseContent = await buildTaskStatusResponseWithVoice(
-        selectedTask,
-        this.dependencies.taskService.listTaskEvents(selectedTask.id),
-        {
-          soul: input.soul,
-          voiceAdapter: this.dependencies.voiceAdapter
-        }
-      );
-    } else if (request.action === "start") {
-      if (selectedTask.status !== "queued") {
-        updatedTask = selectedTask;
-        responseContent = await buildTaskStatusResponseWithVoice(
-          selectedTask,
-          this.dependencies.taskService.listTaskEvents(selectedTask.id),
-          {
-            soul: input.soul,
-            voiceAdapter: this.dependencies.voiceAdapter
-          }
-        );
-      } else {
-        updatedTask = (this.dependencies.startTaskInBackground ?? this.dependencies.taskService.runTaskInBackground.bind(this.dependencies.taskService))({
-          profileId: input.profileId,
-          taskId: selectedTask.id
-        });
-        if (!updatedTask) {
-          responseContent = await this.dependencies.voiceAdapter.render({
-            scene: "task.control_not_found",
-            channel: "chat",
-            soul: input.soul,
-            facts: {}
-          });
-        } else if (updatedTask.status === "completed") {
-          responseContent = (await buildTaskSettledMessageDraftWithVoice(
-            updatedTask,
-            this.dependencies.taskService.listTaskEvents(updatedTask.id),
-            {
-              soul: input.soul,
-              voiceAdapter: this.dependencies.voiceAdapter
-            }
-          )).content;
-        } else if (updatedTask.status === "failed") {
-          responseContent = (await buildTaskSettledMessageDraftWithVoice(
-            updatedTask,
-            this.dependencies.taskService.listTaskEvents(updatedTask.id),
-            {
-              soul: input.soul,
-              voiceAdapter: this.dependencies.voiceAdapter
-            }
-          )).content;
-        } else {
-          responseContent = await buildTaskStatusResponseWithVoice(
-            updatedTask,
-            this.dependencies.taskService.listTaskEvents(updatedTask.id),
-            {
-              soul: input.soul,
-              voiceAdapter: this.dependencies.voiceAdapter
-            }
-          );
-        }
-      }
-    } else if (request.action === "interrupt") {
-      updatedTask = this.dependencies.taskService.interruptTaskFromChat({
-        profileId: input.profileId,
-        taskId: selectedTask.id,
-        reason: "用户在主聊天线程要求停掉"
-      });
-      responseContent = updatedTask
-        ? (await buildTaskSettledMessageDraftWithVoice(
-            updatedTask,
-            this.dependencies.taskService.listTaskEvents(updatedTask.id),
-            {
-              soul: input.soul,
-              voiceAdapter: this.dependencies.voiceAdapter
-            }
-          )).content
-        : await this.dependencies.voiceAdapter.render({
-            scene: "task.control_not_found",
-            channel: "chat",
-            soul: input.soul,
-            facts: {}
-          });
-    } else if (request.action === "continue" || request.action === "retry" || request.action === "rerun") {
-      const queuedTask = this.dependencies.taskService.requeueTaskFromChat({
-        profileId: input.profileId,
-        taskId: selectedTask.id,
-        reason: "用户在主聊天线程要求继续处理"
-      }) ?? selectedTask;
-      if (queuedTask.status === "queued") {
-        updatedTask = (this.dependencies.startTaskInBackground ?? this.dependencies.taskService.runTaskInBackground.bind(this.dependencies.taskService))({
-          profileId: input.profileId,
-          taskId: queuedTask.id
-        });
-      } else {
-        updatedTask = queuedTask;
-      }
-      responseContent = updatedTask
-        ? await buildTaskStatusResponseWithVoice(
-            updatedTask,
-            this.dependencies.taskService.listTaskEvents(updatedTask.id),
-            {
-              soul: input.soul,
-              voiceAdapter: this.dependencies.voiceAdapter
-            }
-          )
-        : await this.dependencies.voiceAdapter.render({
-            scene: "task.control_not_found",
-            channel: "chat",
-            soul: input.soul,
-            facts: {}
-          });
-    } else if (request.action === "open_result") {
-      updatedTask = selectedTask;
-      const events = this.dependencies.taskService.listTaskEvents(selectedTask.id);
-      const draft = buildTaskSettledMessageDraft(selectedTask, events);
-      attachments = buildTaskResultAttachments(selectedTask.id, events);
-      responseContent = attachments.length > 0
-        ? draft.content
-        : await buildTaskStatusResponseWithVoice(selectedTask, events, {
-            soul: input.soul,
-            voiceAdapter: this.dependencies.voiceAdapter
-          });
-    } else if (request.action === "delete") {
-      updatedTask = selectedTask;
-      const deleted = this.dependencies.taskService.deleteSettledTaskFromConsole({
-        profileId: input.profileId,
-        taskId: selectedTask.id
-      });
-      if (deleted) {
-        deletedTaskId = selectedTask.id;
-        updatedTask = undefined;
-      }
-      responseContent = deleted
-        ? `我把“${selectedTask.title}”从任务便签里移除了。`
-        : await this.dependencies.voiceAdapter.render({
-            scene: "task.control_not_found",
-            channel: "chat",
-            soul: input.soul,
-            facts: {}
-          });
-    } else {
-      const revisedTitle = request.revisedTitle ?? input.content;
-      if (selectedTask.kind === "time_reminder") {
-        const reminder = parseReminderRequest({
-          message: `${revisedTitle}提醒我${selectedTask.title}`,
-          nowIso: new Date().toISOString()
-        });
-        updatedTask = reminder
-          ? this.dependencies.taskService.rescheduleReminderFromChat({
-              profileId: input.profileId,
-              taskId: selectedTask.id,
-              dueAt: reminder.dueAt,
-              reason: "用户在主聊天线程调整提醒时间"
-            })
-          : undefined;
-      } else {
-        updatedTask = this.dependencies.taskService.reviseTaskFromChat({
-          profileId: input.profileId,
-          taskId: selectedTask.id,
-          title: revisedTitle
-        });
-      }
-      responseContent = updatedTask
-        ? await this.dependencies.voiceAdapter.render({
-            scene: selectedTask.kind === "time_reminder" ? "task.reminder_scheduled" : "task.accepted",
-            channel: "chat",
-            soul: input.soul,
-            facts: {
-              taskTitle: updatedTask.title,
-              dueAt: updatedTask.dueAt
-            }
-          })
-        : await this.dependencies.voiceAdapter.render({
-            scene: "task.control_not_found",
-            channel: "chat",
-            soul: input.soul,
-            facts: {}
-          });
-    }
-
-    const assistantMessage = this.dependencies.messageRepository.create({
-      sessionId: input.sessionId,
-      profileId: input.profileId,
-      role: "assistant",
-      content: responseContent,
-      attachments
-    });
-
-    this.dependencies.eventLogService.record("chat.message_persisted", {
-      profileId: input.profileId,
-      sessionId: input.sessionId,
-      userMessageId: input.userMessageId,
-      assistantMessageId: assistantMessage.id,
-      writtenMemoryIds: [],
-      updatedTaskId: updatedTask?.id ?? null,
-      deletedTaskId: deletedTaskId ?? null,
-      taskControlAction: request.action,
-      taskControlTargetHint: request.targetHint ?? null,
-      taskControlSelectionReason: selection.reason,
-      taskControlCandidateIds: selection.candidates.map((task) => task.id),
-      gateDecision: "reply"
-    });
-
-    return {
-      assistantMessage,
-      updatedTask,
-      deletedTaskId
-    };
-  }
-
-  private async consumePendingTaskControlChoice(input: {
-    profileId: string;
-    sessionId: string;
-    userMessageId: string;
-    content: string;
-    soul?: Soul;
-  }): Promise<
-    | {
-        assistantMessage: Message;
-        updatedTask?: Task;
-        deletedTaskId?: string;
-      }
-    | undefined
-  > {
-    const pending = this.pendingTaskControls.get(input.sessionId);
-
-    if (!pending || pending.profileId !== input.profileId) {
-      return undefined;
-    }
-
-    const selectedIndex = parseTaskControlChoice(input.content, pending.candidateIds.length);
-
-    if (selectedIndex === undefined) {
-      return undefined;
-    }
-
-    const forcedTaskId = pending.candidateIds[selectedIndex];
-    this.pendingTaskControls.delete(input.sessionId);
-
-    return this.handleTaskControl({
-      profileId: input.profileId,
-      sessionId: input.sessionId,
-      userMessageId: input.userMessageId,
-      content: input.content,
-      soul: input.soul,
-      request: pending.request,
-      forcedTaskId
-    });
-  }
-
-  private buildForcedTaskSelection(profileId: string, taskId: string): TaskSelectionResult {
-    const task = this.dependencies.taskService.getTaskById(taskId);
-
-    if (!task || task.profileId !== profileId) {
-      return {
-        reason: "not_found",
-        candidates: []
-      };
-    }
-
-    return {
-      reason: "selected",
-      task,
-      candidates: [task]
-    };
+    assistantMessageId: string | null;
+    writtenMemoryIds: string[];
+    gateDecision: "reply" | "wait";
+  }): void {
+    this.dependencies.eventLogService.record("chat.message_persisted", input);
   }
 
   private handleModelFailure(input: {
@@ -791,18 +323,17 @@ export class ChatOrchestrator {
     error: unknown;
   }): SendChatMessageResult {
     const content = buildModelRecoveryMessage(input.error);
-    const assistantMessage =
-      input.assistantMessage
-        ? this.dependencies.messageRepository.updateContent({
-            messageId: input.assistantMessage.id,
-            content
-          }) ?? input.assistantMessage
-        : this.dependencies.messageRepository.create({
-            sessionId: input.sessionId,
-            profileId: input.profileId,
-            role: "assistant",
-            content
-          });
+    const assistantMessage = input.assistantMessage
+      ? this.dependencies.messageRepository.updateContent({
+          messageId: input.assistantMessage.id,
+          content
+        }) ?? input.assistantMessage
+      : this.dependencies.messageRepository.create({
+          sessionId: input.sessionId,
+          profileId: input.profileId,
+          role: "assistant",
+          content
+        });
     const summary = summarizeModelError(input.error);
 
     this.dependencies.eventLogService.record("chat.model_recovery_emitted", {
@@ -813,8 +344,7 @@ export class ChatOrchestrator {
       modelRole: getModelRoleFromError(input.error),
       errorCode: summary.code
     });
-
-    this.dependencies.eventLogService.record("chat.message_persisted", {
+    this.recordPersistedMessage({
       profileId: input.profileId,
       sessionId: input.sessionId,
       userMessageId: input.userMessage.id,
@@ -830,54 +360,17 @@ export class ChatOrchestrator {
       gateDecision: input.gateDecision
     };
   }
-
-}
-
-function buildAmbiguousTaskControlResponse(tasks: MessageTaskCandidate[]): string {
-  const candidates = tasks
-    .slice(0, 3)
-    .map((task, index) => `${index + 1}. ${cleanTaskControlTitle(task.title)}`)
-    .join("\n");
-
-  return `我找到几个都像你说的任务。你想操作哪一个？\n${candidates}`;
-}
-
-interface MessageTaskCandidate {
-  title: string;
-}
-
-function cleanTaskControlTitle(title: string): string {
-  return title.replace(/\s+/g, " ").trim();
-}
-
-function parseTaskControlChoice(content: string, candidateCount: number): number | undefined {
-  const normalized = content.replace(/[，。！？!?、\s]/g, "");
-  const match = /^(?:选|选择)?第?([一二三123])(?:个|项|条)?$/.exec(normalized);
-
-  if (!match?.[1]) {
-    return undefined;
-  }
-
-  const value = match[1];
-  const index = value === "一" || value === "1" ? 0 : value === "二" || value === "2" ? 1 : 2;
-
-  return index < candidateCount ? index : undefined;
 }
 
 function dedupeMemoryNodes(memories: MemoryNode[]): MemoryNode[] {
   const seen = new Set<string>();
-  const result: MemoryNode[] = [];
-
-  for (const memory of memories) {
+  return memories.filter((memory) => {
     if (seen.has(memory.id)) {
-      continue;
+      return false;
     }
-
     seen.add(memory.id);
-    result.push(memory);
-  }
-
-  return result;
+    return true;
+  });
 }
 
 function buildModelRecoveryMessage(error: unknown): string {
@@ -887,34 +380,22 @@ function buildModelRecoveryMessage(error: unknown): string {
   if (role === "memoryModel") {
     return "我这边记忆模型现在没连好，这句我先不敢乱记。你可以先继续聊，或者去设置里测一下记忆模型连接。";
   }
-
   if (role === "gateModel") {
-    if (summary.code === "authentication_failed") {
-      return "我这边判断模型没连好，这句没法稳稳接住。你去设置里检查一下判断模型的 API Key，再测一下连接，然后把这句话重新发我一次。";
-    }
-
-    return "我这边判断模型刚刚没连上，这句没能稳稳接住。你去设置里测试一下判断模型连接，连好后再发我一次。";
+    return summary.code === "authentication_failed"
+      ? "我这边判断模型没连好，这句没法稳稳接住。你去设置里检查一下判断模型的 API Key，再测一下连接，然后把这句话重新发我一次。"
+      : "我这边判断模型刚刚没连上，这句没能稳稳接住。你去设置里测试一下判断模型连接，连好后再发我一次。";
   }
-
   if (summary.code === "authentication_failed") {
     return "我这边聊天模型现在没连好，API Key 这边像是有点问题。你去设置里检查一下聊天模型配置，再测一下连接，然后我就能继续接着回你。";
   }
-
   if (summary.code === "missing_configuration" || summary.code === "unsupported_provider") {
     return "我这边聊天模型还没接好，先没法正常回你。你去设置里看一下聊天模型配置，再测试一下连接，连上之后再发我一次。";
   }
-
-  if (role === "voiceAdapter") {
-    return "我这边回复模型刚刚掉了一下线，这句没能正常说出来。你去设置里测一下聊天模型连接，我们马上继续。";
-  }
-
   return "我这边聊天模型刚刚没连上，这句先没法好好接住。你去设置里测一下聊天模型连接，连好后我继续。";
 }
 
 function getModelRoleFromError(error: unknown): ModelRoleName | undefined {
-  if (error instanceof ModelConfigurationError || error instanceof ModelInvocationError) {
-    return error.role;
-  }
-
-  return undefined;
+  return error instanceof ModelConfigurationError || error instanceof ModelInvocationError
+    ? error.role
+    : undefined;
 }

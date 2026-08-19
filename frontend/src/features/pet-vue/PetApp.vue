@@ -1,3 +1,8 @@
+<!--
+  桌宠窗口：组合 Live2D 舞台、主动消息气泡、控制按钮与窗口缩放交互。
+  它从共享 store 读取聊天/Memory 驱动的宠物状态，不渲染或控制任何 Task 数据；
+  Live2D 运动与窗口交互仍分别委托给 motion store 和 preload IPC。
+-->
 <template>
   <main
     class="desktop-pet pet-vue-root"
@@ -26,9 +31,7 @@
           @interactive-area-change="(value) => (isInteractiveAreaHovering = value)"
           @model-ready="syncAgentMotion"
           @view-transform-change="handleLive2DViewTransformChange"
-        >
-          <TaskStickyNotes :tasks="petStore.tasks" :display-language="petStore.displayLanguage" />
-        </Scene>
+        />
       </div>
       <ControlButtons
         :visible="true"
@@ -71,7 +74,6 @@ import {
 import type { Live2DViewTransform } from "../live2d/live2dDiagnostics";
 import { useClickThrough } from "./composables/useClickThrough";
 import ControlButtons from "./components/ControlButtons.vue";
-import TaskStickyNotes from "./components/TaskStickyNotes.vue";
 import Scene from "./live2d/Scene.vue";
 import { useMotionQueueStore } from "./stores/motionQueue";
 
@@ -348,10 +350,6 @@ function handleLive2DViewTransformChange(transform: Live2DViewTransform) {
 .pet-vue-model-shell .live2d-canvas-host,
 .pet-vue-model-shell .live2d-canvas {
   pointer-events: none;
-}
-
-.pet-vue-model-shell .task-sticky-notes {
-  pointer-events: auto;
 }
 
 .pet-quick-controls {

@@ -1,8 +1,8 @@
 """
-验证 Backend agent/app 与指定 MCP 入口持续具备完整中文模块说明。
+验证保留的 Backend Python 源文件持续具备完整中文模块说明。
 
-测试以 AST 读取真实生产文件，检查职责说明至少包含两行且含中文；它不校验文案措辞，
-也不要求函数级注释，从而只守住 AGENTS.md 规定的文件边界文档契约。
+测试以 AST 扫描 backend 下除 tests 外的生产模块，检查职责说明至少包含两行且含中文；
+它不校验具体措辞，只守住 AGENTS.md 规定的文件顶部边界文档契约。
 """
 
 import ast
@@ -11,26 +11,14 @@ from pathlib import Path
 
 
 PROJECT_ROOT = Path(__file__).resolve().parents[2]
-SOURCE_ROOTS = (
-    PROJECT_ROOT / "backend" / "agent",
-    PROJECT_ROOT / "backend" / "app",
-)
-STANDALONE_MODULES = (
-    PROJECT_ROOT / "backend" / "main.py",
-    PROJECT_ROOT / "mcp_server" / "Plan" / "tools.py",
-    PROJECT_ROOT / "mcp_server" / "scripts" / "http_smoke_test.py",
-)
+BACKEND_ROOT = PROJECT_ROOT / "backend"
 
 
 def production_modules() -> tuple[Path, ...]:
     """Return the maintained Python source boundary in deterministic order."""
 
-    package_modules = (
-        module
-        for root in SOURCE_ROOTS
-        for module in root.rglob("*.py")
-    )
-    return tuple(sorted((*package_modules, *STANDALONE_MODULES)))
+    app_modules = tuple(sorted((BACKEND_ROOT / "app").rglob("*.py")))
+    return (*app_modules, BACKEND_ROOT / "main.py")
 
 
 class ModuleDocumentationTests(unittest.TestCase):

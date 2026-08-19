@@ -1,7 +1,14 @@
+/**
+ * 启动 Electron 桌面进程并组合非 Task services、窗口、IPC 与主动能力。
+ *
+ * bootstrap 使用 userData 执行 SQLite 清理迁移，初始化 Chat/Memory/Live2D/通知，
+ * 并只探测 health-only Backend；它不创建 Task runner、repository 或 broadcasts。
+ */
+
 import { existsSync, mkdirSync, writeFileSync } from "node:fs";
 import { join } from "node:path";
 import { app, BrowserWindow, Notification, shell } from "electron";
-import { createServices, createTaskRunner, type AppServices } from "@core/bootstrap/createServices";
+import { createServices, type AppServices } from "@core/bootstrap/createServices";
 import { createLive2DModelRegistry, type Live2DModelRegistry } from "@core/live2d/modelRegistry";
 import { MemoryService } from "@core/memory/memoryService";
 import { ProactiveTriggerEngine } from "@core/proactive/proactiveTriggerEngine";
@@ -24,8 +31,6 @@ import {
   broadcastLive2DModelState,
   broadcastNotificationSettings,
   broadcastPetActivity,
-  broadcastTaskChanged,
-  broadcastTaskDeleted,
   createPetWindow,
   movePetWindowBy,
   resizePetWindowCorner,
@@ -41,16 +46,14 @@ import { SystemNotificationService } from "./systemNotificationService";
 import { registerIpc } from "./registerIpc";
 import {
   updateUserModelProviderSettings,
-  updateUserProactiveSettings,
-  updateUserTaskRunnerSettings
+  updateUserProactiveSettings
 } from "./appConfigStore";
 import {
   createPublicAppConfig,
   type ModelRoleKey,
   type ModelProviderSettingsPatch,
   type ProactiveSettingsPatch,
-  type PublicModelHealthMap,
-  type TaskRunnerSettingsPatch
+  type PublicModelHealthMap
 } from "@shared/contracts/settings";
 import type { PersonaSettings } from "@shared/contracts/personaSettings";
 import type { Live2DModelState } from "@shared/contracts/live2dModel";
@@ -97,7 +100,6 @@ async function bootstrap(): Promise<void> {
     openConsoleWindow,
     openSettingsWindow,
     openConfigFile: () => openUserConfigFile(userDataPath),
-    updateTaskRunnerSettings: (patch) => updateTaskRunnerSettings(userDataPath, patch),
     updateModelProviderSettings: (patch) => updateModelProviderSettings(userDataPath, patch),
     getModelHealth: () => getModelHealth(),
     testModelConnection: (role) => testModelConnection(role),
@@ -129,9 +131,7 @@ async function bootstrap(): Promise<void> {
     broadcastPetActivity,
     broadcastAgentStatus,
     broadcastChatMessage,
-    broadcastChatMessageUpdated,
-    broadcastTaskChanged,
-    broadcastTaskDeleted
+    broadcastChatMessageUpdated
   });
   createPetWindow({
     settings: petSettingsStore.get(),
@@ -146,9 +146,6 @@ async function bootstrap(): Promise<void> {
     get memoryService() {
       return services!.memoryService;
     },
-    get taskService() {
-      return services!.taskService;
-    },
     get eventLogService() {
       return services!.eventLogService;
     },
@@ -156,13 +153,11 @@ async function bootstrap(): Promise<void> {
       return services!.voiceAdapter;
     },
     broadcastPetActivity,
-    broadcastTaskChanged,
     deliverSystemNotification: ({ kind, message }) => {
       const settings = getNotificationSettings();
 
       if (
         kind === "memory_follow_up" ||
-        kind === "task_reminder" ||
         kind === "proactive_idle"
       ) {
         systemNotificationService?.deliver({
@@ -189,25 +184,6 @@ async function openUserConfigFile(userDataPath: string): Promise<void> {
   if (error) {
     shell.showItemInFolder(configPath);
   }
-}
-
-async function updateTaskRunnerSettings(userDataPath: string, patch: TaskRunnerSettingsPatch) {
-  if (!services) {
-    throw new Error("AuraBot services are not ready.");
-  }
-
-  const nextConfig = updateUserTaskRunnerSettings(userDataPath, services.config, patch);
-  services.config.taskRunner = nextConfig.taskRunner;
-  services.taskService.setTaskRunner(
-    createTaskRunner(nextConfig.taskRunner, {
-      userDataPath,
-      taskRepository: services.taskRepository,
-      taskInputArtifactRepository: services.taskInputArtifactRepository,
-      eventLogService: services.eventLogService
-    })
-  );
-
-  return createPublicAppConfig(services.config);
 }
 
 async function updateModelProviderSettings(userDataPath: string, patch: ModelProviderSettingsPatch) {

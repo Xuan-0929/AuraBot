@@ -1,3 +1,10 @@
+/**
+ * 创建并管理 AuraBot 桌宠、控制台与设置窗口及其非 Task broadcasts。
+ *
+ * 模块负责窗口位置、尺寸、点击穿透、Live2D/聊天/通知事件投影；不再发送 Task
+ * changed/deleted 事件或持有 Task DTO。
+ */
+
 import { join } from "node:path";
 import { BrowserWindow, screen } from "electron";
 import { IPC_CHANNELS, type PetResizeDirection } from "@shared/contracts/ipc";
@@ -8,7 +15,6 @@ import { PET_WINDOW_DEFAULT_SIZE, PET_WINDOW_MIN_SIZE } from "@shared/contracts/
 import type { Message } from "@shared/schemas/message";
 import type { PetActivity } from "@shared/contracts/pet";
 import { DEFAULT_PET_SETTINGS, type PetSettings } from "@shared/schemas/petSettings";
-import type { Task } from "@shared/schemas/task";
 import { createPetCursorPosition } from "./petCursorTracking";
 import { clampWindowBoundsToWorkArea, placeWindowNearPet, type WindowRectangle } from "./windowPlacement";
 
@@ -235,14 +241,6 @@ export function broadcastChatMessage(message: Message): void {
 
 export function broadcastChatMessageUpdated(message: Message): void {
   sendToRenderer(IPC_CHANNELS.chatMessageUpdated, message);
-}
-
-export function broadcastTaskChanged(task: Task): void {
-  sendToRenderer(IPC_CHANNELS.taskChanged, task);
-}
-
-export function broadcastTaskDeleted(taskId: string): void {
-  sendToRenderer(IPC_CHANNELS.taskDeleted, taskId);
 }
 
 export function broadcastPetSettings(settings: PetSettings): void {

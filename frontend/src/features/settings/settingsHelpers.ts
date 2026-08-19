@@ -1,3 +1,7 @@
+/**
+ * 设置页通用转换函数：处理模型选项、健康状态、通知权限与分钟/毫秒转换。
+ * 各保留设置页面共享这些无状态 helper；文件不包含 Task runner 默认值或超时映射。
+ */
 import type { NotificationSettings } from "@shared/contracts/notificationSettings";
 import {
   MODEL_PROVIDER_OPTIONS,
@@ -6,8 +10,6 @@ import {
 } from "@shared/contracts/settings";
 import type { PetSettings } from "@shared/schemas/petSettings";
 import { t } from "../../i18n";
-
-export const DEFAULT_TASK_TIMEOUT_MS = 300000;
 
 export function splitLines(value: string): string[] {
   return value
@@ -22,10 +24,6 @@ export function millisecondsToMinutes(value: number): number {
 
 export function minutesToMilliseconds(value: number): number {
   return Math.max(1, value) * 60_000;
-}
-
-export function toTimeoutMinutes(timeoutMs: number | undefined): number {
-  return Math.max(1, Math.round((timeoutMs ?? DEFAULT_TASK_TIMEOUT_MS) / 60000));
 }
 
 export function toModelProviderOption(provider: string): ModelProviderOption {

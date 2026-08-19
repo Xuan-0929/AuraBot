@@ -1,3 +1,7 @@
+/**
+ * 模型健康检查测试：验证各保留模型角色的连接状态、错误归类和公开配置投影。
+ * 测试使用受控 client，不依赖 Task runner 配置或外部模型服务。
+ */
 import { describe, expect, it, vi } from "vitest";
 import { createModelHealthService } from "@core/llm/modelHealth";
 import type { AppConfig } from "@shared/schemas/config";
@@ -25,13 +29,6 @@ const baseConfig: AppConfig = {
     enabled: true,
     baseUrl: "https://api.example.com/v1",
     apiKey: "memory-key"
-  },
-  taskRunner: {
-    provider: "deterministic",
-    runners: [],
-    sandbox: "workspace-write",
-    approvalPolicy: "never",
-    timeoutMs: 300000
   },
   proactive: {
     idleThresholdMs: 600000,

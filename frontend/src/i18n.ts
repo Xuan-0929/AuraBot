@@ -1,6 +1,12 @@
+/**
+ * 提供 Renderer 当前保留界面的英中日文案与 Agent 状态标签。
+ *
+ * 文案服务覆盖 Chat、Memory、Live2D、模型、通知与桌宠设置；旧 Task 状态格式化、
+ * runner 文案和旧执行专属状态不再属于运行时类型。
+ */
+
 import type { AgentStatus } from "@shared/contracts/chat";
 import type { PetSettings } from "@shared/schemas/petSettings";
-import type { Task } from "@shared/schemas/task";
 
 export type DisplayLanguage = PetSettings["displayLanguage"];
 
@@ -19,8 +25,6 @@ const UI_TEXT = {
     removeAttachment: "Remove attachment",
     you: "You",
     aura: "Aura",
-    openFile: "Open file",
-    showInFolder: "Show in folder",
     settings: "Settings",
     openSettingsMenu: "Open settings menu",
     settingsMenu: "Settings menu",
@@ -38,8 +42,6 @@ const UI_TEXT = {
     settingsSectionCompanionHint: "Desktop pet behavior, persona, and Live2D appearance.",
     settingsSectionIntelligence: "Models & Connections",
     settingsSectionIntelligenceHint: "Model connections and memory diagnostics.",
-    settingsSectionAutomation: "Task Execution",
-    settingsSectionAutomationHint: "Local task runners and execution limits.",
     general: "General",
     generalSettingsHint: "Manage language and common preferences.",
     petBehavior: "Pet Behavior",
@@ -76,8 +78,6 @@ const UI_TEXT = {
     notificationPermissionUnsupported: "Unsupported in this environment",
     followUpNotifications: "Follow-up reminders",
     enableFollowUpNotifications: "Enable follow-up reminders",
-    timeReminderNotifications: "Scheduled reminders",
-    enableTimeReminderNotifications: "Enable scheduled reminders",
     idleNudgeNotifications: "Idle reminders",
     enableIdleNudgeNotifications: "Enable idle reminders",
     personaName: "Name",
@@ -122,16 +122,6 @@ const UI_TEXT = {
     chatModel: "Chat model",
     gateModel: "Decision model",
     memoryModel: "Memory model",
-    taskCli: "Task CLI",
-    taskCliSettings: "Task CLI settings",
-    taskCliHint: "Choose the command-line tool Aura uses for tasks.",
-    taskCliTimeoutHint: "Tasks stop and are marked as failed when they exceed this limit.",
-    taskCliCommand: "Command",
-    taskCliWorkingDirectory: "Workdir",
-    taskRunner: "Task runner",
-    taskRunnerPriority: "Task runner priority",
-    taskTimeLimit: "Maximum task time (minutes)",
-    taskTimeLimitMinutesAria: "Task time limit in minutes",
     proactiveMessages: "Idle reminders",
     proactiveMessagesHint: "Set when Aura sends an idle reminder.",
     proactiveWaitMinutes: "Idle reminder delay (minutes)",
@@ -168,8 +158,6 @@ const UI_TEXT = {
     backendStatusOnline: "Online",
     backendStatusOffline: "Offline",
     backendGatewayEndpoint: "Gateway",
-    backendFrontendEndpoint: "Frontend",
-    backendRegisteredServices: "Services",
     backendLastChecked: "Checked",
     refresh: "Refresh",
     memoryDebugPanel: "Memory debug panel",
@@ -184,36 +172,7 @@ const UI_TEXT = {
     lastRecall: "Last Recall",
     seeds: "Seeds",
     expanded: "Expanded",
-    returned: "Returned",
-    taskStatus: "Task status",
-    taskStickyNotes: "Today's notes",
-    taskStickyNoteHint: "I'll keep the important bits lightly pinned beside us.",
-    consoleTaskViewportTitle: "Task notes",
-    expandTaskStickyNotes: "Expand task notes",
-    collapseTaskStickyNotes: "Collapse task notes",
-    resizeTaskStickyNotes: "Resize task notes",
-    taskSidebarEmpty: "No tasks in progress.",
-    consoleTaskViewportIdle: "Idle",
-    consoleTaskViewportActive: "Active",
-    cancel: "Cancel",
-    delete: "Delete",
-    cancelTask: "Cancel task",
-    deleteTask: "Delete task",
-    detail: "Detail",
-    close: "Close",
-    viewTaskDetail: "View task detail",
-    closeTaskDetail: "Close task detail",
-    taskDetail: "Task detail",
-    taskExecutor: "Executor",
-    taskWorkingDirectory: "Working directory",
-    taskSandbox: "Sandbox",
-    taskDuration: "Duration",
-    taskRecentError: "Recent error",
-    taskInputArtifacts: "Input files",
-    taskNoInputArtifacts: "No input files.",
-    taskArtifacts: "Artifacts",
-    taskNoArtifacts: "No artifacts yet.",
-    taskTimeline: "Timeline"
+    returned: "Returned"
   },
   zh: {
     appTitle: "AuraBot",
@@ -229,8 +188,6 @@ const UI_TEXT = {
     removeAttachment: "移除附件",
     you: "你",
     aura: "Aura",
-    openFile: "打开文件",
-    showInFolder: "所在文件夹",
     settings: "设置",
     openSettingsMenu: "打开设置菜单",
     settingsMenu: "设置菜单",
@@ -248,8 +205,6 @@ const UI_TEXT = {
     settingsSectionCompanionHint: "桌宠行为、个性设置和 Live2D 外观。",
     settingsSectionIntelligence: "模型与连接",
     settingsSectionIntelligenceHint: "模型连接与记忆调试。",
-    settingsSectionAutomation: "任务执行",
-    settingsSectionAutomationHint: "本地任务执行器与时间限制。",
     general: "通用",
     generalSettingsHint: "设置语言和常用选项。",
     petBehavior: "桌宠行为",
@@ -286,8 +241,6 @@ const UI_TEXT = {
     notificationPermissionUnsupported: "当前环境不支持",
     followUpNotifications: "对话后跟进提醒",
     enableFollowUpNotifications: "启用对话后跟进提醒",
-    timeReminderNotifications: "定时提醒",
-    enableTimeReminderNotifications: "启用定时提醒",
     idleNudgeNotifications: "空闲提醒",
     enableIdleNudgeNotifications: "启用空闲提醒",
     personaName: "名称",
@@ -332,16 +285,6 @@ const UI_TEXT = {
     chatModel: "会话模型",
     gateModel: "判断模型",
     memoryModel: "记忆模型",
-    taskCli: "任务 CLI",
-    taskCliSettings: "任务 CLI 设置",
-    taskCliHint: "选择执行任务时使用的本地命令行工具。",
-    taskCliTimeoutHint: "任务超过此时间会停止并标记为失败。",
-    taskCliCommand: "命令",
-    taskCliWorkingDirectory: "工作目录",
-    taskRunner: "任务执行器",
-    taskRunnerPriority: "任务执行器优先级",
-    taskTimeLimit: "单次任务最长执行时间（分钟）",
-    taskTimeLimitMinutesAria: "任务最长执行时间（分钟）",
     proactiveMessages: "空闲提醒",
     proactiveMessagesHint: "设置 Aura 在空闲后发送提醒的时间。",
     proactiveWaitMinutes: "空闲提醒延迟（分钟）",
@@ -378,8 +321,6 @@ const UI_TEXT = {
     backendStatusOnline: "在线",
     backendStatusOffline: "离线",
     backendGatewayEndpoint: "网关",
-    backendFrontendEndpoint: "前端",
-    backendRegisteredServices: "服务",
     backendLastChecked: "检查时间",
     refresh: "刷新",
     memoryDebugPanel: "记忆调试面板",
@@ -394,36 +335,7 @@ const UI_TEXT = {
     lastRecall: "最近召回",
     seeds: "种子",
     expanded: "扩展",
-    returned: "返回",
-    taskStatus: "任务状态",
-    taskStickyNotes: "今日便签",
-    taskStickyNoteHint: "我先替你轻轻记在旁边。",
-    consoleTaskViewportTitle: "任务便签",
-    expandTaskStickyNotes: "展开任务便签",
-    collapseTaskStickyNotes: "收起任务便签",
-    resizeTaskStickyNotes: "调整任务便签宽度",
-    taskSidebarEmpty: "暂时没有进行中的任务。",
-    consoleTaskViewportIdle: "空闲中",
-    consoleTaskViewportActive: "有任务",
-    cancel: "取消",
-    delete: "删除",
-    cancelTask: "取消任务",
-    deleteTask: "删除任务",
-    detail: "详情",
-    close: "关闭",
-    viewTaskDetail: "查看任务详情",
-    closeTaskDetail: "关闭任务详情",
-    taskDetail: "任务详情",
-    taskExecutor: "执行器",
-    taskWorkingDirectory: "工作目录",
-    taskSandbox: "安全模式",
-    taskDuration: "耗时",
-    taskRecentError: "最近错误",
-    taskInputArtifacts: "输入附件",
-    taskNoInputArtifacts: "暂时没有输入附件。",
-    taskArtifacts: "产物",
-    taskNoArtifacts: "暂时还没有产物。",
-    taskTimeline: "事件时间线"
+    returned: "返回"
   }
 } as const;
 
@@ -444,8 +356,6 @@ const JAPANESE_UI_TEXT: Record<UiTextKey, string> = {
   removeAttachment: "添付を削除",
   you: "あなた",
   aura: "Aura",
-  openFile: "ファイルを開く",
-  showInFolder: "フォルダで表示",
   settings: "設定",
   openSettingsMenu: "設定メニューを開く",
   settingsMenu: "設定メニュー",
@@ -463,8 +373,6 @@ const JAPANESE_UI_TEXT: Record<UiTextKey, string> = {
   settingsSectionCompanionHint: "デスクトップペットの動き、パーソナリティ、Live2D の外観。",
   settingsSectionIntelligence: "モデルと接続",
   settingsSectionIntelligenceHint: "モデル接続とメモリデバッグ。",
-  settingsSectionAutomation: "タスク実行",
-  settingsSectionAutomationHint: "ローカルタスクランナーと実行時間の上限。",
   general: "一般",
   generalSettingsHint: "言語とよく使う設定を管理します。",
   petBehavior: "ペットの動き",
@@ -501,8 +409,6 @@ const JAPANESE_UI_TEXT: Record<UiTextKey, string> = {
   notificationPermissionUnsupported: "この環境では未対応",
   followUpNotifications: "フォローアップ通知",
   enableFollowUpNotifications: "フォローアップ通知を有効化",
-  timeReminderNotifications: "時間指定リマインダー",
-  enableTimeReminderNotifications: "時間指定リマインダーを有効化",
   idleNudgeNotifications: "アイドル時のリマインダー",
   enableIdleNudgeNotifications: "アイドル時のリマインダーを有効化",
   personaName: "名前",
@@ -547,16 +453,6 @@ const JAPANESE_UI_TEXT: Record<UiTextKey, string> = {
   chatModel: "チャットモデル",
   gateModel: "判定モデル",
   memoryModel: "メモリモデル",
-  taskCli: "タスク CLI",
-  taskCliSettings: "タスク CLI 設定",
-  taskCliHint: "Aura がタスクで使用するコマンドラインツールを選択します。",
-  taskCliTimeoutHint: "この時間を超えたタスクは停止し、失敗として記録されます。",
-  taskCliCommand: "コマンド",
-  taskCliWorkingDirectory: "作業ディレクトリ",
-  taskRunner: "タスクランナー",
-  taskRunnerPriority: "タスクランナーの優先度",
-  taskTimeLimit: "タスクの最長実行時間（分）",
-  taskTimeLimitMinutesAria: "タスクの時間上限（分）",
   proactiveMessages: "アイドル時のリマインダー",
   proactiveMessagesHint: "Aura がアイドル時のリマインダーを送るタイミングを設定します。",
   proactiveWaitMinutes: "アイドル時の通知までの時間（分）",
@@ -593,8 +489,6 @@ const JAPANESE_UI_TEXT: Record<UiTextKey, string> = {
   backendStatusOnline: "オンライン",
   backendStatusOffline: "オフライン",
   backendGatewayEndpoint: "ゲートウェイ",
-  backendFrontendEndpoint: "フロントエンド",
-  backendRegisteredServices: "サービス",
   backendLastChecked: "確認時刻",
   refresh: "更新",
   memoryDebugPanel: "メモリデバッグパネル",
@@ -609,36 +503,7 @@ const JAPANESE_UI_TEXT: Record<UiTextKey, string> = {
   lastRecall: "直近の想起",
   seeds: "シード",
   expanded: "展開",
-  returned: "返却",
-  taskStatus: "タスク状態",
-  taskStickyNotes: "今日のメモ",
-  taskStickyNoteHint: "大事なことはそばに軽く留めておくね。",
-  consoleTaskViewportTitle: "タスクメモ",
-  expandTaskStickyNotes: "タスクメモを開く",
-  collapseTaskStickyNotes: "タスクメモを閉じる",
-  resizeTaskStickyNotes: "タスクメモの幅を調整",
-  taskSidebarEmpty: "進行中のタスクはありません。",
-  consoleTaskViewportIdle: "待機中",
-  consoleTaskViewportActive: "稼働中",
-  cancel: "キャンセル",
-  delete: "削除",
-  cancelTask: "タスクをキャンセル",
-  deleteTask: "タスクを削除",
-  detail: "詳細",
-  close: "閉じる",
-  viewTaskDetail: "タスク詳細を見る",
-  closeTaskDetail: "タスク詳細を閉じる",
-  taskDetail: "タスク詳細",
-  taskExecutor: "実行器",
-  taskWorkingDirectory: "作業ディレクトリ",
-  taskSandbox: "サンドボックス",
-  taskDuration: "所要時間",
-  taskRecentError: "最近のエラー",
-  taskInputArtifacts: "入力ファイル",
-  taskNoInputArtifacts: "入力ファイルはありません。",
-  taskArtifacts: "成果物",
-  taskNoArtifacts: "成果物はまだありません。",
-  taskTimeline: "タイムライン"
+  returned: "返却"
 };
 
 const UI_TEXT_BY_LANGUAGE: Record<DisplayLanguage, Record<UiTextKey, string>> = {
@@ -652,49 +517,19 @@ const AGENT_STATUS_LABELS: Record<DisplayLanguage, Record<AgentStatus, string>> 
     idle: "idle",
     listening: "listening",
     thinking: "thinking",
-    typing: "typing",
-    tasking: "tasking"
+    typing: "typing"
   },
   zh: {
     idle: "空闲中",
     listening: "倾听中",
     thinking: "判断中",
-    typing: "对方正在输入中",
-    tasking: "任务中"
+    typing: "对方正在输入中"
   },
   ja: {
     idle: "待機中",
     listening: "聞き取り中",
     thinking: "考え中",
-    typing: "入力中",
-    tasking: "タスク中"
-  }
-};
-
-const TASK_STATUS_LABELS: Record<DisplayLanguage, Record<Task["status"], string>> = {
-  en: {
-    queued: "queued",
-    running: "running",
-    waiting: "waiting",
-    completed: "completed",
-    failed: "failed",
-    interrupted: "stopped"
-  },
-  zh: {
-    queued: "待开始",
-    running: "处理中",
-    waiting: "处理中",
-    completed: "完成",
-    failed: "没跑成",
-    interrupted: "已停下"
-  },
-  ja: {
-    queued: "待機中",
-    running: "処理中",
-    waiting: "待機中",
-    completed: "完了",
-    failed: "失敗",
-    interrupted: "停止済み"
+    typing: "入力中"
   }
 };
 
@@ -704,97 +539,4 @@ export function t(displayLanguage: DisplayLanguage | undefined, key: UiTextKey):
 
 export function agentStatusLabel(displayLanguage: DisplayLanguage | undefined, status: AgentStatus): string {
   return AGENT_STATUS_LABELS[displayLanguage ?? "en"][status];
-}
-
-export function taskStatusLabel(displayLanguage: DisplayLanguage | undefined, status: Task["status"]): string {
-  return TASK_STATUS_LABELS[displayLanguage ?? "en"][status];
-}
-
-export function taskProgressLabel(displayLanguage: DisplayLanguage | undefined, task: Task): string {
-  const language = displayLanguage ?? "en";
-
-  if (language === "zh" || language === "ja") {
-    if (task.kind === "time_reminder") {
-      if (task.status === "queued" && task.dueAt) {
-        return language === "zh"
-          ? `会在 ${formatTaskDueTime(task.dueAt, language)} 提醒`
-          : `${formatTaskDueTime(task.dueAt, language)} にリマインド`;
-      }
-
-      if (task.status === "completed") {
-        return language === "zh" ? "已经提醒过" : "リマインド済み";
-      }
-    }
-
-    if (task.status === "queued") {
-      return language === "zh" ? "还没开始" : "まだ開始していません";
-    }
-
-    if (task.status === "completed") {
-      return language === "zh" ? "结果已经准备好" : "結果の準備ができました";
-    }
-
-    if (task.status === "failed") {
-      return language === "zh" ? "遇到一点问题" : "少し問題が起きました";
-    }
-
-    if (task.status === "interrupted") {
-      return language === "zh" ? "已经停下" : "停止しました";
-    }
-
-    return cleanTaskProgress(task.latestProgress, language);
-  }
-
-  if (task.status === "queued") {
-    if (task.kind === "time_reminder" && task.dueAt) {
-      return `Reminds at ${formatTaskDueTime(task.dueAt, language)}`;
-    }
-
-    return "Not started yet";
-  }
-
-  if (task.kind === "time_reminder" && task.status === "completed") {
-    return "Reminder sent";
-  }
-
-  if (task.status === "completed") {
-    return "Result is ready";
-  }
-
-  if (task.status === "failed") {
-    return "Needs attention";
-  }
-
-  if (task.status === "interrupted") {
-    return "Stopped";
-  }
-
-  return cleanTaskProgress(task.latestProgress, language);
-}
-
-function formatTaskDueTime(value: string, language: DisplayLanguage): string {
-  const date = new Date(value);
-
-  if (!Number.isFinite(date.getTime())) {
-    return value;
-  }
-
-  return date.toLocaleTimeString(language === "zh" ? "zh-CN" : language === "ja" ? "ja-JP" : "en", {
-    hour: "2-digit",
-    minute: "2-digit"
-  });
-}
-
-function cleanTaskProgress(progress: string, displayLanguage: DisplayLanguage): string {
-  const fallback = displayLanguage === "zh" ? "正在处理" : displayLanguage === "ja" ? "処理中" : "Working";
-  const cleaned = progress
-    .replace(/^(Codex|Claude Code|Hermes) 子任务会话已建立：.*$/u, displayLanguage === "zh" ? "已经接上任务线程" : displayLanguage === "ja" ? "タスクスレッドに接続しました" : "Task thread connected")
-    .replace(/^(Codex|Claude Code|Hermes) 子任务开始处理任务。?$/u, displayLanguage === "zh" ? "正在处理" : displayLanguage === "ja" ? "処理中" : "Working")
-    .replace(/^开始调用 (Codex|Claude Code|Hermes) 子任务：.*$/u, displayLanguage === "zh" ? "正在处理" : displayLanguage === "ja" ? "処理中" : "Working")
-    .replace(/^(Codex|Claude Code|Hermes) 子任务完成命令：.*$/u, displayLanguage === "zh" ? "刚完成一步处理" : displayLanguage === "ja" ? "処理を一段階進めました" : "Completed one step")
-    .replace(/^(Codex|Claude Code|Hermes) 子任务(?:新增|修改|删除)文件：.*$/u, displayLanguage === "zh" ? "正在整理结果文件" : displayLanguage === "ja" ? "結果ファイルを整理中" : "Preparing result files")
-    .replace(/^(Codex|Claude Code|Hermes) 子任务本轮处理完成，正在收尾。?$/u, displayLanguage === "zh" ? "正在收尾" : displayLanguage === "ja" ? "仕上げ中" : "Wrapping up")
-    .trim();
-
-  return cleaned || fallback;
 }

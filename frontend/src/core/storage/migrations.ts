@@ -1,14 +1,31 @@
+/**
+ * 定义 Electron SQLite 的 core/Memory schema 与旧 Task Runtime 清理迁移。
+ *
+ * 新库只创建非 Task 业务表；已有库在同一数据库事务中删除旧 Task 表、子会话与
+ * task.* 事件，并通过受控 userData context 清理两个精确目录。
+ */
+
+import { lstatSync, realpathSync, rmSync, unlinkSync } from "node:fs";
+import { basename, dirname, join, resolve } from "node:path";
+import type { AppDatabase } from "./db";
+
+export interface MigrationContext {
+  userDataPath: string;
+}
+
 export interface Migration {
   id: number;
   name: string;
   up: string;
-  after?: (database: import("./db").AppDatabase) => void;
+  after?: (database: AppDatabase, context: MigrationContext) => void;
 }
+
+const LEGACY_TASK_DIRECTORIES = ["task-inputs", "task-agent-output"] as const;
 
 export const MIGRATIONS: Migration[] = [
   {
     id: 1,
-    name: "initial_core_memory_task_schema",
+    name: "initial_core_memory_schema",
     up: `
       create table if not exists profiles (
         id text primary key,
@@ -30,6 +47,9 @@ export const MIGRATIONS: Migration[] = [
         relationship text not null,
         boundaries_json text not null default '[]',
         topic_preferences_json text not null default '[]',
+        proactive_level text not null default 'balanced',
+        reminder_style text not null default '',
+        reply_preference text not null default '',
         created_at text not null,
         updated_at text not null
       );
@@ -37,7 +57,7 @@ export const MIGRATIONS: Migration[] = [
       create table if not exists sessions (
         id text primary key,
         profile_id text not null references profiles(id) on delete cascade,
-        kind text not null check (kind in ('main', 'task')),
+        kind text not null check (kind = 'main'),
         title text not null,
         parent_session_id text references sessions(id) on delete set null,
         depth integer not null default 0,
@@ -118,51 +138,6 @@ export const MIGRATIONS: Migration[] = [
         updated_at text not null
       );
 
-      create table if not exists tasks (
-        id text primary key,
-        profile_id text not null references profiles(id) on delete cascade,
-        parent_session_id text not null references sessions(id) on delete cascade,
-        session_id text not null references sessions(id) on delete cascade,
-        task_kind text not null default 'result_output' check (
-          task_kind in ('result_output', 'time_reminder')
-        ),
-        title text not null,
-        status text not null check (
-          status in ('queued', 'running', 'waiting', 'completed', 'failed', 'interrupted')
-        ),
-        latest_progress text not null default '',
-        due_at text,
-        created_at text not null,
-        updated_at text not null
-      );
-
-      create table if not exists task_events (
-        id text primary key,
-        task_id text not null references tasks(id) on delete cascade,
-        event_type text not null,
-        payload_json text not null,
-        created_at text not null
-      );
-
-      create table if not exists task_artifacts (
-        id text primary key,
-        task_id text not null references tasks(id) on delete cascade,
-        artifact_type text not null,
-        uri text not null,
-        created_at text not null
-      );
-
-      create table if not exists task_input_artifacts (
-        id text primary key,
-        task_id text not null references tasks(id) on delete cascade,
-        artifact_type text not null,
-        original_name text not null,
-        mime_type text not null,
-        size_bytes integer not null,
-        uri text not null,
-        created_at text not null
-      );
-
       create table if not exists event_logs (
         id text primary key,
         event_type text not null,
@@ -172,38 +147,20 @@ export const MIGRATIONS: Migration[] = [
     `
   },
   {
-    id: 2,
-    name: "add_task_session_id_to_existing_task_tables",
-    up: "",
-    after(database) {
-      const columns = database
-        .prepare("pragma table_info(tasks)")
-        .all()
-        .map((row) => (row as { name: string }).name);
-
-      if (!columns.includes("session_id")) {
-        database.exec("alter table tasks add column session_id text");
-      }
-    }
-  },
-  {
     id: 3,
     name: "add_message_metadata_json",
     up: "",
     after(database) {
-      const messageTable = database
+      const table = database
         .prepare("select name from sqlite_master where type = 'table' and name = 'messages'")
         .get();
-
-      if (!messageTable) {
+      if (!table) {
         return;
       }
-
       const columns = database
         .prepare("pragma table_info(messages)")
         .all()
         .map((row) => (row as { name: string }).name);
-
       if (!columns.includes("metadata_json")) {
         database.exec("alter table messages add column metadata_json text not null default '{}'");
       }
@@ -214,56 +171,24 @@ export const MIGRATIONS: Migration[] = [
     name: "add_soul_voice_fields",
     up: "",
     after(database) {
-      const soulTable = database
+      const table = database
         .prepare("select name from sqlite_master where type = 'table' and name = 'souls'")
         .get();
-
-      if (!soulTable) {
+      if (!table) {
         return;
       }
-
       const columns = database
         .prepare("pragma table_info(souls)")
         .all()
         .map((row) => (row as { name: string }).name);
-
       if (!columns.includes("tone")) {
         database.exec("alter table souls add column tone text not null default ''");
       }
-
       if (!columns.includes("principles_json")) {
         database.exec("alter table souls add column principles_json text not null default '[]'");
       }
-
       if (!columns.includes("taboos_json")) {
         database.exec("alter table souls add column taboos_json text not null default '[]'");
-      }
-    }
-  },
-  {
-    id: 5,
-    name: "add_task_kind_and_due_at",
-    up: "",
-    after(database) {
-      const taskTable = database
-        .prepare("select name from sqlite_master where type = 'table' and name = 'tasks'")
-        .get();
-
-      if (!taskTable) {
-        return;
-      }
-
-      const columns = database
-        .prepare("pragma table_info(tasks)")
-        .all()
-        .map((row) => (row as { name: string }).name);
-
-      if (!columns.includes("task_kind")) {
-        database.exec("alter table tasks add column task_kind text not null default 'result_output'");
-      }
-
-      if (!columns.includes("due_at")) {
-        database.exec("alter table tasks add column due_at text");
       }
     }
   },
@@ -272,46 +197,85 @@ export const MIGRATIONS: Migration[] = [
     name: "add_persona_settings_fields_to_souls",
     up: "",
     after(database) {
-      const soulTable = database
+      const table = database
         .prepare("select name from sqlite_master where type = 'table' and name = 'souls'")
         .get();
-
-      if (!soulTable) {
+      if (!table) {
         return;
       }
-
       const columns = database
         .prepare("pragma table_info(souls)")
         .all()
         .map((row) => (row as { name: string }).name);
-
       if (!columns.includes("proactive_level")) {
         database.exec("alter table souls add column proactive_level text not null default 'balanced'");
       }
-
       if (!columns.includes("reminder_style")) {
         database.exec("alter table souls add column reminder_style text not null default ''");
       }
-
       if (!columns.includes("reply_preference")) {
         database.exec("alter table souls add column reply_preference text not null default ''");
       }
     }
   },
   {
-    id: 7,
-    name: "add_task_input_artifacts",
+    id: 8,
+    name: "remove_legacy_task_runtime_data",
     up: `
-      create table if not exists task_input_artifacts (
-        id text primary key,
-        task_id text not null references tasks(id) on delete cascade,
-        artifact_type text not null,
-        original_name text not null,
-        mime_type text not null,
-        size_bytes integer not null,
-        uri text not null,
-        created_at text not null
-      );
-    `
+      drop table if exists task_input_artifacts;
+      drop table if exists task_artifacts;
+      drop table if exists task_events;
+      drop table if exists tasks;
+      delete from sessions where kind = 'task';
+      delete from event_logs where event_type like 'task.%';
+    `,
+    after(database, context) {
+      cleanupLegacyTaskDirectories(context.userDataPath);
+      const violations = database.pragma("foreign_key_check") as unknown[];
+      if (violations.length > 0) {
+        throw new Error("Task runtime cleanup failed: foreign key violations remain");
+      }
+    }
   }
 ];
+
+function cleanupLegacyTaskDirectories(userDataPath: string): void {
+  const canonicalRoot = realpathSync(resolve(userDataPath));
+
+  for (const directoryName of LEGACY_TASK_DIRECTORIES) {
+    const candidate = resolve(join(canonicalRoot, directoryName));
+    if (
+      dirname(candidate) !== canonicalRoot ||
+      basename(candidate) !== directoryName
+    ) {
+      throw new Error("Task runtime cleanup rejected an unsafe path");
+    }
+
+    try {
+      const stat = lstatSync(candidate);
+      if (stat.isSymbolicLink()) {
+        unlinkSync(candidate);
+      } else {
+        rmSync(candidate, { force: true, recursive: true });
+      }
+    } catch (error) {
+      if (isMissingPathError(error)) {
+        continue;
+      }
+      const detail = error instanceof Error ? error.message : String(error);
+      throw new Error(
+        `Task runtime cleanup failed for ${directoryName}: ${detail}`,
+        { cause: error }
+      );
+    }
+  }
+}
+
+function isMissingPathError(error: unknown): boolean {
+  return (
+    typeof error === "object" &&
+    error !== null &&
+    "code" in error &&
+    error.code === "ENOENT"
+  );
+}

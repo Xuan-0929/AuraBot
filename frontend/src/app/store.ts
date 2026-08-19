@@ -1,3 +1,10 @@
+/**
+ * 管理 Renderer 的聊天、模型、Memory debug、Live2D、桌宠与通知状态。
+ *
+ * Store 通过 preload API 初始化和发送普通聊天，并协调 pet activity 队列；它不保存
+ * Task 列表/详情/debug，也不订阅或调用任何 Task IPC。
+ */
+
 import { defineStore } from "pinia";
 import type {
   AgentStatus,
@@ -9,34 +16,30 @@ import type { BackendStatus } from "@shared/contracts/backend";
 import type { Live2DModelState } from "@shared/contracts/live2dModel";
 import type { MemoryDebugSnapshot, PetCursorPosition } from "@shared/contracts/ipc";
 import type { NotificationSettings } from "@shared/contracts/notificationSettings";
+import type { PersonaSettings } from "@shared/contracts/personaSettings";
 import type { PetActivity } from "@shared/contracts/pet";
-import type { TaskDebugSnapshot, TaskDetail } from "@shared/contracts/taskDetail";
 import type {
   ModelProviderSettingsPatch,
   ModelRoleKey,
   ProactiveSettingsPatch,
   PublicAppConfig,
-  PublicModelHealthMap,
-  TaskRunnerSettingsPatch
+  PublicModelHealthMap
 } from "@shared/contracts/settings";
-import type { PersonaSettings } from "@shared/contracts/personaSettings";
 import type { Message } from "@shared/schemas/message";
-import { DEFAULT_PET_SETTINGS, type PetSettings, type PetSettingsPatch } from "@shared/schemas/petSettings";
+import {
+  DEFAULT_PET_SETTINGS,
+  type PetSettings,
+  type PetSettingsPatch
+} from "@shared/schemas/petSettings";
 import type { Profile } from "@shared/schemas/profile";
-import type { Task } from "@shared/schemas/task";
 
 const PET_ACTIVITY_TIMEOUT_MS = 7000;
-
-interface FocusPoint {
-  x: number;
-  y: number;
-}
+type Unsubscribe = () => void;
 
 interface AuraBotState {
   profile?: Profile;
   mainSessionId?: string;
   messages: Message[];
-  tasks: Task[];
   agentStatus: AgentStatus;
   petSettings: PetSettings;
   appConfig?: PublicAppConfig;
@@ -47,46 +50,28 @@ interface AuraBotState {
   petActivity?: PetActivity;
   petActivityQueue: PetActivity[];
   petCursorPosition?: PetCursorPosition;
-  focusAt: FocusPoint;
+  focusAt: { x: number; y: number };
   memoryDebugSnapshot?: MemoryDebugSnapshot;
-  selectedTaskDetail?: TaskDetail;
-  selectedTaskDetailTaskId?: string;
-  taskDebugSnapshot?: TaskDebugSnapshot;
-  isTaskDetailLoading: boolean;
   debugPetOverlay: boolean;
   isInitialized: boolean;
 }
 
-type Unsubscribe = () => void;
-
 export const useAuraBotStore = defineStore("auraBot", {
   state: (): AuraBotState => ({
-    profile: undefined,
-    mainSessionId: undefined,
     messages: [],
-    tasks: [],
     agentStatus: "idle",
     petSettings: { ...DEFAULT_PET_SETTINGS },
-    appConfig: undefined,
-    modelHealth: undefined,
-    backendStatus: undefined,
-    live2dModelState: undefined,
-    notificationSettings: undefined,
-    petActivity: undefined,
     petActivityQueue: [],
-    petCursorPosition: undefined,
     focusAt: { x: 0, y: 0 },
-    memoryDebugSnapshot: undefined,
-    selectedTaskDetail: undefined,
-    selectedTaskDetailTaskId: undefined,
-    taskDebugSnapshot: undefined,
-    isTaskDetailLoading: false,
     debugPetOverlay: false,
     isInitialized: false
   }),
   getters: {
-    modelPath: (state): string => state.live2dModelState?.currentModelPath ?? "assets/live2d/hiyori/Hiyori.model3.json",
-    displayLanguage: (state): PetSettings["displayLanguage"] => state.petSettings.displayLanguage
+    modelPath: (state): string =>
+      state.live2dModelState?.currentModelPath ??
+      "assets/live2d/hiyori/Hiyori.model3.json",
+    displayLanguage: (state): PetSettings["displayLanguage"] =>
+      state.petSettings.displayLanguage
   },
   actions: {
     async loadInitialState() {
@@ -108,83 +93,38 @@ export const useAuraBotStore = defineStore("auraBot", {
     async loadMemoryDebugSnapshot() {
       this.memoryDebugSnapshot = await window.aurabot.getMemoryDebugSnapshot();
     },
-    async loadTaskDebugSnapshot() {
-      this.taskDebugSnapshot = await window.aurabot.getTaskDebugSnapshot();
-    },
     async loadBackendStatus() {
       this.backendStatus = await window.aurabot.getBackendStatus();
     },
     subscribeToPetEvents(): Unsubscribe {
-      const unsubscribers: Unsubscribe[] = [];
-
-      unsubscribers.push(
-        window.aurabot.onPetSettingsChanged((petSettings) => {
-          this.petSettings = petSettings;
-        })
-      );
-      unsubscribers.push(
-        window.aurabot.onPetActivity((petActivity) => {
-          this.enqueuePetActivity(petActivity);
-        })
-      );
-      unsubscribers.push(
-        window.aurabot.onLive2DModelStateChanged((live2dModelState) => {
-          this.live2dModelState = live2dModelState;
-        })
-      );
-      unsubscribers.push(
-        window.aurabot.onNotificationSettingsChanged((notificationSettings) => {
-          this.notificationSettings = notificationSettings;
-        })
-      );
-      unsubscribers.push(
-        window.aurabot.onPetCursorPosition((petCursorPosition) => {
-          this.petCursorPosition = petCursorPosition;
-          this.focusAt = { x: petCursorPosition.localX, y: petCursorPosition.localY };
-        })
-      );
-      unsubscribers.push(
-        window.aurabot.onAgentStatusChanged((agentStatus) => {
-          if (this.agentStatus !== agentStatus) {
-            this.agentStatus = agentStatus;
+      const unsubscribers: Unsubscribe[] = [
+        window.aurabot.onPetSettingsChanged((value) => {
+          this.petSettings = value;
+        }),
+        window.aurabot.onPetActivity((value) => this.enqueuePetActivity(value)),
+        window.aurabot.onLive2DModelStateChanged((value) => {
+          this.live2dModelState = value;
+        }),
+        window.aurabot.onNotificationSettingsChanged((value) => {
+          this.notificationSettings = value;
+        }),
+        window.aurabot.onPetCursorPosition((value) => {
+          this.petCursorPosition = value;
+          this.focusAt = { x: value.localX, y: value.localY };
+        }),
+        window.aurabot.onAgentStatusChanged((value) => {
+          this.agentStatus = value;
+        }),
+        window.aurabot.onChatMessageCreated((value) => {
+          if (!this.messages.some((message) => message.id === value.id)) {
+            this.messages = [...this.messages, value];
           }
+        }),
+        window.aurabot.onChatMessageUpdated((value) => {
+          this.messages = upsertMessage(this.messages, value);
         })
-      );
-      unsubscribers.push(
-        window.aurabot.onChatMessageCreated((message) => {
-          if (this.messages.some((existingMessage) => existingMessage.id === message.id)) {
-            return;
-          }
-          this.messages = [...this.messages, message];
-        })
-      );
-      unsubscribers.push(
-        window.aurabot.onChatMessageUpdated((message) => {
-          this.messages = upsertMessage(this.messages, message);
-        })
-      );
-      unsubscribers.push(
-        window.aurabot.onTaskChanged((task) => {
-          this.tasks = updateTasks(this.tasks, task);
-          if (this.selectedTaskDetailTaskId === task.id) {
-            void this.openTaskDetail(task.id);
-          }
-        })
-      );
-      unsubscribers.push(
-        window.aurabot.onTaskDeleted((taskId) => {
-          this.tasks = removeTask(this.tasks, taskId);
-          if (this.selectedTaskDetailTaskId === taskId) {
-            this.closeTaskDetail();
-          }
-        })
-      );
-
-      return () => {
-        for (const unsubscribe of unsubscribers) {
-          unsubscribe();
-        }
-      };
+      ];
+      return () => unsubscribers.forEach((unsubscribe) => unsubscribe());
     },
     async openConsoleWindow() {
       await window.aurabot.openConsoleWindow();
@@ -195,9 +135,6 @@ export const useAuraBotStore = defineStore("auraBot", {
     async openConfigFile() {
       await window.aurabot.openConfigFile();
     },
-    async updateTaskRunnerSettings(runners: TaskRunnerSettingsPatch["runners"]) {
-      this.appConfig = await window.aurabot.updateTaskRunnerSettings({ runners });
-    },
     async updateModelProviderSettings(patch: ModelProviderSettingsPatch) {
       this.appConfig = await window.aurabot.updateModelProviderSettings(patch);
       this.modelHealth = await window.aurabot.getModelHealth();
@@ -206,19 +143,12 @@ export const useAuraBotStore = defineStore("auraBot", {
       if (this.modelHealth) {
         this.modelHealth = {
           ...this.modelHealth,
-          [role]: {
-            ...this.modelHealth[role],
-            state: "testing"
-          }
+          [role]: { ...this.modelHealth[role], state: "testing" }
         };
       }
-
       const health = await window.aurabot.testModelConnection({ role });
       if (this.modelHealth) {
-        this.modelHealth = {
-          ...this.modelHealth,
-          [role]: health
-        };
+        this.modelHealth = { ...this.modelHealth, [role]: health };
       }
     },
     async updateProactiveSettings(patch: ProactiveSettingsPatch) {
@@ -230,7 +160,9 @@ export const useAuraBotStore = defineStore("auraBot", {
     async setCurrentLive2DModel(modelId: string) {
       this.live2dModelState = await window.aurabot.setCurrentLive2DModel(modelId);
     },
-    async updateNotificationSettings(patch: Partial<Omit<NotificationSettings, "permissionState">>) {
+    async updateNotificationSettings(
+      patch: Partial<Omit<NotificationSettings, "permissionState">>
+    ) {
       this.notificationSettings = await window.aurabot.updateNotificationSettings(patch);
     },
     async updatePetSettings(patch: PetSettingsPatch) {
@@ -248,13 +180,11 @@ export const useAuraBotStore = defineStore("auraBot", {
       attachments: ChatInputAttachment[] = []
     ) {
       const trimmed = content.trim();
-      const normalizedAttachments = normalizeChatInputAttachments(attachments);
-
       if (!trimmed) {
         return;
       }
-
-      const pendingUserMessage: Message = {
+      const normalizedAttachments = attachments.map((attachment) => ({ ...attachment }));
+      const pending: Message = {
         id: `local-pending-${Date.now()}-${Math.random().toString(36).slice(2, 8)}`,
         sessionId: this.mainSessionId ?? "main-session-pending",
         profileId: this.profile?.id ?? "profile-pending",
@@ -268,69 +198,21 @@ export const useAuraBotStore = defineStore("auraBot", {
         })),
         createdAt: new Date().toISOString()
       };
-
       this.agentStatus = "thinking";
-      this.messages = [...this.messages, pendingUserMessage];
-
+      this.messages = [...this.messages, pending];
       try {
         const result = await window.aurabot.sendChatMessage({
           content: trimmed,
           source,
           attachments: normalizedAttachments
         });
-        this.messages = reconcileMessages(this.messages, pendingUserMessage.id, result);
-        this.tasks = updateTasks(this.tasks, result.createdTask ?? result.updatedTask);
-        if (result.deletedTaskId) {
-          this.tasks = removeTask(this.tasks, result.deletedTaskId);
-        }
+        this.messages = reconcileMessages(this.messages, pending.id, result);
         this.agentStatus = result.agentStatus;
       } catch (error) {
-        this.messages = this.messages.filter((message) => message.id !== pendingUserMessage.id);
+        this.messages = this.messages.filter((message) => message.id !== pending.id);
         this.agentStatus = "idle";
         throw error;
       }
-    },
-    async cancelTask(taskId: string) {
-      const result = await window.aurabot.cancelTask({ taskId });
-
-      if (!result.ok || !result.task) {
-        throw new Error(result.error ?? "任务取消失败。");
-      }
-
-      this.tasks = updateTasks(this.tasks, result.task);
-    },
-    async deleteTask(taskId: string) {
-      const result = await window.aurabot.deleteTask({ taskId });
-
-      if (!result.ok) {
-        throw new Error(result.error ?? "任务删除失败。");
-      }
-
-      this.tasks = removeTask(this.tasks, result.taskId ?? taskId);
-      if (this.selectedTaskDetailTaskId === taskId) {
-        this.closeTaskDetail();
-      }
-    },
-    async openTaskDetail(taskId: string) {
-      this.selectedTaskDetailTaskId = taskId;
-      this.isTaskDetailLoading = true;
-
-      try {
-        const detail = await window.aurabot.getTaskDetail({ taskId });
-
-        if (this.selectedTaskDetailTaskId === taskId) {
-          this.selectedTaskDetail = detail;
-        }
-      } finally {
-        if (this.selectedTaskDetailTaskId === taskId) {
-          this.isTaskDetailLoading = false;
-        }
-      }
-    },
-    closeTaskDetail() {
-      this.selectedTaskDetail = undefined;
-      this.selectedTaskDetailTaskId = undefined;
-      this.isTaskDetailLoading = false;
     },
     showPetNotice(message: string) {
       this.enqueuePetActivity({
@@ -340,96 +222,61 @@ export const useAuraBotStore = defineStore("auraBot", {
         createdAt: new Date().toISOString()
       });
     },
-    enqueuePetActivity(petActivity: PetActivity) {
+    enqueuePetActivity(activity: PetActivity) {
       if (!this.petActivity) {
-        this.petActivity = petActivity;
-        return;
-      }
-
-      if (
-        this.petActivity.id === petActivity.id ||
-        this.petActivityQueue.some((queuedActivity) => queuedActivity.id === petActivity.id)
+        this.petActivity = activity;
+      } else if (
+        this.petActivity.id !== activity.id &&
+        !this.petActivityQueue.some((queued) => queued.id === activity.id)
       ) {
-        return;
+        if (isPriorityPetActivity(activity) && !isPriorityPetActivity(this.petActivity)) {
+          this.petActivity = activity;
+          this.petActivityQueue = this.petActivityQueue.filter(isPriorityPetActivity);
+        } else {
+          this.petActivityQueue = [...this.petActivityQueue, activity];
+        }
       }
-
-      if (isPriorityPetActivity(petActivity) && !isPriorityPetActivity(this.petActivity)) {
-        this.petActivity = petActivity;
-        this.petActivityQueue = this.petActivityQueue.filter(isPriorityPetActivity);
-        return;
-      }
-
-      this.petActivityQueue = [...this.petActivityQueue, petActivity];
     },
     clearPetActivity(id?: string) {
       if (id && this.petActivity?.id !== id) {
         return;
       }
-
-      const [nextActivity, ...remainingActivities] = this.petActivityQueue;
-      this.petActivity = nextActivity;
-      this.petActivityQueue = remainingActivities;
+      const [next, ...remaining] = this.petActivityQueue;
+      this.petActivity = next;
+      this.petActivityQueue = remaining;
     },
     armPetActivityAutoClear(activityId: string) {
-      window.setTimeout(() => {
-        this.clearPetActivity(activityId);
-      }, PET_ACTIVITY_TIMEOUT_MS);
+      window.setTimeout(() => this.clearPetActivity(activityId), PET_ACTIVITY_TIMEOUT_MS);
     }
   }
 });
 
-function isPriorityPetActivity(petActivity: PetActivity): boolean {
-  return petActivity.kind !== "chat_reply";
+function isPriorityPetActivity(activity: PetActivity): boolean {
+  return activity.kind !== "chat_reply";
 }
 
-function normalizeChatInputAttachments(attachments: ChatInputAttachment[]): ChatInputAttachment[] {
-  return attachments.map((attachment) => ({
-    kind: attachment.kind,
-    name: attachment.name,
-    path: attachment.path,
-    mimeType: attachment.mimeType,
-    sizeBytes: attachment.sizeBytes
-  }));
+function upsertMessage(messages: Message[], changed: Message): Message[] {
+  return messages.some((message) => message.id === changed.id)
+    ? messages.map((message) => (message.id === changed.id ? changed : message))
+    : [...messages, changed];
 }
 
-function removeTask(tasks: Task[], taskId: string): Task[] {
-  return tasks.filter((task) => task.id !== taskId);
-}
-
-function updateTasks(tasks: Task[], changedTask?: Task): Task[] {
-  if (!changedTask) {
-    return tasks;
+function reconcileMessages(
+  messages: Message[],
+  pendingId: string,
+  result: SendChatMessageResult
+): Message[] {
+  const next = messages.map((message) =>
+    message.id === pendingId ? result.userMessage : message
+  );
+  if (!next.some((message) => message.id === result.userMessage.id)) {
+    next.push(result.userMessage);
   }
-
-  const exists = tasks.some((task) => task.id === changedTask.id);
-
-  if (!exists) {
-    return [changedTask, ...tasks];
+  if (
+    result.assistantMessage &&
+    !next.some((message) => message.id === result.assistantMessage?.id)
+  ) {
+    next.push(result.assistantMessage);
   }
-
-  return tasks.map((task) => (task.id === changedTask.id ? changedTask : task));
-}
-
-function upsertMessage(messages: Message[], changedMessage: Message): Message[] {
-  const exists = messages.some((message) => message.id === changedMessage.id);
-
-  if (!exists) {
-    return [...messages, changedMessage];
-  }
-
-  return messages.map((message) => (message.id === changedMessage.id ? changedMessage : message));
-}
-
-function reconcileMessages(messages: Message[], pendingMessageId: string, result: SendChatMessageResult): Message[] {
-  const nextMessages = messages.map((message) => (message.id === pendingMessageId ? result.userMessage : message));
-
-  if (!nextMessages.some((message) => message.id === result.userMessage.id)) {
-    nextMessages.push(result.userMessage);
-  }
-
-  if (result.assistantMessage && !nextMessages.some((message) => message.id === result.assistantMessage?.id)) {
-    nextMessages.push(result.assistantMessage);
-  }
-
-  return nextMessages;
+  return next;
 }

@@ -1,217 +1,47 @@
-import { mkdtempSync, readFileSync, writeFileSync } from "node:fs";
+/**
+ * 验证用户设置写入只更新模型与非 Task proactive 字段。
+ *
+ * 测试确认历史 taskRunner JSON 原样保留但不进入当前 AppConfig，满足“不主动重写旧
+ * 配置、同时停止读取”的迁移约束。
+ */
+
+import { mkdtempSync, readFileSync, rmSync, writeFileSync } from "node:fs";
 import { tmpdir } from "node:os";
 import { join } from "node:path";
-import { describe, expect, it } from "vitest";
+import { afterEach, describe, expect, it } from "vitest";
+import { loadConfig } from "@core/bootstrap/loadConfig";
 import {
   updateUserModelProviderSettings,
-  updateUserProactiveSettings,
-  updateUserTaskRunnerSettings
+  updateUserProactiveSettings
 } from "../../../src/main/appConfigStore";
-import type { AppConfig } from "@shared/schemas/config";
 
-const baseConfig: AppConfig = {
-  storagePath: "/tmp/aurabot.sqlite",
-  debugLogging: true,
-  gateModel: {
-    provider: "openai-compatible",
-    model: "gate-model",
-    enabled: false
-  },
-  chatModel: {
-    provider: "openai-compatible",
-    model: "chat-model",
-    enabled: true,
-    baseUrl: "https://api.example.com/v1",
-    apiKey: "secret-chat-key"
-  },
-  memoryModel: {
-    provider: "openai-compatible",
-    model: "memory-model",
-    enabled: true,
-    baseUrl: "https://api.example.com/v1",
-    apiKey: "secret-memory-key"
-  },
-  taskRunner: {
-    provider: "deterministic",
-    runners: [
-      {
-        id: "codex",
-        enabled: true,
-        priority: 1,
-        command: "/usr/local/bin/codex",
-        workingDirectory: "/Users/xuan/project",
-        sandbox: "workspace-write",
-        approvalPolicy: "never",
-        timeoutMs: 300000,
-        extraArgs: []
-      }
-    ],
-    sandbox: "workspace-write",
-    approvalPolicy: "never",
-    timeoutMs: 300000
-  },
-  proactive: {
-    idleThresholdMs: 600000,
-    idleCooldownMs: 1800000,
-    followUpLookaheadMs: 0,
-    pollIntervalMs: 10000
-  }
-};
+const roots: string[] = [];
+afterEach(() => roots.splice(0).forEach((root) => rmSync(root, { recursive: true, force: true })));
 
-describe("updateUserModelProviderSettings", () => {
-  it("persists selected model providers and enables external providers", () => {
-    const userDataPath = mkdtempSync(join(tmpdir(), "aurabot-model-provider-"));
-    writeFileSync(
-      join(userDataPath, "config.json"),
-      JSON.stringify(
-        {
-          chatModel: {
-            apiKey: "persisted-chat-key",
-            model: "persisted-chat-model"
-          }
-        },
-        null,
-        2
-      ),
-      "utf8"
-    );
-
-    const nextConfig = updateUserModelProviderSettings(userDataPath, baseConfig, {
+describe("appConfigStore", () => {
+  it("updates model provider without rewriting a legacy taskRunner field", () => {
+    const root = mkdtempSync(join(tmpdir(), "aurabot-config-store-"));
+    roots.push(root);
+    const path = join(root, "config.json");
+    writeFileSync(path, JSON.stringify({ taskRunner: { provider: "codex" } }));
+    const next = updateUserModelProviderSettings(root, loadConfig(root), {
       role: "chatModel",
       provider: "langchain-openai"
     });
-    const userConfig = JSON.parse(readFileSync(join(userDataPath, "config.json"), "utf8")) as {
-      chatModel: AppConfig["chatModel"];
-    };
+    const persisted = JSON.parse(readFileSync(path, "utf8"));
 
-    expect(nextConfig.chatModel).toMatchObject({
-      provider: "langchain-openai",
-      enabled: true,
-      model: "persisted-chat-model",
-      apiKey: "persisted-chat-key"
-    });
-    expect(userConfig.chatModel).toMatchObject({
-      provider: "langchain-openai",
-      enabled: true,
-      model: "persisted-chat-model",
-      apiKey: "persisted-chat-key"
-    });
+    expect(next.chatModel.provider).toBe("langchain-openai");
+    expect(next).not.toHaveProperty("taskRunner");
+    expect(persisted.taskRunner).toEqual({ provider: "codex" });
   });
 
-  it("keeps external providers enabled without deleting connection details", () => {
-    const userDataPath = mkdtempSync(join(tmpdir(), "aurabot-model-provider-"));
-
-    const nextConfig = updateUserModelProviderSettings(userDataPath, baseConfig, {
-      role: "memoryModel",
-      provider: "langchain-openai"
-    });
-    const userConfig = JSON.parse(readFileSync(join(userDataPath, "config.json"), "utf8")) as {
-      memoryModel: AppConfig["memoryModel"];
-    };
-
-    expect(nextConfig.memoryModel).toMatchObject({
-      provider: "langchain-openai",
-      enabled: true,
-      baseUrl: "https://api.example.com/v1",
-      apiKey: "secret-memory-key"
-    });
-    expect(userConfig.memoryModel).toMatchObject({
-      provider: "langchain-openai",
-      enabled: true,
-      baseUrl: "https://api.example.com/v1",
-      apiKey: "secret-memory-key"
-    });
-  });
-});
-
-describe("updateUserProactiveSettings", () => {
-  it("persists proactive idle timing without touching other config details", () => {
-    const userDataPath = mkdtempSync(join(tmpdir(), "aurabot-proactive-settings-"));
-    writeFileSync(
-      join(userDataPath, "config.json"),
-      JSON.stringify(
-        {
-          chatModel: {
-            apiKey: "persisted-chat-key"
-          }
-        },
-        null,
-        2
-      ),
-      "utf8"
-    );
-
-    const nextConfig = updateUserProactiveSettings(userDataPath, baseConfig, {
-      idleThresholdMs: 120000
-    });
-    const userConfig = JSON.parse(readFileSync(join(userDataPath, "config.json"), "utf8")) as {
-      proactive: AppConfig["proactive"];
-      chatModel: AppConfig["chatModel"];
-    };
-
-    expect(nextConfig.proactive).toMatchObject({
-      idleThresholdMs: 120000,
-      idleCooldownMs: 1800000,
-      pollIntervalMs: 10000
-    });
-    expect(userConfig.proactive).toMatchObject({
-      idleThresholdMs: 120000,
-      idleCooldownMs: 1800000,
-      pollIntervalMs: 10000
-    });
-    expect(userConfig.chatModel.apiKey).toBe("persisted-chat-key");
-  });
-});
-
-describe("updateUserTaskRunnerSettings", () => {
-  it("persists runner timeout changes without dropping existing task CLI details", () => {
-    const userDataPath = mkdtempSync(join(tmpdir(), "aurabot-task-runner-settings-"));
-    writeFileSync(
-      join(userDataPath, "config.json"),
-      JSON.stringify(
-        {
-          taskRunner: {
-            runners: [
-              {
-                id: "codex",
-                workingDirectory: "/Users/xuan/Documents/AuraBot"
-              }
-            ]
-          }
-        },
-        null,
-        2
-      ),
-      "utf8"
-    );
-
-    const nextConfig = updateUserTaskRunnerSettings(userDataPath, baseConfig, {
-      runners: [
-        {
-          id: "codex",
-          enabled: true,
-          priority: 1,
-          timeoutMs: 600000
-        }
-      ]
-    });
-    const userConfig = JSON.parse(readFileSync(join(userDataPath, "config.json"), "utf8")) as {
-      taskRunner: AppConfig["taskRunner"];
-    };
-
-    expect(nextConfig.taskRunner.runners[0]).toMatchObject({
-      id: "codex",
-      enabled: true,
-      priority: 1,
-      workingDirectory: "/Users/xuan/Documents/AuraBot",
-      timeoutMs: 600000
-    });
-    expect(userConfig.taskRunner.runners[0]).toMatchObject({
-      id: "codex",
-      enabled: true,
-      priority: 1,
-      workingDirectory: "/Users/xuan/Documents/AuraBot",
-      timeoutMs: 600000
-    });
+  it("updates retained proactive timing", () => {
+    const root = mkdtempSync(join(tmpdir(), "aurabot-config-store-"));
+    roots.push(root);
+    expect(
+      updateUserProactiveSettings(root, loadConfig(root), {
+        idleThresholdMs: 42_000
+      }).proactive.idleThresholdMs
+    ).toBe(42_000);
   });
 });

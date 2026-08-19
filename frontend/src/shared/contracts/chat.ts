@@ -1,15 +1,20 @@
+/**
+ * 定义普通主聊天在 Main、Preload 与 Renderer 之间共享的公共契约。
+ *
+ * Gate 只区分 chat 与最小 task 意图；结果和初始状态只投影消息、Memory 周边设置、
+ * Live2D 与模型健康，不再携带旧执行 DTO 或专属执行状态。
+ */
+
 import type { Message } from "../schemas/message";
 import type { Live2DModelState } from "./live2dModel";
 import type { NotificationSettings } from "./notificationSettings";
 import type { PetSettings } from "../schemas/petSettings";
 import type { Profile } from "../schemas/profile";
-import type { Task } from "../schemas/task";
 import type { PublicAppConfig, PublicModelHealthMap } from "./settings";
-import type { TaskKind } from "../schemas/task";
 
-export type AgentStatus = "idle" | "listening" | "thinking" | "typing" | "tasking";
+export type AgentStatus = "idle" | "listening" | "thinking" | "typing";
 export type ReplyDecision = "reply" | "wait";
-export type InputKind = "chat" | "task" | "task_control";
+export type InputKind = "chat" | "task";
 export type MemoryDecision = "write_now" | "defer" | "skip";
 
 export interface GateDecision {
@@ -20,7 +25,6 @@ export interface GateDecision {
   reason: string;
   coalescedText: string;
   topicEnded: boolean;
-  taskKind?: TaskKind;
 }
 
 export interface SendChatMessageInput {
@@ -42,9 +46,6 @@ export interface SendChatMessageResult {
   assistantMessage?: Message;
   agentStatus: AgentStatus;
   gateDecision?: GateDecision;
-  createdTask?: Task;
-  updatedTask?: Task;
-  deletedTaskId?: string;
 }
 
 export interface MainSessionMessagesSnapshot {
@@ -56,7 +57,6 @@ export interface AppInitialState {
   profile: Profile;
   mainSessionId: string;
   messages: Message[];
-  tasks: Task[];
   agentStatus: AgentStatus;
   petSettings: PetSettings;
   appConfig: PublicAppConfig;

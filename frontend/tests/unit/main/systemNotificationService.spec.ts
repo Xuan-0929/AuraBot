@@ -1,3 +1,7 @@
+/**
+ * 系统通知服务测试：验证 Memory 跟进投递、点击打开 Console 和 idle 开关过滤。
+ * 用例不包含定时 Task reminder，确保通知契约只覆盖当前保留的主动能力。
+ */
 import { describe, expect, it, vi } from "vitest";
 import type { NotificationSettings } from "@shared/contracts/notificationSettings";
 import { SystemNotificationService } from "../../../src/main/systemNotificationService";
@@ -6,7 +10,6 @@ const baseSettings: NotificationSettings = {
   systemNotificationsEnabled: true,
   permissionState: "system_managed",
   followUpNotificationsEnabled: true,
-  timeReminderNotificationsEnabled: true,
   idleNudgeNotificationsEnabled: false
 };
 
@@ -52,8 +55,8 @@ describe("SystemNotificationService", () => {
 
     expect(
       service.deliver({
-        kind: "task_reminder",
-        message: "Time to check the report.",
+        kind: "memory_follow_up",
+        message: "Remember to check the report.",
         settings: baseSettings
       })
     ).toBe(false);

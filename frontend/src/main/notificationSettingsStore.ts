@@ -1,3 +1,7 @@
+/**
+ * 通知设置存储：在 userData 下读写保留的桌面通知偏好。
+ * 读取时通过共享 schema 丢弃历史未知字段，更新后向 IPC 返回包含平台权限状态的投影。
+ */
 import { existsSync, mkdirSync, readFileSync, writeFileSync } from "node:fs";
 import { join } from "node:path";
 import { notificationSettingsSchema } from "@shared/schemas/notificationSettings";
