@@ -9,7 +9,6 @@ import { defineStore } from "pinia";
 import type {
   AgentStatus,
   AppInitialState,
-  ChatInputAttachment,
   SendChatMessageResult
 } from "@shared/contracts/chat";
 import type { BackendStatus } from "@shared/contracts/backend";
@@ -176,26 +175,18 @@ export const useAuraBotStore = defineStore("auraBot", {
     },
     async sendMessage(
       content: string,
-      source: "console" | "pet_voice" | "pet_text" = "console",
-      attachments: ChatInputAttachment[] = []
+      source: "console" | "pet_voice" | "pet_text" = "console"
     ) {
       const trimmed = content.trim();
       if (!trimmed) {
         return;
       }
-      const normalizedAttachments = attachments.map((attachment) => ({ ...attachment }));
       const pending: Message = {
         id: `local-pending-${Date.now()}-${Math.random().toString(36).slice(2, 8)}`,
         sessionId: this.mainSessionId ?? "main-session-pending",
         profileId: this.profile?.id ?? "profile-pending",
         role: "user",
         content: trimmed,
-        attachments: normalizedAttachments.map((attachment, index) => ({
-          id: `local-input-attachment-${Date.now()}-${index}`,
-          kind: attachment.kind,
-          purpose: "input",
-          name: attachment.name
-        })),
         createdAt: new Date().toISOString()
       };
       this.agentStatus = "thinking";
@@ -203,8 +194,7 @@ export const useAuraBotStore = defineStore("auraBot", {
       try {
         const result = await window.aurabot.sendChatMessage({
           content: trimmed,
-          source,
-          attachments: normalizedAttachments
+          source
         });
         this.messages = reconcileMessages(this.messages, pending.id, result);
         this.agentStatus = result.agentStatus;

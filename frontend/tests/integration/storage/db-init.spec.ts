@@ -1,8 +1,8 @@
 /**
  * 验证应用数据库的新基线与旧 Task Runtime 破坏性迁移。
  *
- * 测试使用真实 SQLite、临时 userData 目录和文件系统副作用，覆盖 Task 数据清理、
- * 受控目录删除、符号链接安全、失败回滚与重试；它不依赖已删除的 repositories。
+ * 测试使用真实 SQLite、临时 userData 目录和文件系统副作用，覆盖 canonical Main
+ * Session、Task 数据清理、受控目录删除、失败语义与重试；它不依赖旧 Task repositories。
  */
 
 import Database from "better-sqlite3";
@@ -43,6 +43,29 @@ function makeTempRoot(): string {
 function tableNames(database: Database.Database): string[] {
   return database
     .prepare("select name from sqlite_master where type = 'table' order by name")
+    .all()
+    .map((row) => (row as { name: string }).name);
+}
+
+function tableSql(database: Database.Database, name: string): string | undefined {
+  return (
+    database
+      .prepare("select sql from sqlite_master where type = 'table' and name = ?")
+      .get(name) as { sql: string } | undefined
+  )?.sql;
+}
+
+function indexSql(database: Database.Database, name: string): string | undefined {
+  return (
+    database
+      .prepare("select sql from sqlite_master where type = 'index' and name = ?")
+      .get(name) as { sql: string } | undefined
+  )?.sql;
+}
+
+function columnNames(database: Database.Database, table: string): string[] {
+  return database
+    .prepare(`pragma table_info(${table})`)
     .all()
     .map((row) => (row as { name: string }).name);
 }
@@ -98,6 +121,16 @@ function createLegacyDatabase(filePath: string): void {
       metadata_json text not null default '{}',
       created_at text not null
     );
+    create index idx_messages_session_created on messages(session_id, created_at);
+    create table memory_write_queue (
+      id text primary key,
+      profile_id text not null references profiles(id) on delete cascade,
+      source_session_id text not null references sessions(id) on delete cascade,
+      payload_json text not null,
+      status text not null check (status in ('queued', 'running', 'completed', 'failed')),
+      created_at text not null,
+      updated_at text not null
+    );
     create table tasks (
       id text primary key,
       profile_id text not null references profiles(id) on delete cascade,
@@ -148,6 +181,12 @@ function createLegacyDatabase(filePath: string): void {
     insert into session_links values ('link', 'main', 'task-session', 'delegated_task', 'now');
     insert into messages values ('main-message', 'main', 'profile', 'user', 'keep', '{}', 'now');
     insert into messages values ('task-message', 'task-session', 'profile', 'assistant', 'drop', '{}', 'now');
+    insert into memory_write_queue values (
+      'main-memory-write', 'profile', 'main', '{"keep":true}', 'queued', 'now', 'now'
+    );
+    insert into memory_write_queue values (
+      'task-memory-write', 'profile', 'task-session', '{"drop":true}', 'queued', 'now', 'now'
+    );
     insert into tasks values (
       'task', 'profile', 'main', 'task-session', 'result_output', 'Legacy', 'completed', '',
       null, 'now', 'now'
@@ -163,6 +202,25 @@ function createLegacyDatabase(filePath: string): void {
   database.close();
 }
 
+function markLegacyTaskRuntimeRemoved(filePath: string): void {
+  const database = new Database(filePath);
+  database.pragma("foreign_keys = ON");
+  database.transaction(() => {
+    database.exec(`
+      drop table if exists task_input_artifacts;
+      drop table if exists task_artifacts;
+      drop table if exists task_events;
+      drop table if exists tasks;
+      delete from sessions where kind = 'task';
+      delete from event_logs where event_type like 'task.%';
+    `);
+    database.prepare(
+      "insert into schema_migrations (id, name, applied_at) values (8, ?, ?)"
+    ).run("remove_legacy_task_runtime_data", "2026-08-19T00:00:00.000Z");
+  })();
+  database.close();
+}
+
 describe("createAppDatabase", () => {
   it("creates a fresh core and memory schema without Task tables", () => {
     const root = makeTempRoot();
@@ -171,11 +229,7 @@ describe("createAppDatabase", () => {
       userDataPath: root
     });
     const tables = tableNames(database);
-    const sessionSql = (
-      database
-        .prepare("select sql from sqlite_master where type = 'table' and name = 'sessions'")
-        .get() as { sql: string }
-    ).sql;
+    const sessionColumns = columnNames(database, "sessions");
 
     database.close();
 
@@ -194,9 +248,54 @@ describe("createAppDatabase", () => {
       ])
     );
     expect(tables).not.toEqual(
-      expect.arrayContaining(["tasks", "task_events", "task_artifacts", "task_input_artifacts"])
+      expect.arrayContaining([
+        "tasks",
+        "task_events",
+        "task_artifacts",
+        "task_input_artifacts",
+        "session_links"
+      ])
     );
-    expect(sessionSql).not.toContain("'task'");
+    expect(sessionColumns).toEqual([
+      "id",
+      "profile_id",
+      "title",
+      "created_at",
+      "updated_at"
+    ]);
+  });
+
+  it("produces identical key schema for fresh and upgraded databases", () => {
+    const root = makeTempRoot();
+    const fresh = createAppDatabase({
+      filePath: join(root, "fresh.sqlite"),
+      userDataPath: join(root, "fresh-user-data")
+    });
+    const legacyFilePath = join(root, "legacy.sqlite");
+    createLegacyDatabase(legacyFilePath);
+    const upgraded = createAppDatabase({
+      filePath: legacyFilePath,
+      userDataPath: join(root, "legacy-user-data")
+    });
+
+    for (const table of ["sessions", "messages", "memory_write_queue"]) {
+      expect(tableSql(upgraded, table)).toBe(tableSql(fresh, table));
+    }
+    expect(indexSql(upgraded, "idx_messages_session_created")).toBe(
+      indexSql(fresh, "idx_messages_session_created")
+    );
+    expect(columnNames(upgraded, "sessions")).toEqual(columnNames(fresh, "sessions"));
+    expect(upgraded.pragma("foreign_key_list(sessions)")).toEqual(
+      fresh.pragma("foreign_key_list(sessions)")
+    );
+    expect(tableNames(upgraded)).not.toContain("session_links");
+    expect(
+      upgraded.prepare("select count(*) from schema_migrations where id = 9").pluck().get()
+    ).toBe(1);
+    expect(upgraded.pragma("foreign_key_check")).toEqual([]);
+
+    fresh.close();
+    upgraded.close();
   });
 
   it("removes legacy Task data and directories while preserving unrelated data", () => {
@@ -217,7 +316,10 @@ describe("createAppDatabase", () => {
     expect(database.prepare("select id from messages order by id").pluck().all()).toEqual([
       "main-message"
     ]);
-    expect(database.prepare("select count(*) from session_links").pluck().get()).toBe(0);
+    expect(tableNames(database)).not.toContain("session_links");
+    expect(
+      database.prepare("select id from memory_write_queue order by id").pluck().all()
+    ).toEqual(["main-memory-write"]);
     expect(database.prepare("select id from event_logs order by id").pluck().all()).toEqual([
       "keep-event"
     ]);
@@ -246,7 +348,7 @@ describe("createAppDatabase", () => {
     expect(readFileSync(join(target, "keep.txt"), "utf8")).toBe("keep");
   });
 
-  it("rolls back migration 8 on cleanup failure and succeeds on retry", () => {
+  it("keeps database migrations committed when cleanup fails and succeeds on retry", () => {
     const root = makeTempRoot();
     const userDataPath = join(root, "locked-user-data");
     const filePath = join(root, "aurabot.sqlite");
@@ -257,10 +359,13 @@ describe("createAppDatabase", () => {
     expect(() => createAppDatabase({ filePath, userDataPath })).toThrow(/Task runtime cleanup/);
 
     const failedDatabase = new Database(filePath);
-    expect(tableNames(failedDatabase)).toContain("tasks");
+    expect(tableNames(failedDatabase)).not.toContain("tasks");
     expect(
       failedDatabase.prepare("select count(*) from schema_migrations where id = 8").pluck().get()
-    ).toBe(0);
+    ).toBe(1);
+    expect(
+      failedDatabase.prepare("select count(*) from schema_migrations where id = 9").pluck().get()
+    ).toBe(1);
     failedDatabase.close();
 
     chmodSync(userDataPath, 0o700);
@@ -270,5 +375,54 @@ describe("createAppDatabase", () => {
       retriedDatabase.prepare("select count(*) from schema_migrations where id = 8").pluck().get()
     ).toBe(1);
     retriedDatabase.close();
+  });
+
+  it("preserves an honest partial cleanup state and retries the remaining directory", () => {
+    const root = makeTempRoot();
+    const filePath = join(root, "aurabot.sqlite");
+    createLegacyDatabase(filePath);
+    mkdirSync(join(root, "task-inputs"));
+    mkdirSync(join(root, "task-agent-output"));
+
+    expect(() =>
+      createAppDatabase({
+        filePath,
+        userDataPath: root,
+        legacyTaskEntryRemover(candidate: string, directoryName: string) {
+          if (directoryName === "task-agent-output") {
+            throw new Error("simulated second-directory failure");
+          }
+          rmSync(candidate, { force: true, recursive: true });
+        }
+      })
+    ).toThrow(/simulated second-directory failure/);
+
+    expect(existsSync(join(root, "task-inputs"))).toBe(false);
+    expect(existsSync(join(root, "task-agent-output"))).toBe(true);
+    const migratedDatabase = new Database(filePath);
+    expect(tableNames(migratedDatabase)).not.toContain("tasks");
+    expect(
+      migratedDatabase.prepare("select id from schema_migrations where id in (8, 9) order by id").pluck().all()
+    ).toEqual([8, 9]);
+    migratedDatabase.close();
+
+    const retriedDatabase = createAppDatabase({ filePath, userDataPath: root });
+    retriedDatabase.close();
+    expect(existsSync(join(root, "task-agent-output"))).toBe(false);
+  });
+
+  it("retries filesystem cleanup after migration 8 was already recorded", () => {
+    const root = makeTempRoot();
+    const filePath = join(root, "aurabot.sqlite");
+    createLegacyDatabase(filePath);
+    markLegacyTaskRuntimeRemoved(filePath);
+    mkdirSync(join(root, "task-inputs"));
+    mkdirSync(join(root, "task-agent-output"));
+
+    const database = createAppDatabase({ filePath, userDataPath: root });
+    database.close();
+
+    expect(existsSync(join(root, "task-inputs"))).toBe(false);
+    expect(existsSync(join(root, "task-agent-output"))).toBe(false);
   });
 });

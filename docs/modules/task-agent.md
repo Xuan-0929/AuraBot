@@ -111,6 +111,30 @@ Python TaskManager
 - 不创建 PiToolGroup、PiSkillGroup、PiCapabilityManager、
   PiHarnessAdapter 或同义转换层。
 
+### 5.1 已确定的安全边界
+
+- Pi Extension、Skill 与 Package 使用运行 AuraBot 的操作系统用户权限；AuraBot
+  不额外发明 Tool 级权限审批、Capability Manager、自研 sandbox、Package 签名
+  或私有信任链。
+- 用户负责判断资源来源及安装风险。未来安装入口必须清楚展示来源、即将启用的
+  资源和失败原因，但这不等于 AuraBot 对第三方代码作安全背书。
+- 未来的 Task question/approval 只表示 Task 向 Main Agent 或用户请求业务信息、
+  方案选择或继续执行确认，不得被实现为另一套 Tool 权限审批系统。
+
+### 5.2 第二轮必须审批的用户协议
+
+以下内容尚未实现，也不能由第一轮代码暗示已经支持：
+
+- 本地 Extension、Skill 与 Package 的落盘位置。
+- 是否支持本地目录、Git、npm 等 Package source，以及各来源的锁定规则。
+- 安装、列出、启用、禁用、更新、移除资源的入口与状态模型。
+- Task 如何选择 Package，以及是否允许只启用其中部分 Extension 或 Skill。
+- 加载错误如何呈现，资源修改何时生效，是否需要重启 Worker。
+- AuraBot 内置资源与用户安装资源如何标识、覆盖和升级。
+
+这些协议应在第二轮计划中单独评审；在此之前，AuraBot 没有可用的 Pi 资源安装
+或管理功能。
+
 ## 6. 产品状态与故障语义
 
 | 场景 | 产品状态 | 进程处理 | Task 级自动重试 |
@@ -153,7 +177,7 @@ flowchart LR
 - Pi auth/model/settings、resource profile 与 Package 管理。
 - Pi runtime event 到 AuraBot business event 的映射。
 - Artifact bridge、Main Agent 接口、新 Task API 与新 Task UI。
-- question/approval、第三方 MCP、true resume 及完整端到端验证。
+- 业务 question/approval、第三方 MCP、true resume 及完整端到端验证。
 
 这些项目在第一轮不得以占位类、空接口或未实现目录提前落地。
 

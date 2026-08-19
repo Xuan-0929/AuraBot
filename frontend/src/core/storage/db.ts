@@ -1,20 +1,26 @@
 /**
- * 创建 Electron 主进程拥有的 SQLite 数据库并原子应用 schema migrations。
+ * 创建 Electron 主进程拥有的 SQLite 数据库并应用迁移与旧文件清理。
  *
- * 调用方必须同时提供数据库文件和规范 userData 根目录；迁移 context 只允许旧 Task
- * 清理操作触达该根目录下两个固定子项，失败时关闭数据库并阻止应用启动。
+ * SQLite schema/data migrations 在一个事务中提交并完成外键检查；随后独立、幂等地
+ * 清理 userData 下两个旧 Task 子项。文件失败不会回滚数据库，但会关闭连接、阻止
+ * 应用启动，并在下一次初始化时重试。
  */
 
-import { mkdirSync, realpathSync } from "node:fs";
-import { dirname, resolve } from "node:path";
+import { mkdirSync } from "node:fs";
+import { dirname } from "node:path";
 import Database from "better-sqlite3";
-import { MIGRATIONS, type MigrationContext } from "./migrations";
+import {
+  cleanupLegacyTaskDirectories,
+  type LegacyTaskEntryRemover
+} from "./legacyTaskCleanup";
+import { MIGRATIONS } from "./migrations";
 
 export type AppDatabase = Database.Database;
 
 export interface CreateAppDatabaseOptions {
   filePath: string;
   userDataPath: string;
+  legacyTaskEntryRemover?: LegacyTaskEntryRemover;
 }
 
 export function createAppDatabase(options: CreateAppDatabaseOptions): AppDatabase {
@@ -25,8 +31,9 @@ export function createAppDatabase(options: CreateAppDatabaseOptions): AppDatabas
   database.pragma("foreign_keys = ON");
 
   try {
-    applyMigrations(database, {
-      userDataPath: realpathSync(resolve(options.userDataPath))
+    applyMigrations(database);
+    cleanupLegacyTaskDirectories(options.userDataPath, {
+      entryRemover: options.legacyTaskEntryRemover
     });
     return database;
   } catch (error) {
@@ -35,7 +42,7 @@ export function createAppDatabase(options: CreateAppDatabaseOptions): AppDatabas
   }
 }
 
-function applyMigrations(database: AppDatabase, context: MigrationContext): void {
+function applyMigrations(database: AppDatabase): void {
   database.exec(`
     create table if not exists schema_migrations (
       id integer primary key,
@@ -60,10 +67,15 @@ function applyMigrations(database: AppDatabase, context: MigrationContext): void
       if (migration.up.trim()) {
         database.exec(migration.up);
       }
-      migration.after?.(database, context);
+      migration.after?.(database);
       database.prepare(
         "insert into schema_migrations (id, name, applied_at) values (?, ?, ?)"
       ).run(migration.id, migration.name, new Date().toISOString());
+    }
+
+    const violations = database.pragma("foreign_key_check") as unknown[];
+    if (violations.length > 0) {
+      throw new Error("Database migration failed: foreign key violations remain");
     }
   })();
 }

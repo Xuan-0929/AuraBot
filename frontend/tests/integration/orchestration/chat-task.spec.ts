@@ -5,7 +5,7 @@
  * assistant 回复，且不会创建 Task schema、child session 或 task.* event。
  */
 
-import { afterEach, describe, expect, it } from "vitest";
+import { afterEach, describe, expect, it, vi } from "vitest";
 import { ChatOrchestrator } from "@core/orchestration/chatOrchestrator";
 import { cleanupTestServices, createTestServices } from "../../helpers/testServices";
 
@@ -29,10 +29,14 @@ describe("chat task migration gap", () => {
       }
     });
 
-    const result = await orchestrator.sendMessage({ content: "帮我整理桌面文件" });
+    const onAssistantMessageCreated = vi.fn();
+    const result = await orchestrator.sendMessage(
+      { content: "帮我整理桌面文件" },
+      { onAssistantMessageCreated }
+    );
     const sessions = services.database
-      .prepare("select id, kind from sessions order by created_at")
-      .all() as Array<{ id: string; kind: string }>;
+      .prepare("select id from sessions order by created_at")
+      .all() as Array<{ id: string }>;
     const taskTables = services.database
       .prepare(
         "select name from sqlite_master where type = 'table' and name in (?, ?, ?, ?) order by name"
@@ -43,9 +47,10 @@ describe("chat task migration gap", () => {
       .all();
 
     expect(result.assistantMessage?.content).toBe("Task 功能正在迁移，当前暂不可用。");
+    expect(onAssistantMessageCreated).toHaveBeenCalledTimes(1);
+    expect(onAssistantMessageCreated).toHaveBeenCalledWith(result.assistantMessage);
     expect(result.agentStatus).toBe("idle");
     expect(sessions).toHaveLength(1);
-    expect(sessions[0]?.kind).toBe("main");
     expect(taskTables).toEqual([]);
     expect(taskEvents).toEqual([]);
   });

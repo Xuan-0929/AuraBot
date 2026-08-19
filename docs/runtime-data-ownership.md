@@ -4,7 +4,7 @@
 
 | 数据 | 当前 owner | 说明 |
 | --- | --- | --- |
-| Electron profiles/sessions/messages | Electron main process | 保留普通主聊天数据。 |
+| Electron profiles/sessions/messages | Electron main process | 保留普通主聊天数据；Session 只有 Main Session 语义。 |
 | Electron memory/event logs | Electron main process | 保留 Memory 与非 task.* 事件。 |
 | Python long/short-term memory | Python Memory modules | 与已删除 Task Runtime 独立。 |
 | Task records/artifacts/events | 无 | 旧 SQLite 表已清理，新 owner 尚未实现。 |
@@ -15,7 +15,7 @@
 
 ~~~mermaid
 flowchart TD
-  OLDDB["旧 Electron DB"] --> KEEP["保留 main sessions/messages<br/>memory · non-task events"]
+  OLDDB["旧 Electron DB"] --> KEEP["保留 Main Sessions/messages<br/>memory · non-task events"]
   OLDDB --> DROP["删除 tasks及子表<br/>task sessions · task.* events"]
   OLDFS["userData"] --> D1["删除 task-inputs"]
   OLDFS --> D2["删除 task-agent-output"]
@@ -23,7 +23,25 @@ flowchart TD
 ~~~
 
 新数据库基线不创建四张 Task 表。已有数据库保留历史 schema_migrations 版本记录，
-并由 remove_legacy_task_runtime_data migration 执行清理。
+并由 migration 8 `remove_legacy_task_runtime_data` 删除旧 Task 数据。migration 9
+`canonicalize_main_session_schema` 再将升级库规范化为与新库一致的 Main Session
+schema：`sessions` 不再包含 `kind`、`parent_session_id` 或 `depth`，并删除整个
+`session_links` 表。
+
+数据库迁移与磁盘清理采用真实的两阶段语义：
+
+~~~mermaid
+flowchart LR
+  TX["提交 SQLite migrations 8/9"] --> CLEAN["幂等清理两个固定目录"]
+  CLEAN -->|"全部成功或已不存在"| READY["应用继续启动"]
+  CLEAN -->|"部分/全部失败"| BLOCK["阻止本次启动"]
+  BLOCK --> RETRY["下次启动重试剩余目录"]
+~~~
+
+磁盘删除无法随 SQLite transaction 回滚：即使第二个目录删除失败，第一个目录也
+不会恢复，已经提交的数据库 migration 也不会回滚。这个清理只接受
+`<userData>/task-inputs` 与 `<userData>/task-agent-output` 两个直接子项，对符号链接
+只删除链接本身；它必须可重复执行，并在任何剩余删除失败时阻止应用启动。
 
 ## 未来切换规则
 

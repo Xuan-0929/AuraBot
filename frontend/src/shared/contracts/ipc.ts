@@ -136,7 +136,6 @@ export interface AuraBotApi {
   onChatMessageCreated(listener: (message: Message) => void): () => void;
   onChatMessageUpdated(listener: (message: Message) => void): () => void;
   sendChatMessage(input: SendChatMessageInput): Promise<SendChatMessageResult>;
-  getPathForFile(file: File): string;
   getEventLogs(): Promise<EventLogRecord[]>;
   getMemoryDebugSnapshot(): Promise<MemoryDebugSnapshot>;
 }

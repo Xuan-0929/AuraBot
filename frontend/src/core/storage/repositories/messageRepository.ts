@@ -1,5 +1,17 @@
+/**
+ * 持久化 Main Session 的纯文本消息并读取历史附件名称 metadata。
+ *
+ * ChatOrchestrator 只通过 create/updateContent 写入正文；旧数据库中的附件数组在
+ * 读取时经过共享 schema 过滤，保留展示名称并剥离路径后投影给 Renderer。
+ */
+
 import { randomUUID } from "node:crypto";
-import type { Message, MessageAttachment, MessageRole } from "@shared/schemas/message";
+import {
+  messageAttachmentSchema,
+  type Message,
+  type MessageAttachment,
+  type MessageRole
+} from "@shared/schemas/message";
 import type { AppDatabase } from "../db";
 
 interface MessageRow {
@@ -62,7 +74,6 @@ export class MessageRepository {
     profileId: string;
     role: MessageRole;
     content: string;
-    attachments?: MessageAttachment[];
   }): Message {
     const now = new Date().toISOString();
     const message: Message = {
@@ -71,7 +82,7 @@ export class MessageRepository {
       profileId: input.profileId,
       role: input.role,
       content: input.content,
-      attachments: input.attachments ?? [],
+      attachments: [],
       createdAt: now
     };
 
@@ -84,9 +95,7 @@ export class MessageRepository {
       )
       .run({
         ...message,
-        metadataJson: JSON.stringify({
-          attachments: message.attachments
-        })
+        metadataJson: "{}"
       });
 
     return message;
@@ -130,8 +139,8 @@ function parseMessageAttachments(metadataJson: string | undefined): MessageAttac
 
   try {
     const metadata = JSON.parse(metadataJson) as { attachments?: unknown };
-
-    return Array.isArray(metadata.attachments) ? (metadata.attachments as MessageAttachment[]) : [];
+    const parsed = messageAttachmentSchema.array().safeParse(metadata.attachments ?? []);
+    return parsed.success ? parsed.data : [];
   } catch {
     return [];
   }

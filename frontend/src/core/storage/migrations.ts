@@ -1,26 +1,66 @@
 /**
  * 定义 Electron SQLite 的 core/Memory schema 与旧 Task Runtime 清理迁移。
  *
- * 新库只创建非 Task 业务表；已有库在同一数据库事务中删除旧 Task 表、子会话与
- * task.* 事件，并通过受控 userData context 清理两个精确目录。
+ * 新库与已有库都按固定历史序列执行，并由 Migration 9 收敛为 canonical Main
+ * Session 与非 Task 业务表；Migration 8 的既有 SQL 保持不变。文件系统清理由
+ * 数据库启动边界在提交后独立执行，不属于本模块的事务语义。
  */
 
-import { lstatSync, realpathSync, rmSync, unlinkSync } from "node:fs";
-import { basename, dirname, join, resolve } from "node:path";
 import type { AppDatabase } from "./db";
-
-export interface MigrationContext {
-  userDataPath: string;
-}
 
 export interface Migration {
   id: number;
   name: string;
   up: string;
-  after?: (database: AppDatabase, context: MigrationContext) => void;
+  after?: (database: AppDatabase) => void;
 }
 
-const LEGACY_TASK_DIRECTORIES = ["task-inputs", "task-agent-output"] as const;
+const CANONICAL_SESSION_COLUMNS = [
+  "id",
+  "profile_id",
+  "title",
+  "created_at",
+  "updated_at"
+] as const;
+
+const CREATE_SESSIONS_TABLE_SQL = `
+      create table if not exists sessions (
+        id text primary key,
+        profile_id text not null references profiles(id) on delete cascade,
+        title text not null,
+        created_at text not null,
+        updated_at text not null
+      );
+`;
+
+const CREATE_MESSAGES_TABLE_SQL = `
+      create table if not exists messages (
+        id text primary key,
+        session_id text not null references sessions(id) on delete cascade,
+        profile_id text not null references profiles(id) on delete cascade,
+        role text not null check (role in ('user', 'assistant', 'system', 'tool')),
+        content text not null,
+        metadata_json text not null default '{}',
+        created_at text not null
+      );
+`;
+
+const CREATE_MESSAGES_INDEX_SQL = `
+      create index if not exists idx_messages_session_created
+        on messages(session_id, created_at);
+`;
+
+const CREATE_MEMORY_WRITE_QUEUE_TABLE_SQL = `
+      create table if not exists memory_write_queue (
+        id text primary key,
+        profile_id text not null references profiles(id) on delete cascade,
+        source_session_id text not null references sessions(id) on delete cascade,
+        payload_json text not null,
+        status text not null check (status in ('queued', 'running', 'completed', 'failed')),
+        created_at text not null,
+        updated_at text not null
+      );
+`;
 
 export const MIGRATIONS: Migration[] = [
   {
@@ -74,18 +114,8 @@ export const MIGRATIONS: Migration[] = [
         unique(parent_session_id, child_session_id, relation_type)
       );
 
-      create table if not exists messages (
-        id text primary key,
-        session_id text not null references sessions(id) on delete cascade,
-        profile_id text not null references profiles(id) on delete cascade,
-        role text not null check (role in ('user', 'assistant', 'system', 'tool')),
-        content text not null,
-        metadata_json text not null default '{}',
-        created_at text not null
-      );
-
-      create index if not exists idx_messages_session_created
-        on messages(session_id, created_at);
+      ${CREATE_MESSAGES_TABLE_SQL}
+      ${CREATE_MESSAGES_INDEX_SQL}
 
       create table if not exists memory_nodes (
         id text primary key,
@@ -128,15 +158,7 @@ export const MIGRATIONS: Migration[] = [
         unique(profile_id, topic)
       );
 
-      create table if not exists memory_write_queue (
-        id text primary key,
-        profile_id text not null references profiles(id) on delete cascade,
-        source_session_id text not null references sessions(id) on delete cascade,
-        payload_json text not null,
-        status text not null check (status in ('queued', 'running', 'completed', 'failed')),
-        created_at text not null,
-        updated_at text not null
-      );
+      ${CREATE_MEMORY_WRITE_QUEUE_TABLE_SQL}
 
       create table if not exists event_logs (
         id text primary key,
@@ -229,53 +251,86 @@ export const MIGRATIONS: Migration[] = [
       delete from sessions where kind = 'task';
       delete from event_logs where event_type like 'task.%';
     `,
-    after(database, context) {
-      cleanupLegacyTaskDirectories(context.userDataPath);
-      const violations = database.pragma("foreign_key_check") as unknown[];
-      if (violations.length > 0) {
-        throw new Error("Task runtime cleanup failed: foreign key violations remain");
-      }
+  },
+  {
+    id: 9,
+    name: "canonicalize_main_session_schema",
+    up: "",
+    after(database) {
+      canonicalizeMainSessionSchema(database);
     }
   }
 ];
 
-function cleanupLegacyTaskDirectories(userDataPath: string): void {
-  const canonicalRoot = realpathSync(resolve(userDataPath));
+function canonicalizeMainSessionSchema(database: AppDatabase): void {
+  const columns = tableColumnNames(database, "sessions");
+  const hasSessionLinks = tableExists(database, "session_links");
+  const isCanonical =
+    columns.length === CANONICAL_SESSION_COLUMNS.length &&
+    columns.every((column, index) => column === CANONICAL_SESSION_COLUMNS[index]);
 
-  for (const directoryName of LEGACY_TASK_DIRECTORIES) {
-    const candidate = resolve(join(canonicalRoot, directoryName));
-    if (
-      dirname(candidate) !== canonicalRoot ||
-      basename(candidate) !== directoryName
-    ) {
-      throw new Error("Task runtime cleanup rejected an unsafe path");
-    }
-
-    try {
-      const stat = lstatSync(candidate);
-      if (stat.isSymbolicLink()) {
-        unlinkSync(candidate);
-      } else {
-        rmSync(candidate, { force: true, recursive: true });
-      }
-    } catch (error) {
-      if (isMissingPathError(error)) {
-        continue;
-      }
-      const detail = error instanceof Error ? error.message : String(error);
-      throw new Error(
-        `Task runtime cleanup failed for ${directoryName}: ${detail}`,
-        { cause: error }
-      );
-    }
+  if (isCanonical && !hasSessionLinks) {
+    return;
   }
+
+  const mainSessionFilter = columns.includes("kind") ? "where kind = 'main'" : "";
+  database.exec(`
+    create temp table migration_9_sessions as
+      select id, profile_id, title, created_at, updated_at
+      from sessions ${mainSessionFilter};
+    create temp table migration_9_messages as
+      select messages.*
+      from messages
+      inner join migration_9_sessions on migration_9_sessions.id = messages.session_id;
+    create temp table migration_9_memory_write_queue as
+      select memory_write_queue.*
+      from memory_write_queue
+      inner join migration_9_sessions
+        on migration_9_sessions.id = memory_write_queue.source_session_id;
+
+    drop table if exists session_links;
+    drop table messages;
+    drop table memory_write_queue;
+    drop table sessions;
+
+    ${CREATE_SESSIONS_TABLE_SQL}
+    ${CREATE_MESSAGES_TABLE_SQL}
+    ${CREATE_MESSAGES_INDEX_SQL}
+    ${CREATE_MEMORY_WRITE_QUEUE_TABLE_SQL}
+
+    insert into sessions (id, profile_id, title, created_at, updated_at)
+      select id, profile_id, title, created_at, updated_at from migration_9_sessions;
+    insert into messages (
+      id, session_id, profile_id, role, content, metadata_json, created_at
+    )
+      select id, session_id, profile_id, role, content, metadata_json, created_at
+      from migration_9_messages;
+    insert into memory_write_queue (
+      id, profile_id, source_session_id, payload_json, status, created_at, updated_at
+    )
+      select id, profile_id, source_session_id, payload_json, status, created_at, updated_at
+      from migration_9_memory_write_queue;
+
+    drop table migration_9_sessions;
+    drop table migration_9_messages;
+    drop table migration_9_memory_write_queue;
+  `);
 }
 
-function isMissingPathError(error: unknown): boolean {
-  return (
-    typeof error === "object" &&
-    error !== null &&
-    "code" in error &&
-    error.code === "ENOENT"
+function tableExists(database: AppDatabase, table: string): boolean {
+  return Boolean(
+    database
+      .prepare("select name from sqlite_master where type = 'table' and name = ?")
+      .get(table)
   );
+}
+
+function tableColumnNames(database: AppDatabase, table: string): string[] {
+  if (!tableExists(database, table)) {
+    return [];
+  }
+  return database
+    .prepare(`pragma table_info(${table})`)
+    .all()
+    .map((row) => (row as { name: string }).name);
 }

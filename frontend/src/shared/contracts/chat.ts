@@ -30,15 +30,6 @@ export interface GateDecision {
 export interface SendChatMessageInput {
   content: string;
   source?: "console" | "pet_voice" | "pet_text";
-  attachments?: ChatInputAttachment[];
-}
-
-export interface ChatInputAttachment {
-  kind: "file" | "image";
-  name: string;
-  path: string;
-  mimeType?: string;
-  sizeBytes?: number;
 }
 
 export interface SendChatMessageResult {

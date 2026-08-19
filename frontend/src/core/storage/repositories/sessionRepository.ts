@@ -8,9 +8,7 @@ import type { AppDatabase } from "../db";
 export interface SessionRecord {
   id: string;
   profileId: string;
-  kind: "main";
   title: string;
-  depth: number;
   createdAt: string;
   updatedAt: string;
 }
@@ -18,9 +16,7 @@ export interface SessionRecord {
 interface SessionRow {
   id: string;
   profile_id: string;
-  kind: "main";
   title: string;
-  depth: number;
   created_at: string;
   updated_at: string;
 }
@@ -30,7 +26,7 @@ export class SessionRepository {
 
   getOrCreateMainSession(profileId: string): SessionRecord {
     const existing = this.database
-      .prepare("select * from sessions where profile_id = ? and kind = 'main' limit 1")
+      .prepare("select * from sessions where profile_id = ? limit 1")
       .get(profileId) as SessionRow | undefined;
 
     if (existing) {
@@ -41,9 +37,7 @@ export class SessionRepository {
     const session: SessionRecord = {
       id: `session_${randomUUID()}`,
       profileId,
-      kind: "main",
       title: "Main chat",
-      depth: 0,
       createdAt: now,
       updatedAt: now
     };
@@ -52,9 +46,9 @@ export class SessionRepository {
       .prepare(
         `
         insert into sessions (
-          id, profile_id, kind, title, parent_session_id, depth, created_at, updated_at
+          id, profile_id, title, created_at, updated_at
         )
-        values (@id, @profileId, @kind, @title, null, @depth, @createdAt, @updatedAt)
+        values (@id, @profileId, @title, @createdAt, @updatedAt)
       `
       )
       .run(session);
@@ -63,7 +57,7 @@ export class SessionRepository {
   }
 
   getSession(sessionId: string): SessionRecord | undefined {
-    const row = this.database.prepare("select * from sessions where id = ? and kind = 'main'").get(sessionId) as
+    const row = this.database.prepare("select * from sessions where id = ?").get(sessionId) as
       | SessionRow
       | undefined;
 
@@ -75,9 +69,7 @@ function mapSession(row: SessionRow): SessionRecord {
   return {
     id: row.id,
     profileId: row.profile_id,
-    kind: row.kind,
     title: row.title,
-    depth: row.depth,
     createdAt: row.created_at,
     updatedAt: row.updated_at
   };

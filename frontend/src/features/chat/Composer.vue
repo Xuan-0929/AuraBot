@@ -1,20 +1,10 @@
+<!--
+  主聊天纯文本输入组件：处理 Enter 发送、Shift+Enter 换行和输入区自适应高度。
+  它只把正文交给 Renderer store；文件选择、拖放和路径解析在新 Task/Artifact
+  协议确定前不再暴露，Agent 状态仅用于当前聊天生命周期展示。
+-->
 <template>
-  <form class="composer" @submit.prevent="handleSubmit" @dragover.prevent @drop.prevent="handleDrop">
-    <input ref="fileInputRef" class="composer-file-input" type="file" multiple @change="handleFileInput" />
-    <div v-if="attachments.length > 0" class="composer-attachments">
-      <span v-for="attachment in attachments" :key="attachment.path" class="composer-attachment">
-        <span class="composer-attachment-dot" aria-hidden="true"></span>
-        <span class="composer-attachment-name" :title="attachment.fullName">{{ attachment.displayName }}</span>
-        <button
-          type="button"
-          class="composer-attachment-remove"
-          :aria-label="`${t(displayLanguage, 'removeAttachment')}: ${attachment.displayName}`"
-          @click="removeAttachment(attachment.path)"
-        >
-          ×
-        </button>
-      </span>
-    </div>
+  <form class="composer" @submit.prevent="handleSubmit">
     <div class="composer-writing-surface">
       <textarea
         ref="textareaRef"
@@ -27,17 +17,6 @@
       />
     </div>
     <div class="composer-action-rail">
-      <div class="composer-rail-actions">
-        <button
-          type="button"
-          class="composer-attach-button"
-          :aria-label="t(displayLanguage, 'attachFile')"
-          :title="t(displayLanguage, 'attachFile')"
-          @click="fileInputRef?.click()"
-        >
-          <span class="composer-add-icon" aria-hidden="true">+</span>
-        </button>
-      </div>
       <span class="composer-presence" aria-live="polite">
         <span :class="['composer-status-dot', `composer-status-dot-${agentStatus}`]" aria-hidden="true"></span>
         {{ agentStatusLabel(displayLanguage, agentStatus) }}
@@ -62,7 +41,7 @@
 import { nextTick, ref } from "vue";
 import { Icon, addCollection } from "@iconify/vue";
 import solarIcons from "@iconify-json/solar/icons.json";
-import type { AgentStatus, ChatInputAttachment } from "@shared/contracts/chat";
+import type { AgentStatus } from "@shared/contracts/chat";
 import type { PetSettings } from "@shared/schemas/petSettings";
 import { agentStatusLabel, t } from "../../i18n";
 
@@ -72,22 +51,15 @@ const props = withDefaults(
   defineProps<{
     displayLanguage?: PetSettings["displayLanguage"];
     agentStatus?: AgentStatus;
-    onSend(content: string, attachments: ChatInputAttachment[]): Promise<void>;
+    onSend(content: string): Promise<void>;
   }>(),
   { displayLanguage: "en", agentStatus: "idle" }
 );
 
 const content = ref("");
 const submitting = ref(false);
-const fileInputRef = ref<HTMLInputElement | null>(null);
 const textareaRef = ref<HTMLTextAreaElement | null>(null);
-const attachments = ref<DisplayChatInputAttachment[]>([]);
 const MAX_COMPOSER_HEIGHT = 198;
-
-type DisplayChatInputAttachment = ChatInputAttachment & {
-  displayName: string;
-  fullName: string;
-};
 
 async function sendContent(nextContent: string) {
   if (!nextContent.trim() || submitting.value) {
@@ -96,13 +68,10 @@ async function sendContent(nextContent: string) {
 
   submitting.value = true;
   content.value = "";
-  const nextAttachments = attachments.value;
-  attachments.value = [];
   try {
-    await props.onSend(nextContent, nextAttachments);
+    await props.onSend(nextContent);
   } catch (error) {
     content.value ||= nextContent;
-    attachments.value = nextAttachments;
     throw error;
   } finally {
     submitting.value = false;
@@ -151,105 +120,4 @@ function insertLineBreak(textarea: HTMLTextAreaElement) {
   resizeTextarea();
 }
 
-function handleFileInput(event: Event) {
-  const input = event.currentTarget as HTMLInputElement;
-  void addFiles(input.files);
-  input.value = "";
-}
-
-function handleDrop(event: DragEvent) {
-  void addFiles(event.dataTransfer?.files);
-}
-
-async function addFiles(files: FileList | null | undefined) {
-  if (!files) {
-    return;
-  }
-
-  for (const file of Array.from(files)) {
-    const path = await readElectronFilePath(file);
-
-    if (!path || attachments.value.some((attachment) => attachment.path === path)) {
-      continue;
-    }
-
-    const fullName = file.name || basenameFromPath(path) || "attachment";
-
-    attachments.value.push({
-      kind: file.type.startsWith("image/") ? "image" : "file",
-      name: fullName,
-      displayName: abbreviateMiddle(fullName),
-      fullName,
-      path,
-      mimeType: file.type || undefined,
-      sizeBytes: file.size
-    });
-  }
-}
-
-function removeAttachment(path: string) {
-  attachments.value = attachments.value.filter((attachment) => attachment.path !== path);
-}
-
-function basenameFromPath(path: string): string {
-  return path.split(/[\\/]/).filter(Boolean).at(-1) ?? "";
-}
-
-function abbreviateMiddle(name: string): string {
-  const normalized = name.trim();
-  const maxWeight = 18;
-
-  if (measureNameWeight(normalized) <= maxWeight) {
-    return normalized;
-  }
-
-  const head = takeWeightedPrefix(normalized, 6);
-  const tail = takeWeightedSuffix(normalized, maxWeight - measureNameWeight(head) - 3);
-
-  return `${head}...${tail}`;
-}
-
-function takeWeightedPrefix(value: string, maxWeight: number): string {
-  let weight = 0;
-  let result = "";
-
-  for (const char of Array.from(value)) {
-    const nextWeight = weight + measureNameWeight(char);
-
-    if (nextWeight > maxWeight) {
-      break;
-    }
-
-    result += char;
-    weight = nextWeight;
-  }
-
-  return result;
-}
-
-function takeWeightedSuffix(value: string, maxWeight: number): string {
-  let weight = 0;
-  let result = "";
-
-  for (const char of Array.from(value).reverse()) {
-    const nextWeight = weight + measureNameWeight(char);
-
-    if (nextWeight > maxWeight) {
-      break;
-    }
-
-    result = `${char}${result}`;
-    weight = nextWeight;
-  }
-
-  return result;
-}
-
-function measureNameWeight(value: string): number {
-  return Array.from(value).reduce((total, char) => total + (char.charCodeAt(0) > 255 ? 2 : 1), 0);
-}
-
-async function readElectronFilePath(file: File): Promise<string | undefined> {
-  return window.aurabot.getPathForFile?.(file) || (file as File & { path?: string }).path;
-}
 </script>

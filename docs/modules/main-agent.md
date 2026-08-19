@@ -56,6 +56,8 @@ sandbox、Tool schema 或 capability manager。
 ## 当前验收
 
 - 普通聊天和 Memory 不依赖已删除 Task 模块。
-- task 意图生成固定普通 assistant 回复，不创建 session、Task、event 或进程。
+- task 意图生成固定普通 assistant 回复；它不创建 Task session、Task record、
+  task.* event 或执行进程，但允许创建/读取 Main Session、持久化普通聊天消息并
+  记录 gate/chat 通用事件。
 - 公共 chat result 与 application initial state 不暴露旧 Task DTO。
 - 文档和 UI 不宣称新 Task Runtime 已可用。

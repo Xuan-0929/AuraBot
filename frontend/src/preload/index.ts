@@ -1,11 +1,11 @@
 /**
  * 通过 contextBridge 向 Renderer 暴露最小、类型化的非 Task Electron API。
  *
- * 每个方法只转发共享 IPC channel 或安全的 webUtils 文件路径解析；不再注册 Task
- * controls、Task events、debug 或结果文件动作。
+ * 每个方法只转发保留的共享 IPC channel；不暴露本地文件路径解析，也不再注册
+ * Task controls、Task events、debug 或结果文件动作。
  */
 
-import { contextBridge, ipcRenderer, webUtils } from "electron";
+import { contextBridge, ipcRenderer } from "electron";
 import type { AgentStatus, SendChatMessageInput } from "@shared/contracts/chat";
 import type { Live2DModelState } from "@shared/contracts/live2dModel";
 import type { NotificationSettings } from "@shared/contracts/notificationSettings";
@@ -71,7 +71,6 @@ const api: AuraBotApi = {
     subscribe(IPC_CHANNELS.chatMessageUpdated, listener),
   sendChatMessage: (input: SendChatMessageInput) =>
     ipcRenderer.invoke(IPC_CHANNELS.sendChatMessage, input),
-  getPathForFile: (file: File) => webUtils.getPathForFile(file),
   getEventLogs: () => ipcRenderer.invoke(IPC_CHANNELS.getEventLogs),
   getMemoryDebugSnapshot: () => ipcRenderer.invoke(IPC_CHANNELS.getMemoryDebugSnapshot)
 };

@@ -1477,30 +1477,6 @@ textarea {
   white-space: nowrap;
 }
 
-.message-attachment-actions {
-  display: inline-flex;
-  flex: 0 0 auto;
-  gap: 6px;
-}
-
-.message-attachment button {
-  min-height: 30px;
-  padding: 0 9px;
-  border: 1px solid rgba(43, 91, 94, 0.18);
-  border-radius: 8px;
-  background: rgba(242, 249, 247, 0.82);
-  color: #263435;
-  cursor: pointer;
-  font-size: 12px;
-  font-weight: 800;
-  letter-spacing: 0;
-}
-
-.message-attachment button:hover {
-  border-color: rgba(43, 113, 98, 0.34);
-  background: rgba(232, 246, 241, 0.94);
-}
-
 .empty-state {
   align-self: center;
   max-width: 340px;
@@ -1543,109 +1519,6 @@ textarea {
   box-shadow: 0 16px 28px rgba(123, 96, 81, 0.08);
 }
 
-.composer-file-input {
-  display: none;
-}
-
-.composer-input-row {
-  display: grid;
-  grid-template-columns: auto minmax(0, 1fr) auto;
-  gap: 8px;
-  align-items: end;
-}
-
-.composer-attachments {
-  display: flex;
-  flex-wrap: wrap;
-  gap: 8px;
-  min-width: 0;
-}
-
-.composer-attachment {
-  display: inline-flex;
-  flex: 0 1 auto;
-  align-items: center;
-  height: 28px;
-  width: fit-content;
-  min-width: 0;
-  max-width: 190px;
-  gap: 6px;
-  padding: 0 7px;
-  border: 1px solid rgba(132, 101, 86, 0.14);
-  border-radius: 999px;
-  background: rgba(255, 255, 255, 0.74);
-  color: var(--aura-ink-muted);
-  font-size: 12px;
-}
-
-.composer-attachment-dot {
-  flex: 0 0 auto;
-  width: 7px;
-  height: 7px;
-  border-radius: 50%;
-  background: var(--console-blue, #6b8fb4);
-}
-
-.composer-attachment-name {
-  display: block;
-  flex: 0 1 auto;
-  width: auto;
-  min-width: 48px;
-  max-width: 138px;
-  overflow: hidden;
-  color: var(--aura-ink);
-  font-weight: 650;
-  line-height: 28px;
-  text-overflow: ellipsis;
-  white-space: nowrap;
-}
-
-.composer-attachment-remove {
-  display: inline-flex;
-  flex: 0 0 auto;
-  align-items: center;
-  justify-content: center;
-  width: 16px;
-  height: 16px;
-  min-width: 16px;
-  padding: 0;
-  color: var(--aura-ink-muted);
-  line-height: 1;
-  box-shadow: none;
-}
-
-.composer-attach-button {
-  width: 44px;
-  min-width: 44px;
-  padding: 0;
-}
-
-.composer-paperclip {
-  position: relative;
-  display: inline-block;
-  width: 18px;
-  height: 18px;
-  color: currentColor;
-}
-
-.composer-paperclip::before,
-.composer-paperclip::after {
-  content: "";
-  position: absolute;
-  border: 2px solid currentColor;
-  border-left-color: transparent;
-  border-radius: 10px;
-  transform: rotate(-38deg);
-}
-
-.composer-paperclip::before {
-  inset: 2px 5px 1px 4px;
-}
-
-.composer-paperclip::after {
-  inset: 5px 8px 4px 7px;
-}
-
 .composer textarea {
   width: 100%;
   min-height: 52px;
@@ -1683,31 +1556,6 @@ textarea {
 .composer button:disabled {
   cursor: not-allowed;
   opacity: 0.52;
-}
-
-.composer .composer-attachment-remove {
-  align-self: center;
-  width: 16px;
-  height: 16px;
-  min-width: 16px;
-  padding: 0;
-  border: none;
-  background: transparent;
-  color: var(--aura-ink-muted);
-  font-size: 13px;
-  font-weight: 700;
-  line-height: 1;
-  box-shadow: none;
-}
-
-.composer .composer-attachment-remove:hover {
-  background: rgba(132, 101, 86, 0.1);
-}
-
-.composer .composer-attach-button {
-  width: 44px;
-  min-width: 44px;
-  padding: 0;
 }
 
 @media (max-width: 760px) {
@@ -1943,21 +1791,6 @@ textarea {
   font-weight: 650;
 }
 
-.console-window .message-attachment button {
-  min-height: 28px;
-  border: 1px solid var(--console-border);
-  border-radius: 999px;
-  background: var(--console-glass-strong);
-  color: var(--console-blue);
-  font-size: 11px;
-  font-weight: 650;
-}
-
-.console-window .message-attachment button:hover {
-  border-color: var(--console-border-strong);
-  background: var(--console-surface-strong);
-}
-
 .console-window .empty-state {
   position: relative;
   overflow: hidden;
@@ -2007,34 +1840,6 @@ textarea {
   border-radius: 24px;
   background: transparent;
   box-shadow: none;
-}
-
-.console-window .composer-input-row {
-  grid-template-columns: auto minmax(0, 1fr) auto;
-}
-
-.console-window .composer-attachment {
-  border-color: var(--console-border);
-  background:
-    linear-gradient(180deg, rgba(255, 255, 255, 0.12), transparent),
-    var(--console-surface);
-}
-
-.console-window .composer-attachment-name {
-  color: var(--console-text) !important;
-}
-
-.console-window .composer-attachment-remove {
-  width: 16px;
-  height: 16px;
-  min-width: 16px;
-  color: var(--console-text-muted);
-}
-
-.console-window .composer-attach-button {
-  width: 42px;
-  min-width: 42px;
-  padding: 0;
 }
 
 .console-window .composer textarea {
@@ -2103,34 +1908,6 @@ textarea {
   opacity: 0.52;
 }
 
-.console-window .composer .composer-attachment-remove,
-.console-window .composer .composer-attachment-remove:disabled {
-  align-self: center;
-  width: 16px;
-  height: 16px;
-  min-width: 16px;
-  padding: 0;
-  border: none;
-  background: transparent;
-  color: var(--console-text-muted);
-  font-size: 13px;
-  font-weight: 700;
-  line-height: 1;
-  opacity: 1;
-  box-shadow: none;
-}
-
-.console-window .composer .composer-attachment-remove:not(:disabled):hover {
-  border: none;
-  background: var(--console-glass-strong);
-}
-
-.console-window .composer .composer-attach-button {
-  width: 42px;
-  min-width: 42px;
-  padding: 0;
-}
-
 /* The console composer is a writing surface with an action rail, not a control bar. */
 .console-composer-glass {
   border: 0;
@@ -2194,9 +1971,11 @@ textarea {
   min-width: 34px;
 }
 
-.console-window .composer-rail-actions-end { justify-content: flex-end; }
+.console-window .composer-rail-actions-end {
+  grid-column: 3;
+  justify-content: flex-end;
+}
 
-.console-window .composer .composer-attach-button,
 .console-window .composer .composer-send-button {
   display: grid;
   width: 32px;
@@ -2213,7 +1992,6 @@ textarea {
 
 .console-window .composer .composer-send-button { color: var(--console-text); }
 
-.console-window .composer-attach-button:hover,
 .console-window .composer-send-button:not(:disabled):hover {
   border: 0;
   background: color-mix(in srgb, var(--console-blue) 10%, transparent);
@@ -2224,17 +2002,11 @@ textarea {
 
 .console-window .composer-action-icon { width: 18px; height: 18px; }
 
-.console-window .composer-add-icon {
-  color: var(--console-text);
-  font-size: 24px;
-  font-weight: 300;
-  line-height: 1;
-  transform: translateY(-1px);
-}
-
 .console-window .composer-presence {
   display: inline-flex;
+  grid-column: 2;
   align-items: center;
+  justify-self: center;
   gap: 7px;
   color: var(--console-text-muted);
   font-size: 11px;
@@ -2698,7 +2470,6 @@ textarea {
 .app-shell-console .console-window .message,
 .app-shell-console .console-window .message-attachment,
 .app-shell-console .console-window .composer-writing-surface,
-.app-shell-console .console-window .composer-attachment,
 .app-shell-console .console-window .empty-state {
   background: var(--surface-raised);
   box-shadow: none;
@@ -2746,12 +2517,6 @@ textarea {
 .app-shell-console .console-window .message-attachment {
   border-color: var(--edge-subtle);
   background: var(--surface-muted);
-}
-
-.app-shell-console .console-window .message-attachment button {
-  border-color: var(--edge-subtle);
-  background: transparent;
-  color: var(--accent);
 }
 
 .app-shell-console .console-window .empty-state {
@@ -2807,7 +2572,6 @@ textarea {
   padding-top: 0;
 }
 
-.app-shell-console .console-window .composer .composer-attach-button,
 .app-shell-console .console-window .composer .composer-send-button {
   width: 30px;
   height: 30px;
@@ -2819,15 +2583,9 @@ textarea {
   color: var(--text-primary);
 }
 
-.app-shell-console .console-window .composer .composer-attach-button:hover,
 .app-shell-console .console-window .composer .composer-send-button:not(:disabled):hover {
   background: var(--surface-accent);
   color: var(--accent);
-}
-
-.app-shell-console .console-window .composer-add-icon {
-  color: var(--text-secondary);
-  font-size: 22px;
 }
 
 .app-shell-console .console-window .composer-presence {

@@ -21,7 +21,7 @@
           <Composer
             :display-language="store.displayLanguage"
             :agent-status="store.agentStatus"
-            :on-send="(content, attachments) => store.sendMessage(content, 'console', attachments)"
+            :on-send="(content) => store.sendMessage(content, 'console')"
           />
         </ConsoleGlassPanel>
       </section>

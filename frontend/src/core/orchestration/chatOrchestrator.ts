@@ -5,7 +5,6 @@
  * 写入固定不可用 assistant 消息，不创建 Task 数据、child session 或执行进程。
  */
 
-import { randomUUID } from "node:crypto";
 import type { SendChatMessageInput, SendChatMessageResult } from "@shared/contracts/chat";
 import type { Message } from "@shared/schemas/message";
 import type { MemoryNode } from "@shared/schemas/memory";
@@ -69,13 +68,7 @@ export class ChatOrchestrator {
       sessionId: mainSession.id,
       profileId: profile.id,
       role: "user",
-      content: input.content,
-      attachments: (input.attachments ?? []).map((attachment) => ({
-        id: `message_attachment_${randomUUID()}`,
-        kind: attachment.kind,
-        purpose: "input",
-        name: attachment.name
-      }))
+      content: input.content
     });
     const recentMessages = this.dependencies.messageRepository
       .listRecentBySession(mainSession.id, GATE_CONTEXT_MESSAGE_LIMIT + 1)
@@ -125,6 +118,7 @@ export class ChatOrchestrator {
           role: "assistant",
           content: TASK_UNAVAILABLE_MESSAGE
         });
+        options.onAssistantMessageCreated?.(assistantMessage);
         this.recordPersistedMessage({
           profileId: profile.id,
           sessionId: mainSession.id,

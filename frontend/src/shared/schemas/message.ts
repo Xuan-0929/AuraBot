@@ -1,6 +1,7 @@
 /**
- * 通用聊天消息 schema：校验主会话中的角色、正文与用户附件元数据。
- * 消息由 renderer、IPC 与 SQLite repository 共享；附件不携带 Task 标识或执行产物协议。
+ * 通用聊天消息 schema：校验主会话角色、正文与历史附件名称投影。
+ * 新消息不再接受附件输入；SQLite 中的旧 metadata 只读解析安全名称字段，不向
+ * Renderer 暴露绝对路径、Task 标识或文件操作协议。
  */
 import { z } from "zod";
 import { isoDateStringSchema } from "./memory";
@@ -11,8 +12,7 @@ export const messageAttachmentSchema = z.object({
   id: z.string().min(1),
   kind: z.enum(["file", "image"]),
   purpose: z.enum(["input", "output"]).optional(),
-  name: z.string().min(1),
-  path: z.string().min(1).optional()
+  name: z.string().min(1)
 });
 
 export const messageSchema = z.object({

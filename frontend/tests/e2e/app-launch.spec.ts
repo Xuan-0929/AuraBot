@@ -60,6 +60,25 @@ test("returns the fixed unavailable message for a Task request", async () => {
     await consoleWindow.getByPlaceholder("Say something").press("Enter");
     await expect(consoleWindow.getByLabel("Conversation messages"))
       .toContainText("Task 功能正在迁移，当前暂不可用。");
+    await expect(petWindow.getByLabel("Pet message"))
+      .toContainText("Task 功能正在迁移，当前暂不可用。");
+  } finally {
+    await cleanup(electronApp, userDataDir);
+  }
+});
+
+test("broadcasts the Task unavailable message from Pet to Console", async () => {
+  const { electronApp, petWindow, userDataDir } = await launchAuraBot();
+  try {
+    const consoleWindow = await openConsole(electronApp, petWindow);
+    await petWindow.evaluate(async () => {
+      await window.aurabot.sendChatMessage({
+        content: "帮我整理桌面",
+        source: "pet_text"
+      });
+    });
+    await expect(consoleWindow.getByLabel("Conversation messages"))
+      .toContainText("Task 功能正在迁移，当前暂不可用。");
   } finally {
     await cleanup(electronApp, userDataDir);
   }
