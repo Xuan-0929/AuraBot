@@ -1,8 +1,8 @@
 """
 验证 Backend YAML 配置的加载、路径解析与环境变量展开。
 
-测试直接使用 backend.config 的公开 API 和临时文件，覆盖 health-only 进程所需配置；
-它不要求已删除的 Task model、MCP 或 runtime 字段。
+测试直接使用 backend.config 的公开 API 和临时文件，覆盖 health 与新 Pi Task Runtime
+所需配置；它不要求已删除的 Task model、MCP 或 runtime 字段。
 """
 
 import os
@@ -36,6 +36,9 @@ features:
     - memory
     - tasks
 optional_value: null
+task:
+  user_data_dir: "./data"
+  concurrency_limit: 2
 """.strip(),
                 encoding="utf-8",
             )
@@ -46,6 +49,7 @@ optional_value: null
         self.assertEqual(runtime_config.ports["frontend"], 6400)
         self.assertNotIn("features", runtime_config)
         self.assertNotIn("optional_value", runtime_config)
+        self.assertEqual(runtime_config.task["user_data_dir"], "./data")
         self.assertEqual(runtime_config.path, config_path.resolve())
 
     def test_initialization_is_idempotent_and_keeps_in_memory_values(self):
@@ -181,6 +185,8 @@ task_runtime:
         self.assertEqual(runtime_config.chat_model["api_key"], "chat-secret")
         self.assertEqual(runtime_config.gateway_model["api_key"], "gateway-secret")
         self.assertNotIn("task_model", runtime_config)
+        self.assertEqual(runtime_config.task["concurrency_limit"], 2)
+        self.assertEqual(runtime_config.task["default_timeout_seconds"], 1800)
 
 
 if __name__ == "__main__":

@@ -8,9 +8,9 @@ AuraBot 是带 Live2D 桌宠界面的陪伴型桌面 AI。用户通过文字、�
 ## 当前产品状态
 
 - Electron 提供桌宠、控制台、普通聊天、Memory、设置和非 Task 主动提醒。
-- Python Backend 当前仅提供健康检查。
-- Task 处于架构迁移空窗期，输入会得到固定不可用回复。
-- 旧自研 Harness/MCP/CLI runner 已删除；Pi Task Runtime 尚未实现。
+- Python Backend 提供健康检查与版本化 Task REST/SSE。
+- Python Pi Task 后端垂直切片已实现；桌面 Task 输入仍因 Electron/Main Agent 未接入而返回固定不可用回复。
+- 旧自研 Harness/MCP/CLI runner 已删除，且没有以兼容层形式恢复。
 
 ## 目标能力
 
@@ -30,8 +30,8 @@ Main Agent 未来可创建、查询和中断 Task。Task 执行必须采用
 
 ### 主动能力
 
-Memory follow-up 和 idle nudge 可主动触达用户。定时 Task、Task 完成提醒和 Task
-问答在新 Runtime 实现前均不可用。
+Memory follow-up 和 idle nudge 可主动触达用户。定时 Task、桌面 Task 完成提醒和
+Main Agent 问答接线仍未实现。
 
 ## 目标进程模型
 
@@ -40,7 +40,7 @@ flowchart TB
   INGRESS["Ingress / Media<br/>channels · VAD · STT · Gate"] --> CORE
   subgraph CORE["Aura Core"]
     MAIN["Main Agent"] --> MEMORY["Memory"]
-    MAIN -. "future" .-> TM["Python TaskManager"]
+    MAIN -. "尚未接线" .-> TM["Python TaskManager"]
   end
   TM -. "one task / one RPC process" .-> PI["Pi Execution Plane"]
   UI["Electron / Vue"] <--> CORE
@@ -59,7 +59,7 @@ flowchart TB
 
 ## 非目标
 
-- 第一轮不实现 Pi、Node Worker、新 Task API/UI 或兼容层。
+- 当前不实现 Node Worker、新 Task UI 或兼容层。
 - 不保留 ToolGroup、SkillGroup、Capability lease、Harness Adapter 或 AuraBot MCP
   server。
 - 不承诺 true resume、第三方 Package 管理或 Task approval UI；这些属于第二轮后续。

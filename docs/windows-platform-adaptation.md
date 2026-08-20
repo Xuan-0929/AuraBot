@@ -9,7 +9,7 @@
 - package:win 与 package:mac 构建入口保留。
 - 不再发现 Codex、Claude Code 或 Hermes CLI；旧 runner 已删除。
 
-## Pi 第二轮要求
+## Pi 第二轮后端范围
 
 ~~~mermaid
 flowchart LR
@@ -20,10 +20,14 @@ flowchart LR
   HOME --> PI
 ~~~
 
-未来 Windows 发行必须携带 Node 与项目锁定 Pi，并把 PI_CODING_AGENT_DIR 指向
+AuraBot 专属 userData/pi-agent。不得依赖 PATH、全局 npm 或用户 ~/.pi/agent。
+第二轮后端实现 Windows 进程组/`taskkill /T /F` 的终止边界，并把
+PI_CODING_AGENT_DIR 指向 AuraBot 专属 userData/pi-agent。不得调用全局 Pi 或读取
+用户 ~/.pi/agent。
 AuraBot 专属 userData/pi-agent。不得依赖 PATH、全局 npm 或用户 ~/.pi/agent。
 
-该打包能力尚未实现；第一轮不得新增占位 Worker 或 CLI discovery。
+生产 Windows 安装包携带 Node/Python/Pi 仍未实现；`pi-runtime` 只是依赖载体，不能
+被描述为 Node Worker 或发行闭环。
 
 ## 回归清单
 

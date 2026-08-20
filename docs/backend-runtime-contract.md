@@ -2,7 +2,7 @@
 
 ## 当前契约
 
-Python Backend 当前是 health-only FastAPI 外壳。唯一公开路径：
+Python Backend 已在同一 Gateway 内提供版本化 Task REST/SSE，健康路径保持：
 
 ~~~http
 GET /health
@@ -14,8 +14,10 @@ GET /health
 {"ok":true,"service":"backend"}
 ~~~
 
-当前无 Task、Plan、MCP、chat、debug 或 registry HTTP API，也无 Task SSE/WebSocket。
-未知路径使用 FastAPI 标准 404。
+当前公开 Task 路径为 `/api/v1/tasks`、`/api/v1/tasks/{taskId}` 和
+`/api/v1/task-events`；完整方法、错误 envelope、乐观并发与 SSE cursor 以
+[Pi Task Runtime](modules/task-agent.md) 为准。旧 `/task`、Plan、MCP、chat、debug
+或 registry API 不恢复，未知路径使用 FastAPI 标准 404。
 
 ## 配置
 
@@ -26,7 +28,8 @@ Backend 在导入应用时通过 backend.config 读取 YAML：
 - 字符串支持必填的 ${VARIABLE} 与可选的 ${VARIABLE:-fallback}。
 - 缺少配置或必需变量时启动失败，不回显 secret value。
 
-当前 health endpoint 不依赖模型、Task runtime 或 MCP 配置。
+health endpoint 不依赖模型或 Worker 健康状态。新 `task` 段只配置 Pi-native Runtime，
+不兼容已删除的 `task_runtime`、`task_model` 或 `local_mcp_server`。
 
 ## 生命周期
 
@@ -37,15 +40,17 @@ sequenceDiagram
   participant Config
   Launcher->>Uvicorn: backend.main:app
   Uvicorn->>Config: initialize YAML
+  Uvicorn->>Config: construct Task Runtime
   Uvicorn-->>Launcher: GET /health = ok
   Launcher->>Uvicorn: SIGINT / SIGTERM
   Uvicorn-->>Launcher: normal process exit
 ~~~
 
-Backend 不创建 BackendRuntime，不绑定 Task event loop，也不负责启动/关闭 MCP。
+Backend 不创建旧 BackendRuntime，也不启动 MCP。第二轮由 FastAPI lifespan 启停
+TaskManager，并在 shutdown deadline 内并行回收其拥有的 Pi 子进程。
 
-## 未来扩展规则
+## 边界规则
 
-新 Main Agent 或 Task API 必须先定义独立版本化契约。未来 Task API 只能投影 Python
-Control Plane 的业务状态，不得暴露 Pi stdin/stdout、内部 Tool Call 或旧 Task DTO。
-未来约束见 [Pi Task Runtime](modules/task-agent.md)。
+Task API 只能投影 Python Control Plane 的业务状态，不得暴露 Pi stdin/stdout、
+内部 Tool Call、stderr、session 路径或旧 Task DTO。第一版只绑定 loopback，不承诺
+远程认证或 CORS；远程开放前必须另行设计威胁模型。

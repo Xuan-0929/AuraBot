@@ -6,3 +6,10 @@ chat_model:
   base_url: https://example.invalid/v1
   model_name: test-chat-model
   api_key: test-only
+
+task:
+  user_data_dir: "${AURABOT_TEST_USER_DATA_DIR:-/tmp/aurabot-backend-tests}"
+  pi_runtime_dir: "../../../pi-runtime"
+  node_executable: "${AURABOT_NODE_EXECUTABLE:-node}"
+  concurrency_limit: 2
+  default_timeout_seconds: 1800

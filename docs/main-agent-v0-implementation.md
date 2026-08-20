@@ -1,7 +1,7 @@
 # Main Agent v0 实现规格
 
-> 状态：历史目标规格仍可作为未来 Main Agent 切片参考，但当前 Backend 仅 health-only，
-> 本规格尚未接入生产路由。
+> 状态：历史目标规格仍可作为未来 Main Agent 切片参考；当前 Backend 已有独立 Task
+> REST/SSE，但本 Main Agent 规格尚未接入生产路由。
 
 ## 目标
 
@@ -43,4 +43,5 @@ Worker RPC 暴露进 Main Agent。
 ## 实施前提
 
 只有新 Main Agent 契约、持久化 owner 和路由被重新批准后才能实现。当前不可把本
-规格中的建议路径误写为已存在接口；现行 Backend 契约只有 GET /health。
+规格中的建议路径误写为已存在接口；现行 Backend 契约见
+[Backend Runtime Contract](backend-runtime-contract.md)。

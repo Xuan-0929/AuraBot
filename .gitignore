@@ -6,6 +6,7 @@
 docs/superpowers
 
 node_modules/
+.aurabot-data/
 out/
 dist/
 coverage/
@@ -32,5 +33,4 @@ __pycache__/
 config.yaml
 # Added by code-review-graph
 .code-review-graph/
-
 

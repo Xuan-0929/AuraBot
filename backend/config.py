@@ -1,11 +1,8 @@
-"""Load the retained process-wide YAML configuration for the Backend shell.
+"""加载 Backend 进程级 YAML 配置并隔离已经删除的旧执行字段。
 
-The health-only Backend initializes this module once during import. Only the
-ports and the surviving chat/gateway model roles cross this boundary; obsolete
-Task and MCP sections are discarded before environment expansion so legacy
-files cannot make the current process depend on removed runtime secrets. The
-module exposes the filtered values as a shared mapping to ``backend.main`` and
-any retained Python services.
+Backend 导入时只初始化一次本模块；端口、保留模型角色与新的 Pi-native ``task`` 段
+通过此边界进入 ``backend.main`` 和保留服务。旧 Task/MCP 段在环境变量展开前即被丢弃，
+因此历史配置不会让当前进程重新依赖已删除的 runtime secret。
 """
 
 from __future__ import annotations
@@ -23,7 +20,9 @@ import yaml
 PROJECT_ROOT = Path(__file__).resolve().parent.parent
 DEFAULT_CONFIG_PATH = PROJECT_ROOT / "config.yaml"
 CONFIG_PATH_ENV = "AURABOT_CONFIG_PATH"
-RETAINED_TOP_LEVEL_KEYS = frozenset({"ports", "chat_model", "gateway_model"})
+RETAINED_TOP_LEVEL_KEYS = frozenset(
+    {"ports", "chat_model", "gateway_model", "task"}
+)
 ENV_REFERENCE_PATTERN = re.compile(
     r"\$\{([A-Za-z_][A-Za-z0-9_]*)(?::-(.*?))?\}"
 )

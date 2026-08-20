@@ -18,7 +18,13 @@ def production_modules() -> tuple[Path, ...]:
     """Return the maintained Python source boundary in deterministic order."""
 
     app_modules = tuple(sorted((BACKEND_ROOT / "app").rglob("*.py")))
-    return (*app_modules, BACKEND_ROOT / "main.py")
+    task_modules = tuple(sorted((BACKEND_ROOT / "task").rglob("*.py")))
+    return (
+        *app_modules,
+        *task_modules,
+        BACKEND_ROOT / "config.py",
+        BACKEND_ROOT / "main.py",
+    )
 
 
 class ModuleDocumentationTests(unittest.TestCase):

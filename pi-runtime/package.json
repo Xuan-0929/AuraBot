@@ -1,0 +1,14 @@
+{
+  "name": "@scpz24/aurabot-pi-runtime",
+  "version": "0.1.0",
+  "private": true,
+  "description": "Pinned Pi CLI dependency carrier for AuraBot Python Task Runtime.",
+  "type": "module",
+  "dependencies": {
+    "@earendil-works/pi-coding-agent": "0.84.2",
+    "@scpz24/pi-aurabot-task": "file:../pi-aurabot-task"
+  },
+  "engines": {
+    "node": ">=22.19.0"
+  }
+}

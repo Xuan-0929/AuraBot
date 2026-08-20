@@ -11,18 +11,19 @@ AuraBot 是一个 desktop-first 的陪伴型 AI 项目。默认界面是常驻�
 | Live2D | 内置 Hiyori 示例模型，支持拖动、点击穿透、光标跟随与状态动作。 |
 | Chat | 普通文字聊天、pet quick chat、模型调用和消息持久化。 |
 | Memory | TypeScript MVP 与保留的 Python Memory 实现、follow-up 与 idle nudge。 |
-| Backend | FastAPI health-only 外壳；GET /health 返回服务状态。 |
-| Task | 正在迁移且不可用；旧执行面已删除，Pi Runtime 尚未实现。 |
+| Backend | Python Task REST/SSE 垂直切片已实现；health 契约保持不变。 |
+| Task | SQLite、FIFO、Pi RPC、暂停/恢复/取消和业务事件已实现；Electron/Main Agent 尚未接入。 |
 
-Task 型输入当前只会收到固定回复：“Task 功能正在迁移，当前暂不可用。”它不会
-创建 Task、启动 CLI、写 Task 数据或显示 Task UI。
+桌面 Task 型输入仍只会收到固定迁移回复，因为 Electron/Main Agent 接入不在本轮。
+后端 API 可独立创建并运行 Task，但桌面不会暗示该 surface 已经可用。
 
 ## 架构状态
 
 ~~~mermaid
 flowchart LR
-  DESKTOP["Electron / Vue<br/>Chat · Memory · Live2D"] --> HEALTH["Python FastAPI<br/>health only"]
-  FUTURE["Future Python TaskManager<br/>Control Plane"] -. "第二轮" .-> PI["Pi RPC processes<br/>Execution Plane"]
+  DESKTOP["Electron / Vue<br/>Chat · Memory · Live2D"] --> HEALTH["Python FastAPI<br/>health + Task REST/SSE"]
+  HEALTH --> TM["Python TaskManager<br/>Control Plane"]
+  TM --> PI["Pi RPC processes<br/>Execution Plane"]
 ~~~
 
 未来 Task 架构、职责边界和第二轮范围以
@@ -32,7 +33,7 @@ flowchart LR
 
 要求：
 
-1. Node.js 20.19+ 或 22.12+，以及 npm。
+1. Node.js 22.19+ 与 npm（Pi 0.84.2 要求 Node >=22.19.0）。
 2. [uv](https://docs.astral.sh/uv/)。
 3. macOS 是主要开发平台；Windows 10/11 x64 保留打包目标。
 
@@ -40,6 +41,8 @@ flowchart LR
 
 ~~~bash
 uv sync --project backend --locked
+npm ci --prefix pi-aurabot-task
+npm ci --prefix pi-runtime
 cd frontend
 npm install
 ~~~
@@ -57,11 +60,11 @@ cd frontend
 npm run dev
 ~~~
 
-npm run dev 会启动 health-only Python Backend、Vite 和 Electron。也可在
+npm run dev 会启动 Python Backend、Vite 和 Electron。也可在
 frontend 目录分别运行 npm run dev:backend、npm run dev:frontend 和
 npm run dev:desktop。
 
-Backend 唯一入口是 backend/main.py。启动后：
+Backend 组合入口仍是 backend/main.py。启动后固定健康检查：
 
 ~~~bash
 curl http://127.0.0.1:6401/health
@@ -73,7 +76,13 @@ curl http://127.0.0.1:6401/health
 {"ok":true,"service":"backend"}
 ~~~
 
-## 配置
+## Task Runtime 配置
+
+仓库根配置的新 `task` 段指定 AuraBot user data、私有 `pi-runtime` 路径、Node、
+并发和默认 timeout。`pi-runtime` 精确锁定 Pi；`pi-aurabot-task` 提供标准
+`ask_main_agent` Extension。二者都不是 Electron runner 或 Node Worker。
+
+## 其他配置
 
 Python Backend 读取仓库根目录 config.yaml；AURABOT_CONFIG_PATH 可覆盖路径。
 Electron 的模型与桌宠设置仍使用 userData 下的 aurabot.config.json 或
