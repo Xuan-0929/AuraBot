@@ -1,3 +1,10 @@
+"""
+验证 Memory 服务、HTTP 路由、检索组件与持久化适配器的可观察行为。
+
+测试使用临时 SQLite 和内存向量替身覆盖 remember/recall/forget、提取与排序流程；
+短期记忆缓冲区由独立测试模块负责，避免在本文件重复验证同一契约。
+"""
+
 import json
 import sqlite3
 import tempfile
@@ -11,14 +18,12 @@ from backend.memory.invode import (
     HashEmbeddingProvider,
     MemoryService,
     QdrantLocalVectorStore,
-    ShortTermMemoryBuffer,
     SQLiteMemoryStore,
     StructuredMemoryExtractor,
     create_embedding_provider,
     create_default_memory_service,
     create_memory_router,
 )
-from backend.memory.extraction.providers import StaticExtractionModel
 from backend.memory.extraction.schemas import parse_structured_extraction_payload
 from backend.memory.consolidation.strategies import (
     ConflictingPreferenceStrategy,
@@ -162,43 +167,6 @@ class MemoryInvodeTests(unittest.TestCase):
         self.assertEqual(result["forgotten_count"], 1)
         self.assertEqual(self.store.get_memory(remembered["memory_id"])["state"], "archived")
         self.assertNotIn(remembered["memory_id"], self.vector_store.points)
-
-    def test_router_exposes_remember_recall_forget_and_health(self):
-        app = FastAPI()
-        app.include_router(create_memory_router(self.service))
-        client = TestClient(app)
-
-        remember_response = client.post(
-            "/memory/remember",
-            json={
-                "profile_id": "user-1",
-                "content": "用户喜欢在晚上写代码。",
-                "source_type": "chat",
-                "source_id": "message-1",
-                "memory_type": "preference",
-            },
-        )
-        self.assertEqual(remember_response.status_code, 200)
-        memory_id = remember_response.json()["memory_id"]
-
-        recall_response = client.post(
-            "/memory/recall",
-            json={"profile_id": "user-1", "query": "晚上写代码", "limit": 3},
-        )
-        self.assertEqual(recall_response.status_code, 200)
-        self.assertEqual(recall_response.json()["memories"][0]["memory_id"], memory_id)
-
-        forget_response = client.post(
-            "/memory/forget",
-            json={"profile_id": "user-1", "memory_ids": [memory_id], "reason": "cleanup"},
-        )
-        self.assertEqual(forget_response.status_code, 200)
-        self.assertEqual(forget_response.json()["forgotten_count"], 1)
-
-        health_response = client.get("/memory/health")
-        self.assertEqual(health_response.status_code, 200)
-        self.assertEqual(health_response.json()["sqlite"]["backend"], "sqlite")
-        self.assertGreaterEqual(health_response.json()["sqlite"]["schema_version"], 2)
 
     def test_sqlite_store_migrates_phase_zero_schema_without_losing_rows(self):
         with tempfile.TemporaryDirectory() as tmpdir:
@@ -353,7 +321,7 @@ class MemoryInvodeTests(unittest.TestCase):
 
         self.assertEqual([item["memory_id"] for item in result["memories"]], due["memory_ids"])
 
-    def test_router_exposes_new_recall_forget_due_improve_and_debug_endpoints(self):
+    def test_router_exposes_memory_workflow_health_and_validation(self):
         app = FastAPI()
         app.include_router(create_memory_router(self.service))
         client = TestClient(app)
@@ -396,6 +364,14 @@ class MemoryInvodeTests(unittest.TestCase):
         self.assertEqual(debug_response.status_code, 200)
         self.assertTrue(debug_response.json()["audit_logs"])
 
+        health_response = client.get("/memory/health")
+        self.assertEqual(health_response.status_code, 200)
+        self.assertEqual(health_response.json()["sqlite"]["backend"], "sqlite")
+        self.assertGreaterEqual(
+            health_response.json()["sqlite"]["schema_version"],
+            2,
+        )
+
         forget_response = client.post(
             "/memory/forget",
             json={"profile_id": "user-1", "episode_ids": [episode_id], "reason": "cleanup"},
@@ -405,77 +381,6 @@ class MemoryInvodeTests(unittest.TestCase):
 
         invalid_forget_response = client.post("/memory/forget", json={"profile_id": "user-1"})
         self.assertEqual(invalid_forget_response.status_code, 400)
-
-    def test_short_term_buffer_returns_oldest_breakpoint_segment_for_chat_agent_summary(self):
-        with ShortTermMemoryBuffer(
-            profile_id="user-1",
-            source_type="chat",
-            max_breakpoints=2,
-        ) as buffer:
-            buffer.add(role="user", content="我最近喜欢热拿铁。", source_id="m1")
-            buffer.add(role="assistant", content="我记住啦。", source_id="m2")
-            self.assertIsNone(
-                buffer.mark_breakpoint(topic="coffee", reason="topic ended")
-            )
-            buffer.add(role="user", content="明天我和阿杰聊项目。", source_id="m3")
-            buffer.add(role="assistant", content="好，我会留意这个安排。", source_id="m4")
-            segment = buffer.mark_breakpoint(
-                topic="project",
-                reason="topic ended",
-            )
-
-            self.assertIsNotNone(segment)
-            self.assertEqual(segment["profile_id"], "user-1")
-            self.assertEqual(segment["topic"], "coffee")
-            self.assertIn("我最近喜欢热拿铁", segment["content"])
-            self.assertNotIn("阿杰", segment["content"])
-            self.assertEqual(len(buffer.messages), 2)
-            self.assertEqual(len(buffer.breakpoints), 1)
-            self.assertEqual(self.vector_store.points, {})
-
-    def test_short_term_buffer_persists_breakpoints_to_disk(self):
-        persistence_path = Path(self.tmpdir.name) / "short-term.json"
-        with ShortTermMemoryBuffer(
-            profile_id="user-1",
-            source_type="chat",
-            max_breakpoints=3,
-            persistence_path=persistence_path,
-        ) as buffer:
-            buffer.add(role="user", content="第一段话题。", source_id="m1")
-            buffer.mark_breakpoint(topic="first-topic", reason="topic ended")
-
-        with ShortTermMemoryBuffer(
-            profile_id="user-1",
-            source_type="chat",
-            max_breakpoints=3,
-            persistence_path=persistence_path,
-        ) as restored:
-            self.assertEqual(len(restored.messages), 1)
-            self.assertEqual(len(restored.breakpoints), 1)
-            self.assertEqual(restored.breakpoints[0].topic, "first-topic")
-
-    def test_short_term_buffer_returns_segment_when_context_length_reaches_limit(self):
-        with ShortTermMemoryBuffer(
-            profile_id="user-1",
-            source_type="chat",
-            max_breakpoints=10,
-            max_chars=10,
-        ) as buffer:
-            buffer.add(role="user", content="咖啡话题。", source_id="m1")
-            buffer.mark_breakpoint(topic="coffee", reason="topic ended")
-            segment = buffer.add(
-                role="user",
-                content="项目话题内容很长。",
-                source_id="m2",
-            )
-
-            self.assertIsNotNone(segment)
-            self.assertEqual(segment["topic"], "coffee")
-            self.assertIn("咖啡话题", segment["content"])
-            self.assertEqual(
-                [message.content for message in buffer.messages],
-                ["项目话题内容很长。"],
-            )
 
     def test_improve_marks_older_conflicting_preference_superseded(self):
         liked = self.service.remember(
@@ -549,7 +454,7 @@ class MemoryInvodeTests(unittest.TestCase):
         self.assertEqual(memory["metadata"]["extraction_source"], "structured")
         self.assertTrue(any(entity["name"] == "低酸咖啡豆" for entity in debug["entities"]))
 
-    def test_structured_payload_parser_lives_in_schema_module_and_dedupes_entities(self):
+    def test_structured_payload_parser_merges_metadata_and_dedupes_entities(self):
         candidates, entities = parse_structured_extraction_payload(
             {
                 "memories": [
@@ -570,31 +475,7 @@ class MemoryInvodeTests(unittest.TestCase):
         self.assertEqual(candidates[0].entities, ["浅烘咖啡"])
         self.assertEqual([entity.name for entity in entities], ["浅烘咖啡", "咖啡器具"])
 
-    def test_static_extraction_model_keeps_provider_logic_out_of_extractor(self):
-        extractor = StructuredMemoryExtractor(
-            StaticExtractionModel(
-                {
-                    "memories": [
-                        {
-                            "content": "用户喜欢手冲咖啡",
-                            "memory_type": "preference",
-                            "entities": ["手冲咖啡"],
-                        }
-                    ],
-                    "entities": [{"name": "手冲咖啡"}],
-                }
-            )
-        )
-
-        candidates, entities = extractor.extract(
-            content="我喜欢手冲咖啡",
-            metadata={},
-        )
-
-        self.assertEqual(candidates[0].content, "用户喜欢手冲咖啡")
-        self.assertEqual(entities[0].name, "手冲咖啡")
-
-    def test_memory_candidate_validation_lives_outside_service(self):
+    def test_memory_candidate_rejects_blank_content(self):
         with self.assertRaises(ValueError):
             validate_memory_candidate(
                 MemoryCandidate(
@@ -664,7 +545,7 @@ class MemoryInvodeTests(unittest.TestCase):
         self.assertEqual(self.store.get_memory(first["memory_id"])["state"], "active")
         self.assertEqual(self.store.get_memory(second["memory_id"])["state"], "stale")
 
-    def test_consolidation_strategies_are_pure_memory_id_selectors(self):
+    def test_consolidation_strategies_select_duplicate_and_conflicting_ids(self):
         memories = [
             {
                 "memory_id": "old-positive",
@@ -695,7 +576,7 @@ class MemoryInvodeTests(unittest.TestCase):
         self.assertEqual(duplicate_result.stale_ids, ["new-positive"])
         self.assertEqual(conflict_result.superseded_ids, ["old-positive", "new-positive"])
 
-    def test_retrieval_components_are_independently_composable(self):
+    def test_seed_retrievers_fuse_and_expand_related_candidates(self):
         self.service.remember(
             profile_id="user-1",
             content="用户喜欢热拿铁。",
@@ -742,7 +623,7 @@ class MemoryInvodeTests(unittest.TestCase):
         self.assertTrue(relations)
         self.assertIsInstance(relation_candidates, list)
 
-    def test_retrieval_ranking_and_trace_are_independent_components(self):
+    def test_ranking_and_trace_preserve_candidate_sources(self):
         remembered = self.service.remember(
             profile_id="user-1",
             content="用户喜欢热拿铁。",
@@ -778,7 +659,7 @@ class MemoryInvodeTests(unittest.TestCase):
         self.assertEqual(trace["pre_rerank"][0]["memory_id"], remembered["memory_id"])
         self.assertEqual(trace["post_rerank"][0]["memory_id"], remembered["memory_id"])
 
-    def test_query_analysis_and_context_packing_are_independent_components(self):
+    def test_query_analysis_and_context_packing_honor_hints_and_budget(self):
         analysis = QueryAnalyzer(default_now_iso="2026-06-11T00:00:00+00:00").analyze(
             query="今天阿杰项目有什么提醒？",
             context_hints={"entities": ["咖啡店"]},

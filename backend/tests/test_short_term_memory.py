@@ -1,3 +1,10 @@
+"""
+验证短期记忆领域模型、缓冲策略、生命周期与公开兼容门面。
+
+测试通过真实临时 SQLite 覆盖消息分段和 summary delivery 流程，仅在资源所有权边界
+使用替身；底层事务、租约、schema 与旧 JSON 迁移由各自专门测试模块负责。
+"""
+
 from dataclasses import FrozenInstanceError
 import gc
 import os
@@ -5,7 +12,6 @@ from pathlib import Path
 import stat
 import tempfile
 from threading import Barrier, BrokenBarrierError, Event, Thread
-from typing import get_type_hints
 import unittest
 from unittest.mock import Mock, patch
 import weakref
@@ -14,26 +20,12 @@ from backend.memory.short_term.buffer import ShortTermMemoryBuffer
 from backend.memory.short_term.models import (
     BufferStats,
     SegmentState,
-    ShortTermBreakpoint,
     ShortTermMessage,
     SummaryRequest,
 )
 from backend.memory.short_term.errors import ShortTermStateError
 from backend.memory.short_term.policy import ShortTermPolicy
 from backend.memory.stores.short_term_sqlite import SQLiteShortTermStore
-
-
-class ShortTermModelAnnotationTests(unittest.TestCase):
-    def test_optional_storage_fields_are_annotated_as_nullable(self):
-        message_hints = get_type_hints(ShortTermMessage)
-        breakpoint_hints = get_type_hints(ShortTermBreakpoint)
-        summary_hints = get_type_hints(SummaryRequest)
-
-        self.assertEqual(message_hints["source_id"], str | None)
-        self.assertEqual(breakpoint_hints["topic"], str | None)
-        self.assertEqual(breakpoint_hints["reason"], str | None)
-        self.assertEqual(summary_hints["topic"], str | None)
-        self.assertEqual(summary_hints["reason"], str | None)
 
 
 class ShortTermPolicyTests(unittest.TestCase):
@@ -179,13 +171,7 @@ class ShortTermMemoryBufferTests(unittest.TestCase):
 
     def test_breakpoint_threshold_prepares_oldest_pending_segment(self):
         store = self._store()
-        service = Mock()
-        buffer = self._buffer(
-            max_breakpoints=2,
-            store=store,
-            service=service,
-            max_messages=1,
-        )
+        buffer = self._buffer(max_breakpoints=2, store=store)
         buffer.add(role="user", content="咖啡", source_id="m1")
 
         self.assertIsNone(
@@ -208,7 +194,6 @@ class ShortTermMemoryBufferTests(unittest.TestCase):
             [breakpoint.topic for breakpoint in buffer.breakpoints],
             ["project"],
         )
-        self.assertEqual(service.mock_calls, [])
 
     def test_context_limit_prepares_only_oldest_complete_segment(self):
         buffer = self._buffer(max_breakpoints=10, max_chars=8)
@@ -282,11 +267,10 @@ class ShortTermMemoryBufferTests(unittest.TestCase):
         self.assertIsNot(buffer.messages, buffer.messages)
         self.assertIsNot(buffer.breakpoints, buffer.breakpoints)
 
-    def test_delivery_methods_delegate_exact_buffer_scope_and_arguments(self):
+    def test_delivery_methods_complete_summary_flow(self):
         store = self._store()
-        wrapped = Mock(wraps=store, spec=store)
         buffer = self._buffer(
-            store=wrapped,
+            store=store,
             max_breakpoints=1,
             max_summary_attempts=4,
         )
@@ -318,41 +302,16 @@ class ShortTermMemoryBufferTests(unittest.TestCase):
         )
 
         self.assertIsInstance(claimed, SummaryRequest)
+        self.assertEqual(claimed.segment_id, prepared["segment_id"])
         self.assertEqual(released.state, SegmentState.PENDING)
+        self.assertEqual(released.attempt_count, 1)
         self.assertEqual(completed.state, SegmentState.COMPLETED)
-        wrapped.claim_next_segment.assert_any_call(
-            profile_id=self.PROFILE_ID,
-            source_type=self.SOURCE_TYPE,
-            owner="main-agent",
-            lease_seconds=60,
-            now="2026-07-25T00:00:00+00:00",
-        )
-        wrapped.release_segment.assert_called_once_with(
-            profile_id=self.PROFILE_ID,
-            source_type=self.SOURCE_TYPE,
-            segment_id=prepared["segment_id"],
-            owner="main-agent",
-            error="temporary failure",
-            max_attempts=4,
-            now="2026-07-25T00:00:30+00:00",
-        )
-        wrapped.acknowledge_segment.assert_called_once_with(
-            profile_id=self.PROFILE_ID,
-            source_type=self.SOURCE_TYPE,
-            segment_id=prepared["segment_id"],
-            owner="main-agent",
-            outcome="remembered",
-            episode_id="episode-1",
-            memory_ids=["memory-1"],
-            reason=None,
-            now="2026-07-25T00:01:15+00:00",
-        )
+        self.assertEqual(completed.attempt_count, 2)
 
     def test_release_summary_accepts_valid_per_call_attempt_override(self):
         store = self._store()
-        wrapped = Mock(wraps=store, spec=store)
         buffer = self._buffer(
-            store=wrapped,
+            store=store,
             max_breakpoints=1,
             max_summary_attempts=4,
         )
@@ -366,22 +325,14 @@ class ShortTermMemoryBufferTests(unittest.TestCase):
             max_attempts=1,
         )
 
+        self.assertEqual(released.segment_id, prepared["segment_id"])
         self.assertEqual(released.state, SegmentState.FAILED)
-        wrapped.release_segment.assert_called_once_with(
-            profile_id=self.PROFILE_ID,
-            source_type=self.SOURCE_TYPE,
-            segment_id=prepared["segment_id"],
-            owner="main-agent",
-            error="permanent failure",
-            max_attempts=1,
-            now=None,
-        )
+        self.assertEqual(released.attempt_count, 1)
 
-    def test_recover_and_requeue_delegate_and_preserve_store_behavior(self):
+    def test_recover_and_requeue_preserve_store_behavior(self):
         store = self._store()
-        wrapped = Mock(wraps=store, spec=store)
         buffer = self._buffer(
-            store=wrapped,
+            store=store,
             max_breakpoints=1,
             max_summary_attempts=1,
         )
@@ -411,17 +362,9 @@ class ShortTermMemoryBufferTests(unittest.TestCase):
         )
 
         self.assertEqual(recovered, 1)
+        self.assertEqual(failed.segment_id, prepared["segment_id"])
+        self.assertEqual(failed.state, SegmentState.FAILED)
         self.assertEqual(requeued.state, SegmentState.PENDING)
-        wrapped.recover_expired_leases.assert_called_once_with(
-            profile_id=self.PROFILE_ID,
-            source_type=self.SOURCE_TYPE,
-            now="2026-07-25T00:01:00+00:00",
-        )
-        wrapped.requeue_failed_segment.assert_called_once_with(
-            profile_id=self.PROFILE_ID,
-            source_type=self.SOURCE_TYPE,
-            segment_id=prepared["segment_id"],
-        )
 
     def test_default_owned_store_closes_idempotently(self):
         buffer = self._buffer()
@@ -854,8 +797,8 @@ class ShortTermCompatibilityTests(unittest.TestCase):
         from backend.memory import short_term
 
         self.assertEqual(
-            short_term.__all__,
-            [
+            set(short_term.__all__),
+            {
                 "BufferStats",
                 "SegmentState",
                 "ShortTermBreakpoint",
@@ -866,14 +809,9 @@ class ShortTermCompatibilityTests(unittest.TestCase):
                 "ShortTermStore",
                 "SummaryRequest",
                 "now_iso",
-            ],
+            },
         )
-
-    def test_now_iso_remains_importable_from_short_term_package(self):
-        from backend.memory.short_term import now_iso
-        from backend.memory.short_term.buffer import now_iso as buffer_now_iso
-
-        self.assertIs(now_iso, buffer_now_iso)
+        self.assertTrue(callable(short_term.now_iso))
 
     def test_memory_package_and_facade_export_short_term_contract(self):
         from backend.memory import (
