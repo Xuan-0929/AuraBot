@@ -9,7 +9,6 @@ from __future__ import annotations
 
 import asyncio
 import contextlib
-import logging
 from collections.abc import AsyncIterator
 from typing import cast
 from uuid import UUID
@@ -20,15 +19,16 @@ from fastapi.responses import JSONResponse, StreamingResponse
 from ...task.manager import TaskManager, TaskRuntimeUnavailable
 from ...task.models import (
     TaskNotFound,
+    TaskCommandError,
+    TaskRequestError,
     TaskStateConflict,
     TaskStatus,
     TaskVersionConflict,
 )
+from .errors import error_response
 from .task_schemas import (
     CreateTaskRequest,
     TaskCommandRequest,
-    TaskErrorBody,
-    TaskErrorResponse,
     TaskEventResponse,
     TaskPageResponse,
     TaskResponse,
@@ -36,7 +36,6 @@ from .task_schemas import (
 
 router = APIRouter(prefix="/api/v1", tags=["tasks"])
 SSE_KEEPALIVE_SECONDS = 15.0
-logger = logging.getLogger(__name__)
 
 
 def _manager(request: Request) -> TaskManager:
@@ -110,9 +109,9 @@ async def task_events(
     try:
         cursor = int(last_event_id) if last_event_id is not None else 0
     except ValueError as exc:
-        raise ValueError("Last-Event-ID must be a non-negative integer.") from exc
+        raise TaskRequestError("Last-Event-ID must be a non-negative integer.") from exc
     if cursor < 0:
-        raise ValueError("Last-Event-ID must be a non-negative integer.")
+        raise TaskRequestError("Last-Event-ID must be a non-negative integer.")
 
     async def stream() -> AsyncIterator[str]:
         iterator = _manager(request).iter_events(cursor, task_id)
@@ -153,47 +152,38 @@ async def task_events(
     )
 
 
-def _error(status_code: int, code: str, message: str) -> JSONResponse:
-    body = TaskErrorResponse(
-        error=TaskErrorBody(code=code, message=message, details={})
-    )
-    return JSONResponse(status_code=status_code, content=body.model_dump(by_alias=True))
-
-
 def register_task_exception_handlers(application: FastAPI) -> None:
     """Install stable mappings for errors intentionally exposed by TaskManager."""
 
     async def not_found(_request: Request, exception: TaskNotFound) -> JSONResponse:
-        return _error(404, "task_not_found", str(exception))
+        return error_response(404, "task_not_found", str(exception))
 
     async def state_conflict(
         _request: Request, exception: TaskStateConflict
     ) -> JSONResponse:
-        return _error(409, "task_state_conflict", str(exception))
+        return error_response(409, "task_state_conflict", str(exception))
 
     async def version_conflict(
         _request: Request, exception: TaskVersionConflict
     ) -> JSONResponse:
-        return _error(409, "task_version_conflict", str(exception))
+        return error_response(409, "task_version_conflict", str(exception))
 
     async def unavailable(
         _request: Request, exception: TaskRuntimeUnavailable
     ) -> JSONResponse:
-        return _error(503, "task_runtime_unavailable", str(exception))
+        return error_response(503, "task_runtime_unavailable", str(exception))
 
-    async def invalid_command(_request: Request, exception: ValueError) -> JSONResponse:
-        return _error(400, "invalid_task_request", str(exception))
-
-    async def unexpected(_request: Request, exception: Exception) -> JSONResponse:
-        logger.exception("Unexpected Task Gateway failure", exc_info=exception)
-        return _error(500, "internal_error", "Task request failed internally.")
+    async def invalid_command(
+        _request: Request, exception: TaskCommandError | TaskRequestError
+    ) -> JSONResponse:
+        return error_response(400, "invalid_task_request", str(exception))
 
     application.add_exception_handler(TaskNotFound, not_found)
     application.add_exception_handler(TaskStateConflict, state_conflict)
     application.add_exception_handler(TaskVersionConflict, version_conflict)
     application.add_exception_handler(TaskRuntimeUnavailable, unavailable)
-    application.add_exception_handler(ValueError, invalid_command)
-    application.add_exception_handler(Exception, unexpected)
+    application.add_exception_handler(TaskCommandError, invalid_command)
+    application.add_exception_handler(TaskRequestError, invalid_command)
 
 
 __all__ = ["register_task_exception_handlers", "router"]

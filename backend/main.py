@@ -18,6 +18,7 @@ from .config import config, initialize_config
 initialize_config()
 
 from .app.gateway.health_routes import router as health_router
+from .app.gateway.errors import register_backend_exception_handlers
 from .app.gateway.task_routes import (
     register_task_exception_handlers,
     router as task_router,
@@ -57,6 +58,7 @@ def create_app(task_manager: TaskManager | None = None) -> FastAPI:
     application.include_router(health_router)
     application.include_router(task_router)
     register_task_exception_handlers(application)
+    register_backend_exception_handlers(application)
     return application
 
 

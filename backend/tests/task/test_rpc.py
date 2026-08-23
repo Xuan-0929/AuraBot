@@ -36,6 +36,25 @@ class RecordingWriter:
         return [json.loads(line) for line in self.buffer.decode().splitlines()]
 
 
+class FailingWriter(RecordingWriter):
+    """Inject one concrete stdin I/O failure at write or drain."""
+
+    def __init__(self, *, write_error: OSError | None = None, drain_error: OSError | None = None):
+        super().__init__()
+        self.write_error = write_error
+        self.drain_error = drain_error
+
+    def write(self, data: bytes) -> None:
+        if self.write_error is not None:
+            raise self.write_error
+        super().write(data)
+
+    async def drain(self) -> None:
+        if self.drain_error is not None:
+            raise self.drain_error
+        await super().drain()
+
+
 class PiRpcClientTests(unittest.IsolatedAsyncioTestCase):
     async def asyncSetUp(self):
         self.stdout = asyncio.StreamReader(limit=4096)
@@ -137,6 +156,26 @@ class PiRpcClientTests(unittest.IsolatedAsyncioTestCase):
                 {"type": "extension_ui_response", "id": "ui-2", "cancelled": True},
             ],
         )
+
+    async def test_normalizes_write_and_drain_io_failures_to_protocol_error(self):
+        for writer in (
+            FailingWriter(write_error=OSError("write failed")),
+            FailingWriter(drain_error=OSError("drain failed")),
+        ):
+            with self.subTest(writer=writer):
+                stdout = asyncio.StreamReader(limit=4096)
+                stderr = asyncio.StreamReader(limit=4096)
+                client = PiRpcClient(
+                    stdin=writer, stdout=stdout, stderr=stderr,
+                    response_timeout_seconds=1, max_line_bytes=1024,
+                    event_queue_size=4, stderr_tail_bytes=64, output_chunk_bytes=16,
+                )
+                await client.start()
+                with self.assertRaises(PiProtocolError):
+                    await client.send_extension_ui_response("ui", "answer")
+                stdout.feed_eof()
+                stderr.feed_eof()
+                await client.aclose()
 
     async def assert_protocol_failure(self, data: bytes, pattern: str) -> None:
         self.stdout.feed_data(data)

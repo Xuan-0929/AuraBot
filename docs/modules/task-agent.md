@@ -87,8 +87,9 @@ stateDiagram-v2
 类别。重跑创建新 Task，并以 `rerunOfTaskId` 关联；第一版不拆 ExecutionAttempt。
 
 Task 产品记录从创建保留到终态和逻辑删除。`paused` 不持有进程且可显式恢复；
-`waiting` 表示 `ask_main_agent` 尚未回答。删除只允许终态 Task：受控删除 Pi session
-目录，数据库保留记录、问题与事件，普通查询隐藏该 Task。
+`waiting` 表示 `ask_main_agent` 尚未回答，或回答刚持久化而 delivery recovery 尚未
+排队。删除只允许终态 Task：数据库保留记录、问题与事件，普通查询隐藏该 Task；
+重复 DELETE 幂等，不增加 version，也不重复产生 `task.deleted`。
 
 ## 4. Process Supervisor 与 Pi RPC
 
@@ -126,19 +127,42 @@ response 以 command id 关联，`prompt` response 仅表示 accepted，`agent_s
 Python 是 Task 数据唯一 owner，数据库位于
 `<userData>/task/task-runtime.sqlite3`，与 Electron Chat/Memory SQLite 及 Python
 Memory 存储分离。表固定为 `schema_migrations`、`tasks`、`task_events` 和
-`task_questions`。
+`task_questions`。当前 Task schema 版本为 v2；`task_questions.answered_at` 表示
+AuraBot 已接受并持久化回答，`delivered_at` 表示回答已写入 live Pi，或携带回答的
+continuation prompt 已被新 Pi 接受。`task.question_answered` 只表达前一种事实。
 
 - 状态写入与业务事件在同一 SQLite transaction。
 - `version` 使用 compare-and-swap。
 - `event_id` 全局递增；`task_sequence` 在单 Task 内严格递增。
 - 公共 payload 不保存 Pi raw object、Tool 参数/结果、thinking、stderr 或 RPC id。
 - WAL、foreign keys、busy timeout 与 `foreign_key_check` 在初始化时启用。
-- 进程句柄、pending RPC future、内存 notifier 和并发槽只存在内存中。
+- 进程句柄、pending RPC future、内存 notifier 和并发槽只存在内存中；恢复所需的
+  Question answer 不保存在内存 continuation map。
 
 启动 reconciliation：`queued` 按 `row_id` 重新排队；有 session 的
 `starting/running/pausing` 变为 `paused(backend_restarted)`，缺少 session 则
-`failed(session_missing)`；`waiting` 原样保留且没有旧 worker；`cancelling` 变为
-`cancelled`。不自动恢复已执行 Task。
+`failed(session_missing)`；`waiting + unanswered` 原样保留，`waiting + answered`
+修复为 `queued`；`cancelling` 变为 `cancelled`。queued/paused 的 continuation
+完全从 SQLite session 与未投递回答派生。非终态 v1 answered Question 升级后允许
+至多重放一次；Pi Tool 的外部副作用仍不保证 exactly-once。
+
+session 删除使用 `<sessionRoot>/.deleting/<task-id>` 隔离区：先原子 rename，再在
+同一数据库 transaction 写 tombstone 与 `task.deleted`，最后永久清理。DB 失败时
+恢复 canonical session；DB 已提交但最终清理失败时保留隔离目录并返回 500，后续
+相同 DELETE 或下次启动继续清理。只有 canonical 与隔离目录都不存在才返回 204。
+
+~~~mermaid
+flowchart LR
+  C[canonical session] -->|atomic rename| Q[.deleting/task-id]
+  Q -->|DB rollback| C
+  Q -->|tombstone committed| P[purge]
+  START[startup] -->|live DB row| C
+  START -->|deleted DB row| P
+  BOTH[canonical + quarantine] --> FAIL[fail closed]
+~~~
+
+非 UUID、非 canonical UUID 或数据库未知的隔离项只记录诊断，不触碰；symlink 只移动
+或 unlink 链接本身，不跟随其目标。
 
 ## 6. Gateway API 与业务事件
 
@@ -158,6 +182,9 @@ Memory 存储分离。表固定为 `schema_migrations`、`tasks`、`task_events`
 公共 JSON 使用 camelCase。pause/resume/cancel 以 `expectedVersion` 做乐观并发，
 过期返回 `409 task_version_conflict`；已经达到目标状态的重复命令返回当前 snapshot。
 本轮不公开问题回答 HTTP endpoint，Main Agent 将来通过 TaskManager 的内部稳定方法回答。
+创建请求的 `timeoutSeconds` 可省略，省略时由
+`task.default_timeout_seconds` 提供唯一默认值；显式 `null` 或超出 `1..86400`
+返回 FastAPI 422。Task response 不包含尚未实现的 `pendingQuestion`。
 
 业务事件为 `task.created`、`task.status_changed`、`task.output_appended`、
 `task.question_raised`、`task.question_answered`、`task.deleted`。SSE 使用全局整数
@@ -188,11 +215,16 @@ AuraBot 不实现 ToolGroup、SkillGroup、Capability、Package registry、MCP w
 `resource_load_failed`、`protocol_error`、`unexpected_exit`、`model_error`、
 `timeout`、`session_missing`、`result_unavailable`、`internal_error`。公开响应只含
 稳定 code 与脱敏 message；exit code、signal、stderr tail 和 stack trace 只进入日志。
+Task Gateway 只映射明确的 request/command、not-found、state/version conflict 与
+runtime-unavailable 错误。其他 Task 或非 Task 异常统一由 Backend 边界记录 stack，
+并返回 `500 internal_error` / `Backend request failed internally.`。
 
-`ask_main_agent` 在 60 秒内等待时占用 worker 槽；回答后直接回传原 RPC UI response。
+`ask_main_agent` 在 60 秒内等待时占用 worker 槽；回答先持久化，live write 成功后再
+原子写 `delivered_at` 并恢复 `running`。live write 失败会回收旧 Pi、取消旧 execution，
+将 Task 排回 `queued`，回答保持未投递。
 超过 60 秒则 abort、退出并 reap，但状态保持 `waiting`、释放槽；稍后回答先持久化，
-再以同一 Pi session 新进程和 continuation prompt 继续。问题回答与休眠使用单 Task
-锁及 version 串行。
+再以同一 Pi session 新进程和持久化 continuation prompt 继续；新 Pi 接受 prompt 后
+才写 `delivered_at`。问题回答与休眠使用单 Task 锁及 version 串行。
 
 Backend shutdown 总 deadline 30 秒：queued 保留，active Task 收口为
 `paused(backend_shutdown)`，waiting 保持且休眠 worker，cancelling 收口为 cancelled。

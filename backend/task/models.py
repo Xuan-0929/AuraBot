@@ -105,6 +105,14 @@ class TaskRuntimeError(RuntimeError):
     """Base class for stable Task Control Plane failures."""
 
 
+class TaskCommandError(TaskRuntimeError):
+    """Raised when an internal Task command violates the Control Plane contract."""
+
+
+class TaskRequestError(TaskRuntimeError):
+    """Raised when Task Gateway input cannot be represented by its public schema."""
+
+
 class TaskNotFound(TaskRuntimeError):
     """Raised when a Task is absent or hidden by logical deletion."""
 
@@ -142,7 +150,7 @@ class CreateTaskCommand:
     title: str
     prompt: str
     working_directory: Path
-    timeout_seconds: int
+    timeout_seconds: int | None = None
     rerun_of_task_id: UUID | None = None
 
 
@@ -197,6 +205,7 @@ class TaskQuestion:
     answer: str | None
     created_at: datetime
     answered_at: datetime | None
+    delivered_at: datetime | None
 
 
 @dataclass(frozen=True, slots=True)
@@ -211,11 +220,13 @@ __all__ = [
     "CreateTaskCommand",
     "TERMINAL_TASK_STATUSES",
     "TaskErrorCode",
+    "TaskCommandError",
     "TaskEvent",
     "TaskNotFound",
     "TaskPage",
     "TaskQuestion",
     "TaskRecord",
+    "TaskRequestError",
     "TaskRuntimeError",
     "TaskStateConflict",
     "TaskStatus",

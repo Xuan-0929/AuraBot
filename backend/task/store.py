@@ -10,6 +10,7 @@ from __future__ import annotations
 
 import asyncio
 import json
+import logging
 import os
 import shutil
 import sqlite3
@@ -25,6 +26,7 @@ from .models import (
     CreateTaskCommand,
     TERMINAL_TASK_STATUSES,
     TaskErrorCode,
+    TaskCommandError,
     TaskEvent,
     TaskNotFound,
     TaskPage,
@@ -36,7 +38,8 @@ from .models import (
     validate_status_transition,
 )
 
-SCHEMA_VERSION = 1
+SCHEMA_VERSION = 2
+logger = logging.getLogger(__name__)
 
 
 class TaskStoreMigrationError(RuntimeError):
@@ -45,6 +48,14 @@ class TaskStoreMigrationError(RuntimeError):
 
 class TaskPersistenceError(RuntimeError):
     """Raised when a Task write cannot be durably committed to SQLite."""
+
+
+class TaskSessionCleanupError(RuntimeError):
+    """Raised when session quarantine cannot converge safely with its tombstone."""
+
+    def __init__(self, *, tombstone_committed: bool) -> None:
+        self.tombstone_committed = tombstone_committed
+        super().__init__("Task session cleanup failed.")
 
 
 def _now() -> datetime:
@@ -102,6 +113,9 @@ class TaskStore:
                 )
             if current < 1:
                 await self._apply_initial_schema(connection)
+                current = SCHEMA_VERSION
+            if current < 2:
+                await self._apply_v2_schema(connection)
             violations = await (await connection.execute("PRAGMA foreign_key_check")).fetchall()
             if violations:
                 raise TaskStoreMigrationError(
@@ -159,7 +173,8 @@ class TaskStore:
                     rpc_request_id TEXT,
                     answer TEXT,
                     created_at TEXT NOT NULL,
-                    answered_at TEXT
+                    answered_at TEXT,
+                    delivered_at TEXT
                 )""",
                 """CREATE INDEX task_questions_pending_idx
                     ON task_questions(task_id, answered_at, created_at)""",
@@ -172,6 +187,37 @@ class TaskStore:
             await connection.execute(
                 "INSERT INTO schema_migrations(version, name, applied_at) VALUES (?, ?, ?)",
                 (1, "initial_pi_task_runtime_schema", _dump_time(_now())),
+            )
+            await connection.execute(
+                "INSERT INTO schema_migrations(version, name, applied_at) VALUES (?, ?, ?)",
+                (2, "durable_question_delivery", _dump_time(_now())),
+            )
+            await connection.commit()
+        except BaseException:
+            await connection.rollback()
+            raise
+
+    async def _apply_v2_schema(self, connection: aiosqlite.Connection) -> None:
+        """Upgrade v1 questions atomically and conservatively mark terminal answers delivered."""
+
+        await connection.execute("BEGIN IMMEDIATE")
+        try:
+            await connection.execute(
+                "ALTER TABLE task_questions ADD COLUMN delivered_at TEXT"
+            )
+            terminal = tuple(status.value for status in TERMINAL_TASK_STATUSES)
+            await connection.execute(
+                f"""
+                UPDATE task_questions SET delivered_at = answered_at
+                WHERE answered_at IS NOT NULL AND task_id IN (
+                    SELECT id FROM tasks WHERE status IN ({','.join('?' for _ in terminal)})
+                )
+                """,
+                terminal,
+            )
+            await connection.execute(
+                "INSERT INTO schema_migrations(version, name, applied_at) VALUES (?, ?, ?)",
+                (2, "durable_question_delivery", _dump_time(_now())),
             )
             await connection.commit()
         except BaseException:
@@ -205,6 +251,13 @@ class TaskStore:
 
     async def create_task(self, command: CreateTaskCommand) -> TaskRecord:
         """Insert one queued Task and its task.created event atomically."""
+
+        if (
+            command.timeout_seconds is None
+            or isinstance(command.timeout_seconds, bool)
+            or not 1 <= command.timeout_seconds <= 86_400
+        ):
+            raise TaskCommandError("timeout_seconds must be an integer from 1 to 86400.")
 
         task_id = uuid4()
         occurred_at = _now()
@@ -550,6 +603,75 @@ class TaskStore:
         ).fetchone()
         return self._question_from_row(row) if row else None
 
+    async def undelivered_answer(self, task_id: UUID) -> TaskQuestion | None:
+        """Return the oldest accepted answer that has not yet reached Pi."""
+
+        row = await (
+            await self._db().execute(
+                """
+                SELECT * FROM task_questions
+                WHERE task_id = ? AND answered_at IS NOT NULL AND delivered_at IS NULL
+                ORDER BY answered_at LIMIT 1
+                """,
+                (str(task_id),),
+            )
+        ).fetchone()
+        return self._question_from_row(row) if row else None
+
+    async def deliver_answer_and_transition(
+        self,
+        task_id: UUID,
+        question_id: UUID,
+        target_status: TaskStatus,
+        *,
+        expected_version: int,
+    ) -> tuple[TaskRecord, TaskQuestion, TaskEvent]:
+        """Atomically mark one answer delivered and advance its waiting/starting Task."""
+
+        async with self._write_lock:
+            connection = self._db()
+            await connection.execute("BEGIN IMMEDIATE")
+            try:
+                row = await self._fetch_task_row(task_id, include_deleted=False)
+                actual = int(row["version"])
+                if actual != expected_version:
+                    raise TaskVersionConflict(expected_version, actual)
+                current = TaskStatus(row["status"])
+                validate_status_transition(current, target_status)
+                question = await (
+                    await connection.execute(
+                        """SELECT * FROM task_questions
+                           WHERE id = ? AND task_id = ? AND answered_at IS NOT NULL""",
+                        (str(question_id), str(task_id)),
+                    )
+                ).fetchone()
+                if question is None:
+                    raise TaskNotFound(f"Answered Task question not found: {question_id}")
+                occurred_at = _now()
+                await connection.execute(
+                    "UPDATE task_questions SET delivered_at = COALESCE(delivered_at, ?) WHERE id = ?",
+                    (_dump_time(occurred_at), str(question_id)),
+                )
+                await connection.execute(
+                    "UPDATE tasks SET status = ?, version = ?, updated_at = ? WHERE id = ? AND version = ?",
+                    (target_status.value, actual + 1, _dump_time(occurred_at), str(task_id), actual),
+                )
+                event = await self._insert_event(
+                    task_id,
+                    await self._next_sequence(task_id),
+                    "task.status_changed",
+                    occurred_at,
+                    {"from": current.value, "to": target_status.value},
+                )
+                await connection.commit()
+                return (
+                    await self.get_task(task_id),
+                    await self._get_question(question_id),
+                    event,
+                )
+            except BaseException as error:
+                await self._rollback_write(connection, error)
+
     async def _get_question(self, question_id: UUID) -> TaskQuestion:
         row = await (
             await self._db().execute(
@@ -561,16 +683,33 @@ class TaskStore:
         return self._question_from_row(row)
 
     async def soft_delete(self, task_id: UUID) -> tuple[TaskRecord, TaskEvent]:
-        """Remove the controlled session first, then persist a logical deletion."""
+        """Quarantine a session, commit one tombstone, then strongly purge it."""
 
+        self._require_safe_deleting_root()
         task = await self.get_task(task_id, include_deleted=True)
         if task.deleted_at is not None:
-            events = await self.events_after(0, task_id, 10_000)
-            deleted_event = next(event for event in reversed(events) if event.type == "task.deleted")
+            canonical, staged = self._session_paths(task_id)
+            if self._lexists(canonical) and self._lexists(staged):
+                raise TaskSessionCleanupError(tombstone_committed=True)
+            if self._lexists(canonical):
+                staged.parent.mkdir(parents=True, exist_ok=True)
+                os.replace(canonical, staged)
+            await self._purge_staged_session(task_id)
+            row = await (
+                await self._db().execute(
+                    """SELECT * FROM task_events WHERE task_id = ? AND event_type = 'task.deleted'
+                       ORDER BY event_id DESC LIMIT 1""",
+                    (str(task_id),),
+                )
+            ).fetchone()
+            if row is None:
+                raise TaskPersistenceError("Deleted Task has no deletion event.")
+            deleted_event = self._event_from_row(row)
             return task, deleted_event
         if task.status not in TERMINAL_TASK_STATUSES:
             raise TaskStateConflict(task.status, TaskStatus.CANCELLED)
-        self._remove_session_directory(task_id)
+
+        moved = self._stage_session(task_id)
 
         async with self._write_lock:
             connection = self._db()
@@ -593,23 +732,99 @@ class TaskStore:
                     {"status": current["status"]},
                 )
                 await connection.commit()
-                return await self.get_task(task_id, include_deleted=True), event
+                deleted = await self.get_task(task_id, include_deleted=True)
             except BaseException as error:
-                await self._rollback_write(connection, error)
+                try:
+                    await connection.rollback()
+                    if moved:
+                        self._restore_staged_session(task_id)
+                except BaseException:
+                    logger.critical(
+                        "Failed to restore Task session after tombstone rollback",
+                        exc_info=True,
+                    )
+                    raise TaskSessionCleanupError(tombstone_committed=False) from error
+                if isinstance(error, sqlite3.Error):
+                    raise TaskPersistenceError(
+                        "The Task database rejected a state or event write."
+                    ) from error
+                raise
+        try:
+            await self._purge_staged_session(task_id)
+        except OSError as error:
+            raise TaskSessionCleanupError(tombstone_committed=True) from error
+        return deleted, event
 
-    def _remove_session_directory(self, task_id: UUID) -> None:
-        canonical = UUID(str(task_id))
-        root = self.session_root.resolve()
-        candidate = root / str(canonical)
-        if candidate.parent.resolve() != root or candidate.name != str(canonical):
-            raise ValueError("Task session path escaped the configured session root.")
-        if candidate.is_symlink():
-            candidate.unlink()
-        elif candidate.exists():
-            if not candidate.is_dir():
-                candidate.unlink()
+    def _session_paths(self, task_id: UUID) -> tuple[Path, Path]:
+        canonical_id = UUID(str(task_id))
+        name = str(canonical_id)
+        return self.session_root / name, self.session_root / ".deleting" / name
+
+    @staticmethod
+    def _lexists(path: Path) -> bool:
+        return os.path.lexists(path)
+
+    def _require_safe_deleting_root(self) -> None:
+        deleting = self.session_root / ".deleting"
+        if deleting.is_symlink() or (self._lexists(deleting) and not deleting.is_dir()):
+            logger.critical("Task deletion quarantine root is unsafe: %s", deleting)
+            raise TaskSessionCleanupError(tombstone_committed=False)
+
+    def _stage_session(self, task_id: UUID) -> bool:
+        canonical, staged = self._session_paths(task_id)
+        if self._lexists(canonical) and self._lexists(staged):
+            raise TaskSessionCleanupError(tombstone_committed=False)
+        if not self._lexists(canonical):
+            return False
+        staged.parent.mkdir(parents=True, exist_ok=True)
+        os.replace(canonical, staged)
+        return True
+
+    def _restore_staged_session(self, task_id: UUID) -> None:
+        canonical, staged = self._session_paths(task_id)
+        if not self._lexists(staged):
+            return
+        if self._lexists(canonical):
+            raise TaskSessionCleanupError(tombstone_committed=False)
+        os.replace(staged, canonical)
+
+    async def _purge_staged_session(self, task_id: UUID) -> None:
+        _, staged = self._session_paths(task_id)
+        if not self._lexists(staged):
+            return
+        if staged.is_symlink() or not staged.is_dir():
+            staged.unlink()
+        else:
+            shutil.rmtree(staged)
+
+    async def recover_session_deletions(self) -> None:
+        """Reconcile UUID quarantine entries from durable tombstones at startup."""
+
+        deleting = self.session_root / ".deleting"
+        self._require_safe_deleting_root()
+        if not deleting.is_dir():
+            return
+        for staged in deleting.iterdir():
+            try:
+                task_id = UUID(staged.name)
+            except ValueError:
+                logger.warning("Ignoring non-UUID Task deletion entry: %s", staged)
+                continue
+            if str(task_id) != staged.name:
+                logger.warning("Ignoring non-canonical Task deletion entry: %s", staged)
+                continue
+            try:
+                task = await self.get_task(task_id, include_deleted=True)
+            except TaskNotFound:
+                logger.warning("Ignoring unknown Task deletion entry: %s", staged)
+                continue
+            canonical, _ = self._session_paths(task_id)
+            if self._lexists(canonical):
+                raise TaskSessionCleanupError(tombstone_committed=task.deleted_at is not None)
+            if task.deleted_at is None:
+                self._restore_staged_session(task_id)
             else:
-                shutil.rmtree(candidate)
+                await self._purge_staged_session(task_id)
 
     async def events_after(
         self,
@@ -744,12 +959,14 @@ class TaskStore:
             answer=row["answer"],
             created_at=_load_time(row["created_at"]),
             answered_at=_load_time(row["answered_at"]),
+            delivered_at=_load_time(row["delivered_at"]),
         )
 
 
 __all__ = [
     "SCHEMA_VERSION",
     "TaskPersistenceError",
+    "TaskSessionCleanupError",
     "TaskStore",
     "TaskStoreMigrationError",
 ]

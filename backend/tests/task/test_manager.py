@@ -24,6 +24,22 @@ from backend.task.settings import TaskSettings
 from backend.task.store import TaskStore
 
 
+class BrokenRpcWriter:
+    """Fail every Pi stdin write while still supporting idempotent close."""
+
+    def write(self, _data: bytes) -> None:
+        raise BrokenPipeError("Pi disappeared")
+
+    async def drain(self) -> None:
+        return None
+
+    def close(self) -> None:
+        return None
+
+    async def wait_closed(self) -> None:
+        return None
+
+
 class TaskManagerTests(unittest.IsolatedAsyncioTestCase):
     async def asyncSetUp(self):
         self.temp = tempfile.TemporaryDirectory()
@@ -153,6 +169,8 @@ class TaskManagerTests(unittest.IsolatedAsyncioTestCase):
                 waiting.version,
             )
             self.assertEqual(answered.status, TaskStatus.RUNNING)
+            delivered = await self.store.undelivered_answer(created.id)
+            self.assertIsNone(delivered)
             completed = await self.wait_status(created.id, TaskStatus.COMPLETED)
 
         self.assertEqual(completed.result_text, "final result")
@@ -177,6 +195,60 @@ class TaskManagerTests(unittest.IsolatedAsyncioTestCase):
             completed = await self.wait_status(created.id, TaskStatus.COMPLETED)
 
         self.assertEqual(completed.result_text, "final result")
+        self.assertIsNone(await self.store.undelivered_answer(created.id))
+
+    async def test_live_answer_write_failure_reaps_then_replays_durable_answer(self):
+        await self.startup()
+        with patch.dict(os.environ, {"AURABOT_FAKE_PI_SCENARIO": "ask_main_agent"}):
+            created = await self.manager.create_task(self.command())
+            waiting = await self.wait_status(created.id, TaskStatus.WAITING)
+            question = await self.store.pending_question(created.id)
+            running = await self.supervisor.get(created.id)
+            self.assertIsNotNone(question)
+            self.assertIsNotNone(running)
+            running.rpc._stdin = BrokenRpcWriter()
+            os.environ["AURABOT_FAKE_PI_SCENARIO"] = "complete"
+
+            queued = await self.manager.answer_question(
+                created.id, question.id, "blue", waiting.version
+            )
+            self.assertEqual(queued.status, TaskStatus.QUEUED)
+            completed = await self.wait_status(created.id, TaskStatus.COMPLETED)
+
+        self.assertEqual(completed.result_text, "final result")
+        self.assertIsNone(await self.supervisor.get(created.id))
+        self.assertIsNone(await self.store.undelivered_answer(created.id))
+        events = await self.store.events_after(0, created.id, 100)
+        self.assertEqual([event.type for event in events].count("task.question_answered"), 1)
+
+    async def test_manager_uses_yaml_timeout_when_command_omits_it(self):
+        await self.startup()
+        command = CreateTaskCommand(
+            title="Default timeout",
+            prompt="Prompt",
+            working_directory=self.project,
+            timeout_seconds=None,
+        )
+        with patch.dict(os.environ, {"AURABOT_FAKE_PI_SCENARIO": "complete"}):
+            created = await self.manager.create_task(command)
+            await self.wait_status(created.id, TaskStatus.COMPLETED)
+        self.assertEqual(created.timeout_seconds, 10)
+
+    async def test_concurrent_delete_is_idempotent(self):
+        await self.startup()
+        task = await self.store.create_task(self.command())
+        task, _ = await self.store.transition_task(
+            task.id, TaskStatus.CANCELLED, expected_version=task.version
+        )
+
+        await asyncio.gather(
+            self.manager.delete_task(task.id), self.manager.delete_task(task.id)
+        )
+
+        deleted = await self.store.get_task(task.id, include_deleted=True)
+        events = await self.store.events_after(0, task.id, 100)
+        self.assertEqual(deleted.version, task.version + 1)
+        self.assertEqual([event.type for event in events].count("task.deleted"), 1)
 
     async def test_active_timeout_fails_without_task_level_retry(self):
         await self.startup()

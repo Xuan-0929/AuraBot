@@ -33,6 +33,7 @@ from backend.task.models import (
     TaskStatus,
     TaskVersionConflict,
 )
+from backend.task.store import TaskSessionCleanupError
 
 
 def task_record(status: TaskStatus = TaskStatus.QUEUED) -> TaskRecord:
@@ -72,6 +73,7 @@ class FakeTaskManager:
         self.event_filter: UUID | None = None
         self.raise_state_conflict = False
         self.raise_unexpected = False
+        self.raise_cleanup = False
         self.event_delay = 0.0
 
     async def startup(self) -> None:
@@ -113,6 +115,8 @@ class FakeTaskManager:
         return self.task
 
     async def delete_task(self, _task_id: UUID) -> None:
+        if self.raise_cleanup:
+            raise TaskSessionCleanupError(tombstone_committed=True)
         return None
 
     async def iter_events(self, after_event_id: int, task_id: UUID | None = None):
@@ -168,7 +172,28 @@ class TaskGatewayTests(unittest.TestCase):
         self.assertEqual(body["status"], "queued")
         self.assertNotIn("piSessionId", body)
         self.assertNotIn("piSessionPath", body)
+        self.assertNotIn("pendingQuestion", body)
         self.assertEqual(self.manager.created_command.working_directory, Path("/tmp/project"))
+
+    def test_create_omits_timeout_for_manager_and_rejects_explicit_null_or_bounds(self):
+        omitted = self.client.post(
+            "/api/v1/tasks",
+            json={"title": "x", "prompt": "y", "workingDirectory": "/tmp/project"},
+        )
+        self.assertEqual(omitted.status_code, 201)
+        self.assertIsNone(self.manager.created_command.timeout_seconds)
+
+        for value in (None, 0, -1, 86_401):
+            with self.subTest(value=value):
+                response = self.client.post(
+                    "/api/v1/tasks",
+                    json={
+                        "title": "x", "prompt": "y",
+                        "workingDirectory": "/tmp/project",
+                        "timeoutSeconds": value,
+                    },
+                )
+                self.assertEqual(response.status_code, 422)
 
     def test_create_rejects_relative_working_directory(self):
         response = self.client.post(
@@ -189,6 +214,10 @@ class TaskGatewayTests(unittest.TestCase):
             f"/api/v1/tasks/{self.manager.task.id}/pause",
             json={"expectedVersion": 1},
         )
+        resumed = self.client.post(
+            f"/api/v1/tasks/{self.manager.task.id}/resume",
+            json={"expectedVersion": 2},
+        )
         cancelled = self.client.post(
             f"/api/v1/tasks/{self.manager.task.id}/cancel",
             json={"expectedVersion": 2},
@@ -201,6 +230,14 @@ class TaskGatewayTests(unittest.TestCase):
         self.assertEqual(paused.json()["status"], "paused")
         self.assertEqual(cancelled.json()["status"], "cancelled")
         self.assertEqual(deleted.status_code, 204)
+        for response in (
+            listed.json()["items"][0],
+            fetched.json(),
+            paused.json(),
+            resumed.json(),
+            cancelled.json(),
+        ):
+            self.assertNotIn("pendingQuestion", response)
 
     def test_version_and_state_conflicts_use_stable_error_envelope(self):
         stale = self.client.post(
@@ -218,6 +255,19 @@ class TaskGatewayTests(unittest.TestCase):
         self.assertEqual(state.status_code, 409)
         self.assertEqual(state.json()["error"]["code"], "task_state_conflict")
         self.assertEqual(state.json()["error"]["details"], {})
+
+    def test_delete_cleanup_failure_is_not_reported_as_204_and_can_retry(self):
+        self.manager.raise_cleanup = True
+        with TestClient(
+            create_app(task_manager=self.manager), raise_server_exceptions=False
+        ) as client:
+            failed = client.delete(f"/api/v1/tasks/{self.manager.task.id}")
+            self.manager.raise_cleanup = False
+            retried = client.delete(f"/api/v1/tasks/{self.manager.task.id}")
+
+        self.assertEqual(failed.status_code, 500)
+        self.assertEqual(failed.json()["error"]["code"], "internal_error")
+        self.assertEqual(retried.status_code, 204)
 
     def test_unexpected_gateway_failure_is_sanitized(self):
         manager = FakeTaskManager()
@@ -238,6 +288,24 @@ class TaskGatewayTests(unittest.TestCase):
         self.assertEqual(response.status_code, 500)
         self.assertEqual(response.json()["error"]["code"], "internal_error")
         self.assertNotIn("secret stack detail", response.text)
+        self.assertEqual(
+            response.json()["error"]["message"],
+            "Backend request failed internally.",
+        )
+
+    def test_non_task_value_error_uses_backend_generic_500(self):
+        application = create_app(task_manager=FakeTaskManager())
+
+        @application.get("/test/value-error")
+        async def value_error_route():
+            raise ValueError("private non-task detail")
+
+        with TestClient(application, raise_server_exceptions=False) as client:
+            response = client.get("/test/value-error")
+        self.assertEqual(response.status_code, 500)
+        self.assertEqual(response.json()["error"]["code"], "internal_error")
+        self.assertNotIn("private non-task detail", response.text)
+        self.assertNotEqual(response.json()["error"]["code"], "invalid_task_request")
 
     def test_sse_uses_last_event_id_and_business_envelope(self):
         with self.client.stream(
@@ -255,6 +323,17 @@ class TaskGatewayTests(unittest.TestCase):
         self.assertIn('"taskSequence":7', body)
         self.assertNotIn("private-session", body)
 
+    def test_sse_rejects_invalid_or_negative_last_event_id_as_task_request(self):
+        for value in ("not-an-int", "-1"):
+            with self.subTest(value=value):
+                response = self.client.get(
+                    "/api/v1/task-events", headers={"Last-Event-ID": value}
+                )
+                self.assertEqual(response.status_code, 400)
+                self.assertEqual(
+                    response.json()["error"]["code"], "invalid_task_request"
+                )
+
     def test_sse_keepalive_does_not_cancel_pending_database_event(self):
         self.manager.event_delay = 0.03
         with patch(
@@ -268,7 +347,8 @@ class TaskGatewayTests(unittest.TestCase):
         self.assertIn("id: 382", body)
 
     def test_openapi_has_only_versioned_task_surface(self):
-        paths = self.client.get("/openapi.json").json()["paths"]
+        document = self.client.get("/openapi.json").json()
+        paths = document["paths"]
         self.assertIn("/api/v1/tasks", paths)
         self.assertIn("/api/v1/tasks/{task_id}", paths)
         self.assertIn("/api/v1/task-events", paths)
@@ -276,6 +356,9 @@ class TaskGatewayTests(unittest.TestCase):
         self.assertNotIn("/task/events", paths)
         self.assertNotIn("/tool/plan", paths)
         self.assertNotIn("/api/v1/tasks/{task_id}/answer", paths)
+        request_schema = document["components"]["schemas"]["CreateTaskRequest"]
+        timeout_schema = request_schema["properties"]["timeoutSeconds"]
+        self.assertNotEqual(timeout_schema.get("default"), 1800)
 
 
 if __name__ == "__main__":

@@ -129,6 +129,17 @@ class TaskSettingsTests(unittest.TestCase):
             with self.assertRaisesRegex(TaskSettingsError, "Pi CLI"):
                 settings.validate_runtime()
 
+    def test_rejects_default_timeout_outside_public_bounds(self):
+        with tempfile.TemporaryDirectory() as directory:
+            root = Path(directory)
+            for timeout in (0, 86_401):
+                with self.subTest(timeout=timeout):
+                    with self.assertRaisesRegex(TaskSettingsError, "default_timeout_seconds"):
+                        TaskSettings.from_mapping(
+                            {"task": {"default_timeout_seconds": timeout}},
+                            config_root=root,
+                        )
+
 
 if __name__ == "__main__":
     unittest.main()

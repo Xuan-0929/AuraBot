@@ -12,7 +12,7 @@ from pathlib import Path
 from typing import Any
 from uuid import UUID
 
-from pydantic import BaseModel, ConfigDict, Field, field_validator
+from pydantic import Field, field_validator
 
 from ...task.models import (
     CreateTaskCommand,
@@ -22,28 +22,16 @@ from ...task.models import (
     TaskRecord,
     TaskStatus,
 )
-
-
-def _to_camel(value: str) -> str:
-    first, *rest = value.split("_")
-    return first + "".join(part.capitalize() for part in rest)
-
-
-class CamelModel(BaseModel):
-    """Shared JSON alias rules for the public Gateway contract."""
-
-    model_config = ConfigDict(
-        alias_generator=_to_camel,
-        populate_by_name=True,
-        serialize_by_alias=True,
-    )
+from .errors import CamelModel
 
 
 class CreateTaskRequest(CamelModel):
     title: str = Field(min_length=1, max_length=200)
     prompt: str = Field(min_length=1, max_length=200_000)
     working_directory: Path
-    timeout_seconds: int = Field(default=1800, ge=1, le=86_400)
+    timeout_seconds: int | None = Field(
+        default=None, ge=1, le=86_400, strict=True
+    )
     rerun_of_task_id: UUID | None = None
 
     @field_validator("working_directory")
@@ -51,6 +39,13 @@ class CreateTaskRequest(CamelModel):
     def require_absolute_working_directory(cls, value: Path) -> Path:
         if not value.is_absolute():
             raise ValueError("workingDirectory must be an absolute path")
+        return value
+
+    @field_validator("timeout_seconds", mode="before")
+    @classmethod
+    def reject_explicit_null_timeout(cls, value: object) -> object:
+        if value is None:
+            raise ValueError("timeoutSeconds cannot be null")
         return value
 
     def to_command(self) -> CreateTaskCommand:
@@ -65,13 +60,6 @@ class CreateTaskRequest(CamelModel):
 
 class TaskCommandRequest(CamelModel):
     expected_version: int = Field(ge=1)
-
-
-class PendingQuestionResponse(CamelModel):
-    id: UUID
-    question: str
-    options: tuple[str, ...] = ()
-    created_at: datetime
 
 
 class TaskResponse(CamelModel):
@@ -94,7 +82,6 @@ class TaskResponse(CamelModel):
     started_at: datetime | None
     finished_at: datetime | None
     deleted_at: datetime | None
-    pending_question: PendingQuestionResponse | None = None
 
     @classmethod
     def from_record(cls, task: TaskRecord) -> "TaskResponse":
@@ -153,22 +140,9 @@ class TaskEventResponse(CamelModel):
         )
 
 
-class TaskErrorBody(CamelModel):
-    code: str
-    message: str
-    details: dict[str, Any] = Field(default_factory=dict)
-
-
-class TaskErrorResponse(CamelModel):
-    error: TaskErrorBody
-
-
 __all__ = [
     "CreateTaskRequest",
-    "PendingQuestionResponse",
     "TaskCommandRequest",
-    "TaskErrorBody",
-    "TaskErrorResponse",
     "TaskEventResponse",
     "TaskPageResponse",
     "TaskResponse",

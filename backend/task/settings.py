@@ -88,11 +88,18 @@ class TaskSettings:
             raise TaskSettingsError("Configuration must contain a task mapping.")
 
         concurrency_limit = int(raw.get("concurrency_limit", 2))
-        default_timeout_seconds = int(raw.get("default_timeout_seconds", 1800))
+        raw_default_timeout = raw.get("default_timeout_seconds", 1800)
+        if isinstance(raw_default_timeout, bool):
+            raise TaskSettingsError(
+                "task.default_timeout_seconds must be between 1 and 86400."
+            )
+        default_timeout_seconds = int(raw_default_timeout)
         if concurrency_limit < 1:
             raise TaskSettingsError("task.concurrency_limit must be at least 1.")
-        if default_timeout_seconds < 1:
-            raise TaskSettingsError("task.default_timeout_seconds must be positive.")
+        if not 1 <= default_timeout_seconds <= 86_400:
+            raise TaskSettingsError(
+                "task.default_timeout_seconds must be between 1 and 86400."
+            )
 
         user_data = _resolve_path(
             str(raw.get("user_data_dir", "./.aurabot-data")), config_root

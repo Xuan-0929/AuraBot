@@ -81,6 +81,8 @@ curl http://127.0.0.1:6401/health
 仓库根配置的新 `task` 段指定 AuraBot user data、私有 `pi-runtime` 路径、Node、
 并发和默认 timeout。`pi-runtime` 精确锁定 Pi；`pi-aurabot-task` 提供标准
 `ask_main_agent` Extension。二者都不是 Electron runner 或 Node Worker。
+HTTP 创建请求省略 timeout 时使用 YAML 默认值；显式 null 或 `1..86400` 之外的值
+会被拒绝。
 
 ## 其他配置
 

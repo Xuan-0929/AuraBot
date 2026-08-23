@@ -322,10 +322,10 @@ class PiRpcClient:
             json.dumps(value, ensure_ascii=False, separators=(",", ":")) + "\n"
         ).encode("utf-8")
         async with self._write_lock:
-            self._stdin.write(encoded)
             try:
+                self._stdin.write(encoded)
                 await self._stdin.drain()
-            except (BrokenPipeError, ConnectionResetError) as exc:
+            except OSError as exc:
                 error = PiProtocolError("Pi RPC stdin closed while writing.")
                 await self._fail(error)
                 raise error from exc

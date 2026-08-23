@@ -13,6 +13,7 @@ import contextlib
 import logging
 import time
 from collections.abc import AsyncIterator, Iterable
+from dataclasses import replace
 from pathlib import Path
 from uuid import UUID
 
@@ -20,6 +21,7 @@ from .models import (
     CreateTaskCommand,
     TERMINAL_TASK_STATUSES,
     TaskErrorCode,
+    TaskCommandError,
     TaskEvent,
     TaskPage,
     TaskRecord,
@@ -36,7 +38,7 @@ from .process import (
 from .rpc import PiProtocolError
 from .scheduler import FIFOScheduler, SchedulerClosed
 from .settings import TaskSettings
-from .store import TaskPersistenceError, TaskStore
+from .store import TaskPersistenceError, TaskSessionCleanupError, TaskStore
 
 QUESTION_MARKER = "AURABOT_TASK_QUESTION_V1\n"
 RESUME_PROMPT = (
@@ -68,14 +70,13 @@ class TaskManager:
         self._executions: dict[UUID, asyncio.Task[None]] = {}
         self._task_locks: dict[UUID, asyncio.Lock] = {}
         self._hibernate_tasks: dict[UUID, asyncio.Task[None]] = {}
-        self._continuations: dict[UUID, str] = {}
         self._active_base_ms: dict[UUID, int] = {}
         self._active_started: dict[UUID, float] = {}
         self._event_condition = asyncio.Condition()
         self._event_revision = 0
         self._started = False
         self._closing = False
-        self._fatal_error: TaskPersistenceError | None = None
+        self._fatal_error: RuntimeError | None = None
 
     async def startup(self) -> None:
         """Initialize persistence, reconcile orphaned Tasks and start FIFO dispatch."""
@@ -83,6 +84,7 @@ class TaskManager:
         if self._started:
             return
         await self._store.initialize()
+        await self._store.recover_session_deletions()
         await self._reconcile_startup()
         self._started = True
         self._dispatcher = asyncio.create_task(
@@ -132,7 +134,20 @@ class TaskManager:
         """Persist queued before notifying the in-memory scheduler."""
 
         self._require_available()
-        task = await self._persist(self._store.create_task(command))
+        timeout = (
+            command.timeout_seconds
+            if command.timeout_seconds is not None
+            else self._settings.default_timeout_seconds
+        )
+        if (
+            isinstance(timeout, bool)
+            or not isinstance(timeout, int)
+            or not 1 <= timeout <= 86_400
+        ):
+            raise TaskCommandError("timeout_seconds must be an integer from 1 to 86400.")
+        task = await self._persist(
+            self._store.create_task(replace(command, timeout_seconds=timeout))
+        )
         await self._notify_event()
         await self._scheduler.enqueue(task.id)
         return task
@@ -237,7 +252,6 @@ class TaskManager:
                     pause_reason=None,
                 )
             )
-            self._continuations[task_id] = RESUME_PROMPT
             await self._notify_event()
             await self._scheduler.enqueue(task_id)
             return queued
@@ -294,8 +308,14 @@ class TaskManager:
     async def delete_task(self, task_id: UUID) -> None:
         """Soft-delete terminal work after Store performs controlled session cleanup."""
 
-        await self._persist(self._store.soft_delete(task_id))
-        await self._notify_event()
+        async with self._lock_for(task_id):
+            try:
+                await self._persist(self._store.soft_delete(task_id))
+            except TaskSessionCleanupError as error:
+                if error.tombstone_committed:
+                    await self._notify_event()
+                raise
+            await self._notify_event()
 
     async def answer_question(
         self,
@@ -319,28 +339,42 @@ class TaskManager:
             hibernate = self._hibernate_tasks.pop(task_id, None)
             if hibernate is not None:
                 hibernate.cancel()
+                with contextlib.suppress(asyncio.CancelledError):
+                    await hibernate
             running = await self._supervisor.get(task_id)
             if running is not None and question.rpc_request_id is not None:
-                await running.rpc.send_extension_ui_response(question.rpc_request_id, answer)
-                resumed, _ = await self._persist(
-                    self._store.transition_task(
-                        task_id,
-                        TaskStatus.RUNNING,
-                        expected_version=waiting.version,
+                try:
+                    await running.rpc.send_extension_ui_response(question.rpc_request_id, answer)
+                except PiProtocolError:
+                    await self._cancel_execution(task_id)
+                    stopped = await self._supervisor.stop(task_id, StopIntent.WAITING)
+                    if not stopped.reaped:
+                        error = TaskRuntimeUnavailable(
+                            "The previous Pi process could not be safely reaped."
+                        )
+                        await self._enter_fail_stop(error)
+                        raise error
+                else:
+                    resumed, _, _ = await self._persist(
+                        self._store.deliver_answer_and_transition(
+                            task_id,
+                            question.id,
+                            TaskStatus.RUNNING,
+                            expected_version=waiting.version,
+                        )
                     )
-                )
-                self._start_active_clock(task_id, resumed)
-                await self._notify_event()
-                return resumed
+                    self._start_active_clock(task_id, resumed)
+                    await self._notify_event()
+                    return resumed
+            elif running is not None:
+                await self._cancel_execution(task_id)
+                await self._supervisor.stop(task_id, StopIntent.WAITING)
             queued, _ = await self._persist(
                 self._store.transition_task(
                     task_id,
                     TaskStatus.QUEUED,
                     expected_version=waiting.version,
                 )
-            )
-            self._continuations[task_id] = (
-                f"{RESUME_PROMPT}\nThe Main Agent answered the pending question: {answer}"
             )
             await self._notify_event()
             await self._scheduler.enqueue(task_id)
@@ -404,7 +438,7 @@ class TaskManager:
                 title=starting.title,
                 prompt=starting.prompt,
                 working_directory=starting.working_directory,
-                continuation_prompt=self._continuations.pop(task_id, None),
+                continuation_prompt=await self._continuation_prompt(queued),
             )
             remaining = self._remaining_seconds(starting)
             running_process = await asyncio.wait_for(
@@ -414,13 +448,24 @@ class TaskManager:
                 current = await self._store.get_task(task_id)
                 if current.status != TaskStatus.STARTING:
                     return
-                running, _ = await self._persist(
-                    self._store.transition_task(
-                        task_id,
-                        TaskStatus.RUNNING,
-                        expected_version=current.version,
+                undelivered = await self._store.undelivered_answer(task_id)
+                if undelivered is not None:
+                    running, _, _ = await self._persist(
+                        self._store.deliver_answer_and_transition(
+                            task_id,
+                            undelivered.id,
+                            TaskStatus.RUNNING,
+                            expected_version=current.version,
+                        )
                     )
-                )
+                else:
+                    running, _ = await self._persist(
+                        self._store.transition_task(
+                            task_id,
+                            TaskStatus.RUNNING,
+                            expected_version=current.version,
+                        )
+                    )
                 await self._notify_event()
 
             iterator = running_process.rpc.events()
@@ -720,6 +765,30 @@ class TaskManager:
                     )
                 )
                 await self._notify_event()
+            elif task.status == TaskStatus.WAITING:
+                if await self._store.undelivered_answer(task.id) is not None:
+                    queued, _ = await self._persist(
+                        self._store.transition_task(
+                            task.id,
+                            TaskStatus.QUEUED,
+                            expected_version=task.version,
+                        )
+                    )
+                    await self._notify_event()
+                    await self._scheduler.enqueue(queued.id)
+
+    async def _continuation_prompt(self, task: TaskRecord) -> str | None:
+        """Derive restart input only from durable Task and Question state."""
+
+        undelivered = await self._store.undelivered_answer(task.id)
+        if undelivered is not None:
+            return (
+                f"{RESUME_PROMPT}\n"
+                f"The Main Agent answered the pending question: {undelivered.answer}"
+            )
+        if task.started_at is not None:
+            return RESUME_PROMPT
+        return None
 
     def _start_active_clock(self, task_id: UUID, task: TaskRecord) -> None:
         self._active_base_ms[task_id] = task.active_runtime_ms
@@ -784,13 +853,13 @@ class TaskManager:
                 "Task persistence failed; the runtime stopped admission."
             ) from error
 
-    async def _enter_fail_stop(self, error: TaskPersistenceError) -> None:
-        """Stop admission and reap every worker after a durable Store failure."""
+    async def _enter_fail_stop(self, error: RuntimeError) -> None:
+        """Stop admission and reap every worker after an unrecoverable runtime failure."""
 
         if self._fatal_error is not None:
             return
         self._fatal_error = error
-        logger.critical("Task runtime entered persistence fail-stop", exc_info=error)
+        logger.critical("Task runtime entered fail-stop", exc_info=error)
         await self._scheduler.shutdown()
         dispatcher = self._dispatcher
         if dispatcher is not None and dispatcher is not asyncio.current_task():

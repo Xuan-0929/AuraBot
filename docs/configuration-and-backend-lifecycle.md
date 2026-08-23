@@ -10,6 +10,8 @@
 | config.json / aurabot.config.json | Electron | 模型、Live2D、通知等桌面设置。 |
 
 新 `task` 段配置 user data、Pi runtime 载体、Node executable、并发和默认 timeout。
+`task.default_timeout_seconds` 必须在 `1..86400`；缺省为 1800，并且只有 HTTP 请求
+显式提供合法 `timeoutSeconds` 时才会覆盖它，显式 null 不等价于省略。
 旧 task_runtime、task_model、local_mcp_server 和 Electron taskRunner 字段不再读取，
 新段不是兼容映射。
 已有 JSON 文件不主动重写，未知旧字段被忽略。
@@ -18,7 +20,8 @@
 
 1. uv 根据 backend/pyproject.toml 与 backend/uv.lock 准备环境。
 2. backend.main 加载 YAML。
-3. FastAPI lifespan 初始化 Python Task Store、Scheduler、Supervisor 与 TaskManager。
+3. FastAPI lifespan 初始化 Python Task Store、恢复 `.deleting` session 隔离项，再启动
+   Scheduler、Supervisor 与 TaskManager。
 4. Uvicorn 暴露固定 GET /health 以及版本化 Task REST/SSE。
 5. 开发启动器等待 health 成功，再运行桌面环境。
 

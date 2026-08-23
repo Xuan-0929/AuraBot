@@ -19,6 +19,11 @@ GET /health
 [Pi Task Runtime](modules/task-agent.md) 为准。旧 `/task`、Plan、MCP、chat、debug
 或 registry API 不恢复，未知路径使用 FastAPI 标准 404。
 
+Task response 不暴露 `pendingQuestion`。POST 创建时 `timeoutSeconds` 可省略并由 YAML
+默认值填充；显式 null 与范围外数字由 FastAPI 返回 422。Task 的已知 domain error
+使用稳定 Task envelope；所有未识别 Backend 异常统一返回脱敏的
+`500 internal_error`，message 固定为 `Backend request failed internally.`。
+
 ## 配置
 
 Backend 在导入应用时通过 backend.config 读取 YAML：
