@@ -50,6 +50,11 @@ TERMINAL_TASK_STATUSES = frozenset(
     {TaskStatus.COMPLETED, TaskStatus.FAILED, TaskStatus.CANCELLED}
 )
 
+"""
+更像开发时脚手架，这里定义了允许的状态转换。
+
+Task Core开发完成后可以考虑删除之。
+"""
 _ALLOWED_STATUS_TRANSITIONS: Mapping[TaskStatus, frozenset[TaskStatus]] = {
     TaskStatus.QUEUED: frozenset(
         {TaskStatus.STARTING, TaskStatus.PAUSED, TaskStatus.CANCELLED}

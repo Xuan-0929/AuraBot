@@ -34,7 +34,7 @@ from .process import (
     TaskLaunchSpec,
 )
 from .rpc import PiProtocolError
-from .scheduler import FifoScheduler, SchedulerClosed
+from .scheduler import FIFOScheduler, SchedulerClosed
 from .settings import TaskSettings
 from .store import TaskPersistenceError, TaskStore
 
@@ -57,7 +57,7 @@ class TaskManager:
         self,
         settings: TaskSettings,
         store: TaskStore,
-        scheduler: FifoScheduler,
+        scheduler: FIFOScheduler,
         supervisor: PiProcessSupervisor,
     ) -> None:
         self._settings = settings

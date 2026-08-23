@@ -11,12 +11,12 @@ import asyncio
 import unittest
 from uuid import uuid4
 
-from backend.task.scheduler import FifoScheduler, SchedulerClosed
+from backend.task.scheduler import FIFOScheduler, SchedulerClosed
 
 
-class FifoSchedulerTests(unittest.IsolatedAsyncioTestCase):
+class FIFOSchedulerTests(unittest.IsolatedAsyncioTestCase):
     async def test_admits_fifo_up_to_limit_and_waits_for_release(self):
-        scheduler = FifoScheduler(concurrency_limit=2)
+        scheduler = FIFOScheduler(concurrency_limit=2)
         task_ids = [uuid4(), uuid4(), uuid4()]
         for task_id in task_ids:
             await scheduler.enqueue(task_id)
@@ -31,7 +31,7 @@ class FifoSchedulerTests(unittest.IsolatedAsyncioTestCase):
         self.assertEqual(await asyncio.wait_for(third, 0.1), task_ids[2])
 
     async def test_remove_and_reenqueue_puts_task_at_tail_without_duplicates(self):
-        scheduler = FifoScheduler(concurrency_limit=1)
+        scheduler = FIFOScheduler(concurrency_limit=1)
         first, second = uuid4(), uuid4()
         await scheduler.enqueue(first)
         await scheduler.enqueue(second)
@@ -44,7 +44,7 @@ class FifoSchedulerTests(unittest.IsolatedAsyncioTestCase):
         self.assertEqual(await scheduler.admit(), first)
 
     async def test_shutdown_rejects_new_and_wakes_waiters(self):
-        scheduler = FifoScheduler(concurrency_limit=1)
+        scheduler = FIFOScheduler(concurrency_limit=1)
         waiter = asyncio.create_task(scheduler.admit())
         await asyncio.sleep(0)
         await scheduler.shutdown()

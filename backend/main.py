@@ -24,7 +24,7 @@ from .app.gateway.task_routes import (
 )
 from .task.manager import TaskManager
 from .task.process import PiProcessSupervisor
-from .task.scheduler import FifoScheduler
+from .task.scheduler import FIFOScheduler
 from .task.settings import TaskSettings
 from .task.store import TaskStore
 
@@ -35,7 +35,7 @@ def build_task_manager() -> TaskManager:
     settings = TaskSettings.from_config(config, config.path)
     settings.validate_runtime()
     store = TaskStore(settings.database_path, settings.session_root)
-    scheduler = FifoScheduler(settings.concurrency_limit)
+    scheduler = FIFOScheduler(settings.concurrency_limit)
     supervisor = PiProcessSupervisor(settings)
     return TaskManager(settings, store, scheduler, supervisor)
 

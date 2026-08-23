@@ -19,7 +19,7 @@ from unittest.mock import patch
 from backend.task.manager import TaskManager, TaskRuntimeUnavailable
 from backend.task.models import CreateTaskCommand, TaskErrorCode, TaskStatus
 from backend.task.process import PiProcessSupervisor
-from backend.task.scheduler import FifoScheduler
+from backend.task.scheduler import FIFOScheduler
 from backend.task.settings import TaskSettings
 from backend.task.store import TaskStore
 
@@ -59,7 +59,7 @@ class TaskManagerTests(unittest.IsolatedAsyncioTestCase):
             output_chunk_bytes=16,
         )
         self.store = TaskStore(self.settings.database_path, self.settings.session_root)
-        self.scheduler = FifoScheduler(self.settings.concurrency_limit)
+        self.scheduler = FIFOScheduler(self.settings.concurrency_limit)
         self.supervisor = PiProcessSupervisor(self.settings)
         self.manager = TaskManager(
             self.settings, self.store, self.scheduler, self.supervisor
