@@ -1,7 +1,7 @@
-"""提供 AuraBot 第二轮 Python Pi Task Control Plane 的公开包边界。
+"""公开 AuraBot Task runtime 的 Manager 门面、产品模型和领域错误。
 
-具体产品模型、持久化、调度、RPC、进程监督与编排分别位于子模块；Gateway 和未来
-Main Agent 只从本入口取得稳定业务门面、DTO 所需模型与明确 domain exceptions。
+Gateway 只从本包取得 TaskManager 与公共模型；Store、process 和 RPC 是 Manager 的
+内部实现，不通过包边界暴露持久化或 Pi 协议细节。
 """
 
 from .manager import TaskManager
@@ -12,7 +12,6 @@ from .models import (
     TaskEvent,
     TaskNotFound,
     TaskPage,
-    TaskQuestion,
     TaskRecord,
     TaskRequestError,
     TaskRuntimeUnavailable,
@@ -29,7 +28,6 @@ __all__ = [
     "TaskManager",
     "TaskNotFound",
     "TaskPage",
-    "TaskQuestion",
     "TaskRecord",
     "TaskRequestError",
     "TaskRuntimeUnavailable",

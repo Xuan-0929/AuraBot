@@ -12,7 +12,7 @@ AuraBot 是一个 desktop-first 的陪伴型 AI 项目。默认界面是常驻�
 | Chat | 普通文字聊天、pet quick chat、模型调用和消息持久化。 |
 | Memory | TypeScript MVP 与保留的 Python Memory 实现、follow-up 与 idle nudge。 |
 | Backend | Python Task REST/SSE 垂直切片已实现；health 契约保持不变。 |
-| Task | SQLite、FIFO、Pi RPC、暂停/恢复/取消和业务事件已实现；Electron/Main Agent 尚未接入。 |
+| Task | 两表同步 SQLite、固定五槽 FIFO、Pi RPC、立即 waiting 回收、暂停/恢复/取消和业务事件已实现；Electron/Main Agent 尚未接入。 |
 
 桌面 Task 型输入仍只会收到固定迁移回复，因为 Electron/Main Agent 接入不在本轮。
 后端 API 可独立创建并运行 Task，但桌面不会暗示该 surface 已经可用。
@@ -78,8 +78,9 @@ curl http://127.0.0.1:6401/health
 
 ## Task Runtime 配置
 
-仓库根配置的新 `task` 段指定 AuraBot user data、私有 `pi-runtime` 路径、Node、
-并发和默认 timeout。`pi-runtime` 精确锁定 Pi；`pi-aurabot-task` 提供标准
+仓库根配置的新 `task` 段指定 AuraBot user data、私有 `pi-runtime` 路径、Node 和
+默认 timeout。并发固定为五且不可配置；旧 `task.concurrency_limit` 会导致启动失败。
+`pi-runtime` 精确锁定 Pi；`pi-aurabot-task` 提供标准
 `ask_main_agent` Extension。二者都不是 Electron runner 或 Node Worker。
 HTTP 创建请求省略 timeout 时使用 YAML 默认值；显式 null 或 `1..86400` 之外的值
 会被拒绝。

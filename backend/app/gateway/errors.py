@@ -27,6 +27,7 @@ class CamelModel(BaseModel):
 
     model_config = ConfigDict(
         alias_generator=_to_camel,
+        from_attributes=True,
         populate_by_name=True,
         serialize_by_alias=True,
     )

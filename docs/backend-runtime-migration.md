@@ -23,8 +23,9 @@ flowchart LR
 
 1. 产品状态、Python-owned SQLite 与业务事件已经落地。
 2. Pi 0.84.2 私有依赖载体和 Pi-native Extension Package 已经落地。
-3. 严格 JSONL RPC、一 Task 一进程 supervisor、FIFO 与并发准入已经落地。
-4. TaskManager 已收口正常完成、错误、暂停、session 恢复、取消、重启和 shutdown。
+3. 严格 JSONL RPC、一 Task 一进程函数边界、SQLite FIFO 与固定五并发已经落地。
+4. TaskManager 作为单一 owner 已收口正常完成、错误、暂停、session 恢复、取消、
+   重启、fail-stop 和 shutdown。
 5. 现有 Gateway 已加入版本化 REST 与 SSE 后端垂直切片。
 6. Main Agent、Electron、Artifact 与生产发行打包仍留在后续切片。
 

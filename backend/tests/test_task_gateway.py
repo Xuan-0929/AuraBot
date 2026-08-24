@@ -33,7 +33,7 @@ from backend.task.models import (
     TaskStatus,
     TaskVersionConflict,
 )
-from backend.task.persistence.sessions import TaskSessionCleanupError
+from backend.task.process import TaskSessionCleanupError
 
 
 def task_record(status: TaskStatus = TaskStatus.QUEUED) -> TaskRecord:
@@ -47,8 +47,10 @@ def task_record(status: TaskStatus = TaskStatus.QUEUED) -> TaskRecord:
         status=status,
         timeout_seconds=1800,
         active_runtime_ms=0,
-        pi_session_id="private-session",
-        pi_session_path=Path("/private/session.jsonl"),
+        question_id=UUID("00000000-0000-4000-8000-000000000002"),
+        question_text="private question",
+        question_options=("private option",),
+        question_answer=None,
         result_text=None,
         error_code=None,
         error_message=None,
@@ -116,7 +118,7 @@ class FakeTaskManager:
 
     async def delete_task(self, _task_id: UUID) -> None:
         if self.raise_cleanup:
-            raise TaskSessionCleanupError(tombstone_committed=True)
+            raise TaskSessionCleanupError("session cleanup failed")
         return None
 
     async def iter_events(self, after_event_id: int, task_id: UUID | None = None):
@@ -359,6 +361,11 @@ class TaskGatewayTests(unittest.TestCase):
         request_schema = document["components"]["schemas"]["CreateTaskRequest"]
         timeout_schema = request_schema["properties"]["timeoutSeconds"]
         self.assertNotEqual(timeout_schema.get("default"), 1800)
+        status_values = document["components"]["schemas"]["TaskStatus"]["enum"]
+        self.assertEqual(
+            status_values,
+            ["queued", "running", "waiting", "paused", "completed", "failed", "cancelled"],
+        )
 
 
 if __name__ == "__main__":

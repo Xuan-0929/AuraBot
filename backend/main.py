@@ -24,11 +24,6 @@ from .app.gateway.task_routes import (
     router as task_router,
 )
 from .task.manager import TaskManager
-from .task.persistence.sessions import TaskSessionDeletion
-from .task.persistence.store import TaskStore
-from .task.runtime.engine import TaskRuntimeEngine
-from .task.runtime.process import PiProcessSupervisor
-from .task.runtime.scheduler import FIFOScheduler
 from .task.settings import TaskSettings
 
 
@@ -37,17 +32,7 @@ def build_task_manager() -> TaskManager:
 
     settings = TaskSettings.from_config(config, config.path)
     settings.validate_runtime()
-    store = TaskStore(settings.database_path)
-    scheduler = FIFOScheduler(settings.concurrency_limit)
-    supervisor = PiProcessSupervisor(settings)
-    runtime = TaskRuntimeEngine(settings, store, scheduler, supervisor)
-    session_deletion = TaskSessionDeletion(store, settings.session_root)
-    return TaskManager(
-        settings.default_timeout_seconds,
-        store,
-        runtime,
-        session_deletion,
-    )
+    return TaskManager(settings)
 
 
 def create_app(task_manager: TaskManager | None = None) -> FastAPI:

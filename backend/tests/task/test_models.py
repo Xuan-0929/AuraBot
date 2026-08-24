@@ -7,11 +7,13 @@
 
 from __future__ import annotations
 
+from dataclasses import fields
 import unittest
 
 from backend.task.models import (
     TERMINAL_TASK_STATUSES,
     TaskErrorCode,
+    TaskRecord,
     TaskStateConflict,
     TaskStatus,
     validate_status_transition,
@@ -19,17 +21,24 @@ from backend.task.models import (
 
 
 class TaskModelTests(unittest.TestCase):
+    def test_task_record_embeds_only_current_question_state(self):
+        field_names = {field.name for field in fields(TaskRecord)}
+
+        self.assertTrue(
+            {"question_id", "question_text", "question_options", "question_answer"}
+            <= field_names
+        )
+        self.assertNotIn("pi_session_id", field_names)
+        self.assertNotIn("pi_session_path", field_names)
+
     def test_public_statuses_and_error_codes_are_stable(self):
         self.assertEqual(
             {status.value for status in TaskStatus},
             {
                 "queued",
-                "starting",
                 "running",
                 "waiting",
-                "pausing",
                 "paused",
-                "cancelling",
                 "completed",
                 "failed",
                 "cancelled",
@@ -59,40 +68,27 @@ class TaskModelTests(unittest.TestCase):
     def test_all_approved_status_transitions_are_allowed(self):
         allowed = {
             TaskStatus.QUEUED: {
-                TaskStatus.STARTING,
+                TaskStatus.RUNNING,
                 TaskStatus.PAUSED,
                 TaskStatus.CANCELLED,
             },
-            TaskStatus.STARTING: {
-                TaskStatus.RUNNING,
-                TaskStatus.PAUSING,
-                TaskStatus.CANCELLING,
-                TaskStatus.FAILED,
-                TaskStatus.PAUSED,
-            },
             TaskStatus.RUNNING: {
                 TaskStatus.WAITING,
-                TaskStatus.PAUSING,
-                TaskStatus.CANCELLING,
                 TaskStatus.COMPLETED,
                 TaskStatus.FAILED,
                 TaskStatus.PAUSED,
+                TaskStatus.CANCELLED,
             },
             TaskStatus.WAITING: {
-                TaskStatus.RUNNING,
-                TaskStatus.PAUSING,
-                TaskStatus.CANCELLING,
                 TaskStatus.QUEUED,
                 TaskStatus.PAUSED,
                 TaskStatus.CANCELLED,
             },
-            TaskStatus.PAUSING: {TaskStatus.PAUSED, TaskStatus.FAILED},
             TaskStatus.PAUSED: {
                 TaskStatus.QUEUED,
                 TaskStatus.WAITING,
                 TaskStatus.CANCELLED,
             },
-            TaskStatus.CANCELLING: {TaskStatus.CANCELLED, TaskStatus.FAILED},
             TaskStatus.COMPLETED: set(),
             TaskStatus.FAILED: set(),
             TaskStatus.CANCELLED: set(),

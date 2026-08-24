@@ -1,8 +1,7 @@
-"""
-验证 TaskManager 在真实 Store、Scheduler 与 fake Pi Supervisor 上的完整业务编排。
+"""验证 TaskManager 是运行状态、FIFO、进程与 fail-stop 的唯一 owner。
 
-测试覆盖后端垂直切片的状态持久化、FIFO、pause/resume/cancel、问题回答、active timeout、
-restart reconciliation 与 shutdown；它不经过 FastAPI，也不依赖模型、网络或 Electron。
+测试使用真实同步 Store 和 fake Pi subprocess 覆盖固定五并发、立即 waiting 回收、命令
+CAS、timeout、recovery 与并行 shutdown；Gateway 与 JSON DTO 在各自测试中验证。
 """
 
 from __future__ import annotations
@@ -12,39 +11,21 @@ import os
 import sqlite3
 import sys
 import tempfile
+import time
 import unittest
 from pathlib import Path
 from unittest.mock import patch
 
-from backend.task.manager import TaskManager
+from backend.task.manager import MAX_ACTIVE_TASKS, TaskManager
 from backend.task.models import (
     CreateTaskCommand,
     TaskErrorCode,
     TaskRuntimeUnavailable,
     TaskStatus,
 )
-from backend.task.persistence.sessions import TaskSessionDeletion
-from backend.task.persistence.store import TaskStore
-from backend.task.runtime.engine import TaskRuntimeEngine
-from backend.task.runtime.process import PiProcessSupervisor
-from backend.task.runtime.scheduler import FIFOScheduler
 from backend.task.settings import TaskSettings
-
-
-class BrokenRpcWriter:
-    """Fail every Pi stdin write while still supporting idempotent close."""
-
-    def write(self, _data: bytes) -> None:
-        raise BrokenPipeError("Pi disappeared")
-
-    async def drain(self) -> None:
-        return None
-
-    def close(self) -> None:
-        return None
-
-    async def wait_closed(self) -> None:
-        return None
+from backend.task.store import TaskStore
+from backend.task.process import TaskSessionCleanupError
 
 
 class TaskManagerTests(unittest.IsolatedAsyncioTestCase):
@@ -53,76 +34,47 @@ class TaskManagerTests(unittest.IsolatedAsyncioTestCase):
         self.root = Path(self.temp.name).resolve()
         self.project = self.root / "project"
         self.project.mkdir()
-        fake_pi = Path(__file__).resolve().parents[1] / "fixtures/fake_pi_rpc.py"
-        plugin = self.root / "plugin.ts"
-        prompt = self.root / "prompt.md"
+        fake_pi = Path(__file__).parent.parent / "fixtures/fake_pi_rpc.py"
+        plugin, prompt = self.root / "plugin.ts", self.root / "prompt.md"
         plugin.write_text("// fake\n", encoding="utf-8")
         prompt.write_text("prompt\n", encoding="utf-8")
         self.settings = TaskSettings(
-            user_data_dir=self.root / "data",
             database_path=self.root / "data/task/task-runtime.sqlite3",
             session_root=self.root / "data/task/sessions",
             pi_home=self.root / "data/pi-agent",
-            pi_runtime_dir=self.root,
             node_executable=sys.executable,
             pi_cli_path=fake_pi,
             plugin_entry_path=plugin,
             system_prompt_path=prompt,
-            concurrency_limit=1,
             default_timeout_seconds=10,
             startup_timeout_seconds=0.3,
             rpc_timeout_seconds=0.3,
             abort_grace_seconds=0.1,
             terminate_grace_seconds=0.1,
-            shutdown_timeout_seconds=2,
-            waiting_process_grace_seconds=0.15,
+            shutdown_timeout_seconds=3,
             max_jsonl_line_bytes=1024,
             protocol_queue_size=32,
-            stderr_tail_bytes=128,
             output_chunk_bytes=16,
         )
-        self.store = TaskStore(self.settings.database_path)
-        self.scheduler = FIFOScheduler(self.settings.concurrency_limit)
-        self.supervisor = PiProcessSupervisor(self.settings)
-        self.runtime = TaskRuntimeEngine(
-            self.settings,
-            self.store,
-            self.scheduler,
-            self.supervisor,
-        )
-        self.session_deletion = TaskSessionDeletion(
-            self.store,
-            self.settings.session_root,
-        )
-        self.manager = TaskManager(
-            self.settings.default_timeout_seconds,
-            self.store,
-            self.runtime,
-            self.session_deletion,
-        )
+        self.manager = TaskManager(self.settings)
         self.started = False
 
     async def asyncTearDown(self):
         if self.started:
             await self.manager.shutdown()
-        else:
-            await self.supervisor.shutdown(1)
-            await self.store.close()
         self.temp.cleanup()
 
     async def startup(self):
         await self.manager.startup()
         self.started = True
 
-    def command(self, index: int = 1, timeout: int = 10) -> CreateTaskCommand:
+    def command(self, index: int = 1, timeout: int | None = 10):
         return CreateTaskCommand(
-            title=f"Task {index}",
-            prompt=f"Prompt {index}",
-            working_directory=self.project,
-            timeout_seconds=timeout,
+            title=f"Task {index}", prompt=f"Prompt {index}",
+            working_directory=self.project, timeout_seconds=timeout,
         )
 
-    async def wait_status(self, task_id, status: TaskStatus, timeout: float = 3):
+    async def wait_status(self, task_id, status: TaskStatus, timeout: float = 4):
         async with asyncio.timeout(timeout):
             while True:
                 task = await self.manager.get_task(task_id)
@@ -130,187 +82,155 @@ class TaskManagerTests(unittest.IsolatedAsyncioTestCase):
                     return task
                 await asyncio.sleep(0.01)
 
-    async def test_create_runs_to_completion_and_persists_output(self):
+    async def wait_no_run(self, task_id, timeout: float = 3):
+        async with asyncio.timeout(timeout):
+            while task_id in self.manager._runs:
+                await asyncio.sleep(0.01)
+
+    async def wait_pi(self, task_id, timeout: float = 3):
+        async with asyncio.timeout(timeout):
+            while True:
+                run = self.manager._runs.get(task_id)
+                if run is not None and run.pi is not None:
+                    return run.pi
+                await asyncio.sleep(0.01)
+
+    async def test_create_uses_default_and_completes_with_output(self):
         await self.startup()
         with patch.dict(os.environ, {"AURABOT_FAKE_PI_SCENARIO": "complete"}):
-            created = await self.manager.create_task(self.command())
+            created = await self.manager.create_task(self.command(timeout=None))
             completed = await self.wait_status(created.id, TaskStatus.COMPLETED)
 
+        self.assertEqual(created.timeout_seconds, 10)
         self.assertEqual(completed.result_text, "final result")
         self.assertGreater(completed.active_runtime_ms, 0)
-        events = await self.store.events_after(0, created.id, 100)
+        events = self.manager._store.events_after(0, created.id, 100)
         self.assertIn("task.output_appended", [event.type for event in events])
         self.assertEqual(events[-1].payload["to"], "completed")
-        self.assertIsNone(await self.supervisor.get(created.id))
+        self.assertNotIn(created.id, self.manager._runs)
 
-    async def test_fifo_keeps_second_queued_and_queued_pause_cancel_are_immediate(self):
-        await self.startup()
-        with patch.dict(os.environ, {"AURABOT_FAKE_PI_SCENARIO": "ask_main_agent"}):
-            first = await self.manager.create_task(self.command(1))
-            await self.wait_status(first.id, TaskStatus.WAITING)
-            second = await self.manager.create_task(self.command(2))
-            await asyncio.sleep(0.05)
-            self.assertEqual((await self.manager.get_task(second.id)).status, TaskStatus.QUEUED)
-
-            paused = await self.manager.pause_task(second.id, second.version)
-            self.assertEqual(paused.status, TaskStatus.PAUSED)
-            cancelled = await self.manager.cancel_task(second.id, paused.version)
-            self.assertEqual(cancelled.status, TaskStatus.CANCELLED)
-
-            first_current = await self.manager.get_task(first.id)
-            await self.manager.cancel_task(first.id, first_current.version)
-
-    async def test_active_pause_reaps_and_resume_uses_new_process(self):
+    async def test_sqlite_fifo_admits_exactly_five_then_refills_one_slot(self):
+        self.assertEqual(MAX_ACTIVE_TASKS, 5)
         await self.startup()
         with patch.dict(os.environ, {"AURABOT_FAKE_PI_SCENARIO": "running_hang"}):
-            created = await self.manager.create_task(self.command())
-            running = await self.wait_status(created.id, TaskStatus.RUNNING)
-            paused = await self.manager.pause_task(created.id, running.version)
+            tasks = [await self.manager.create_task(self.command(i)) for i in range(6)]
+            for task in tasks[:5]:
+                await self.wait_status(task.id, TaskStatus.RUNNING)
+            await asyncio.sleep(0.05)
+            sixth = await self.manager.get_task(tasks[5].id)
+            self.assertEqual(sixth.status, TaskStatus.QUEUED)
+            self.assertEqual(len(self.manager._runs), 5)
 
-        self.assertEqual(paused.status, TaskStatus.PAUSED)
-        self.assertIsNone(await self.supervisor.get(created.id))
-        with patch.dict(os.environ, {"AURABOT_FAKE_PI_SCENARIO": "complete"}):
-            resumed = await self.manager.resume_task(created.id, paused.version)
-            self.assertEqual(resumed.status, TaskStatus.QUEUED)
-            completed = await self.wait_status(created.id, TaskStatus.COMPLETED)
-        self.assertEqual(completed.result_text, "final result")
+            first = await self.manager.get_task(tasks[0].id)
+            paused = await self.manager.pause_task(first.id, first.version)
+            self.assertEqual(paused.status, TaskStatus.PAUSED)
+            await self.wait_status(sixth.id, TaskStatus.RUNNING)
+            self.assertEqual(len(self.manager._runs), 5)
 
-    async def test_question_answer_resumes_live_rpc_and_completes(self):
-        await self.startup()
-        with patch.dict(os.environ, {"AURABOT_FAKE_PI_SCENARIO": "ask_main_agent"}):
-            created = await self.manager.create_task(self.command())
-            waiting = await self.wait_status(created.id, TaskStatus.WAITING)
-            question = await self.store.pending_question(created.id)
-            self.assertIsNotNone(question)
-            answered = await self.manager.answer_question(
-                created.id,
-                question.id,
-                "blue",
-                waiting.version,
+            seventh = await self.manager.create_task(self.command(7))
+            paused_queued = await self.manager.pause_task(seventh.id, seventh.version)
+            self.assertEqual(paused_queued.status, TaskStatus.PAUSED)
+            cancelled_paused = await self.manager.cancel_task(
+                seventh.id, paused_queued.version
             )
-            self.assertEqual(answered.status, TaskStatus.RUNNING)
-            delivered = await self.store.undelivered_answer(created.id)
-            self.assertIsNone(delivered)
-            completed = await self.wait_status(created.id, TaskStatus.COMPLETED)
+            self.assertEqual(cancelled_paused.status, TaskStatus.CANCELLED)
+            eighth = await self.manager.create_task(self.command(8))
+            cancelled_queued = await self.manager.cancel_task(eighth.id, eighth.version)
+            self.assertEqual(cancelled_queued.status, TaskStatus.CANCELLED)
 
-        self.assertEqual(completed.result_text, "final result")
-        self.assertIsNone(await self.store.pending_question(created.id))
-
-    async def test_waiting_hibernates_then_answer_requeues_session(self):
+    async def test_question_immediately_reaps_and_answer_always_requeues(self):
         await self.startup()
         with patch.dict(os.environ, {"AURABOT_FAKE_PI_SCENARIO": "ask_main_agent"}):
             created = await self.manager.create_task(self.command())
             waiting = await self.wait_status(created.id, TaskStatus.WAITING)
-            question = await self.store.pending_question(created.id)
-            self.assertIsNotNone(question)
-            async with asyncio.timeout(2):
-                while await self.supervisor.get(created.id) is not None:
-                    await asyncio.sleep(0.01)
+            await self.wait_no_run(created.id)
+            self.assertIsNotNone(waiting.question_id)
 
             os.environ["AURABOT_FAKE_PI_SCENARIO"] = "complete"
+            os.environ["AURABOT_FAKE_EXPECT_PROMPT_CONTAINS"] = "blue"
             queued = await self.manager.answer_question(
-                created.id, question.id, "blue", waiting.version
+                created.id, waiting.question_id, "blue", waiting.version
             )
             self.assertEqual(queued.status, TaskStatus.QUEUED)
+            self.assertEqual(queued.question_answer, "blue")
             completed = await self.wait_status(created.id, TaskStatus.COMPLETED)
 
         self.assertEqual(completed.result_text, "final result")
-        self.assertIsNone(await self.store.undelivered_answer(created.id))
-
-    async def test_live_answer_write_failure_reaps_then_replays_durable_answer(self):
-        await self.startup()
-        with patch.dict(os.environ, {"AURABOT_FAKE_PI_SCENARIO": "ask_main_agent"}):
-            created = await self.manager.create_task(self.command())
-            waiting = await self.wait_status(created.id, TaskStatus.WAITING)
-            question = await self.store.pending_question(created.id)
-            running = await self.supervisor.get(created.id)
-            self.assertIsNotNone(question)
-            self.assertIsNotNone(running)
-            running.rpc._stdin = BrokenRpcWriter()
-            os.environ["AURABOT_FAKE_PI_SCENARIO"] = "complete"
-
-            queued = await self.manager.answer_question(
-                created.id, question.id, "blue", waiting.version
-            )
-            self.assertEqual(queued.status, TaskStatus.QUEUED)
-            completed = await self.wait_status(created.id, TaskStatus.COMPLETED)
-
-        self.assertEqual(completed.result_text, "final result")
-        self.assertIsNone(await self.supervisor.get(created.id))
-        self.assertIsNone(await self.store.undelivered_answer(created.id))
-        events = await self.store.events_after(0, created.id, 100)
+        self.assertIsNone(completed.question_id)
+        events = self.manager._store.events_after(0, created.id, 100)
         self.assertEqual([event.type for event in events].count("task.question_answered"), 1)
 
-    async def test_manager_uses_yaml_timeout_when_command_omits_it(self):
+    async def test_waiting_pause_resume_and_answered_pause_resume(self):
         await self.startup()
-        command = CreateTaskCommand(
-            title="Default timeout",
-            prompt="Prompt",
-            working_directory=self.project,
-            timeout_seconds=None,
-        )
-        with patch.dict(os.environ, {"AURABOT_FAKE_PI_SCENARIO": "complete"}):
-            created = await self.manager.create_task(command)
-            await self.wait_status(created.id, TaskStatus.COMPLETED)
-        self.assertEqual(created.timeout_seconds, 10)
+        with patch.dict(os.environ, {"AURABOT_FAKE_PI_SCENARIO": "ask_main_agent"}):
+            task = await self.manager.create_task(self.command())
+            waiting = await self.wait_status(task.id, TaskStatus.WAITING)
+            paused = await self.manager.pause_task(task.id, waiting.version)
+            restored = await self.manager.resume_task(task.id, paused.version)
+            self.assertEqual(restored.status, TaskStatus.WAITING)
 
-    async def test_concurrent_delete_is_idempotent(self):
-        await self.startup()
-        task = await self.store.create_task(self.command())
-        task, _ = await self.store.transition_task(
-            task.id, TaskStatus.CANCELLED, expected_version=task.version
-        )
+            queued = await self.manager.answer_question(
+                task.id, restored.question_id, "blue", restored.version
+            )
+            paused_answer = await self.manager.pause_task(task.id, queued.version)
+            resumed = await self.manager.resume_task(task.id, paused_answer.version)
+            self.assertEqual(resumed.status, TaskStatus.QUEUED)
 
-        await asyncio.gather(
-            self.manager.delete_task(task.id), self.manager.delete_task(task.id)
-        )
+            another = await self.manager.create_task(self.command(2))
+            waiting = await self.wait_status(another.id, TaskStatus.WAITING)
+            cancelled = await self.manager.cancel_task(another.id, waiting.version)
+            self.assertEqual(cancelled.status, TaskStatus.CANCELLED)
+            self.assertNotIn(another.id, self.manager._runs)
 
-        deleted = await self.store.get_task(task.id, include_deleted=True)
-        events = await self.store.events_after(0, task.id, 100)
-        self.assertEqual(deleted.version, task.version + 1)
-        self.assertEqual([event.type for event in events].count("task.deleted"), 1)
-
-    async def test_active_timeout_fails_without_task_level_retry(self):
+    async def test_running_pause_and_cancel_commit_only_after_reap(self):
         await self.startup()
         with patch.dict(os.environ, {"AURABOT_FAKE_PI_SCENARIO": "running_hang"}):
-            created = await self.manager.create_task(self.command(timeout=1))
-            failed = await self.wait_status(created.id, TaskStatus.FAILED, timeout=3)
+            first = await self.manager.create_task(self.command(1))
+            running = await self.wait_status(first.id, TaskStatus.RUNNING)
+            process = (await self.wait_pi(first.id)).process
+            paused = await self.manager.pause_task(first.id, running.version)
+            self.assertIsNotNone(process.returncode)
+            self.assertEqual(paused.status, TaskStatus.PAUSED)
 
-        self.assertEqual(failed.error_code, TaskErrorCode.TIMEOUT)
-        self.assertIsNone(await self.supervisor.get(created.id))
+            second = await self.manager.create_task(self.command(2))
+            running = await self.wait_status(second.id, TaskStatus.RUNNING)
+            process = (await self.wait_pi(second.id)).process
+            cancelled = await self.manager.cancel_task(second.id, running.version)
+            self.assertIsNotNone(process.returncode)
+            self.assertEqual(cancelled.status, TaskStatus.CANCELLED)
 
-    async def test_nonzero_exit_after_prompt_acceptance_is_unexpected_exit(self):
+    async def test_timeout_nonzero_exit_and_model_error_are_stable(self):
         await self.startup()
-        with patch.dict(
-            os.environ, {"AURABOT_FAKE_PI_SCENARIO": "exit_nonzero_after_accept"}
-        ):
-            created = await self.manager.create_task(self.command())
-            failed = await self.wait_status(created.id, TaskStatus.FAILED)
-
-        self.assertEqual(failed.error_code, TaskErrorCode.UNEXPECTED_EXIT)
-        self.assertIsNone(await self.supervisor.get(created.id))
-
-    async def test_agent_settled_after_model_error_does_not_complete_task(self):
-        await self.startup()
-        with patch.dict(os.environ, {"AURABOT_FAKE_PI_SCENARIO": "model_error"}):
-            created = await self.manager.create_task(self.command())
-            failed = await self.wait_status(created.id, TaskStatus.FAILED)
-
-        self.assertEqual(failed.error_code, TaskErrorCode.MODEL_ERROR)
-        self.assertNotIn("provider secret detail", failed.error_message)
-        self.assertIsNone(await self.supervisor.get(created.id))
-
-    async def test_restart_reconciliation_pauses_session_and_fails_missing_session(self):
-        await self.store.initialize()
-        resumable = await self.store.create_task(self.command(1))
-        resumable, _ = await self.store.transition_task(
-            resumable.id, TaskStatus.STARTING, expected_version=resumable.version
+        cases = (
+            ("running_hang", 1, TaskErrorCode.TIMEOUT),
+            ("exit_nonzero_after_accept", 10, TaskErrorCode.UNEXPECTED_EXIT),
+            ("model_error", 10, TaskErrorCode.MODEL_ERROR),
+            ("malformed_json", 10, TaskErrorCode.PROTOCOL_ERROR),
+            ("extension_error", 10, TaskErrorCode.RESOURCE_LOAD_FAILED),
+            ("missing_result", 10, TaskErrorCode.RESULT_UNAVAILABLE),
         )
+        for index, (scenario, timeout, code) in enumerate(cases, start=1):
+            with self.subTest(scenario=scenario):
+                with patch.dict(os.environ, {"AURABOT_FAKE_PI_SCENARIO": scenario}):
+                    task = await self.manager.create_task(self.command(index, timeout))
+                    failed = await self.wait_status(task.id, TaskStatus.FAILED)
+                self.assertEqual(failed.error_code, code)
+                self.assertNotIn("provider secret detail", failed.error_message or "")
+
+    async def test_restart_repairs_running_and_preserves_other_durable_states(self):
+        seed = TaskStore(self.settings.database_path)
+        seed.initialize()
+        resumable = seed.create_task(self.command(1))
+        resumable = seed.claim_queued(1)[0]
         self.settings.session_directory(resumable.id).mkdir(parents=True)
-        missing = await self.store.create_task(self.command(2))
-        missing, _ = await self.store.transition_task(
-            missing.id, TaskStatus.STARTING, expected_version=missing.version
+        missing = seed.create_task(self.command(2))
+        missing = seed.claim_queued(1)[0]
+        waiting_source = seed.create_task(self.command(3))
+        waiting_source = seed.claim_queued(1)[0]
+        waiting, _ = seed.raise_question(
+            waiting_source.id, "Choose", (), expected_version=waiting_source.version
         )
+        seed.close()
 
         await self.startup()
 
@@ -318,52 +238,68 @@ class TaskManagerTests(unittest.IsolatedAsyncioTestCase):
         failed = await self.manager.get_task(missing.id)
         self.assertEqual(paused.status, TaskStatus.PAUSED)
         self.assertEqual(paused.pause_reason, "backend_restarted")
-        self.assertEqual(failed.status, TaskStatus.FAILED)
         self.assertEqual(failed.error_code, TaskErrorCode.SESSION_MISSING)
+        self.assertEqual((await self.manager.get_task(waiting.id)).status, TaskStatus.WAITING)
 
-    async def test_shutdown_pauses_active_task_after_reaping(self):
+    async def test_shutdown_reaps_five_in_parallel_and_pauses_running(self):
         await self.startup()
-        with patch.dict(os.environ, {"AURABOT_FAKE_PI_SCENARIO": "running_hang"}):
-            created = await self.manager.create_task(self.command())
-            await self.wait_status(created.id, TaskStatus.RUNNING)
+        with patch.dict(os.environ, {"AURABOT_FAKE_PI_SCENARIO": "ignore_abort"}):
+            tasks = [await self.manager.create_task(self.command(i)) for i in range(5)]
+            for task in tasks:
+                await self.wait_status(task.id, TaskStatus.RUNNING)
+            started = time.monotonic()
             await self.manager.shutdown()
+            elapsed = time.monotonic() - started
             self.started = False
 
         reopened = TaskStore(self.settings.database_path)
-        await reopened.initialize()
-        paused = await reopened.get_task(created.id)
-        await reopened.close()
-        self.assertEqual(paused.status, TaskStatus.PAUSED)
-        self.assertEqual(paused.pause_reason, "backend_shutdown")
+        reopened.initialize()
+        self.assertLess(elapsed, 1.5)
+        for task in tasks:
+            paused = reopened.get_task(task.id)
+            self.assertEqual(paused.status, TaskStatus.PAUSED)
+            self.assertEqual(paused.pause_reason, "backend_shutdown")
+        reopened.close()
 
-    async def test_store_write_failure_stops_admission_and_reaps_workers(self):
-        await self.store.initialize()
-        created = await self.store.create_task(self.command())
-        await self.store.close()
-        with sqlite3.connect(self.settings.database_path) as connection:
-            connection.execute(
-                """
-                CREATE TRIGGER reject_manager_status_event
-                BEFORE INSERT ON task_events
-                WHEN NEW.event_type = 'task.status_changed'
-                BEGIN
-                  SELECT RAISE(ABORT, 'durability lost');
-                END
-                """
-            )
-
+    async def test_durable_write_failure_stops_admission_and_reaps_all_pi(self):
         await self.startup()
-        async with asyncio.timeout(2):
-            while True:
-                try:
-                    self.runtime.require_available()
-                except TaskRuntimeUnavailable:
-                    break
-                await asyncio.sleep(0.01)
+        with patch.dict(os.environ, {"AURABOT_FAKE_PI_SCENARIO": "running_hang"}):
+            tasks = [await self.manager.create_task(self.command(i)) for i in range(2)]
+            for task in tasks:
+                await self.wait_status(task.id, TaskStatus.RUNNING)
+            with sqlite3.connect(self.settings.database_path) as connection:
+                connection.execute(
+                    """CREATE TRIGGER reject_status_event BEFORE INSERT ON task_events
+                       WHEN NEW.event_type='task.status_changed'
+                       BEGIN SELECT RAISE(ABORT, 'durability lost'); END"""
+                )
+            current = await self.manager.get_task(tasks[0].id)
+            with self.assertRaises(TaskRuntimeUnavailable):
+                await self.manager.pause_task(current.id, current.version)
+            async with asyncio.timeout(3):
+                while self.manager._runs:
+                    await asyncio.sleep(0.01)
+            with self.assertRaises(TaskRuntimeUnavailable):
+                await self.manager.create_task(self.command(3))
 
-        with self.assertRaises(TaskRuntimeUnavailable):
-            await self.manager.create_task(self.command(2))
-        self.assertIsNone(await self.supervisor.get(created.id))
+    async def test_delete_commits_tombstone_before_cleanup_and_retries_idempotently(self):
+        await self.startup()
+        with patch.dict(os.environ, {"AURABOT_FAKE_PI_SCENARIO": "complete"}):
+            task = await self.manager.create_task(self.command())
+            await self.wait_status(task.id, TaskStatus.COMPLETED)
+
+        with patch(
+            "backend.task.manager.remove_session",
+            side_effect=TaskSessionCleanupError("cleanup failed"),
+        ):
+            with self.assertRaises(TaskSessionCleanupError):
+                await self.manager.delete_task(task.id)
+
+        deleted = await self.manager.get_task(task.id, include_deleted=True)
+        self.assertIsNotNone(deleted.deleted_at)
+        await self.manager.delete_task(task.id)
+        events = self.manager._store.events_after(0, task.id, 100)
+        self.assertEqual([event.type for event in events].count("task.deleted"), 1)
 
 
 if __name__ == "__main__":

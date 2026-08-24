@@ -19,12 +19,9 @@ class TaskStatus(StrEnum):
     """Public product lifecycle of one Task execution."""
 
     QUEUED = "queued"
-    STARTING = "starting"
     RUNNING = "running"
     WAITING = "waiting"
-    PAUSING = "pausing"
     PAUSED = "paused"
-    CANCELLING = "cancelling"
     COMPLETED = "completed"
     FAILED = "failed"
     CANCELLED = "cancelled"
@@ -50,50 +47,28 @@ TERMINAL_TASK_STATUSES = frozenset(
     {TaskStatus.COMPLETED, TaskStatus.FAILED, TaskStatus.CANCELLED}
 )
 
-"""
-更像开发时脚手架，这里定义了允许的状态转换。
-
-Task Core开发完成后可以考虑删除之。
-"""
 _ALLOWED_STATUS_TRANSITIONS: Mapping[TaskStatus, frozenset[TaskStatus]] = {
     TaskStatus.QUEUED: frozenset(
-        {TaskStatus.STARTING, TaskStatus.PAUSED, TaskStatus.CANCELLED}
-    ),
-    TaskStatus.STARTING: frozenset(
-        {
-            TaskStatus.RUNNING,
-            TaskStatus.PAUSING,
-            TaskStatus.CANCELLING,
-            TaskStatus.FAILED,
-            TaskStatus.PAUSED,
-        }
+        {TaskStatus.RUNNING, TaskStatus.PAUSED, TaskStatus.CANCELLED}
     ),
     TaskStatus.RUNNING: frozenset(
         {
             TaskStatus.WAITING,
-            TaskStatus.PAUSING,
-            TaskStatus.CANCELLING,
             TaskStatus.COMPLETED,
             TaskStatus.FAILED,
             TaskStatus.PAUSED,
+            TaskStatus.CANCELLED,
         }
     ),
     TaskStatus.WAITING: frozenset(
         {
-            TaskStatus.RUNNING,
-            TaskStatus.PAUSING,
-            TaskStatus.CANCELLING,
             TaskStatus.QUEUED,
             TaskStatus.PAUSED,
             TaskStatus.CANCELLED,
         }
     ),
-    TaskStatus.PAUSING: frozenset({TaskStatus.PAUSED, TaskStatus.FAILED}),
     TaskStatus.PAUSED: frozenset(
         {TaskStatus.QUEUED, TaskStatus.WAITING, TaskStatus.CANCELLED}
-    ),
-    TaskStatus.CANCELLING: frozenset(
-        {TaskStatus.CANCELLED, TaskStatus.FAILED}
     ),
     TaskStatus.COMPLETED: frozenset(),
     TaskStatus.FAILED: frozenset(),
@@ -160,7 +135,7 @@ class CreateTaskCommand:
 
 @dataclass(frozen=True, slots=True)
 class TaskRecord:
-    """Persisted Task snapshot without raw Pi protocol values."""
+    """持久化 Task 快照；问题只保留当前一次，历史由事件保存。"""
 
     id: UUID
     row_id: int
@@ -170,8 +145,10 @@ class TaskRecord:
     status: TaskStatus
     timeout_seconds: int
     active_runtime_ms: int
-    pi_session_id: str | None
-    pi_session_path: Path | None
+    question_id: UUID | None
+    question_text: str | None
+    question_options: tuple[str, ...]
+    question_answer: str | None
     result_text: str | None
     error_code: TaskErrorCode | None
     error_message: str | None
@@ -198,21 +175,6 @@ class TaskEvent:
 
 
 @dataclass(frozen=True, slots=True)
-class TaskQuestion:
-    """Persisted Main Agent question independent of a live Pi process."""
-
-    id: UUID
-    task_id: UUID
-    question: str
-    options: tuple[str, ...]
-    rpc_request_id: str | None
-    answer: str | None
-    created_at: datetime
-    answered_at: datetime | None
-    delivered_at: datetime | None
-
-
-@dataclass(frozen=True, slots=True)
 class TaskPage:
     """Cursor page ordered by monotonically increasing Task row id."""
 
@@ -228,7 +190,6 @@ __all__ = [
     "TaskEvent",
     "TaskNotFound",
     "TaskPage",
-    "TaskQuestion",
     "TaskRecord",
     "TaskRequestError",
     "TaskRuntimeError",

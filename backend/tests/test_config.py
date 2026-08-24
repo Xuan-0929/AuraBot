@@ -38,7 +38,6 @@ features:
 optional_value: null
 task:
   user_data_dir: "./data"
-  concurrency_limit: 2
 """.strip(),
                 encoding="utf-8",
             )
@@ -185,7 +184,6 @@ task_runtime:
         self.assertEqual(runtime_config.chat_model["api_key"], "chat-secret")
         self.assertEqual(runtime_config.gateway_model["api_key"], "gateway-secret")
         self.assertNotIn("task_model", runtime_config)
-        self.assertEqual(runtime_config.task["concurrency_limit"], 2)
         self.assertEqual(runtime_config.task["default_timeout_seconds"], 1800)
 
 

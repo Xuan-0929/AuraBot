@@ -7,10 +7,10 @@
 | Electron profiles/sessions/messages | Electron main process | 保留普通主聊天数据；Session 只有 Main Session 语义。 |
 | Electron memory/event logs | Electron main process | 保留 Memory 与非 task.* 事件。 |
 | Python long/short-term memory | Python Memory modules | 与已删除 Task Runtime 独立。 |
-| Task records/questions/events | Python Task Store | 第二轮独立数据库，不写 Electron SQLite。 |
+| Task records/current question/events | Python Task Store | 两表独立数据库，不写 Electron SQLite。 |
 | Task artifacts | 无 | 本轮仍未实现。 |
 | Task child sessions/messages | 无 | migration 删除，不并入主聊天。 |
-| Pi session/context | Pi，路径由 Python Supervisor 管理 | 使用 AuraBot 专属 Pi Home 与每 Task session 目录。 |
+| Pi session/context | Pi，路径由 Python Manager/process 管理 | 使用 AuraBot 专属 Pi Home 与每 Task session 目录。 |
 
 ## 第一轮清理
 
@@ -48,6 +48,9 @@ flowchart LR
 
 - Python TaskManager/Store 是 Task 业务数据唯一 owner，数据库位于
   `<userData>/task/task-runtime.sqlite3`。
+- Task SQLite 只含 `tasks` 与 `task_events`，并使用 `PRAGMA user_version=1`；当前问题
+  折叠在 tasks，问题历史由 events 保存。旧 Task schema 不自动迁移。
+- SQLite 的 `row_id` 是唯一 FIFO 真相；Manager 只保存最多五个 active TaskRun。
 - Electron 只能消费 API/event projection，不得恢复本地 Task write path。
 - Pi 拥有进程内部上下文，但不直接成为 AuraBot 产品数据库 owner。
 - 本轮不向第一轮 Electron DB 添加 Task migration，也不双写 Memory DB。

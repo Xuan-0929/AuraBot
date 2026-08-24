@@ -7,7 +7,6 @@ CLI，并把所有 Task 数据和 Pi Home 固定在 AuraBot user data 下。
 
 from __future__ import annotations
 
-import os
 import tempfile
 import unittest
 from pathlib import Path
@@ -42,14 +41,12 @@ class TaskSettingsTests(unittest.TestCase):
                         "user_data_dir": "./user-data",
                         "pi_runtime_dir": str(runtime),
                         "node_executable": str(node),
-                        "concurrency_limit": 3,
                         "default_timeout_seconds": 900,
                     }
                 },
                 config_root=root,
             )
 
-            self.assertEqual(settings.user_data_dir, (root / "user-data").resolve())
             resolved_root = root.resolve()
             self.assertEqual(
                 settings.database_path,
@@ -57,14 +54,15 @@ class TaskSettingsTests(unittest.TestCase):
             )
             self.assertEqual(settings.session_root, resolved_root / "user-data/task/sessions")
             self.assertEqual(settings.pi_home, resolved_root / "user-data/pi-agent")
-            self.assertEqual(settings.pi_runtime_dir, runtime.resolve())
-            self.assertEqual(settings.concurrency_limit, 3)
             self.assertEqual(settings.default_timeout_seconds, 900)
             self.assertEqual(settings.startup_timeout_seconds, 15)
             self.assertEqual(settings.max_jsonl_line_bytes, 8 * 1024 * 1024)
             self.assertTrue(settings.pi_cli_path.is_absolute())
             self.assertTrue(settings.plugin_entry_path.is_absolute())
             self.assertTrue(settings.system_prompt_path.is_absolute())
+            self.assertFalse(hasattr(settings, "concurrency_limit"))
+            self.assertFalse(hasattr(settings, "waiting_process_grace_seconds"))
+            self.assertFalse(hasattr(settings, "stderr_tail_bytes"))
 
     def test_validates_exact_pinned_cli_version(self):
         with tempfile.TemporaryDirectory() as directory:
@@ -97,22 +95,22 @@ class TaskSettingsTests(unittest.TestCase):
             with self.assertRaisesRegex(TaskSettingsError, "0.84.2"):
                 wrong.validate_runtime()
 
-    def test_rejects_missing_runtime_files_and_invalid_limits(self):
+    def test_rejects_removed_concurrency_configuration(self):
         with tempfile.TemporaryDirectory() as directory:
             root = Path(directory)
-            with self.assertRaisesRegex(TaskSettingsError, "concurrency_limit"):
+            with self.assertRaisesRegex(TaskSettingsError, "no longer configurable"):
                 TaskSettings.from_mapping(
                     {
                         "task": {
-                            "user_data_dir": str(root / "data"),
-                            "pi_runtime_dir": str(root / "missing"),
-                            "node_executable": os.devnull,
-                            "concurrency_limit": 0,
+                            "concurrency_limit": 2,
                         }
                     },
                     config_root=root,
                 )
 
+    def test_rejects_missing_runtime_files(self):
+        with tempfile.TemporaryDirectory() as directory:
+            root = Path(directory)
             node = root / "node"
             node.write_text("#!/bin/sh\nprintf '0.84.2\\n'\n", encoding="utf-8")
             node.chmod(0o755)

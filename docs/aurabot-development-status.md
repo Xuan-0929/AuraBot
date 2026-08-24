@@ -1,6 +1,6 @@
 # AuraBot 当前开发状态
 
-更新时间：2026-08-20
+更新时间：2026-08-24
 
 ## 当前事实
 
@@ -27,8 +27,10 @@ Task 采用 Python Control Plane + 一 Task 一 Pi RPC 进程；唯一事实源�
 
 ## 本轮与后续
 
-本轮已经实现产品模型、Python SQLite、FIFO/并发、Pi RPC Supervisor、TaskManager、
-REST/SSE 与 offline smoke。后续才接 Main Agent、Electron、Artifact 和生产打包。
+本轮已经把 Task Control Plane 收口为单一 owner：TaskManager 直接拥有同步两表 SQLite、
+固定五槽 FIFO、Pi handle、active clock、recovery 与 fail-stop；waiting 问题 durable 后
+立即 reap。REST/SSE 与 offline smoke 保持。后续才接 Main Agent、Electron、Artifact
+和生产打包。
 
 ## 验证入口
 
@@ -41,8 +43,7 @@ npm test
 npm run build
 ~~~
 
-2026-08-20 最终验证结果：Backend 230 个 unittest 通过（包含真实 Pi offline
-smoke）；Pi Extension Package 5 个 Node 测试与 TypeScript typecheck 通过，固定 CLI
-版本精确为 0.84.2；Frontend 54 个 Vitest 文件、160 个测试、typecheck 与 production
-build 通过。真实 Uvicorn health 响应精确，OpenAPI 只包含 `/health` 与版本化
-`/api/v1/tasks*` 路径。Build 仍只有既存 Pixi 混合导入 chunk warning。
+2026-08-24 Task runtime 精简后 Backend 218 个 unittest 通过（1 个可选 live test
+skipped，包含真实 Pi offline smoke）；`backend/task` 只保留六个实质模块和
+`__init__.py`。固定 CLI 版本仍精确为 0.84.2，OpenAPI 仍只公开 `/health` 与版本化
+`/api/v1/tasks*` 路径。

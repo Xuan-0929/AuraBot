@@ -45,7 +45,7 @@ def _manager(request: Request) -> TaskManager:
 
 @router.post("/tasks", response_model=TaskResponse, status_code=status.HTTP_201_CREATED)
 async def create_task(body: CreateTaskRequest, request: Request) -> TaskResponse:
-    return TaskResponse.from_record(
+    return TaskResponse.model_validate(
         await _manager(request).create_task(body.to_command())
     )
 
@@ -60,19 +60,19 @@ async def list_tasks(
     page = await _manager(request).list_tasks(
         after_row_id=cursor, limit=limit, statuses=task_status
     )
-    return TaskPageResponse.from_page(page)
+    return TaskPageResponse.model_validate(page)
 
 
 @router.get("/tasks/{task_id}", response_model=TaskResponse)
 async def get_task(task_id: UUID, request: Request) -> TaskResponse:
-    return TaskResponse.from_record(await _manager(request).get_task(task_id))
+    return TaskResponse.model_validate(await _manager(request).get_task(task_id))
 
 
 @router.post("/tasks/{task_id}/pause", response_model=TaskResponse)
 async def pause_task(
     task_id: UUID, body: TaskCommandRequest, request: Request
 ) -> TaskResponse:
-    return TaskResponse.from_record(
+    return TaskResponse.model_validate(
         await _manager(request).pause_task(task_id, body.expected_version)
     )
 
@@ -81,7 +81,7 @@ async def pause_task(
 async def resume_task(
     task_id: UUID, body: TaskCommandRequest, request: Request
 ) -> TaskResponse:
-    return TaskResponse.from_record(
+    return TaskResponse.model_validate(
         await _manager(request).resume_task(task_id, body.expected_version)
     )
 
@@ -90,7 +90,7 @@ async def resume_task(
 async def cancel_task(
     task_id: UUID, body: TaskCommandRequest, request: Request
 ) -> TaskResponse:
-    return TaskResponse.from_record(
+    return TaskResponse.model_validate(
         await _manager(request).cancel_task(task_id, body.expected_version)
     )
 
@@ -129,7 +129,7 @@ async def task_events(
                     event = pending.result()
                 except StopAsyncIteration:
                     return
-                public = TaskEventResponse.from_event(event)
+                public = TaskEventResponse.model_validate(event)
                 yield (
                     f"id: {event.event_id}\n"
                     f"event: {event.type}\n"

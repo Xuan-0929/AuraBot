@@ -14,14 +14,7 @@ from uuid import UUID
 
 from pydantic import Field, field_validator
 
-from ...task import (
-    CreateTaskCommand,
-    TaskErrorCode,
-    TaskEvent,
-    TaskPage,
-    TaskRecord,
-    TaskStatus,
-)
+from ...task import CreateTaskCommand, TaskErrorCode, TaskStatus
 from .errors import CamelModel
 
 
@@ -83,41 +76,9 @@ class TaskResponse(CamelModel):
     finished_at: datetime | None
     deleted_at: datetime | None
 
-    @classmethod
-    def from_record(cls, task: TaskRecord) -> "TaskResponse":
-        return cls(
-            id=task.id,
-            row_id=task.row_id,
-            title=task.title,
-            prompt=task.prompt,
-            working_directory=task.working_directory,
-            status=task.status,
-            timeout_seconds=task.timeout_seconds,
-            active_runtime_ms=task.active_runtime_ms,
-            result_text=task.result_text,
-            error_code=task.error_code,
-            error_message=task.error_message,
-            pause_reason=task.pause_reason,
-            rerun_of_task_id=task.rerun_of_task_id,
-            version=task.version,
-            created_at=task.created_at,
-            updated_at=task.updated_at,
-            started_at=task.started_at,
-            finished_at=task.finished_at,
-            deleted_at=task.deleted_at,
-        )
-
-
 class TaskPageResponse(CamelModel):
     items: tuple[TaskResponse, ...]
     next_cursor: int | None
-
-    @classmethod
-    def from_page(cls, page: TaskPage) -> "TaskPageResponse":
-        return cls(
-            items=tuple(TaskResponse.from_record(item) for item in page.items),
-            next_cursor=page.next_cursor,
-        )
 
 
 class TaskEventResponse(CamelModel):
@@ -127,18 +88,6 @@ class TaskEventResponse(CamelModel):
     type: str
     occurred_at: datetime
     payload: dict[str, Any]
-
-    @classmethod
-    def from_event(cls, event: TaskEvent) -> "TaskEventResponse":
-        return cls(
-            event_id=event.event_id,
-            task_sequence=event.task_sequence,
-            task_id=event.task_id,
-            type=event.type,
-            occurred_at=event.occurred_at,
-            payload=dict(event.payload),
-        )
-
 
 __all__ = [
     "CreateTaskRequest",

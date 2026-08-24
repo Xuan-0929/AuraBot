@@ -66,7 +66,10 @@ for raw_line in sys.stdin.buffer:
             },
         )
     elif command_type == "prompt":
-        if SCENARIO == "prompt_reject":
+        expected_prompt = os.environ.get("AURABOT_FAKE_EXPECT_PROMPT_CONTAINS")
+        if expected_prompt and expected_prompt not in str(command.get("message")):
+            response(command, success=False, error="expected continuation missing")
+        elif SCENARIO == "prompt_reject":
             response(command, success=False, error="prompt rejected")
         elif SCENARIO == "exit_zero_early":
             raise SystemExit(0)
@@ -108,6 +111,9 @@ for raw_line in sys.stdin.buffer:
                 }
             )
             emit({"type": "agent_settled"})
+        elif SCENARIO == "extension_error":
+            response(command)
+            emit({"type": "extension_error", "error": "private extension detail"})
         elif SCENARIO == "running_hang":
             response(command)
         else:
@@ -126,7 +132,10 @@ for raw_line in sys.stdin.buffer:
             )
             emit({"type": "agent_settled"})
     elif command_type == "get_last_assistant_text":
-        response(command, data={"text": "final result"})
+        response(
+            command,
+            data={"text": None if SCENARIO == "missing_result" else "final result"},
+        )
     elif command_type == "abort":
         if SCENARIO not in {"ignore_abort", "ignore_terminate"}:
             response(command)
