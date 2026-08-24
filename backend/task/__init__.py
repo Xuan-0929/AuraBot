@@ -1,9 +1,39 @@
 """提供 AuraBot 第二轮 Python Pi Task Control Plane 的公开包边界。
 
-具体产品模型、存储、调度、RPC、进程监督与编排分别位于同包小模块；Gateway 只应
-依赖 TaskManager，而不从本入口获得旧 Runtime 或兼容类型。
+具体产品模型、持久化、调度、RPC、进程监督与编排分别位于子模块；Gateway 和未来
+Main Agent 只从本入口取得稳定业务门面、DTO 所需模型与明确 domain exceptions。
 """
 
-from .models import CreateTaskCommand, TaskRecord, TaskStatus
+from .manager import TaskManager
+from .models import (
+    CreateTaskCommand,
+    TaskCommandError,
+    TaskErrorCode,
+    TaskEvent,
+    TaskNotFound,
+    TaskPage,
+    TaskQuestion,
+    TaskRecord,
+    TaskRequestError,
+    TaskRuntimeUnavailable,
+    TaskStateConflict,
+    TaskStatus,
+    TaskVersionConflict,
+)
 
-__all__ = ["CreateTaskCommand", "TaskRecord", "TaskStatus"]
+__all__ = [
+    "CreateTaskCommand",
+    "TaskCommandError",
+    "TaskErrorCode",
+    "TaskEvent",
+    "TaskManager",
+    "TaskNotFound",
+    "TaskPage",
+    "TaskQuestion",
+    "TaskRecord",
+    "TaskRequestError",
+    "TaskRuntimeUnavailable",
+    "TaskStateConflict",
+    "TaskStatus",
+    "TaskVersionConflict",
+]

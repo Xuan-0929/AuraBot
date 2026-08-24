@@ -7,8 +7,8 @@ Python command 编码成 LF 结尾的 JSON 行，按 command id 等待对应 res
 stderr 则被持续读取并只保留有限诊断尾部，避免子进程因管道写满而阻塞。
 
 本模块不创建或终止进程，也不理解 queued、running、waiting 等 Task 产品状态。进程句柄
-由 Supervisor 管理，TaskManager 消费归一化事件；任何 framing、UTF-8、JSON 或 response
-correlation 破坏都会使当前 RPC Client 进入不可恢复的 fatal protocol error 状态。
+由 Supervisor 管理，execution 主协程消费归一化事件；任何 framing、UTF-8、JSON 或
+response correlation 破坏都会使当前 RPC Client 进入不可恢复的 fatal protocol error。
 """
 
 from __future__ import annotations
@@ -144,7 +144,7 @@ class PiRpcClient:
         self._stderr_task: asyncio.Task[None] | None = None
 
         self._next_command_id = 1
-        
+
         self._fatal_error: PiProtocolError | None = None
 
         # Pi 会逐个发送 text_delta；这里先合并，再按 UTF-8 字节上限产生 text_output。

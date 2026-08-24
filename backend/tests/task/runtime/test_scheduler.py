@@ -1,8 +1,8 @@
 """
 验证轻量 Scheduler 只负责 FIFO 队列、并发槽和 shutdown admission。
 
-测试不创建 SQLite 或 subprocess；TaskManager 通过同一公开方法入队、移除、准入与释放，
-确保调度策略可独立证明且不会拥有执行资源。
+测试不创建 SQLite 或 subprocess；TaskRuntimeEngine 通过同一公开方法入队、移除、准入
+与释放，确保调度策略可独立证明且不会拥有执行资源。
 """
 
 from __future__ import annotations
@@ -11,7 +11,7 @@ import asyncio
 import unittest
 from uuid import uuid4
 
-from backend.task.scheduler import FIFOScheduler, SchedulerClosed
+from backend.task.runtime.scheduler import FIFOScheduler, SchedulerClosed
 
 
 class FIFOSchedulerTests(unittest.IsolatedAsyncioTestCase):

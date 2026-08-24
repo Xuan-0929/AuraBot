@@ -16,11 +16,12 @@ from uuid import UUID
 from fastapi import APIRouter, FastAPI, Header, Query, Request, Response, status
 from fastapi.responses import JSONResponse, StreamingResponse
 
-from ...task.manager import TaskManager, TaskRuntimeUnavailable
-from ...task.models import (
-    TaskNotFound,
+from ...task import (
     TaskCommandError,
+    TaskManager,
+    TaskNotFound,
     TaskRequestError,
+    TaskRuntimeUnavailable,
     TaskStateConflict,
     TaskStatus,
     TaskVersionConflict,

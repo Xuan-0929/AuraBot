@@ -16,12 +16,19 @@ import unittest
 from pathlib import Path
 from unittest.mock import patch
 
-from backend.task.manager import TaskManager, TaskRuntimeUnavailable
-from backend.task.models import CreateTaskCommand, TaskErrorCode, TaskStatus
-from backend.task.process import PiProcessSupervisor
-from backend.task.scheduler import FIFOScheduler
+from backend.task.manager import TaskManager
+from backend.task.models import (
+    CreateTaskCommand,
+    TaskErrorCode,
+    TaskRuntimeUnavailable,
+    TaskStatus,
+)
+from backend.task.persistence.sessions import TaskSessionDeletion
+from backend.task.persistence.store import TaskStore
+from backend.task.runtime.engine import TaskRuntimeEngine
+from backend.task.runtime.process import PiProcessSupervisor
+from backend.task.runtime.scheduler import FIFOScheduler
 from backend.task.settings import TaskSettings
-from backend.task.store import TaskStore
 
 
 class BrokenRpcWriter:
@@ -74,11 +81,24 @@ class TaskManagerTests(unittest.IsolatedAsyncioTestCase):
             stderr_tail_bytes=128,
             output_chunk_bytes=16,
         )
-        self.store = TaskStore(self.settings.database_path, self.settings.session_root)
+        self.store = TaskStore(self.settings.database_path)
         self.scheduler = FIFOScheduler(self.settings.concurrency_limit)
         self.supervisor = PiProcessSupervisor(self.settings)
+        self.runtime = TaskRuntimeEngine(
+            self.settings,
+            self.store,
+            self.scheduler,
+            self.supervisor,
+        )
+        self.session_deletion = TaskSessionDeletion(
+            self.store,
+            self.settings.session_root,
+        )
         self.manager = TaskManager(
-            self.settings, self.store, self.scheduler, self.supervisor
+            self.settings.default_timeout_seconds,
+            self.store,
+            self.runtime,
+            self.session_deletion,
         )
         self.started = False
 
@@ -309,7 +329,7 @@ class TaskManagerTests(unittest.IsolatedAsyncioTestCase):
             await self.manager.shutdown()
             self.started = False
 
-        reopened = TaskStore(self.settings.database_path, self.settings.session_root)
+        reopened = TaskStore(self.settings.database_path)
         await reopened.initialize()
         paused = await reopened.get_task(created.id)
         await reopened.close()
@@ -334,7 +354,11 @@ class TaskManagerTests(unittest.IsolatedAsyncioTestCase):
 
         await self.startup()
         async with asyncio.timeout(2):
-            while self.manager._fatal_error is None:
+            while True:
+                try:
+                    self.runtime.require_available()
+                except TaskRuntimeUnavailable:
+                    break
                 await asyncio.sleep(0.01)
 
         with self.assertRaises(TaskRuntimeUnavailable):

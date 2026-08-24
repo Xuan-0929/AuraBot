@@ -1,12 +1,12 @@
 """
-提供 TaskManager 使用的内存 FIFO 队列与并发准入槽。
+提供 TaskRuntimeEngine 使用的内存 FIFO 队列与并发准入槽。
 
 FIFOScheduler 不创建线程，也不亲自执行 Task。它只在一个 asyncio event loop 中保存
 Task UUID 的排队顺序和已占用槽位，通过 asyncio.Condition 让入队、准入、释放和关闭
 安全地修改同一组内存状态，并唤醒正在等待“队列非空且存在空闲槽”的协程。
 
 本模块不访问 SQLite、Pi RPC 或进程句柄：持久化状态由 TaskStore 负责，Task 的实际
-执行由 TaskManager 创建的 asyncio.Task 负责，Pi 子进程则由 PiProcessSupervisor 管理。
+执行由 TaskRuntimeEngine 创建的 asyncio.Task 负责，Pi 子进程由 Supervisor 管理。
 """
 
 from __future__ import annotations
@@ -32,9 +32,9 @@ class FIFOScheduler:
         """创建一个最多允许 ``concurrency_limit`` 项 Task 同时 active 的调度器。
 
         并发上限必须至少为 1。
-        
+
         构造函数只初始化进程内状态，不启动 dispatcher、协程
-        或子进程；后续由 TaskManager 循环调用 ``admit()`` 获取可执行的 Task。
+        或子进程；后续由 TaskRuntimeEngine 循环调用 ``admit()`` 获取可执行的 Task。
         """
 
         if concurrency_limit < 1:
@@ -93,7 +93,7 @@ class FIFOScheduler:
     async def admit(self) -> UUID:
         """等待并返回 FIFO 队首中可以占用一个并发槽的 Task。
 
-        被后续Task Manager直接调用，用于调度新的Task。
+        被 TaskRuntimeEngine 的 dispatcher 调用，用于调度新的 Task。
 
         准入条件必须同时满足：等待队列非空，并且 ``active_count`` 小于并发上限。如果
         条件暂不满足，``Condition.wait()`` 会挂起当前协程并释放 Condition 的锁，使
@@ -103,7 +103,7 @@ class FIFOScheduler:
         多个等待协程可能同时被唤醒，状态也可能在当前协程重新拿到锁之前再次改变。
         成功准入时，从 deque 左侧取出最老 Task，并在同一临界区内把它从 queued 移入
         active，确保不会出现两个协程准入同一 Task。调度器关闭时抛出
-        ``SchedulerClosed``，使 TaskManager 的 dispatcher 能退出循环。
+        ``SchedulerClosed``，使 TaskRuntimeEngine 的 dispatcher 能退出循环。
         """
 
         async with self._condition:
@@ -137,7 +137,8 @@ class FIFOScheduler:
         """永久关闭新准入，并唤醒所有阻塞在 ``admit()`` 的协程。
 
         shutdown 不清空 ``_queue`` 或 ``_active``，也不负责取消正在执行的 Task；这些
-        生命周期由 TaskManager 和 PiProcessSupervisor 收口。``notify_all()`` 确保即使
+        生命周期由 TaskRuntimeEngine 和 PiProcessSupervisor 收口。``notify_all()``
+        确保即使
         队列为空或并发槽已满，等待中的 ``admit()`` 也能醒来观察 ``_closed`` 并抛出
         ``SchedulerClosed``，从而避免 Backend 关闭时留下永远挂起的 dispatcher。
         """

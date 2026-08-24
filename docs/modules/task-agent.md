@@ -12,10 +12,14 @@ Python Control Plane，并以项目精确锁定的 Pi CLI 作为 Execution Plane
 ~~~mermaid
 flowchart LR
   CLIENT["HTTP Client"] --> GW["REST + SSE Gateway"]
-  GW --> TM["backend/task/TaskManager"]
-  TM --> DB["Python Task SQLite"]
-  TM --> Q["FIFO Scheduler"]
-  TM --> SUP["Pi Process Supervisor"]
+  GW --> TM["TaskManager 门面"]
+  TM --> DB["TaskStore façade"]
+  TM --> RT["TaskRuntimeEngine"]
+  TM --> DEL["TaskSessionDeletion"]
+  RT --> Q["FIFO Scheduler"]
+  RT --> SUP["Pi Process Supervisor"]
+  RT --> EX["execution.run_task"]
+  DB --> SQL["schema / questions / events / codec"]
   SUP --> RPC["stdin/stdout JSONL"]
   RPC --> PI["Pinned Pi 0.84.2"]
   PI --> EXT["@scpz24/pi-aurabot-task"]
@@ -39,21 +43,35 @@ backend/
     task_schemas.py             # 公共 HTTP DTO
     task_routes.py              # REST/SSE 映射
   task/
+    __init__.py                 # Gateway/Main Agent 稳定公开入口
+    manager.py                  # 跨 Store/Runtime 的业务命令门面
     models.py                   # 产品模型与纯状态转换
     settings.py                 # 路径、版本与运行参数
-    store.py                    # Python-owned SQLite
-    scheduler.py                # FIFO 与并发槽
-    rpc.py                      # 严格 JSONL 协议子集
-    process.py                  # 唯一 subprocess owner
-    manager.py                  # Gateway/Main Agent 唯一门面
+    runtime/
+      engine.py                 # 调度、锁、clock、recovery 与 fail-stop
+      execution.py              # 单 Task Pi 执行主协程
+      questions.py              # Question/continuation 纯协议映射
+      scheduler.py              # FIFO 与并发槽
+      process.py                # 唯一 subprocess owner
+      rpc.py                    # 严格 JSONL 协议子集
+    persistence/
+      store.py                  # 单连接、单写锁 SQLite façade
+      schema.py                 # v2 DDL、migration 与验证
+      questions.py              # Question 跨表事务 helper
+      events.py                 # Event 写入、sequence 与 replay
+      codec.py                  # SQLite row/time/JSON 纯转换
+      sessions.py               # tombstone/session quarantine 协调
 pi-runtime/                     # 私有、精确锁定的 Pi CLI 依赖载体
 pi-aurabot-task/                # Pi-native Extension/Prompt Package
 ~~~
 
-依赖保持单向：Gateway 只调用 TaskManager；TaskManager 编排 Store、Scheduler 与
-Supervisor；Supervisor 独占 subprocess handle；RPC 不认识产品状态；Scheduler 不
-访问 SQLite 或进程。Pi Package 不依赖 Python 业务模型。第一版不创建 Repository
-interface、application-service 森林或 AuraBot-to-Pi Tool/Skill 转换层。
+依赖保持单向：Gateway 只从 `backend.task` 调用 TaskManager；Manager 只编排 Store、
+Runtime Engine 与 session deletion；Engine 拥有全部进程内运行状态并调用单 Task 主协程；
+Store 仍独占唯一 SQLite connection、write lock 和 transaction runner。Persistence 不
+依赖 Runtime/Manager，Runtime 不依赖 Manager/Gateway。Supervisor 独占 subprocess
+handle；RPC 不认识产品状态；Scheduler 不访问 SQLite 或进程。Pi Package 不依赖 Python
+业务模型。第一版不创建 Repository interface、UnitOfWork、per-Task Execution 对象、
+application-service 森林或 AuraBot-to-Pi Tool/Skill 转换层。
 
 ## 3. 产品模型与状态
 
@@ -234,10 +252,11 @@ Backend shutdown 总 deadline 30 秒：queued 保留，active Task 收口为
 
 ## 9. 测试策略
 
-测试分层覆盖纯状态机、独立 SQLite、FIFO/并发、严格 JSONL、fake Pi process、
-TaskManager 生命周期、Gateway/SSE 与真实 pinned Pi offline smoke。默认测试不调用
-模型、不需要 provider key、不访问网络；live smoke 必须显式开关并使用用户主动配置
-的 AuraBot Pi Home。Frontend 只做回归，不能复活 Electron Task surface。
+测试目录镜像 `runtime/` 与 `persistence/`，分层覆盖纯状态机、schema migration、
+Question/Event/session 事务、FIFO/并发、严格 JSONL、fake Pi process、execution/Engine、
+TaskManager 生命周期、Gateway/SSE 与真实 pinned Pi offline smoke。默认测试不调用模型、
+不需要 provider key、不访问网络；live smoke 必须显式开关并使用用户主动配置的 AuraBot
+Pi Home。Frontend 只做回归，不能复活 Electron Task surface。
 
 关键故障包括 spawn/startup/prompt、response correlation、非法 JSONL、stderr flood、
 非零退出、超时、pause/resume/cancel、grace 后强杀、Backend shutdown、重启孤儿、

@@ -33,7 +33,7 @@ from backend.task.models import (
     TaskStatus,
     TaskVersionConflict,
 )
-from backend.task.store import TaskSessionCleanupError
+from backend.task.persistence.sessions import TaskSessionCleanupError
 
 
 def task_record(status: TaskStatus = TaskStatus.QUEUED) -> TaskRecord:

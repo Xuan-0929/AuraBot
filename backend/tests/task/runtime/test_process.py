@@ -16,14 +16,14 @@ from pathlib import Path
 from unittest.mock import patch
 from uuid import uuid4
 
-from backend.task.process import (
+from backend.task.runtime.process import (
     PiProcessStartError,
     PiProcessSupervisor,
     StopIntent,
     TaskLaunchSpec,
 )
 from backend.task.models import TaskErrorCode
-from backend.task.rpc import PiProtocolError
+from backend.task.runtime.rpc import PiProtocolError
 from backend.task.settings import TaskSettings
 
 
@@ -34,7 +34,7 @@ class PiProcessSupervisorTests(unittest.IsolatedAsyncioTestCase):
         self.project = self.root / "project"
         self.project.mkdir()
         self.fake_pi = (
-            Path(__file__).resolve().parents[1] / "fixtures/fake_pi_rpc.py"
+            Path(__file__).resolve().parents[2] / "fixtures/fake_pi_rpc.py"
         )
         plugin = self.root / "plugin.ts"
         prompt = self.root / "prompt.md"

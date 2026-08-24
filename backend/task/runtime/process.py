@@ -3,7 +3,8 @@
 
 PiProcessSupervisor 是进程句柄的唯一 owner：它用 TaskSettings 构造绝对 CLI 命令和
 隔离环境，把字节流交给 PiRpcClient，并按 abort→stdin close→terminate→kill→wait
-收口进程树。TaskManager 只持有 Task id，不直接访问 asyncio subprocess。
+收口进程树。TaskRuntimeEngine 与 execution 主协程只通过 Supervisor 操作进程，不直接
+持有 asyncio subprocess。
 """
 
 from __future__ import annotations
@@ -19,9 +20,9 @@ from pathlib import Path
 from typing import Any, Mapping
 from uuid import UUID
 
-from .models import TaskErrorCode
+from ..models import TaskErrorCode
+from ..settings import TaskSettings
 from .rpc import PiCommandError, PiCommandTimeout, PiProtocolError, PiRpcClient
-from .settings import TaskSettings
 
 
 class StopIntent(StrEnum):

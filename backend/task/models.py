@@ -105,6 +105,10 @@ class TaskRuntimeError(RuntimeError):
     """Base class for stable Task Control Plane failures."""
 
 
+class TaskRuntimeUnavailable(RuntimeError):
+    """Raised when startup, shutdown or fail-stop prevents Task admission."""
+
+
 class TaskCommandError(TaskRuntimeError):
     """Raised when an internal Task command violates the Control Plane contract."""
 
@@ -228,6 +232,7 @@ __all__ = [
     "TaskRecord",
     "TaskRequestError",
     "TaskRuntimeError",
+    "TaskRuntimeUnavailable",
     "TaskStateConflict",
     "TaskStatus",
     "TaskVersionConflict",

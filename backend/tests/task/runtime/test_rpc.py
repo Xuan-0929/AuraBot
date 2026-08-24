@@ -12,7 +12,7 @@ import json
 import unittest
 from typing import Any
 
-from backend.task.rpc import PiCommandError, PiProtocolError, PiRpcClient
+from backend.task.runtime.rpc import PiCommandError, PiProtocolError, PiRpcClient
 
 
 class RecordingWriter:
