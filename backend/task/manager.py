@@ -272,12 +272,23 @@ class TaskManager:
                     await self._event_condition.wait()
 
     async def _dispatch_loop(self) -> None:
+        """
+        持续监听是否有任务队列变动。
+
+        _wake表示一个钟。别的协程进行了可能改变任务队列状态的动作就敲钟(_wake.set())。
+        可能改变任务队列状态的事件举例：新任务入队、任务被暂停、任务被取消、任务被删除、任务回答了问题等。
+
+        这里持续等着敲钟(await _wake.wait())，发现敲钟就进后面的loop。
+
+        发布任务时，调用create_task()。create_task的任务就是下面的_run_task()。
+        """
+        
         try:
             while True:
                 await self._wake.wait()
                 self._wake.clear()
                 while True:
-                    async with self._state_lock:
+                    async with self._state_lock:  # 整个TaskManager共用同一把大锁。
                         if self._closing or self._fatal_error is not None:
                             return
                         free = MAX_ACTIVE_TASKS - len(self._runs)
@@ -305,6 +316,12 @@ class TaskManager:
             self._begin_fail_stop(error)
 
     async def _run_task(self, run: TaskRun, task: TaskRecord) -> None:
+        """
+        _dispatch_loop()里创建的协程。每个任务一个协程。
+
+        这里负责任务环境的铺垫。执行Loop在下面的_execute()里。两个函数就是协程中的生命周期。
+        """
+
         try:
             remaining = task.timeout_seconds - task.active_runtime_ms / 1000
             if remaining <= 0:
