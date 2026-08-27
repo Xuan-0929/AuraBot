@@ -35,6 +35,12 @@ class MainAgentSettingsTests(unittest.TestCase):
                     "memory": {},
                     "task": {},
                     "dev": {},
+                    "chat_model": {
+                        "base_url": "https://model.example/v1",
+                        "model_name": "chat-model",
+                        "api_key": "test-key",
+                        "timeout_seconds": 17,
+                    },
                 },
                 config_path=root / "config.yaml",
             )
@@ -42,6 +48,10 @@ class MainAgentSettingsTests(unittest.TestCase):
         self.assertEqual(settings.data_dir, (root / "data").resolve())
         self.assertEqual(settings.profile_root, (root / "data/profiles").resolve())
         self.assertEqual(settings.workspaces.require("project"), workspace.resolve())
+        self.assertEqual(settings.chat_model.base_url, "https://model.example/v1")
+        self.assertEqual(settings.chat_model.model_name, "chat-model")
+        self.assertEqual(settings.chat_model.api_key, "test-key")
+        self.assertEqual(settings.chat_model.timeout_seconds, 17.0)
 
     def test_registry_rejects_unknown_and_path_like_workspace_ids(self):
         with tempfile.TemporaryDirectory() as directory:

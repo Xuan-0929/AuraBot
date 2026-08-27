@@ -1,6 +1,7 @@
 """Own the optional speech pipeline, normalized providers, and lazy local VAD/EOU sessions.
 
-DashScope-specific callback fields terminate inside the adapters and become ``TranscriptUpdate`` facts
+DashScope-specific callback fields and credentials terminate inside the adapters and become
+``TranscriptUpdate`` facts
 before Main Agent Core can observe them.  TTS exposes only clause audio bytes.  Silero VAD and Smart Turn
 v3.2 share process-wide ONNX sessions, verify both model and license assets before loading, and configure
 ONNX Runtime for sequential single-thread CPU inference; missing optional packages or assets are reported
@@ -188,6 +189,7 @@ class DashScopeStreamingSttProvider:
         self,
         model_name: str,
         *,
+        api_key: str = "",
         sample_rate_hz: int = 16_000,
         transport_factory: Callable[..., Any] | None = None,
     ) -> None:
@@ -195,6 +197,7 @@ class DashScopeStreamingSttProvider:
         if sample_rate_hz != 16_000:
             raise ValueError("AuraBot streaming STT requires 16000 Hz audio")
         self.sample_rate_hz = sample_rate_hz
+        self._api_key = api_key.strip()
         self._transport_factory = transport_factory or _dashscope_stt_transport
 
     async def start(self, on_update: TranscriptSink) -> StreamingSttSession:
@@ -210,11 +213,14 @@ class DashScopeStreamingSttProvider:
                 session.provider_event(event)
 
         try:
-            transport = self._transport_factory(
-                model_name=self.model_name,
-                sample_rate_hz=self.sample_rate_hz,
-                on_event=on_event,
-            )
+            options = {
+                "model_name": self.model_name,
+                "sample_rate_hz": self.sample_rate_hz,
+                "on_event": on_event,
+            }
+            if self._api_key:
+                options["api_key"] = self._api_key
+            transport = self._transport_factory(**options)
             session = _DashScopeSttSession(transport, owner_loop, on_update)
             await _call_maybe_blocking(transport.start)
         except BaseException as exc:
@@ -247,10 +253,12 @@ class DashScopeSpeechOutputProvider:
         model_name: str,
         *,
         voice: str,
+        api_key: str = "",
         transport_factory: Callable[..., Any] | None = None,
     ) -> None:
         self.model_name = _required_text(model_name, "TTS model name")
         self.voice = _required_text(voice, "TTS voice")
+        self._api_key = api_key.strip()
         self._transport_factory = transport_factory or _dashscope_tts_transport
         self._current: Any | None = None
         self._lock = asyncio.Lock()
@@ -258,9 +266,10 @@ class DashScopeSpeechOutputProvider:
     async def synthesize(self, text: str):
         clause = _required_text(text, "TTS clause")
         try:
-            transport = self._transport_factory(
-                model_name=self.model_name, voice=self.voice,
-            )
+            options = {"model_name": self.model_name, "voice": self.voice}
+            if self._api_key:
+                options["api_key"] = self._api_key
+            transport = self._transport_factory(**options)
         except (ImportError, ModuleNotFoundError) as exc:
             raise SpeechProviderUnavailable("DashScope TTS dependency is unavailable") from exc
         async with self._lock:
@@ -1256,6 +1265,7 @@ def _dashscope_stt_transport(**kwargs: Any) -> Any:
         model=kwargs["model_name"], format="pcm",
         sample_rate=kwargs["sample_rate_hz"], callback=Callback(),
         semantic_punctuation_enabled=False,
+        **({"api_key": kwargs["api_key"]} if kwargs.get("api_key") else {}),
     )
 
 
@@ -1277,6 +1287,7 @@ def _dashscope_tts_transport(**kwargs: Any) -> _DashScopeTtsTransport:
     audio_format = getattr(tts.AudioFormat, "PCM_24000HZ_MONO_16BIT")
     return _DashScopeTtsTransport(tts.SpeechSynthesizer(
         model=kwargs["model_name"], voice=kwargs["voice"], format=audio_format,
+        **({"api_key": kwargs["api_key"]} if kwargs.get("api_key") else {}),
     ))
 
 

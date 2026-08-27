@@ -88,6 +88,29 @@ class FakeResponse:
 
 
 class ObservationLedgerTests(unittest.TestCase):
+    def test_terminal_histories_are_bounded_without_evicting_running_or_reowning_late_results(self) -> None:
+        ledger = ObservationLedger()
+        active, _ = ledger.start(
+            "active", input_id="active-input", revision=1,
+            kind="web_search", arguments={"query": "held"},
+        )
+        first_terminal = "terminal-0"
+        for index in range(300):
+            observation_id, created = ledger.start(
+                f"terminal-{index}", input_id=f"input-{index}", revision=1,
+                kind="web_search", arguments={"query": str(index)},
+            )
+            self.assertTrue(created)
+            self.assertTrue(ledger.complete(observation_id, {"answer": index}))
+
+        self.assertLessEqual(len(ledger._latest), 256)
+        self.assertLessEqual(len(ledger._dedupe), 256)
+        self.assertLessEqual(len(ledger.events), 512)
+        late, owned = ledger.settle(first_terminal, "completed", {"answer": "late"})
+        self.assertIsNone(late)
+        self.assertFalse(owned)
+        self.assertTrue(ledger.complete(active, {"answer": "held completed"}))
+
     def test_append_only_fold_and_same_input_canonical_argument_dedupe(self) -> None:
         ledger = ObservationLedger()
 

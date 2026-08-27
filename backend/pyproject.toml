@@ -5,6 +5,7 @@ description = "AuraBot Python gateway and microservice workspace."
 requires-python = ">=3.11"
 dependencies = [
   "fastapi>=0.115.0",
+  "httpx>=0.28.0",
   "PyYAML>=6.0",
   "qdrant-client>=1.18.0",
   "uvicorn[standard]>=0.32.0"

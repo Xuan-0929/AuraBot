@@ -833,6 +833,7 @@ class RealtimeHub:
         tts_queue_frames: int = TTS_QUEUE_FRAMES,
     ) -> None:
         self.runtime = runtime
+        self.accepting = True
         configured_origins = (
             {"http://127.0.0.1:6400", "http://localhost:6400"}
             if allowed_origins is None
@@ -849,6 +850,19 @@ class RealtimeHub:
         self._epoch = 0
         self._lease_lock = _CrossLoopLock()
         self._effect_lock = _CrossLoopLock()
+
+    def start_accepting(self) -> None:
+        """Open lifespan-owned admission without probing Renderer or providers."""
+
+        self.accepting = True
+
+    async def stop_accepting(self) -> None:
+        """Fence new tokens/sessions and revoke the currently owned Renderer lease."""
+
+        self.accepting = False
+        session = self._session
+        if session is not None:
+            await self.release(session)
 
     @property
     def connected(self) -> bool:
@@ -1216,6 +1230,8 @@ async def issue_realtime_token(request: Request, response: Response) -> Realtime
     """Issue one short-lived capability only to a configured desktop origin."""
 
     hub = _hub(request)
+    if not hub.accepting:
+        raise HTTPException(status_code=503, detail="realtime is not accepting sessions")
     origin = request.headers.get("origin")
     if not hub.origin_allowed(origin):
         raise HTTPException(status_code=403, detail="origin is not allowed")
@@ -1233,6 +1249,9 @@ async def main_agent_realtime(websocket: WebSocket) -> None:
     """Run one validated renderer session until replacement, disconnect, or fatal protocol error."""
 
     hub = _hub(websocket)
+    if not hub.accepting:
+        await websocket.close(code=1013, reason="realtime is shutting down")
+        return
     origin = websocket.headers.get("origin")
     offered = [item.strip() for item in websocket.headers.get("sec-websocket-protocol", "").split(",")]
     capabilities = [item.removeprefix("aurabot.capability.") for item in offered if item.startswith("aurabot.capability.")]

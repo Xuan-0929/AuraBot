@@ -99,6 +99,16 @@ class RuntimeTestCase(unittest.IsolatedAsyncioTestCase):
 
 
 class TriggerAndGrantTests(RuntimeTestCase):
+    async def test_invoke_diagnostics_keep_only_a_bounded_recent_history(self) -> None:
+        runtime = self.runtime(ScriptedProvider())
+
+        for index in range(140):
+            await runtime.submit_text(f"input {index}")
+            await runtime.wait_until_idle()
+
+        self.assertLessEqual(len(runtime.invoke_requests), 128)
+        self.assertEqual(runtime.invoke_requests[-1].snapshot.transcript, "input 139")
+
     async def test_confirmed_barge_in_revokes_grant_and_cancels_control_but_noise_does_not(self) -> None:
         started = asyncio.Event()
         cancelled = asyncio.Event()

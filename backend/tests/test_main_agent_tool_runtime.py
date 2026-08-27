@@ -16,9 +16,11 @@ from backend.main_agent.tool_runtime import (
     EffectFence,
     InvokeMode,
     ObservationOutcome,
+    ObservationLimiter,
     ResponseGrant,
     SayTextStream,
     ToolCallAssembler,
+    ToolCall,
     ToolHarness,
     ToolSurfacePolicy,
 )
@@ -654,6 +656,54 @@ class ToolHarnessTests(unittest.IsolatedAsyncioTestCase):
         release.set()
         await harness.wait_for_observations()
         self.assertEqual(self.effects, [("web_search", {"query": "x"})])
+
+    async def test_observation_dedupe_and_outcomes_are_bounded_while_inflight_is_retained(self) -> None:
+        release = asyncio.Event()
+
+        async def execute(call):
+            if call.arguments["query"] == "held":
+                await release.wait()
+            return {"accepted": True}
+
+        executors = dict(self.executors)
+        executors["web_search"] = execute
+        harness = ToolHarness(
+            ToolSurfacePolicy(), executors,
+            observation_limiter=ObservationLimiter(3),
+        )
+        held = ToolCall(
+            call_id="held", name="web_search", arguments={"query": "held"},
+            index=0, raw_arguments='{"query":"held"}',
+        )
+        self.assertEqual(
+            await harness._detach_observation(held, "invoke-held", "input-held"),
+            "detached",
+        )
+        for index in range(270):
+            call = ToolCall(
+                call_id=f"call-{index}", name="web_search",
+                arguments={"query": str(index)}, index=0,
+                raw_arguments=json.dumps({"query": str(index)}),
+            )
+            self.assertEqual(
+                await harness._detach_observation(
+                    call, f"invoke-{index}", f"input-{index}"
+                ),
+                "detached",
+            )
+            for _ in range(20):
+                if len(harness._observation_tasks) == 1:
+                    break
+                await asyncio.sleep(0)
+
+        self.assertLessEqual(len(harness._observation_requests), 256)
+        self.assertLessEqual(len(harness._observation_outcomes), 256)
+        self.assertEqual(
+            await harness._detach_observation(held, "invoke-late", "input-held"),
+            "observation_reused",
+        )
+        release.set()
+        await harness.wait_for_observations()
 
     async def test_detached_failures_are_retrieved_retained_and_forwarded(self) -> None:
         forwarded: list[ObservationOutcome] = []

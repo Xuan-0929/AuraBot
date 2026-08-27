@@ -4,7 +4,8 @@ ToolHarness consumes provider chunks in-process, streams stable speech clauses t
 speech port, stages every call for complete JSON/schema/group validation, executes say before other
 effects regardless of provider order, and re-reads scheduler fencing facts at each acceptance point.
 Safe Observation origin ownership/reuse is synchronously decided exactly when a validated call
-detaches; one process-shared owner admits at most three executor jobs across Harness instances, while
+detaches; one process-shared owner admits at most three executor jobs across Harness instances. Running
+request identities are never evicted, while terminal dedupe/outcome diagnostics use hard bounded windows;
 cancellation and all control effects still settle before another control invoke is admitted.
 """
 
@@ -14,7 +15,7 @@ import asyncio
 import inspect
 import json
 import threading
-from collections import OrderedDict
+from collections import OrderedDict, deque
 from collections.abc import AsyncIterable, AsyncIterator, Callable, Iterable, Mapping
 from contextlib import asynccontextmanager
 from typing import Any
@@ -69,6 +70,7 @@ class ObservationLimiter:
 
 
 _GLOBAL_OBSERVATION_LIMITER = ObservationLimiter(3)
+_OBSERVATION_HISTORY_LIMIT = 256
 
 
 class ToolHarness:
@@ -98,8 +100,12 @@ class ToolHarness:
         self._cancel_events: dict[str, asyncio.Event] = {}
         self._control_tasks: dict[str, asyncio.Task[Any]] = {}
         self._observation_tasks: set[asyncio.Task[Any]] = set()
-        self._observation_outcomes: list[ObservationOutcome] = []
-        self._observation_requests: dict[tuple[str, str, str], str] = {}
+        self._observation_outcomes: deque[ObservationOutcome] = deque(
+            maxlen=_OBSERVATION_HISTORY_LIMIT
+        )
+        self._observation_requests: OrderedDict[tuple[str, str, str], str] = OrderedDict()
+        self._active_observation_requests: set[tuple[str, str, str]] = set()
+        self._observation_task_keys: dict[asyncio.Task[Any], tuple[str, str, str]] = {}
         self._cancelled_invokes: OrderedDict[str, None] = OrderedDict()
 
     def freeze_surface(
@@ -491,7 +497,10 @@ class ToolHarness:
             ),
         )
         if request_key in self._observation_requests:
+            self._observation_requests.move_to_end(request_key)
             return "observation_reused"
+        if not self._reserve_observation_request_slot():
+            return "observation_limit_reached"
         if not self.observation_limiter.try_acquire():
             return "observation_limit_reached"
         proposed_id = f"{invoke_id}:{call.call_id}"
@@ -515,9 +524,12 @@ class ToolHarness:
                 return "executor_failed"
         if observation_id != proposed_id:
             self._observation_requests.setdefault(request_key, observation_id)
+            self._observation_requests.move_to_end(request_key)
+            self._trim_observation_requests()
             self.observation_limiter.release()
             return "observation_reused"
         self._observation_requests[request_key] = observation_id
+        self._observation_requests.move_to_end(request_key)
         outcome_recorded = False
 
         async def record_once(outcome: ObservationOutcome) -> None:
@@ -557,6 +569,8 @@ class ToolHarness:
                 self.observation_limiter.release()
             return "executor_failed"
         self._observation_tasks.add(task)
+        self._active_observation_requests.add(request_key)
+        self._observation_task_keys[task] = request_key
         task.add_done_callback(self._observation_done)
         await asyncio.sleep(0)
         if task.cancelled():
@@ -570,7 +584,32 @@ class ToolHarness:
         """Release admission even when cancellation happens before the executor coroutine starts."""
 
         self._observation_tasks.discard(task)
+        request_key = self._observation_task_keys.pop(task, None)
+        if request_key is not None:
+            self._active_observation_requests.discard(request_key)
+        self._trim_observation_requests()
         self.observation_limiter.release()
+
+    def _reserve_observation_request_slot(self) -> bool:
+        """Make one bounded slot by evicting only a terminal request identity."""
+
+        self._trim_observation_requests(target=_OBSERVATION_HISTORY_LIMIT - 1)
+        return len(self._observation_requests) < _OBSERVATION_HISTORY_LIMIT
+
+    def _trim_observation_requests(
+        self, *, target: int = _OBSERVATION_HISTORY_LIMIT
+    ) -> None:
+        while len(self._observation_requests) > target:
+            terminal = next(
+                (
+                    key for key in self._observation_requests
+                    if key not in self._active_observation_requests
+                ),
+                None,
+            )
+            if terminal is None:
+                return
+            self._observation_requests.pop(terminal, None)
 
     async def _record_observation_outcome(self, outcome: ObservationOutcome) -> None:
         """Retain terminal truth and contain completion-hook failures without skipping release."""

@@ -1,9 +1,9 @@
 # AuraBot Python Backend configuration example.
 #
-# Copy this file to config.yaml. The Backend exposes health plus the Python Pi
-# Task REST/SSE vertical slice; model sections remain for future chat/Memory
-# integration. The task section is unrelated to removed legacy task_runtime,
-# task_model, or local_mcp_server fields.
+# Copy this file to config.yaml. The Backend composes Main Agent, automatic
+# Memory, realtime/speech, and the Python Pi Task control plane in one lifespan.
+# The task section is unrelated to removed legacy task_runtime, task_model, or
+# local_mcp_server fields.
 
 ports:
   frontend: 6400
@@ -16,11 +16,12 @@ app:
       path: "."
 
 main_agent:
+  profile_id: default
   profile_dir: profiles
-  # Speech stays off unless Task9 composition supplies a runtime/providers and
-  # both local ONNX models plus their license texts have been installed.
+  # Speech remains disabled by default and does not probe optional providers.
   speech:
     enabled: false
+    api_key: "${DASHSCOPE_API_KEY:-}"
     stt_model_name: fun-asr-realtime
     tts_model_name: cosyvoice-v3-flash
     tts_voice: longanyang
@@ -29,7 +30,12 @@ main_agent:
     smart_turn_model_path: assets/models/smart-turn-v3.2.onnx
     smart_turn_license_path: assets/licenses/smart-turn-v3.2.txt
 
-memory: {}
+memory:
+  # Local deterministic embeddings keep default startup offline-safe. Durable
+  # SQLite truth and the embedded Qdrant collection live inside the profile.
+  embedding:
+    provider: hash
+    dimension: 384
 
 dev: {}
 
@@ -37,6 +43,7 @@ chat_model:
   base_url: "https://api.deepseek.com/v1"
   model_name: "deepseek-v4-flash"
   api_key: "${AURABOT_CHAT_MODEL_API_KEY:-}"
+  timeout_seconds: 60
 
 gateway_model:
   base_url: "https://api.deepseek.com/v1"

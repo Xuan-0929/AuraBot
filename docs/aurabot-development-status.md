@@ -1,6 +1,6 @@
 # AuraBot 当前开发状态
 
-更新时间：2026-08-24
+更新时间：2026-08-27
 
 ## 当前事实
 
@@ -9,10 +9,10 @@
 | Desktop | Electron + Vue + TypeScript + Vite；Live2D、控制台和设置保留。 |
 | Chat/Memory | 普通聊天、Memory follow-up、idle nudge 和持久化保留。 |
 | Chat attachments | 新附件输入已关闭；历史消息仅保留只读附件名称，不再暴露本地路径或打开动作。 |
-| Python Backend | health 与版本化 Task REST/SSE 已实现，Task 生命周期由 lifespan 管理。 |
+| Python Backend | lifespan 已组合惰性 OpenAI-compatible Main provider、Memory、realtime/speech 与 Task；health 精确兼容，readiness 为 local-only/零付费 probe。 |
 | Backend speech | 生命周期、实时 mic/STT/VAD/EOU/TTS/ACK 边界已接入；默认禁用，只有显式配置且安装可选 SDK/模型资产后才可用。 |
-| Python Memory | backend/memory 与短期记忆存储保留。 |
-| Task | Python 后端垂直切片已实现；Electron/Main Agent 尚未接入，桌面入口仍不可用。 |
+| Python Memory | automatic lexical-first recall、300 ms vector degradation、可跨重启的五分钟 pending seal、durable extraction/outbox 与管理 API 已实现。 |
+| Task | Python Control Plane 与 Main Agent proposal/Task fact bridge 已实现；桌面 Task UI 仍不可用。 |
 | 旧执行面 | Python Harness/MCP/Task runtime 与 TypeScript Task runners/UI 已删除。 |
 | Pi Runtime | Pi 0.84.2、Python Control Plane 与本地 Extension Package 已实现并通过 offline smoke。 |
 
@@ -28,10 +28,10 @@ Task 采用 Python Control Plane + 一 Task 一 Pi RPC 进程；唯一事实源�
 
 ## 本轮与后续
 
-本轮已经把 Task Control Plane 收口为单一 owner：TaskManager 直接拥有同步两表 SQLite、
-固定五槽 FIFO、Pi handle、active clock、recovery 与 fail-stop；waiting 问题 durable 后
-立即 reap。REST/SSE 与 offline smoke 保持。后续才接 Main Agent、Electron、Artifact
-和生产打包。
+本轮完成 Main Agent V1 后端闭环：Runtime 在锁外自动 recall，并对 input/revision/context
+做重入 fence；Memory 使用 profile 既有 SQLite 的 episode/job/outbox 真相与一个无轮询
+worker；Gateway 明确管理 startup/shutdown admission。搜索 Observation 会触发 CONTINUE，
+Task proposal durable 后以 Task fact 回流 Context。后续仍是 Electron surface、Artifact 与生产打包。
 
 ## 验证入口
 
@@ -44,7 +44,7 @@ npm test
 npm run build
 ~~~
 
-2026-08-24 Task runtime 精简后 Backend 218 个 unittest 通过（1 个可选 live test
-skipped，包含真实 Pi offline smoke）；`backend/task` 只保留六个实质模块和
-`__init__.py`。固定 CLI 版本仍精确为 0.84.2，OpenAPI 仍只公开 `/health` 与版本化
-`/api/v1/tasks*` 路径。
+验收测试覆盖 silent/voice fake E2E、recall timeout/degrade/cache/source filtering、seal
+generation race、job/outbox restart/retry、forget/retry API、readiness/exact health/lifespan、
+search→CONTINUE 与 Task proposal→Task fact。真实 provider smoke 仍为显式 opt-in，默认
+TestClient/static route 不调用付费 provider。固定 Pi CLI 版本仍精确为 0.84.2。

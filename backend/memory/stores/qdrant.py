@@ -1,11 +1,25 @@
+"""Adapt one process-shared embedded Qdrant collection to AuraBot's vector-store protocol.
+
+Wrappers targeting the same local path share one Qdrant client with a small locked reference count,
+because FastAPI test/application compositions may overlap while embedded Qdrant permits only one
+process-local file owner. Search/upsert/delete remain synchronous adapter calls used through the
+shared asyncio executor by MemoryBridge/MemoryWorker. A condition-protected closing entry remains
+registered until the last slow close releases the file lock, fencing a concurrent constructor.
+"""
+
 from __future__ import annotations
 
 from datetime import datetime
 from pathlib import Path
+from threading import Condition
 from typing import Any
 from uuid import NAMESPACE_URL, uuid5
 
 from ..types import DEFAULT_COLLECTION_NAME, DEFAULT_VECTOR_DIMENSION
+
+
+_CLIENT_CONDITION = Condition()
+_LOCAL_CLIENTS: dict[Path, dict[str, Any]] = {}
 
 
 class QdrantLocalVectorStore:
@@ -25,10 +39,31 @@ class QdrantLocalVectorStore:
                 "Run `uv sync --project backend` from the repository root."
             ) from exc
 
-        self.path = Path(path)
+        self.path = Path(path).resolve()
         self.collection_name = collection_name
         self.vector_size = vector_size
-        self.client = QdrantClient(path=str(self.path))
+        with _CLIENT_CONDITION:
+            shared = _LOCAL_CLIENTS.get(self.path)
+            while shared is not None and shared["closing"]:
+                _CLIENT_CONDITION.wait()
+                shared = _LOCAL_CLIENTS.get(self.path)
+            if shared is not None:
+                if (
+                    shared["collection_name"] != collection_name
+                    or shared["vector_size"] != vector_size
+                ):
+                    raise RuntimeError("Qdrant local path is already open with incompatible settings")
+                shared["references"] += 1
+                self.client = shared["client"]
+            else:
+                self.client = QdrantClient(path=str(self.path))
+                _LOCAL_CLIENTS[self.path] = {
+                    "client": self.client,
+                    "collection_name": collection_name,
+                    "vector_size": vector_size,
+                    "references": 1,
+                    "closing": False,
+                }
         self._closed = False
 
         if not self.client.collection_exists(collection_name):
@@ -97,29 +132,28 @@ class QdrantLocalVectorStore:
         )
 
     def close(self) -> None:
-        if self._closed:
-            return
-
-        inner_client = getattr(self.client, "_client", None)
-        collections = getattr(inner_client, "collections", {})
-
-        for collection in list(collections.values()):
-            collection_close = getattr(collection, "close", None)
-
-            if collection_close:
-                collection_close()
-
-        close = getattr(self.client, "close", None)
-
-        if close:
-            close()
-
-        inner_close = getattr(inner_client, "close", None)
-
-        if inner_close and not getattr(inner_client, "closed", False):
-            inner_close()
-
-        self._closed = True
+        client = None
+        shared = None
+        with _CLIENT_CONDITION:
+            if self._closed:
+                return
+            self._closed = True
+            shared = _LOCAL_CLIENTS.get(self.path)
+            if shared is not None and shared["client"] is self.client:
+                shared["references"] -= 1
+                if shared["references"] == 0:
+                    shared["closing"] = True
+                    client = self.client
+        if client is not None:
+            close = getattr(client, "close", None)
+            try:
+                if close:
+                    close()
+            finally:
+                with _CLIENT_CONDITION:
+                    if _LOCAL_CLIENTS.get(self.path) is shared:
+                        _LOCAL_CLIENTS.pop(self.path, None)
+                    _CLIENT_CONDITION.notify_all()
 
     def health(self) -> dict[str, Any]:
         info = self.client.get_collection(self.collection_name)

@@ -1,7 +1,8 @@
 """Own safe Observation facts and the concrete web/workspace read-only executor boundaries.
 
-ObservationLedger keeps append-only in-memory started/completed/failed facts and folds them by stable
-observation identity.  TavilySearchExecutor registers provider URLs in SourceRegistry; SafeWebReader
+ObservationLedger keeps a bounded in-memory window of started/completed/failed facts, never evicts
+running identities, and folds them by stable observation identity; durable terminal facts live in
+ContextStore. TavilySearchExecutor registers provider URLs in SourceRegistry; SafeWebReader
 then performs pinned-address, manually redirected public-web reads.  WorkspaceReader walks only a
 configured WorkspaceRegistry through no-follow descriptors, and its tiny executor wrappers connect
 these bounded reads to ToolHarness without changing scheduling or ResponseGrant semantics.
@@ -26,6 +27,7 @@ import stat
 import threading
 import time
 import urllib.parse
+from collections import OrderedDict, deque
 from collections.abc import Callable, Mapping
 from html.parser import HTMLParser
 from typing import Any
@@ -38,6 +40,8 @@ _MAX_WEB_BYTES = 1024 * 1024
 _MAX_CONTEXT_BYTES = 64 * 1024
 _MAX_WORKSPACE_ITEMS = 200
 _MAX_WORKSPACE_LINES = 200
+_OBSERVATION_HISTORY_LIMIT = 256
+_OBSERVATION_EVENT_LIMIT = 512
 _MAX_WORKSPACE_SCAN = 1_000
 _MAX_WORKSPACE_FILE_BYTES = 1024 * 1024
 _MAX_START_LINE = 10_000
@@ -259,13 +263,14 @@ def _canonical_arguments(arguments: Mapping[str, Any]) -> tuple[str, dict[str, A
 
 
 class ObservationLedger:
-    """Thread-safe append-only facts with same-input request reuse and terminal idempotency."""
+    """Thread-safe bounded facts with same-input request reuse and terminal idempotency."""
 
     def __init__(self) -> None:
         self._lock = threading.Lock()
-        self._events: list[dict[str, Any]] = []
-        self._latest: dict[str, dict[str, Any]] = {}
-        self._dedupe: dict[tuple[str, str, str], str] = {}
+        self._events: deque[dict[str, Any]] = deque(maxlen=_OBSERVATION_EVENT_LIMIT)
+        self._latest: OrderedDict[str, dict[str, Any]] = OrderedDict()
+        self._dedupe: OrderedDict[tuple[str, str, str], str] = OrderedDict()
+        self._keys_by_id: dict[str, tuple[str, str, str]] = {}
 
     @property
     def events(self) -> tuple[dict[str, Any], ...]:
@@ -293,9 +298,13 @@ class ObservationLedger:
         key = (input_id, kind, canonical)
         with self._lock:
             if existing := self._dedupe.get(key):
+                self._dedupe.move_to_end(key)
                 return existing, False
             if observation_id in self._latest:
                 raise ValueError("Observation identity is already in use")
+            self._trim_terminal_locked(_OBSERVATION_HISTORY_LIMIT - 1)
+            if len(self._latest) >= _OBSERVATION_HISTORY_LIMIT:
+                raise ValueError("Observation running history limit reached")
             event = {
                 "id": observation_id,
                 "kind": kind,
@@ -307,6 +316,7 @@ class ObservationLedger:
             self._events.append(event)
             self._latest[observation_id] = event
             self._dedupe[key] = observation_id
+            self._keys_by_id[observation_id] = key
             return observation_id, True
 
     def complete(self, observation_id: str, result: Any) -> bool:
@@ -347,7 +357,28 @@ class ObservationLedger:
             returned = _json_value(event)
             self._events.append(event)
             self._latest[observation_id] = event
+            self._latest.move_to_end(observation_id)
+            self._trim_terminal_locked(_OBSERVATION_HISTORY_LIMIT)
             return returned, True
+
+    def _trim_terminal_locked(self, target: int) -> None:
+        """Evict oldest terminal folds/dedupe while retaining every running identity."""
+
+        while len(self._latest) > target:
+            terminal_id = next(
+                (
+                    observation_id
+                    for observation_id, fact in self._latest.items()
+                    if fact["status"] != "running"
+                ),
+                None,
+            )
+            if terminal_id is None:
+                return
+            self._latest.pop(terminal_id, None)
+            key = self._keys_by_id.pop(terminal_id, None)
+            if key is not None and self._dedupe.get(key) == terminal_id:
+                self._dedupe.pop(key, None)
 
     def terminal_fact(self, observation_id: str) -> dict[str, Any] | None:
         """Return the canonical terminal fact, or None while unknown/running, for fault recovery."""

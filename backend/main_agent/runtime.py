@@ -7,7 +7,11 @@ executors detach through an append-only ObservationLedger with same-input reuse;
 ContextStore only after complete acknowledgement. Runtime also owns cancellable three-second Task
 proposals, cancellation-immune Manager commits/controls, and supervised durable Task-event replay;
 current-input proposal identities have a hard admission bound, and canonical Task versions fence stale
-retries. TaskBridge fresh-reads Manager state for owner-safe inspection and optimistic-version control.
+retries. Automatic Memory recall captures immutable coordinates under the scheduler lock, waits outside
+that lock, then revalidates input/revision/context plus a monotonic endpoint generation before snapshot
+publication. In-flight PREPARE recall participates in StrongPause settlement, so stale work cannot start
+after RESPOND. TaskBridge fresh-reads Manager state for owner-safe inspection and optimistic-version
+control.
 """
 
 from __future__ import annotations
@@ -18,7 +22,7 @@ import json
 import re
 import time
 import uuid
-from collections import OrderedDict
+from collections import OrderedDict, deque
 from collections.abc import AsyncIterable, Awaitable, Callable, Iterable, Mapping, Sequence
 from dataclasses import dataclass, replace
 from enum import StrEnum
@@ -160,6 +164,7 @@ _PUNCTUATED = re.compile(r"[。！？!?；;.]\s*$")
 _ENGLISH_WORD = re.compile(r"[A-Za-z0-9]+(?:['’-][A-Za-z0-9]+)*")
 _PROPOSAL_LIMIT_PER_INPUT = 256
 _TASK_VERSION_LIMIT = 512
+_INVOKE_HISTORY_LIMIT = 128
 
 
 class MainAgentRuntime:
@@ -176,6 +181,7 @@ class MainAgentRuntime:
         executors: Mapping[str, Executor],
         soul: str,
         memory_facts: Sequence[Mapping[str, Any]] | Callable[[], Sequence[Mapping[str, Any]]] = (),
+        memory_bridge: Any | None = None,
         clock: Callable[[], float] | None = None,
         prepare_admission: PrepareAdmissionPolicy | None = None,
         observation_ledger: ObservationLedger | None = None,
@@ -184,6 +190,7 @@ class MainAgentRuntime:
         task_event_retry_sleep: Callable[[float], Awaitable[None]] | None = None,
         task_manager: Any | None = None,
         owner_profile_id: str | None = None,
+        metrics: Any | None = None,
     ) -> None:
         if not callable(provider) or not callable(renderer):
             raise TypeError("provider and renderer ports must be callable")
@@ -196,6 +203,8 @@ class MainAgentRuntime:
         self.renderer = renderer
         self.soul = soul
         self.memory_facts = memory_facts
+        self.memory_bridge = memory_bridge
+        self.metrics = metrics
         self.clock = clock or time.monotonic
         self.prepare_admission = prepare_admission or PrepareAdmissionPolicy()
         self.observation_ledger = observation_ledger or ObservationLedger()
@@ -215,6 +224,9 @@ class MainAgentRuntime:
         self._drain_task: asyncio.Task[None] | None = None
         self._drain_scheduled = False
         self._barrier_intent: object | None = None
+        self._control_generation = 0
+        self._preinvoke_mode: InvokeMode | None = None
+        self._preinvoke_settled: asyncio.Event | None = None
         self._shutdown = False
         self._user_speaking = False
         self._speech_candidate = False
@@ -223,7 +235,7 @@ class MainAgentRuntime:
         self._last_prepare_at: float | None = None
         self._last_prepare_units = 0
         self._prepare_wait_started_at: float | None = None
-        self._requests: list[InvokeRequest] = []
+        self._requests: deque[InvokeRequest] = deque(maxlen=_INVOKE_HISTORY_LIMIT)
         self._clause_origins: dict[str, tuple[str, int]] = {}
         self._observation_origins: dict[str, tuple[str, int]] = {}
         self._task_proposals: OrderedDict[str, PendingTaskProposal] = OrderedDict()
@@ -293,6 +305,7 @@ class MainAgentRuntime:
 
         async with self._lock:
             self._ensure_task_event_listener_locked()
+        self._increment_metric("main.runtime.startup")
 
     async def wait_for_task_proposals(self) -> None:
         """Wait for currently scheduled proposal timers/commits without waiting on the event listener."""
@@ -341,12 +354,15 @@ class MainAgentRuntime:
         async with self._lock:
             barrier = self._prepare_barrier_locked()
             self._advance_input_locked(transcript)
+            assert self._active_input is not None
+            confirmed_input = self._active_input
             self._user_speaking = False
             self._speech_candidate = False
             self._confirmed_speech = False
             grant = self._create_grant_locked()
             self._merge_trigger_locked(InvokeMode.RESPOND, "explicit_text_submit")
             self._kick_locked()
+        await self._record_confirmed_input(confirmed_input)
         if barrier is not None:
             await barrier.wait()
         return grant
@@ -406,8 +422,11 @@ class MainAgentRuntime:
 
         intent = object()
         committed = False
+        confirmed_input: ActiveInput | None = None
+        grant: ResponseGrant | None = None
         async with self._lock:
             self._barrier_intent = intent
+            self._control_generation += 1
             self._user_speaking = False
             self._speech_candidate = False
             self._confirmed_speech = True
@@ -464,6 +483,7 @@ class MainAgentRuntime:
             if self._speech_candidate or self._confirmed_speech:
                 self._cancel_pending_proposals_locked("confirmed_speech")
             self._barrier_intent = intent
+            self._control_generation += 1
             self._pending_trigger = None
             barrier = self._prepare_barrier_locked()
         try:
@@ -479,17 +499,20 @@ class MainAgentRuntime:
                 self._speech_candidate = False
                 self._confirmed_speech = False
                 grant = self._create_grant_locked()
+                confirmed_input = self._active_input
                 self._pending_trigger = None
                 self._merge_trigger_locked(InvokeMode.RESPOND, normalized_reason)
                 self._barrier_intent = None
                 self._kick_locked()
                 committed = True
-                return grant
             finally:
                 self._lock.release()
         finally:
             if not committed:
                 await asyncio.shield(self._release_barrier_intent(intent))
+        assert grant is not None and confirmed_input is not None
+        await self._record_confirmed_input(confirmed_input)
+        return grant
 
     async def request_prepare(self, reason: str, *, high_priority: bool = False) -> bool:
         """Request one admitted PREPARE snapshot, coalescing all intermediate checkpoints."""
@@ -595,10 +618,12 @@ class MainAgentRuntime:
     async def shutdown(self) -> None:
         """Fence new work, cancel pending proposals, and await any irreversible commit already started."""
 
+        first_shutdown = False
         async with self._lock:
             if self._shutdown:
                 task = self._drain_task
             else:
+                first_shutdown = True
                 self._shutdown = True
                 self._pending_trigger = None
                 self._cancel_pending_proposals_locked("runtime_shutdown")
@@ -622,6 +647,8 @@ class MainAgentRuntime:
         if event_task is not None and event_task is not asyncio.current_task():
             await asyncio.gather(event_task, return_exceptions=True)
         await self.harness.cancel_observations()
+        if first_shutdown:
+            self._increment_metric("main.runtime.shutdown")
 
     def _advance_input_locked(self, transcript: str) -> None:
         previous = self._active_input
@@ -699,10 +726,18 @@ class MainAgentRuntime:
 
     def _prepare_barrier_locked(self) -> asyncio.Event | None:
         active = self._active_invoke
-        if active is None or active.request.mode is not InvokeMode.PREPARE:
-            return None
-        self.harness.cancel(active.request.invoke_id)
-        return active.settled
+        if active is not None and active.request.mode is InvokeMode.PREPARE:
+            self.harness.cancel(active.request.invoke_id)
+            return active.settled
+        if self._preinvoke_mode is InvokeMode.PREPARE:
+            return self._preinvoke_settled
+        return None
+
+    def _settle_preinvoke_locked(self, event: asyncio.Event) -> None:
+        event.set()
+        if self._preinvoke_settled is event:
+            self._preinvoke_settled = None
+            self._preinvoke_mode = None
 
     async def _release_barrier_intent(self, intent: object) -> None:
         """Release and kick only the endpoint barrier still owned by the caller's token."""
@@ -791,11 +826,17 @@ class MainAgentRuntime:
                         return
                     trigger = self._pending_trigger
                     self._pending_trigger = None
+                    trigger_generation = self._control_generation
+                    preinvoke_settled = asyncio.Event()
+                    self._preinvoke_mode = trigger.mode
+                    self._preinvoke_settled = preinvoke_settled
                     active_input = self._active_input
                     if active_input is None or trigger.input_id != active_input.input_id:
+                        self._settle_preinvoke_locked(preinvoke_settled)
                         continue
                     if trigger.mode is InvokeMode.PREPARE:
                         if self._prepare_count >= self.prepare_admission.max_prepares_per_input:
+                            self._settle_preinvoke_locked(preinvoke_settled)
                             continue
                         self._prepare_count += 1
                         self._last_prepare_at = self.clock()
@@ -804,6 +845,42 @@ class MainAgentRuntime:
                         grant = None
                     else:
                         grant = self._refresh_grant_locked()
+                    recall_identity = (
+                        active_input.input_id,
+                        active_input.revision,
+                        self._latest_context_version,
+                    )
+                    folded = self.context_store.fold()
+                    recall_query = active_input.latest_transcript
+                    recall_segment_id = f"{active_input.input_id}:{active_input.revision}"
+                if self.memory_bridge is None:
+                    memory_facts = self._memory_facts()
+                else:
+                    try:
+                        memory_facts = await self.memory_bridge.recall(
+                            query=recall_query,
+                            revision=recall_identity[1],
+                            input_id=recall_identity[0],
+                            context_version=recall_identity[2],
+                            visible_source_segment_ids=(recall_segment_id,),
+                            visible_source_texts=(recall_query,),
+                        )
+                    except Exception:
+                        memory_facts = ()
+                async with self._lock:
+                    current = self._active_input
+                    if (
+                        self._shutdown
+                        or current is None
+                        or trigger_generation != self._control_generation
+                        or (
+                            current.input_id,
+                            current.revision,
+                            self._latest_context_version,
+                        ) != recall_identity
+                    ):
+                        self._settle_preinvoke_locked(preinvoke_settled)
+                        continue
                     surface = self.harness.freeze_surface(
                         trigger.mode,
                         input_id=active_input.input_id,
@@ -815,9 +892,9 @@ class MainAgentRuntime:
                         confirmed_speech=self._confirmed_speech,
                     )
                     snapshot = self.snapshot_projector.project(
-                        self.context_store.fold(),
+                        folded,
                         soul=self.soul,
-                        memory_facts=self._memory_facts(),
+                        memory_facts=memory_facts,
                         runtime_state=self._runtime_state(trigger.mode, trigger.reason, grant),
                         allowed_tools=surface.provider_schemas(),
                     )
@@ -835,6 +912,7 @@ class MainAgentRuntime:
                     active = _ActiveInvoke(request, asyncio.Event())
                     self._active_invoke = active
                     self._requests.append(request)
+                    self._settle_preinvoke_locked(preinvoke_settled)
                 try:
                     request.settlement = await self.harness.run(
                         self._provider_chunks(request),
@@ -848,21 +926,36 @@ class MainAgentRuntime:
                         active.settled.set()
         finally:
             async with self._lock:
+                if self._preinvoke_settled is not None:
+                    self._settle_preinvoke_locked(self._preinvoke_settled)
                 if self._drain_task is current_task:
                     self._drain_task = None
                 if self._pending_trigger is not None and not self._shutdown:
                     self._kick_locked()
 
     async def _provider_chunks(self, request: InvokeRequest):
-        source = self.provider(request)
-        if inspect.isawaitable(source):
-            source = await source
-        if hasattr(source, "__aiter__"):
-            async for chunk in source:  # type: ignore[union-attr]
+        started_at = time.monotonic()
+        self._increment_metric("main.invoke.started")
+        try:
+            source = self.provider(request)
+            if inspect.isawaitable(source):
+                source = await source
+            if hasattr(source, "__aiter__"):
+                async for chunk in source:  # type: ignore[union-attr]
+                    yield chunk
+                return
+            for chunk in source:  # type: ignore[union-attr]
                 yield chunk
-            return
-        for chunk in source:  # type: ignore[union-attr]
-            yield chunk
+        finally:
+            observe = getattr(self.metrics, "observe", None)
+            if callable(observe):
+                observe("main.invoke.latency", time.monotonic() - started_at)
+            self._increment_metric("main.invoke.finished")
+
+    def _increment_metric(self, name: str) -> None:
+        increment = getattr(self.metrics, "increment", None)
+        if callable(increment):
+            increment(name)
 
     async def _offer_say(self, call: ToolCall) -> None:
         async with self._lock:
@@ -1518,6 +1611,24 @@ class MainAgentRuntime:
     def _memory_facts(self) -> Sequence[Mapping[str, Any]]:
         value = self.memory_facts() if callable(self.memory_facts) else self.memory_facts
         return value
+
+    async def _record_confirmed_input(self, active_input: ActiveInput) -> None:
+        """Reset Memory idle sealing outside the scheduler lock; failures never block dialogue."""
+
+        record = getattr(self.memory_bridge, "record_confirmed_input", None)
+        if not callable(record):
+            return
+        try:
+            result = record(
+                segment_id=f"{active_input.input_id}:{active_input.revision}",
+                content=active_input.latest_transcript,
+                input_id=active_input.input_id,
+                revision=active_input.revision,
+            )
+            if inspect.isawaitable(result):
+                await result
+        except Exception:
+            return
 
     def _context_changed_locked(self, *, refresh_grant: bool = True) -> None:
         self._latest_context_version += 1

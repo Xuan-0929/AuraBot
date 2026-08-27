@@ -10,19 +10,21 @@ AuraBot 是一个 desktop-first 的陪伴型 AI 项目。默认界面是常驻�
 | Desktop | Electron + Vue + TypeScript + Vite，可运行桌宠、控制台和设置窗口。 |
 | Live2D | 内置 Hiyori 示例模型，支持拖动、点击穿透、光标跟随与状态动作。 |
 | Chat | 普通文字聊天、pet quick chat、模型调用和消息持久化。 |
-| Memory | TypeScript MVP 与保留的 Python Memory 实现、follow-up 与 idle nudge。 |
-| Backend | Python Task REST/SSE 垂直切片已实现；health 契约保持不变。 |
-| Task | 两表同步 SQLite、固定五槽 FIFO、Pi RPC、立即 waiting 回收、暂停/恢复/取消和业务事件已实现；Electron/Main Agent 尚未接入。 |
+| Memory | Main Agent 自动 lexical-first recall、跨重启五分钟 episode seal、durable extraction/Qdrant outbox，以及 browse/forget/retry API 已实现。 |
+| Backend | FastAPI lifespan 已组合惰性 OpenAI-compatible Main provider、Memory、realtime/speech 与 Task；health 精确兼容，另有零付费 probe 的 local-only readiness。 |
+| Task | 两表同步 SQLite、固定五槽 FIFO、Pi RPC、控制/业务事件与 Main Agent proposal/事实回流已实现；桌面 Task UI 仍未开放。 |
 
-桌面 Task 型输入仍只会收到固定迁移回复，因为 Electron/Main Agent 接入不在本轮。
-后端 API 可独立创建并运行 Task，但桌面不会暗示该 surface 已经可用。
+桌面 Task UI 尚未开放；Python Main Agent 与 TaskManager 的后端 control path 已接通，
+但当前桌面不会暗示这个 surface 已经可用。
 
 ## 架构状态
 
 ~~~mermaid
 flowchart LR
-  DESKTOP["Electron / Vue<br/>Chat · Memory · Live2D"] --> HEALTH["Python FastAPI<br/>health + Task REST/SSE"]
-  HEALTH --> TM["Python TaskManager<br/>Control Plane"]
+  DESKTOP["Electron / Vue<br/>Chat · Live2D"] --> GATEWAY["Python FastAPI Gateway<br/>realtime · readiness · Task API"]
+  GATEWAY --> MAIN["MainAgentRuntime<br/>Snapshot · Memory bridge"]
+  MAIN --> MEMORY["profile memory.sqlite3<br/>FTS · jobs · outbox · Qdrant"]
+  MAIN --> TM["Python TaskManager<br/>Control Plane"]
   TM --> PI["Pi RPC processes<br/>Execution Plane"]
 ~~~
 
@@ -75,6 +77,11 @@ curl http://127.0.0.1:6401/health
 ~~~json
 {"ok":true,"service":"backend"}
 ~~~
+
+本地 readiness 使用 `GET /api/v1/readiness`；它只读取 lifespan、SQLite 与 worker
+状态，不调用模型、embedding、Qdrant health 或 Pi subprocess。Memory 管理路径为
+`GET /api/v1/memories`、`POST /api/v1/memories/forget` 和
+`POST /api/v1/memory-jobs/{jobId}/retry`。
 
 ## Task Runtime 配置
 

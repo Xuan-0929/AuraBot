@@ -1,9 +1,10 @@
 """解析 Main Agent 的局部设置、语音模型引用并维护共享的受信任工作区目录。
 
-配置加载器保留原始 YAML 后，本模块把 app/main_agent 段变成不可变路径设置；
+配置加载器保留原始 YAML 后，本模块把 app/main_agent/chat_model 段变成不可变路径设置；
 WorkspaceRegistry 只接受由配置声明的真实目录，TaskManager 用它将 workspace_id 解析为
-内部 cwd。语音设置只记录 Provider 模型名及本地模型/许可证路径，真正的可选 SDK 和 ONNX
-资产由 speech 模块按需检查加载，因此关闭或未安装语音能力时 Backend 仍能正常启动。
+内部 cwd。聊天与语音设置只记录 Provider 地址、密钥、模型名及本地模型/许可证路径，
+真正的网络连接、可选 SDK 和 ONNX 资产由 composition/provider 模块按需检查加载，因此
+关闭、缺少密钥或未安装语音能力时 Backend 仍能正常启动。
 """
 
 from __future__ import annotations
@@ -127,6 +128,7 @@ class SpeechSettings:
     """Configured provider model identities and explicitly checked local model/license assets."""
 
     enabled: bool
+    api_key: str
     stt_model_name: str
     tts_model_name: str
     tts_voice: str
@@ -152,6 +154,7 @@ class SpeechSettings:
 
         return cls(
             enabled=enabled,
+            api_key=str(raw.get("api_key", "")).strip(),
             stt_model_name=text("stt_model_name", "fun-asr-realtime"),
             tts_model_name=text("tts_model_name", "cosyvoice-v3-flash"),
             tts_voice=text("tts_voice", "longanyang"),
@@ -163,12 +166,45 @@ class SpeechSettings:
 
 
 @dataclass(frozen=True, slots=True)
+class ChatModelSettings:
+    """Validated OpenAI-compatible endpoint identity with a bounded invoke deadline."""
+
+    base_url: str
+    model_name: str
+    api_key: str
+    timeout_seconds: float = 60.0
+
+    @classmethod
+    def from_config(cls, raw: Mapping[str, Any]) -> "ChatModelSettings":
+        if not isinstance(raw, Mapping):
+            raise ValueError("chat_model must be a mapping.")
+
+        def text(key: str, default: str = "") -> str:
+            value = raw.get(key, default)
+            if not isinstance(value, str):
+                raise ValueError(f"chat_model.{key} must be text.")
+            return value.strip()
+
+        base_url = text("base_url")
+        model_name = text("model_name")
+        api_key = text("api_key")
+        raw_timeout = raw.get("timeout_seconds", 60.0)
+        if isinstance(raw_timeout, bool) or not isinstance(raw_timeout, (int, float)):
+            raise ValueError("chat_model.timeout_seconds must be a number.")
+        timeout = float(raw_timeout)
+        if not 0 < timeout <= 600:
+            raise ValueError("chat_model.timeout_seconds must be between 0 and 600.")
+        return cls(base_url.rstrip("/"), model_name, api_key, timeout)
+
+
+@dataclass(frozen=True, slots=True)
 class MainAgentSettings:
     """Typed Main Agent paths shared by profile storage and workspace-aware services."""
 
     data_dir: Path
     profile_root: Path
     workspaces: WorkspaceRegistry
+    chat_model: ChatModelSettings
     speech: SpeechSettings
 
     @classmethod
@@ -190,10 +226,14 @@ class MainAgentSettings:
             data_dir=data_dir,
             profile_root=profile_root,
             workspaces=WorkspaceRegistry.from_config(config, config_root=root),
+            chat_model=ChatModelSettings.from_config(config.get("chat_model", {})),
             speech=SpeechSettings.from_config(
                 main_agent.get("speech", {}), config_root=root
             ),
         )
 
 
-__all__ = ["MainAgentSettings", "SpeechSettings", "WorkspaceRegistry", "WorkspaceRegistryError"]
+__all__ = [
+    "ChatModelSettings", "MainAgentSettings", "SpeechSettings", "WorkspaceRegistry",
+    "WorkspaceRegistryError",
+]
