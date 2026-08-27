@@ -1,7 +1,8 @@
 """验证 TaskManager 是运行状态、FIFO、进程与 fail-stop 的唯一 owner。
 
 测试使用真实同步 Store 和 fake Pi subprocess 覆盖固定五并发、立即 waiting 回收、命令
-CAS、timeout、recovery 与并行 shutdown；Gateway 与 JSON DTO 在各自测试中验证。
+CAS、timeout、recovery 与并行 shutdown；创建入口还统一校验 Task 标题、提示词、工作区、
+owner 与幂等键。Gateway 与 JSON DTO 在各自测试中验证。
 """
 
 from __future__ import annotations
@@ -13,6 +14,7 @@ import sys
 import tempfile
 import time
 import unittest
+from dataclasses import replace
 from pathlib import Path
 from unittest.mock import patch
 
@@ -26,6 +28,7 @@ from backend.task.models import (
 from backend.task.settings import TaskSettings
 from backend.task.store import TaskStore
 from backend.task.process import TaskSessionCleanupError
+from backend.main_agent.settings import WorkspaceRegistry
 
 
 class TaskManagerTests(unittest.IsolatedAsyncioTestCase):
@@ -34,6 +37,7 @@ class TaskManagerTests(unittest.IsolatedAsyncioTestCase):
         self.root = Path(self.temp.name).resolve()
         self.project = self.root / "project"
         self.project.mkdir()
+        self.workspaces = WorkspaceRegistry({"project": self.project})
         fake_pi = Path(__file__).parent.parent / "fixtures/fake_pi_rpc.py"
         plugin, prompt = self.root / "plugin.ts", self.root / "prompt.md"
         plugin.write_text("// fake\n", encoding="utf-8")
@@ -55,6 +59,7 @@ class TaskManagerTests(unittest.IsolatedAsyncioTestCase):
             max_jsonl_line_bytes=1024,
             protocol_queue_size=32,
             output_chunk_bytes=16,
+            workspace_registry=self.workspaces,
         )
         self.manager = TaskManager(self.settings)
         self.started = False
@@ -71,8 +76,40 @@ class TaskManagerTests(unittest.IsolatedAsyncioTestCase):
     def command(self, index: int = 1, timeout: int | None = 10):
         return CreateTaskCommand(
             title=f"Task {index}", prompt=f"Prompt {index}",
-            working_directory=self.project, timeout_seconds=timeout,
+            workspace_id="project", owner_profile_id="profile-1",
+            idempotency_key=f"task-{index}", timeout_seconds=timeout,
         )
+
+    async def test_create_admission_validates_domain_and_deduplicates_idempotency_key(self):
+        await self.startup()
+        for command in (
+            CreateTaskCommand(" ", "Prompt", "project", "profile-1", "key-1"),
+            CreateTaskCommand("Title", " ", "project", "profile-1", "key-2"),
+            CreateTaskCommand("Title", "Prompt", "missing", "profile-1", "key-3"),
+            CreateTaskCommand("Title", "Prompt", "project", "profile-1", " "),
+            CreateTaskCommand("Title", "Prompt", "project", "profile-1", "key-4", 0),
+        ):
+            with self.subTest(command=command):
+                with self.assertRaisesRegex(Exception, "must|Unknown"):
+                    await self.manager.create_task(command)
+
+        first = await self.manager.create_task(self.command(99))
+        duplicate = await self.manager.create_task(self.command(99))
+        self.assertEqual(duplicate.id, first.id)
+        self.assertEqual(duplicate.workspace_id, "project")
+        self.assertEqual(duplicate.owner_profile_id, "profile-1")
+
+    async def test_manager_configuration_rejects_workspace_with_symlinked_ancestor(self):
+        outside_project = self.root / "outside/project"
+        outside_project.mkdir(parents=True)
+        link = self.root / "link"
+        link.symlink_to(self.root / "outside", target_is_directory=True)
+
+        with self.assertRaisesRegex(ValueError, "symlink"):
+            TaskManager(replace(
+                self.settings,
+                workspace_registry=WorkspaceRegistry({"project": link / "project"}),
+            ))
 
     async def wait_status(self, task_id, status: TaskStatus, timeout: float = 4):
         async with asyncio.timeout(timeout):
@@ -220,12 +257,12 @@ class TaskManagerTests(unittest.IsolatedAsyncioTestCase):
     async def test_restart_repairs_running_and_preserves_other_durable_states(self):
         seed = TaskStore(self.settings.database_path)
         seed.initialize()
-        resumable = seed.create_task(self.command(1))
+        resumable = seed.create_task(self.command(1), self.project)
         resumable = seed.claim_queued(1)[0]
         self.settings.session_directory(resumable.id).mkdir(parents=True)
-        missing = seed.create_task(self.command(2))
+        missing = seed.create_task(self.command(2), self.project)
         missing = seed.claim_queued(1)[0]
-        waiting_source = seed.create_task(self.command(3))
+        waiting_source = seed.create_task(self.command(3), self.project)
         waiting_source = seed.claim_queued(1)[0]
         waiting, _ = seed.raise_question(
             waiting_source.id, "Choose", (), expected_version=waiting_source.version

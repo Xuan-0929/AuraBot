@@ -2,13 +2,16 @@
 验证版本化 Task REST/SSE Gateway 只暴露 AuraBot 业务模型。
 
 测试注入具体内存 FakeTaskManager 检查输入映射、camelCase 输出、乐观并发错误、SSE
-cursor 与 lifespan；fake 不持有 subprocess，进程和持久化行为由 task 子目录测试覆盖。
+cursor 与 lifespan；创建请求只传 workspaceId/ownerProfileId/idempotencyKey，绝不传
+客户端 cwd。fake 不持有 subprocess，进程和持久化行为由 task 子目录测试覆盖。
 """
 
 from __future__ import annotations
 
 import asyncio
 import os
+import sys
+import tempfile
 import unittest
 from dataclasses import replace
 from datetime import UTC, datetime
@@ -34,6 +37,9 @@ from backend.task.models import (
     TaskVersionConflict,
 )
 from backend.task.process import TaskSessionCleanupError
+from backend.task.manager import TaskManager
+from backend.task.settings import TaskSettings
+from backend.main_agent.settings import WorkspaceRegistry
 
 
 def task_record(status: TaskStatus = TaskStatus.QUEUED) -> TaskRecord:
@@ -44,6 +50,9 @@ def task_record(status: TaskStatus = TaskStatus.QUEUED) -> TaskRecord:
         title="Fix login",
         prompt="Run tests and fix login.",
         working_directory=Path("/tmp/project"),
+        workspace_id="project",
+        owner_profile_id="profile-1",
+        idempotency_key="request-1",
         status=status,
         timeout_seconds=1800,
         active_runtime_ms=0,
@@ -155,13 +164,15 @@ class TaskGatewayTests(unittest.TestCase):
         self.client_context = TestClient(create_app(task_manager=FakeTaskManager()))
         self.client = self.client_context.__enter__()
 
-    def test_create_maps_camel_case_and_hides_pi_session_fields(self):
+    def test_create_maps_camel_case_workspace_and_hides_internal_fields(self):
         response = self.client.post(
             "/api/v1/tasks",
             json={
                 "title": "Fix login",
                 "prompt": "Run tests and fix login.",
-                "workingDirectory": "/tmp/project",
+                "workspaceId": "project",
+                "ownerProfileId": "profile-1",
+                "idempotencyKey": "request-1",
                 "timeoutSeconds": 1800,
                 "rerunOfTaskId": None,
             },
@@ -169,45 +180,106 @@ class TaskGatewayTests(unittest.TestCase):
 
         self.assertEqual(response.status_code, 201)
         body = response.json()
-        self.assertEqual(body["workingDirectory"], "/tmp/project")
+        self.assertEqual(body["workspaceId"], "project")
+        self.assertEqual(body["ownerProfileId"], "profile-1")
         self.assertEqual(body["activeRuntimeMs"], 0)
         self.assertEqual(body["status"], "queued")
         self.assertNotIn("piSessionId", body)
         self.assertNotIn("piSessionPath", body)
         self.assertNotIn("pendingQuestion", body)
-        self.assertEqual(self.manager.created_command.working_directory, Path("/tmp/project"))
+        self.assertEqual(self.manager.created_command.workspace_id, "project")
+        self.assertEqual(self.manager.created_command.owner_profile_id, "profile-1")
+        self.assertEqual(self.manager.created_command.idempotency_key, "request-1")
+        self.assertNotIn("workingDirectory", body)
 
-    def test_create_omits_timeout_for_manager_and_rejects_explicit_null_or_bounds(self):
+    def test_create_omits_timeout_and_forwards_manager_validated_bounds(self):
         omitted = self.client.post(
             "/api/v1/tasks",
-            json={"title": "x", "prompt": "y", "workingDirectory": "/tmp/project"},
+            json={
+                "title": "x", "prompt": "y", "workspaceId": "project",
+                "ownerProfileId": "profile-1", "idempotencyKey": "request-2",
+            },
         )
         self.assertEqual(omitted.status_code, 201)
         self.assertIsNone(self.manager.created_command.timeout_seconds)
 
-        for value in (None, 0, -1, 86_401):
+        null = self.client.post(
+            "/api/v1/tasks",
+            json={
+                "title": "x", "prompt": "y", "workspaceId": "project",
+                "ownerProfileId": "profile-1", "idempotencyKey": "request-null",
+                "timeoutSeconds": None,
+            },
+        )
+        self.assertEqual(null.status_code, 422)
+
+        for value in (0, -1, 86_401):
             with self.subTest(value=value):
                 response = self.client.post(
                     "/api/v1/tasks",
                     json={
                         "title": "x", "prompt": "y",
-                        "workingDirectory": "/tmp/project",
+                        "workspaceId": "project",
+                        "ownerProfileId": "profile-1",
+                        "idempotencyKey": f"request-{value}",
                         "timeoutSeconds": value,
                     },
                 )
-                self.assertEqual(response.status_code, 422)
+                self.assertEqual(response.status_code, 201)
+                self.assertEqual(self.manager.created_command.timeout_seconds, value)
 
-    def test_create_rejects_relative_working_directory(self):
+    def test_create_rejects_client_controlled_working_directory(self):
         response = self.client.post(
             "/api/v1/tasks",
             json={
                 "title": "x",
                 "prompt": "y",
-                "workingDirectory": "relative/path",
+                "workspaceId": "project",
+                "ownerProfileId": "profile-1",
+                "idempotencyKey": "request-3",
+                "workingDirectory": "/tmp/project",
                 "timeoutSeconds": 1800,
             },
         )
         self.assertEqual(response.status_code, 422)
+
+    def test_real_manager_rejects_missing_or_unknown_workspace_at_rest_boundary(self):
+        with tempfile.TemporaryDirectory() as directory:
+            root = Path(directory)
+            workspace = root / "project"
+            workspace.mkdir()
+            manager = TaskManager(
+                TaskSettings(
+                    database_path=root / "task.sqlite3",
+                    session_root=root / "sessions",
+                    pi_home=root / "pi-home",
+                    node_executable=sys.executable,
+                    pi_cli_path=root / "missing-cli.py",
+                    plugin_entry_path=root / "plugin.ts",
+                    system_prompt_path=root / "prompt.md",
+                    default_timeout_seconds=1800,
+                    workspace_registry=WorkspaceRegistry({"project": workspace.resolve()}),
+                )
+            )
+            with TestClient(create_app(task_manager=manager)) as client:
+                missing = client.post(
+                    "/api/v1/tasks",
+                    json={
+                        "title": "x", "prompt": "y", "ownerProfileId": "profile-1",
+                        "idempotencyKey": "missing-workspace",
+                    },
+                )
+                unknown = client.post(
+                    "/api/v1/tasks",
+                    json={
+                        "title": "x", "prompt": "y", "workspaceId": "unknown",
+                        "ownerProfileId": "profile-1", "idempotencyKey": "unknown-workspace",
+                    },
+                )
+
+        self.assertEqual(missing.status_code, 422)
+        self.assertEqual(unknown.status_code, 400)
+        self.assertEqual(unknown.json()["error"]["code"], "invalid_task_request")
 
     def test_list_get_pause_cancel_and_delete_contracts(self):
         listed = self.client.get("/api/v1/tasks?limit=20")
@@ -282,7 +354,9 @@ class TaskGatewayTests(unittest.TestCase):
                 json={
                     "title": "Fix login",
                     "prompt": "Run tests.",
-                    "workingDirectory": "/tmp/project",
+                    "workspaceId": "project",
+                    "ownerProfileId": "profile-1",
+                    "idempotencyKey": "request-4",
                     "timeoutSeconds": 1800,
                 },
             )

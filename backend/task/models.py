@@ -2,7 +2,8 @@
 定义 AuraBot Task 产品模型、错误类别和纯状态转换规则。
 
 本模块不访问 SQLite、Pi RPC 或 FastAPI；Store 负责保存这些值，TaskManager 负责
-编排转换，而所有调用方必须通过这里的纯函数验证同一张产品状态图。
+编排转换和 workspace 解析。CreateTaskCommand 仅携带 workspace/owner/idempotency 业务
+标识，所有调用方必须通过 Manager 验证同一张产品状态图。
 """
 
 from __future__ import annotations
@@ -128,7 +129,9 @@ class CreateTaskCommand:
 
     title: str
     prompt: str
-    working_directory: Path
+    workspace_id: str
+    owner_profile_id: str
+    idempotency_key: str
     timeout_seconds: int | None = None
     rerun_of_task_id: UUID | None = None
 
@@ -142,6 +145,9 @@ class TaskRecord:
     title: str
     prompt: str
     working_directory: Path
+    workspace_id: str
+    owner_profile_id: str
+    idempotency_key: str
     status: TaskStatus
     timeout_seconds: int
     active_runtime_ms: int

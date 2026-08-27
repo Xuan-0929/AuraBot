@@ -2,7 +2,8 @@
 验证 Task 产品模型与纯状态转换图。
 
 测试只依赖 backend.task.models，不接触 SQLite、进程或 Gateway；任何新增状态和转换都
-必须先在这里成为明确的产品决策，再由 Store 与 TaskManager 消费。
+必须先在这里成为明确的产品决策，再由 Store 与 TaskManager 消费，包括可路由 owner、
+受信任 workspace 与创建幂等性。
 """
 
 from __future__ import annotations
@@ -27,6 +28,9 @@ class TaskModelTests(unittest.TestCase):
         self.assertTrue(
             {"question_id", "question_text", "question_options", "question_answer"}
             <= field_names
+        )
+        self.assertTrue(
+            {"workspace_id", "owner_profile_id", "idempotency_key"} <= field_names
         )
         self.assertNotIn("pi_session_id", field_names)
         self.assertNotIn("pi_session_path", field_names)

@@ -2,6 +2,18 @@ ports:
   frontend: 6400
   backend_gateway: 6401
 
+app:
+  data_dir: "${AURABOT_TEST_USER_DATA_DIR:-/tmp/aurabot-backend-tests-v1}"
+  workspaces:
+    - id: default
+      path: "../../.."
+
+main_agent: {}
+
+memory: {}
+
+dev: {}
+
 chat_model:
   base_url: https://example.invalid/v1
   model_name: test-chat-model

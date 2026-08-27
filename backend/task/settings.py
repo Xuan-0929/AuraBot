@@ -1,8 +1,8 @@
 """解析并验证 Backend Task runtime 的不可变配置。
 
-本模块从 YAML 派生 SQLite、Pi session、Pi Home 与项目内 pinned runtime 路径，并在
-Manager 启动前验证 Node、Pi CLI、Extension 和 prompt。并发上限属于 Manager 的固定
-资源边界，不再接受配置，避免配置项存在但运行时忽略的假象。
+本模块从 YAML 派生 SQLite、Pi session、Pi Home、共享 WorkspaceRegistry 与项目内 pinned
+runtime 路径，并在 Manager 启动前验证 Node、Pi CLI、Extension 和 prompt。并发上限属于
+Manager 的固定资源边界，不再接受配置，避免配置项存在但运行时忽略的假象。
 """
 
 from __future__ import annotations
@@ -10,10 +10,12 @@ from __future__ import annotations
 import shutil
 import subprocess
 from collections.abc import Mapping
-from dataclasses import dataclass
+from dataclasses import dataclass, field
 from pathlib import Path
 from typing import Any
 from uuid import UUID
+
+from ..main_agent.settings import WorkspaceRegistry
 
 EXPECTED_PI_VERSION = "0.84.2"
 
@@ -56,6 +58,7 @@ class TaskSettings:
     max_jsonl_line_bytes: int = 8 * 1024 * 1024
     protocol_queue_size: int = 512
     output_chunk_bytes: int = 16 * 1024
+    workspace_registry: WorkspaceRegistry = field(default_factory=WorkspaceRegistry.empty)
 
     @classmethod
     def from_mapping(
@@ -113,6 +116,7 @@ class TaskSettings:
             plugin_entry_path=(installed_package / "aurabot-task/index.ts").resolve(),
             system_prompt_path=(installed_package / "prompts/task-system.md").resolve(),
             default_timeout_seconds=default_timeout_seconds,
+            workspace_registry=WorkspaceRegistry.from_config(config, config_root=config_root),
         )
 
     @classmethod

@@ -1,7 +1,7 @@
 """加载 Backend 进程级 YAML 配置并隔离已经删除的旧执行字段。
 
-Backend 导入时只初始化一次本模块；端口、保留模型角色与新的 Pi-native ``task`` 段
-通过此边界进入 ``backend.main`` 和保留服务。旧 Task/MCP 段在环境变量展开前即被丢弃，
+Backend 导入时只初始化一次本模块；app、main_agent、memory、task、dev、端口和保留模型
+角色通过此边界进入组合入口及各领域设置。旧 Task/MCP 段在环境变量展开前即被丢弃，
 因此历史配置不会让当前进程重新依赖已删除的 runtime secret。
 """
 
@@ -21,7 +21,7 @@ PROJECT_ROOT = Path(__file__).resolve().parent.parent
 DEFAULT_CONFIG_PATH = PROJECT_ROOT / "config.yaml"
 CONFIG_PATH_ENV = "AURABOT_CONFIG_PATH"
 RETAINED_TOP_LEVEL_KEYS = frozenset(
-    {"ports", "chat_model", "gateway_model", "task"}
+    {"app", "dev", "memory", "ports", "chat_model", "gateway_model", "main_agent", "task"}
 )
 ENV_REFERENCE_PATTERN = re.compile(
     r"\$\{([A-Za-z_][A-Za-z0-9_]*)(?::-(.*?))?\}"

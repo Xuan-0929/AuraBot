@@ -1,7 +1,8 @@
 """验证最小 Pi process 函数的启动、错误映射、回收和 session 清理。
 
 测试运行独立 fake Pi RPC 子进程，覆盖 pinned 命令、stderr DEVNULL、abort/terminate/kill
-以及 symlink 不跟随；Manager registry 和状态语义不属于本模块。
+以及 symlink 不跟随；Pi 的 cwd 由 Task 已保存的受信任 workspace 解析结果提供，Manager
+registry 和状态语义不属于本模块。
 """
 
 from __future__ import annotations
@@ -25,6 +26,7 @@ from backend.task.process import (
 )
 from backend.task.settings import TaskSettings
 from backend.task.store import TaskStore
+from backend.main_agent.settings import WorkspaceRegistry
 
 
 class PiProcessTests(unittest.IsolatedAsyncioTestCase):
@@ -33,6 +35,7 @@ class PiProcessTests(unittest.IsolatedAsyncioTestCase):
         self.root = Path(self.temp.name).resolve()
         self.project = self.root / "project"
         self.project.mkdir()
+        self.workspaces = WorkspaceRegistry({"project": self.project})
         self.fake_pi = Path(__file__).parent.parent / "fixtures/fake_pi_rpc.py"
         plugin, prompt = self.root / "plugin.ts", self.root / "prompt.md"
         plugin.write_text("// fake\n", encoding="utf-8")
@@ -54,6 +57,7 @@ class PiProcessTests(unittest.IsolatedAsyncioTestCase):
             max_jsonl_line_bytes=1024,
             protocol_queue_size=16,
             output_chunk_bytes=16,
+            workspace_registry=self.workspaces,
         )
         self.store = TaskStore(self.settings.database_path)
         self.store.initialize()
@@ -67,7 +71,8 @@ class PiProcessTests(unittest.IsolatedAsyncioTestCase):
 
     def task(self, title: str = "Test Task"):
         return self.store.create_task(
-            CreateTaskCommand(title, "Do the work", self.project, 30)
+            CreateTaskCommand(title, "Do the work", "project", "profile-1", str(uuid4()), 30),
+            self.project,
         )
 
     async def start(self, scenario: str, prompt: str = "Do the work") -> PiProcess:

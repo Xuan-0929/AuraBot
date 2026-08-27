@@ -51,6 +51,32 @@ task:
         self.assertEqual(runtime_config.task["user_data_dir"], "./data")
         self.assertEqual(runtime_config.path, config_path.resolve())
 
+    def test_retains_main_agent_workspace_memory_and_development_sections(self):
+        with tempfile.TemporaryDirectory() as directory:
+            config_path = Path(directory) / "config.yaml"
+            config_path.write_text(
+                """
+app:
+  data_dir: ./data
+main_agent:
+  profile_dir: profiles
+memory:
+  enabled: true
+task:
+  default_timeout_seconds: 60
+dev:
+  test_mode: true
+ignored:
+  value: false
+""".strip(),
+                encoding="utf-8",
+            )
+            runtime_config = Config().initialize(config_path)
+
+        self.assertEqual(
+            set(runtime_config), {"app", "main_agent", "memory", "task", "dev"}
+        )
+
     def test_initialization_is_idempotent_and_keeps_in_memory_values(self):
         with tempfile.TemporaryDirectory() as directory:
             config_path = Path(directory) / "config.yaml"

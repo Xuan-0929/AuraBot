@@ -9,6 +9,19 @@ ports:
   frontend: 6400
   backend_gateway: 6401
 
+app:
+  data_dir: "${AURABOT_USER_DATA_DIR:-./.aurabot-data}"
+  workspaces:
+    - id: default
+      path: "."
+
+main_agent:
+  profile_dir: profiles
+
+memory: {}
+
+dev: {}
+
 chat_model:
   base_url: "https://api.deepseek.com/v1"
   model_name: "deepseek-v4-flash"

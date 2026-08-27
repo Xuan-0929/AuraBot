@@ -13,6 +13,7 @@ import logging
 import time
 from collections.abc import AsyncIterator, Callable, Iterable
 from dataclasses import dataclass, replace
+from pathlib import Path
 from typing import TypeVar
 from uuid import UUID
 
@@ -138,6 +139,7 @@ class TaskManager:
             self._event_condition.notify_all()
 
     async def create_task(self, command: CreateTaskCommand) -> TaskRecord:
+        command, working_directory = self._validate_create_command(command)
         timeout = command.timeout_seconds
         if timeout is None:
             timeout = self._settings.default_timeout_seconds
@@ -146,10 +148,40 @@ class TaskManager:
         async with self._state_lock:
             self._require_available()
             task = await self._commit(lambda: self._store.create_task(
-                replace(command, timeout_seconds=timeout)
+                replace(command, timeout_seconds=timeout), working_directory
             ))
             self._wake.set()
             return task
+
+    def _validate_create_command(self, command: CreateTaskCommand) -> tuple[CreateTaskCommand, Path]:
+        """Normalize all Task admission fields before durable storage or process ownership."""
+
+        def text(name: str, value: object, maximum: int) -> str:
+            if not isinstance(value, str) or not (normalized := value.strip()):
+                raise TaskCommandError(f"{name} must be a non-empty string.")
+            if len(normalized) > maximum:
+                raise TaskCommandError(f"{name} must be at most {maximum} characters.")
+            return normalized
+
+        title = text("title", command.title, 200)
+        prompt = text("prompt", command.prompt, 200_000)
+        owner_profile_id = text("owner_profile_id", command.owner_profile_id, 128)
+        idempotency_key = text("idempotency_key", command.idempotency_key, 200)
+        try:
+            working_directory = self._settings.workspace_registry.require(command.workspace_id)
+        except ValueError as exc:
+            raise TaskCommandError(str(exc)) from exc
+        return (
+            replace(
+                command,
+                title=title,
+                prompt=prompt,
+                workspace_id=command.workspace_id.strip(),
+                owner_profile_id=owner_profile_id,
+                idempotency_key=idempotency_key,
+            ),
+            Path(working_directory),
+        )
 
     async def list_tasks(
         self, *, after_row_id: int | None = None, limit: int = 50,

@@ -132,9 +132,11 @@ erDiagram
 version 与业务事件共享 `BEGIN IMMEDIATE` transaction。`event_id` 全局递增，
 `task_sequence` 在单 Task 内唯一递增，SSE 直接按 cursor replay。
 
-新模型使用 `PRAGMA user_version=1`。空数据库只创建 `tasks` 和 `task_events`；发现旧表、
-旧 v2 或未知 user version 时拒绝启动，不自动删除、改名或迁移。用户必须先备份，再删除
-整个 `<userData>/task` 目录，避免 SQLite 与旧 session 失去关联。
+新模型使用 `PRAGMA user_version=2`。空数据库只创建 `tasks` 和 `task_events`；启动时仅将
+首个未发布版本的 v1 原地补充 `workspace_id`、`owner_profile_id` 与 `idempotency_key`，既有行
+标记为 `legacy` 且没有可复用的幂等键。发现旧表、未知版本或未来版本时拒绝启动，不自动删除、
+改名或迁移。用户必须先备份，再删除整个 `<userData>/task` 目录，避免 SQLite 与旧 session
+失去关联。
 
 ## 6. 问题、执行与 active timeout
 
