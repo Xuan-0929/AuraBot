@@ -1,9 +1,9 @@
 """Project folded Canonical Context into a deterministic, immutable and bounded LLM prompt snapshot.
 
 This module deliberately does no scheduling or tool execution: ContextStore supplies only delivered/folded
-facts, ProfileStore supplies Soul, and future Memory/Tool Runtime code supplies read-only facts plus the
-allowed surface. The projector canonicalizes map ordering and applies small section budgets before a total
-budget, so one verbose source cannot make a real-time invoke unbounded or nondeterministic.
+facts, ProfileStore supplies Soul, and MainAgentRuntime supplies read-only facts plus the exact frozen
+ToolSurface. The projector canonicalizes map ordering, clips descriptive sections, and preserves required
+runtime/tool control structure inside the total budget so invokes stay bounded and capabilities never drift.
 """
 
 from __future__ import annotations
@@ -94,7 +94,9 @@ class SnapshotProjector:
             "task_facts": _clip_json_records(task_facts, self.budget.observation_chars),
             "memory_facts": _clip_json_records(memory, self.budget.memory_chars),
             "runtime_state": _clip_json_mapping(runtime, self.budget.runtime_chars),
-            "allowed_tool_surface": _clip_json_records(tools, self.budget.tool_chars),
+            # Tool schemas are authority, not descriptive prompt data: partial exposure would make the
+            # provider request disagree with its Snapshot.  The total budget below rejects if they cannot fit.
+            "allowed_tool_surface": [_thaw(tool) for tool in tools],
         }
         sections = _fit_total_budget(sections, self.budget.max_prompt_chars)
         prompt = _canonical(sections)

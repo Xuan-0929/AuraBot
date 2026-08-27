@@ -3,14 +3,17 @@
 ToolHarness consumes provider chunks in-process, streams stable speech clauses through an injected
 speech port, stages every call for complete JSON/schema/group validation, executes say before other
 effects regardless of provider order, and re-reads scheduler fencing facts at each acceptance point.
-Safe Observation ports detach only after group validation; cancellation and all control effects still
-reach an explicit InvokeSettlement before the harness admits another control invoke.
+Safe Observation origin ownership/reuse is synchronously decided exactly when a validated call
+detaches; one process-shared owner admits at most three executor jobs across Harness instances, while
+cancellation and all control effects still settle before another control invoke is admitted.
 """
 
 from __future__ import annotations
 
 import asyncio
 import inspect
+import json
+import threading
 from collections import OrderedDict
 from collections.abc import AsyncIterable, AsyncIterator, Callable, Iterable, Mapping
 from contextlib import asynccontextmanager
@@ -25,14 +28,47 @@ from .definitions import (
     ResponseGrant,
     StreamedSpeechReceipt,
     ToolCall,
+    ToolExecutorError,
     ToolReceipt,
     ToolSurface,
     ToolSurfacePolicy,
 )
-from .stream import SayClause, ToolCallAssembler
+from .stream import SayClause, ToolCallAssembler, segment_say_text
 
 
 Executor = Callable[[ToolCall], Any]
+
+
+class ObservationLimiter:
+    """Process-shareable nonblocking admission owner for the fixed live Observation budget."""
+
+    def __init__(self, limit: int = 3) -> None:
+        if limit < 1:
+            raise ValueError("Observation limit must be positive")
+        self.limit = limit
+        self._active = 0
+        self._lock = threading.Lock()
+
+    @property
+    def active(self) -> int:
+        with self._lock:
+            return self._active
+
+    def try_acquire(self) -> bool:
+        with self._lock:
+            if self._active >= self.limit:
+                return False
+            self._active += 1
+            return True
+
+    def release(self) -> None:
+        with self._lock:
+            if self._active < 1:
+                raise RuntimeError("Observation limiter released without ownership")
+            self._active -= 1
+
+
+_GLOBAL_OBSERVATION_LIMITER = ObservationLimiter(3)
 
 
 class ToolHarness:
@@ -44,21 +80,26 @@ class ToolHarness:
         executors: Mapping[str, Executor],
         *,
         state_provider: Callable[[], EffectFence | Mapping[str, Any]] | None = None,
+        observation_acceptance_hook: Callable[[str, ToolCall], Any] | None = None,
         observation_completion_hook: Callable[[ObservationOutcome], Any] | None = None,
         cancel_tombstone_limit: int = 256,
+        observation_limiter: ObservationLimiter | None = None,
     ) -> None:
         if cancel_tombstone_limit < 1:
             raise ValueError("cancel_tombstone_limit must be positive")
         self.policy = policy
         self.executors = dict(executors)
         self.state_provider = state_provider
+        self.observation_acceptance_hook = observation_acceptance_hook
         self.observation_completion_hook = observation_completion_hook
         self.cancel_tombstone_limit = cancel_tombstone_limit
+        self.observation_limiter = observation_limiter or _GLOBAL_OBSERVATION_LIMITER
         self._single_flight = asyncio.Lock()
         self._cancel_events: dict[str, asyncio.Event] = {}
         self._control_tasks: dict[str, asyncio.Task[Any]] = {}
         self._observation_tasks: set[asyncio.Task[Any]] = set()
         self._observation_outcomes: list[ObservationOutcome] = []
+        self._observation_requests: dict[tuple[str, str, str], str] = {}
         self._cancelled_invokes: OrderedDict[str, None] = OrderedDict()
 
     def freeze_surface(
@@ -105,6 +146,16 @@ class ToolHarness:
 
         if self._observation_tasks:
             await asyncio.gather(*tuple(self._observation_tasks), return_exceptions=True)
+        return tuple(self._observation_outcomes)
+
+    async def cancel_observations(self) -> tuple[ObservationOutcome, ...]:
+        """Cancel accepted jobs during runtime shutdown and retain their failed terminal outcomes."""
+
+        tasks = tuple(self._observation_tasks)
+        for task in tasks:
+            task.cancel()
+        if tasks:
+            await asyncio.gather(*tasks, return_exceptions=True)
         return tuple(self._observation_outcomes)
 
     @asynccontextmanager
@@ -260,8 +311,11 @@ class ToolHarness:
                         continue
                     if definition.effect is EffectClass.SAY:
                         text = str(call.arguments["text"])
-                        tail = text[streamed.get(call.index, 0):]
-                        if tail:
+                        tails = segment_say_text(
+                            text[streamed.get(call.index, 0):], final=True
+                        )
+                        codes[call.index] = "accepted"
+                        for tail in tails:
                             tail_call = ToolCall(
                                 call.call_id, call.name, {**call.arguments, "text": tail}, call.index,
                                 call.raw_arguments,
@@ -269,18 +323,18 @@ class ToolHarness:
                             codes[call.index] = await self._execute_control(
                                 tail_call, invoke_id, cancel_event
                             )
-                            if codes[call.index] == "accepted":
-                                streamed_receipts.append(StreamedSpeechReceipt(
-                                    call.call_id, tail, len(streamed_receipts)
-                                ))
-                        else:
-                            codes[call.index] = "accepted"
+                            if codes[call.index] != "accepted":
+                                break
+                            streamed_receipts.append(StreamedSpeechReceipt(
+                                call.call_id, tail, len(streamed_receipts)
+                            ))
                     elif definition.effect is EffectClass.SAFE_READ:
                         if call.name not in self.executors:
                             codes[call.index] = "executor_unavailable"
                         else:
-                            self._detach_observation(call)
-                            codes[call.index] = "detached"
+                            codes[call.index] = await self._detach_observation(
+                                call, invoke_id, tool_surface.input_id,
+                            )
                     else:
                         codes[call.index] = await self._execute_control(call, invoke_id, cancel_event)
 
@@ -417,40 +471,128 @@ class ToolHarness:
         except asyncio.CancelledError:
             cancel_event.set()
             return "invoke_cancelled"
+        except ToolExecutorError as error:
+            return error.code
         except Exception:
             return "executor_failed"
         finally:
             self._control_tasks.pop(invoke_id, None)
 
-    def _detach_observation(self, call: ToolCall) -> None:
+    async def _detach_observation(self, call: ToolCall, invoke_id: str, input_id: str) -> str:
         executor = self.executors.get(call.name)
         if executor is None:
-            return
+            return "executor_unavailable"
+        request_key = (
+            input_id,
+            call.name,
+            json.dumps(
+                dict(call.arguments), ensure_ascii=False, sort_keys=True,
+                separators=(",", ":"), allow_nan=False,
+            ),
+        )
+        if request_key in self._observation_requests:
+            return "observation_reused"
+        if not self.observation_limiter.try_acquire():
+            return "observation_limit_reached"
+        proposed_id = f"{invoke_id}:{call.call_id}"
+        observation_id = proposed_id
+        if self.observation_acceptance_hook is not None:
+            try:
+                hook_result = self.observation_acceptance_hook(proposed_id, call)
+                if inspect.isawaitable(hook_result):
+                    close = getattr(hook_result, "close", None)
+                    if close is not None:
+                        close()
+                    self.observation_limiter.release()
+                    return "executor_failed"
+                if hook_result is not None:
+                    if not isinstance(hook_result, str) or not hook_result:
+                        self.observation_limiter.release()
+                        return "executor_failed"
+                    observation_id = hook_result
+            except BaseException:
+                self.observation_limiter.release()
+                return "executor_failed"
+        if observation_id != proposed_id:
+            self._observation_requests.setdefault(request_key, observation_id)
+            self.observation_limiter.release()
+            return "observation_reused"
+        self._observation_requests[request_key] = observation_id
+        outcome_recorded = False
+
+        async def record_once(outcome: ObservationOutcome) -> None:
+            nonlocal outcome_recorded
+            if outcome_recorded:
+                return
+            outcome_recorded = True
+            await self._record_observation_outcome(outcome)
 
         async def execute() -> None:
             try:
+                await asyncio.sleep(0)
                 result = executor(call)
                 if inspect.isawaitable(result):
                     result = await result
-                outcome = ObservationOutcome(call.call_id, call.name, result=result)
+                outcome = ObservationOutcome(
+                    call.call_id, call.name, observation_id, result=result
+                )
             except BaseException as exc:
-                outcome = ObservationOutcome(call.call_id, call.name, error_type=type(exc).__name__)
-            self._observation_outcomes.append(outcome)
-            if self.observation_completion_hook is not None:
-                try:
-                    hook_result = self.observation_completion_hook(outcome)
-                    if inspect.isawaitable(hook_result):
-                        await hook_result
-                except BaseException:
-                    pass
+                outcome = ObservationOutcome(
+                    call.call_id, call.name, observation_id,
+                    error_type=type(exc).__name__,
+                )
+            await record_once(outcome)
 
-        task = asyncio.create_task(execute())
+        coroutine = execute()
+        try:
+            task = asyncio.create_task(coroutine)
+        except BaseException as exc:
+            coroutine.close()
+            try:
+                await record_once(ObservationOutcome(
+                    call.call_id, call.name, observation_id,
+                    error_type=type(exc).__name__,
+                ))
+            finally:
+                self.observation_limiter.release()
+            return "executor_failed"
         self._observation_tasks.add(task)
-        task.add_done_callback(self._observation_tasks.discard)
+        task.add_done_callback(self._observation_done)
+        await asyncio.sleep(0)
+        if task.cancelled():
+            await record_once(ObservationOutcome(
+                call.call_id, call.name, observation_id, error_type="CancelledError",
+            ))
+            return "executor_failed"
+        return "detached"
+
+    def _observation_done(self, task: asyncio.Task[Any]) -> None:
+        """Release admission even when cancellation happens before the executor coroutine starts."""
+
+        self._observation_tasks.discard(task)
+        self.observation_limiter.release()
+
+    async def _record_observation_outcome(self, outcome: ObservationOutcome) -> None:
+        """Retain terminal truth and contain completion-hook failures without skipping release."""
+
+        self._observation_outcomes.append(outcome)
+        if self.observation_completion_hook is None:
+            return
+        try:
+            hook_result = self.observation_completion_hook(outcome)
+            if inspect.isawaitable(hook_result):
+                await hook_result
+        except BaseException:
+            pass
 
     @staticmethod
     def _receipt(call: ToolCall, code: str) -> ToolReceipt:
-        return ToolReceipt(call.call_id, call.name, code in {"accepted", "detached"}, code)
+        return ToolReceipt(
+            call.call_id,
+            call.name,
+            code in {"accepted", "detached", "observation_reused"},
+            code,
+        )
 
     @staticmethod
     async def _chunks(
@@ -506,4 +648,4 @@ def _effect_fence(value: EffectFence | Mapping[str, Any]) -> EffectFence:
     )
 
 
-__all__ = ["ToolHarness"]
+__all__ = ["ObservationLimiter", "ToolHarness"]

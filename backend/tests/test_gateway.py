@@ -22,12 +22,15 @@ from backend.main import create_app
 
 class GatewayEndpointTests(unittest.TestCase):
     def test_health_is_runtime_independent_and_exact(self):
-        with TestClient(create_app()) as client:
+        application = create_app()
+        with TestClient(application) as client:
             response = client.get("/health")
 
         self.assertTrue(global_config.initialized)
         self.assertEqual(response.status_code, 200)
         self.assertEqual(response.json(), {"ok": True, "service": "backend"})
+        self.assertFalse(application.state.main_agent_speech.status.enabled)
+        self.assertEqual(application.state.main_agent_speech.status.reason, "stopped")
 
     def test_removed_execution_routes_are_not_registered(self):
         with TestClient(create_app()) as client:

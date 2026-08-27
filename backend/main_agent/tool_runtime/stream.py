@@ -2,8 +2,8 @@
 
 Provider adapters may split call ids, names, JSON arguments, escape sequences, and Unicode surrogate
 pairs at arbitrary boundaries.  This module normalizes common Chat Completions/Responses shapes into
-ordered ToolCall records while a tiny state machine exposes only punctuation-terminated decoded speech;
-ToolHarness still performs full JSON, schema, group, and fencing validation before non-speech effects.
+ordered ToolCall records while a tiny state machine emits natural, 24-codepoint soft, or 80-codepoint
+hard speech clauses; ToolHarness still validates every complete call and owns the final-tail flush.
 """
 
 from __future__ import annotations
@@ -19,6 +19,9 @@ from .definitions import ToolCall
 
 _TEXT_START = re.compile(r'^\s*\{\s*"text"\s*:\s*"')
 _CLAUSE_END = frozenset("。！？!?；;\n")
+_SOFT_END = frozenset("，,、：:—- \t")
+_SOFT_LENGTH = 24
+_HARD_LENGTH = 80
 _SIMPLE_ESCAPES = {'"': '"', "\\": "\\", "/": "/", "b": "\b", "f": "\f",
                    "n": "\n", "r": "\r", "t": "\t"}
 
@@ -97,12 +100,20 @@ class SayTextStream:
                     break
                 self._decoded += value
                 self._position += consumed
-            if self._decoded and self._decoded[-1] in _CLAUSE_END:
-                clause = self.remaining_text
-                if clause:
-                    clauses.append(clause)
-                    self._emitted = len(self._decoded)
+            clauses.extend(self._ready_clauses())
         return () if self.invalid else tuple(clauses)
+
+    def _ready_clauses(self) -> tuple[str, ...]:
+        """Cut every boundary made stable by decoded text while retaining a short unfinished tail."""
+
+        clauses: list[str] = []
+        while tail := self.remaining_text:
+            length = _next_clause_length(tail)
+            if length is None:
+                break
+            clauses.append(tail[:length])
+            self._emitted += length
+        return tuple(clauses)
 
     def _reject(self, code: str) -> None:
         self.invalid = True
@@ -503,6 +514,35 @@ def _string(value: Any) -> str:
     return value if isinstance(value, str) else ""
 
 
+def segment_say_text(text: str, *, final: bool) -> tuple[str, ...]:
+    """Segment decoded speech at natural/soft/hard boundaries and optionally flush its final tail."""
+
+    if not isinstance(text, str):
+        raise TypeError("speech text must be text")
+    clauses: list[str] = []
+    position = 0
+    while position < len(text):
+        length = _next_clause_length(text[position:])
+        if length is None:
+            break
+        clauses.append(text[position:position + length])
+        position += length
+    if final and position < len(text):
+        clauses.append(text[position:])
+    return tuple(clauses)
+
+
+def _next_clause_length(text: str) -> int | None:
+    for index, character in enumerate(text, 1):
+        if character in _CLAUSE_END:
+            return index
+        if index >= _SOFT_LENGTH and character in _SOFT_END:
+            return index
+        if index >= _HARD_LENGTH:
+            return _HARD_LENGTH
+    return None
+
+
 class _DuplicateKeyError(ValueError):
     pass
 
@@ -532,4 +572,4 @@ def _contains_surrogate(value: Any) -> bool:
     return False
 
 
-__all__ = ["SayClause", "SayTextStream", "ToolCallAssembler"]
+__all__ = ["SayClause", "SayTextStream", "ToolCallAssembler", "segment_say_text"]

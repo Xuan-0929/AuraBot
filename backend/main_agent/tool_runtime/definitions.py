@@ -2,8 +2,8 @@
 
 This module is the deterministic trust boundary between an immutable invoke snapshot and provider
 tool schemas.  It physically omits effects unavailable to an invoke mode, builds workspace/avatar
-enums from trusted runtime facts, and exposes small immutable records shared by the stream parser,
-ToolHarness, and the later scheduler/adapters.
+enums and exact Task controls from trusted runtime facts, and exposes small immutable records shared
+by the stream parser, ToolHarness, scheduler, and concrete adapters.
 """
 
 from __future__ import annotations
@@ -102,6 +102,16 @@ class ToolReceipt:
     detail: str = ""
 
 
+class ToolExecutorError(RuntimeError):
+    """A concrete executor rejection whose stable public code is safe to place in a receipt."""
+
+    def __init__(self, code: str) -> None:
+        if not isinstance(code, str) or not code or not code.replace("_", "").isalnum():
+            raise ValueError("tool executor error code must be stable identifier text")
+        self.code = code
+        super().__init__(code)
+
+
 @dataclass(frozen=True, slots=True)
 class StreamedSpeechReceipt:
     """Truth that one clause was already accepted even if its enclosing call later fails."""
@@ -113,10 +123,11 @@ class StreamedSpeechReceipt:
 
 @dataclass(frozen=True, slots=True)
 class ObservationOutcome:
-    """Retained completion of detached Observation work for its later ledger owner."""
+    """Retained completion keyed to one accepted detach rather than a reusable provider call id."""
 
     call_id: str
     tool_name: str
+    observation_id: str
     result: Any = None
     error_type: str | None = None
 
@@ -191,6 +202,7 @@ class ToolSurfacePolicy:
         workspace_ids: Sequence[str] = (),
         motion_tokens: Sequence[str] = (),
         expression_tokens: Sequence[str] = (),
+        task_controls: Sequence[str] = (),
         max_calls: int = 8,
         max_durable_calls: int = 1,
         max_note_calls: int = 1,
@@ -200,10 +212,15 @@ class ToolSurfacePolicy:
         self.max_calls = max_calls
         self.max_durable_calls = max_durable_calls
         self.max_note_calls = max_note_calls
+        controls = tuple(dict.fromkeys(task_controls))
+        unknown_controls = set(controls) - set(_TASK_CONTROLS)
+        if unknown_controls:
+            raise ValueError(f"unknown task controls: {', '.join(sorted(unknown_controls))}")
         self._definitions = _approved_definitions(
             tuple(sorted(set(workspace_ids))),
             tuple(sorted(set(motion_tokens))),
             tuple(sorted(set(expression_tokens))),
+            controls,
         )
 
     @property
@@ -314,8 +331,14 @@ def _valid_grant(grant: ResponseGrant | None) -> bool:
     )
 
 
+_TASK_CONTROLS = (
+    "inspect_tasks", "answer_task_question", "pause_task", "resume_task", "cancel_task",
+)
+
+
 def _approved_definitions(
-    workspace_ids: tuple[str, ...], motion_tokens: tuple[str, ...], expression_tokens: tuple[str, ...]
+    workspace_ids: tuple[str, ...], motion_tokens: tuple[str, ...], expression_tokens: tuple[str, ...],
+    task_controls: tuple[str, ...],
 ) -> dict[str, ToolDefinition]:
     """Construct the fixed catalog while injecting only trusted dynamic enum values."""
 
@@ -359,7 +382,7 @@ def _approved_definitions(
                 "workspace_read", "Read a bounded page from a registered workspace text file.", EffectClass.SAFE_READ,
                 _object({
                     "workspace_id": workspace, "path": _text(maximum=1_024),
-                    "start_line": {"type": "integer", "minimum": 1},
+                    "start_line": {"type": "integer", "minimum": 1, "maximum": 10_000},
                     "max_lines": {"type": "integer", "minimum": 1, "maximum": 200},
                 }, ("workspace_id", "path")),
             ),
@@ -371,6 +394,44 @@ def _approved_definitions(
                 }, ("title", "prompt", "workspace_id")),
             ),
         ))
+    task_id = _text(maximum=36)
+    task_definitions = {
+        "inspect_tasks": ToolDefinition(
+            "inspect_tasks", "Inspect bounded public Task status for the active owner profile.",
+            EffectClass.SAFE_READ,
+            _object({
+                "statuses": {
+                    "type": "array",
+                    "items": _text(maximum=16, enum=(
+                        "queued", "running", "waiting", "paused", "completed", "failed", "cancelled",
+                    )),
+                    "maxItems": 7,
+                },
+                "limit": {"type": "integer", "minimum": 1, "maximum": 50},
+            }),
+        ),
+        "answer_task_question": ToolDefinition(
+            "answer_task_question", "Answer the exact currently pending question for an owned Task.",
+            EffectClass.DURABLE_ACTION,
+            _object({
+                "task_id": task_id, "question_id": _text(maximum=36),
+                "answer": _text(maximum=8_000),
+            }, ("task_id", "question_id", "answer")),
+        ),
+        "pause_task": ToolDefinition(
+            "pause_task", "Pause an owned Task using its freshly read current version.",
+            EffectClass.DURABLE_ACTION, _object({"task_id": task_id}, ("task_id",)),
+        ),
+        "resume_task": ToolDefinition(
+            "resume_task", "Resume an owned Task using its freshly read current version.",
+            EffectClass.DURABLE_ACTION, _object({"task_id": task_id}, ("task_id",)),
+        ),
+        "cancel_task": ToolDefinition(
+            "cancel_task", "Cancel an owned Task using its freshly read current version.",
+            EffectClass.DURABLE_ACTION, _object({"task_id": task_id}, ("task_id",)),
+        ),
+    }
+    definitions.extend(task_definitions[name] for name in _TASK_CONTROLS if name in task_controls)
     return {definition.name: definition for definition in definitions}
 
 
@@ -409,6 +470,6 @@ def _matches_schema(value: Any, schema: Mapping[str, Any]) -> bool:
 
 __all__ = [
     "EffectClass", "EffectFence", "InvokeMode", "InvokeSettlement", "ObservationOutcome",
-    "ResponseGrant", "StreamedSpeechReceipt", "ToolCall", "ToolDefinition", "ToolReceipt",
+    "ResponseGrant", "StreamedSpeechReceipt", "ToolCall", "ToolDefinition", "ToolExecutorError", "ToolReceipt",
     "ToolSurface", "ToolSurfacePolicy",
 ]

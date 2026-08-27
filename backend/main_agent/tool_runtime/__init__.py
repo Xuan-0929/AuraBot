@@ -15,16 +15,17 @@ from .definitions import (
     StreamedSpeechReceipt,
     ToolCall,
     ToolDefinition,
+    ToolExecutorError,
     ToolReceipt,
     ToolSurface,
     ToolSurfacePolicy,
 )
-from .harness import ToolHarness
-from .stream import SayClause, SayTextStream, ToolCallAssembler
+from .harness import ObservationLimiter, ToolHarness
+from .stream import SayClause, SayTextStream, ToolCallAssembler, segment_say_text
 
 __all__ = [
-    "EffectClass", "EffectFence", "InvokeMode", "InvokeSettlement", "ObservationOutcome",
+    "EffectClass", "EffectFence", "InvokeMode", "InvokeSettlement", "ObservationLimiter", "ObservationOutcome",
     "ResponseGrant", "SayClause", "SayTextStream", "StreamedSpeechReceipt", "ToolCall",
-    "ToolCallAssembler", "ToolDefinition", "ToolHarness", "ToolReceipt", "ToolSurface",
-    "ToolSurfacePolicy",
+    "ToolCallAssembler", "ToolDefinition", "ToolExecutorError", "ToolHarness", "ToolReceipt", "ToolSurface",
+    "ToolSurfacePolicy", "segment_say_text",
 ]

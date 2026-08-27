@@ -1,8 +1,9 @@
-"""解析 Main Agent 的局部设置并维护共享、受信任的工作区目录。
+"""解析 Main Agent 的局部设置、语音模型引用并维护共享的受信任工作区目录。
 
 配置加载器保留原始 YAML 后，本模块把 app/main_agent 段变成不可变路径设置；
 WorkspaceRegistry 只接受由配置声明的真实目录，TaskManager 用它将 workspace_id 解析为
-内部 cwd，后续 Main Agent 的安全读取也复用这同一份注册表而不接收任意文件系统路径。
+内部 cwd。语音设置只记录 Provider 模型名及本地模型/许可证路径，真正的可选 SDK 和 ONNX
+资产由 speech 模块按需检查加载，因此关闭或未安装语音能力时 Backend 仍能正常启动。
 """
 
 from __future__ import annotations
@@ -122,12 +123,53 @@ class WorkspaceRegistry:
 
 
 @dataclass(frozen=True, slots=True)
+class SpeechSettings:
+    """Configured provider model identities and explicitly checked local model/license assets."""
+
+    enabled: bool
+    stt_model_name: str
+    tts_model_name: str
+    tts_voice: str
+    silero_model_path: Path
+    silero_license_path: Path
+    smart_turn_model_path: Path
+    smart_turn_license_path: Path
+
+    @classmethod
+    def from_config(cls, raw: Mapping[str, Any], *, config_root: Path) -> "SpeechSettings":
+        if not isinstance(raw, Mapping):
+            raise ValueError("main_agent.speech must be a mapping.")
+
+        def text(key: str, default: str) -> str:
+            value = raw.get(key, default)
+            if not isinstance(value, str) or not value.strip():
+                raise ValueError(f"main_agent.speech.{key} must be non-empty text.")
+            return value.strip()
+
+        enabled = raw.get("enabled", False)
+        if not isinstance(enabled, bool):
+            raise ValueError("main_agent.speech.enabled must be a boolean.")
+
+        return cls(
+            enabled=enabled,
+            stt_model_name=text("stt_model_name", "fun-asr-realtime"),
+            tts_model_name=text("tts_model_name", "cosyvoice-v3-flash"),
+            tts_voice=text("tts_voice", "longanyang"),
+            silero_model_path=_path(text("silero_model_path", "assets/models/silero-vad.onnx"), config_root),
+            silero_license_path=_path(text("silero_license_path", "assets/licenses/silero-vad.txt"), config_root),
+            smart_turn_model_path=_path(text("smart_turn_model_path", "assets/models/smart-turn-v3.2.onnx"), config_root),
+            smart_turn_license_path=_path(text("smart_turn_license_path", "assets/licenses/smart-turn-v3.2.txt"), config_root),
+        )
+
+
+@dataclass(frozen=True, slots=True)
 class MainAgentSettings:
     """Typed Main Agent paths shared by profile storage and workspace-aware services."""
 
     data_dir: Path
     profile_root: Path
     workspaces: WorkspaceRegistry
+    speech: SpeechSettings
 
     @classmethod
     def from_config(
@@ -148,7 +190,10 @@ class MainAgentSettings:
             data_dir=data_dir,
             profile_root=profile_root,
             workspaces=WorkspaceRegistry.from_config(config, config_root=root),
+            speech=SpeechSettings.from_config(
+                main_agent.get("speech", {}), config_root=root
+            ),
         )
 
 
-__all__ = ["MainAgentSettings", "WorkspaceRegistry", "WorkspaceRegistryError"]
+__all__ = ["MainAgentSettings", "SpeechSettings", "WorkspaceRegistry", "WorkspaceRegistryError"]

@@ -10,6 +10,7 @@
 | Chat/Memory | 普通聊天、Memory follow-up、idle nudge 和持久化保留。 |
 | Chat attachments | 新附件输入已关闭；历史消息仅保留只读附件名称，不再暴露本地路径或打开动作。 |
 | Python Backend | health 与版本化 Task REST/SSE 已实现，Task 生命周期由 lifespan 管理。 |
+| Backend speech | 生命周期、实时 mic/STT/VAD/EOU/TTS/ACK 边界已接入；默认禁用，只有显式配置且安装可选 SDK/模型资产后才可用。 |
 | Python Memory | backend/memory 与短期记忆存储保留。 |
 | Task | Python 后端垂直切片已实现；Electron/Main Agent 尚未接入，桌面入口仍不可用。 |
 | 旧执行面 | Python Harness/MCP/Task runtime 与 TypeScript Task runners/UI 已删除。 |

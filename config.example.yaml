@@ -17,6 +17,17 @@ app:
 
 main_agent:
   profile_dir: profiles
+  # Speech stays off unless Task9 composition supplies a runtime/providers and
+  # both local ONNX models plus their license texts have been installed.
+  speech:
+    enabled: false
+    stt_model_name: fun-asr-realtime
+    tts_model_name: cosyvoice-v3-flash
+    tts_voice: longanyang
+    silero_model_path: assets/models/silero-vad.onnx
+    silero_license_path: assets/licenses/silero-vad.txt
+    smart_turn_model_path: assets/models/smart-turn-v3.2.onnx
+    smart_turn_license_path: assets/licenses/smart-turn-v3.2.txt
 
 memory: {}
 

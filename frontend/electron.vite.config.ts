@@ -1,3 +1,9 @@
+/**
+ * Configures Electron main/preload builds plus both the production Renderer and standalone realtime
+ * protocol lab HTML entry. Shared aliases keep application code stable while the diagnostic entry remains
+ * dependency-free and is emitted beside the normal index page.
+ */
+
 import { resolve } from "node:path";
 import vue from "@vitejs/plugin-vue";
 import { defineConfig, externalizeDepsPlugin } from "electron-vite";
@@ -44,7 +50,10 @@ export default defineConfig({
     },
     build: {
       rollupOptions: {
-        input: resolve(__dirname, "index.html"),
+        input: {
+          app: resolve(__dirname, "index.html"),
+          realtimeTestClient: resolve(__dirname, "realtime-test-client.html"),
+        },
       },
     },
     resolve: {
