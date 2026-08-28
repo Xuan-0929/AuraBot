@@ -1,85 +1,105 @@
 # Backend Runtime Contract
 
-## 当前契约
+## HTTP 边界
 
-Python Backend 已在同一 Gateway/lifespan 内组合 Main Agent、Memory、realtime/speech 与
-版本化 Task REST/SSE，健康路径保持：
+健康响应固定为：
 
 ~~~http
 GET /health
-~~~
 
-成功响应必须精确为：
-
-~~~json
 {"ok":true,"service":"backend"}
 ~~~
 
-当前公开 Task 路径为 `/api/v1/tasks`、`/api/v1/tasks/{taskId}` 和
-`/api/v1/task-events`；完整方法、错误 envelope、乐观并发与 SSE cursor 以
-[Pi Task Runtime](modules/task-agent.md) 为准。旧 `/task`、Plan、MCP、chat、debug
-或 registry API 不恢复，未知路径使用 FastAPI 标准 404。
+公开 Task 路径为 `/api/v1/tasks`、`/api/v1/tasks/{taskId}`、`/api/v1/task-events`；完整契约见
+[Pi Task Runtime](modules/task-agent.md)。旧 `/task`、Plan、MCP、chat、debug 与 registry API 不恢复。
 
-附加本地运维/Memory 路径：
+Main Agent 附加路径：
 
-- `GET /api/v1/readiness`：只读 lifecycle、SQLite 与 worker 状态，永不调用模型、
-  embedding、Qdrant health、Pi subprocess 或 Task spawn。
-- `GET /api/v1/metrics`：bounded 内存 counters/timing snapshot，不包含 transcript/content。
-- `GET /api/v1/memories`、`POST /api/v1/memories/forget`、
-  `POST /api/v1/memory-jobs/{jobId}/retry`：camelCase DTO；不暴露 durable payload/lease。
+- `POST /api/v1/main-agent/realtime-token`：严格 Origin；JSON body 为 `profileId` + `soul`。
+- `WS /api/v1/main-agent/realtime`：一次性 capability + `aurabot.main-agent.v1`。
+- `GET /api/v1/profiles/{profileId}/memories`。
+- `POST /api/v1/profiles/{profileId}/memories/forget`。
+- `POST /api/v1/profiles/{profileId}/memory-jobs/{jobId}/retry`。
+- `GET /api/v1/readiness`：只读本地 owner 状态，不 probe 外部服务。
+- `GET /api/v1/metrics`：bounded counters/timing，不包含对话内容。
 
-Task response 不暴露 `pendingQuestion`。POST 创建时 `timeoutSeconds` 可省略并由 YAML
-默认值填充；显式 null 与范围外数字由 FastAPI 返回 422。Task 的已知 domain error
-使用稳定 Task envelope；所有未识别 Backend 异常统一返回脱敏的
-`500 internal_error`，message 固定为 `Backend request failed internally.`。
+Memory API 只允许 active Profile；不匹配返回 `409 profile_not_active`，不会临时打开 inactive DB。
+已知 domain error 使用稳定 envelope；未知异常统一返回脱敏 `500 internal_error`。
 
-## 配置
+## Process 与 Profile ownership
 
-Backend 在导入应用时通过 backend.config 读取 YAML：
+~~~mermaid
+flowchart TB
+  PROCESS["FastAPI lifespan"] --> TASK["共享 TaskManager"]
+  PROCESS --> HUB["RealtimeHub"]
+  PROCESS --> ACTIVE["ActiveProfileManager"]
+  ACTIVE -->|0 或 1| PROFILE["ProfileResources"]
+  PROFILE --> RT["MainAgentRuntime"]
+  PROFILE --> SPEECH["SpeechService"]
+  PROFILE --> MEMORY["ProfileMemory"]
+  PROFILE --> CONTEXT["ContextStore"]
+  PROFILE --> CLIENTS["Chat/Tavily clients"]
+~~~
 
-- 默认路径：仓库根目录 config.yaml。
-- 覆盖变量：AURABOT_CONFIG_PATH。
-- 字符串支持必填的 ${VARIABLE} 与可选的 ${VARIABLE:-fallback}。
-- 缺少配置或必需变量时启动失败，不回显 secret value。
+Process startup 不创建 ProfileResources。合法 token 请求才激活；Profile switch 串行关闭旧资源后
+打开新资源。inactive Profile 没有 timer、worker、DB connection 或 Qdrant client。
 
-health endpoint 在任何 owner 状态下都独立且不依赖模型或 Worker。新 `task` 段只配置 Pi-native Runtime，
-不兼容已删除的 `task_runtime`、`task_model` 或 `local_mcp_server`。
+Profile 数据：
 
-## 生命周期
+~~~text
+profiles/<profile_id>/context.sqlite3
+profiles/<profile_id>/memory.sqlite3
+profiles/<profile_id>/qdrant/
+~~~
+
+没有 Backend Profile/Soul 文件。旧数据不迁移。
+
+## Realtime contract
+
+Client binary 永远是 640-byte mic PCM16LE 16 kHz；Server binary 永远是当前唯一 clause 的 TTS
+PCM。JSON 仅包含 session ready/error、playback pause/resume、clause offer/audio_end/cancel 和
+renderer ACK。TCP/WebSocket 提供顺序，因此应用层没有 AUR1 header、seq、command ledger、epoch、
+stream ID 或 sample coordinate。
+
+Mic queue 最多 50 frames，满时丢最旧。Speech delivery 串行且等待物理 ACK；只有 PLAYING clause
+的 complete ACK 能提交 assistant Context。
+
+## Memory durability
+
+`memory.sqlite3` 只有 pending episode、统一 jobs、items 和 FTS。active Profile 的单 worker 处理
+`extract` / `vector_delete`：
+
+~~~mermaid
+stateDiagram-v2
+  [*] --> pending
+  pending --> running
+  running --> indexing: extraction result persisted
+  indexing --> completed: SQLite + Qdrant upsert
+  running --> pending: retry 5/30/300s
+  indexing --> pending: retry 5/30/300s
+  running --> failed: retries exhausted
+  indexing --> failed: retries exhausted
+  failed --> pending: manual retry
+~~~
+
+启动把残留 running/indexing 复位为 pending。Memory ID 确定性生成，整 job 可重放。forget 先删除
+SQLite truth；Qdrant delete 失败写同一 jobs 表的 vector_delete，不创建 outbox。
+
+Recall 同时启动 lexical/vector；lexical 必须完成，vector 最多等待 300 ms。最终 fresh-read SQLite，
+所以 forget 对同一 query 立即生效。
+
+## Shutdown
 
 ~~~mermaid
 sequenceDiagram
-  participant Launcher
-  participant Uvicorn
-  participant Config
-  Launcher->>Uvicorn: backend.main:app
-  Uvicorn->>Config: initialize YAML
-  Uvicorn->>Config: construct Task + active profile owners
-  Uvicorn->>Uvicorn: start Task → Memory → Main → realtime → speech
-  Uvicorn-->>Launcher: GET /health = ok
-  Launcher->>Uvicorn: SIGINT / SIGTERM
-  Uvicorn->>Uvicorn: fence admission → speech/Main → Memory → Task
-  Uvicorn-->>Launcher: normal process exit
+  participant L as Lifespan
+  participant H as RealtimeHub
+  participant P as ActiveProfile
+  participant T as TaskManager
+  L->>H: stop accepting + close voice
+  L->>P: Runtime → Speech → Memory → stores
+  L->>T: shutdown shared control plane
 ~~~
 
-Backend 不创建旧 BackendRuntime，也不启动 MCP。FastAPI lifespan 拥有 TaskManager、
-一个 process-level event-driven MemoryWorker、active-profile MemoryBridge、MainAgentRuntime、
-RealtimeHub 与 SpeechPipeline。配置完整时 Main runtime 使用惰性 OpenAI-compatible SSE
-provider；缺少 chat key/endpoint/model 时为静默 unavailable。speech 默认 disabled；
-import、startup、readiness、health/static route 均不做付费 probe。
-
-Memory pending episode/episode/job/outbox 全部在 profile 既有 `memory.sqlite3`。确认用户输入
-把 segments、last-confirmed timestamp 与 generation 原子持久化并重置五分钟 seal；重启按
-剩余时间恢复，超期立即把 episode/job 与 pending delete 同事务提交。worker 用 SQLite
-claim/lease/restart recovery 与 5/30/300 秒精确重试。
-SQLite memory commit 与 Qdrant outbox 分离，所以 vector partial failure 不会重复 extraction。
-
-Runtime 仅保留最近 128 个 invoke 诊断；ToolHarness 的 Observation terminal dedupe/outcome
-各最多 256，ObservationLedger latest/dedupe 最多 256、events 最多 512。running/inflight
-identity 不可驱逐，晚到的已驱逐 terminal settlement fail-closed；终态事实由 ContextStore 持久化。
-
-## 边界规则
-
-Task API 只能投影 Python Control Plane 的业务状态，不得暴露 Pi stdin/stdout、
-内部 Tool Call、stderr、session 路径或旧 Task DTO。第一版只绑定 loopback，不承诺
-远程认证或 CORS；远程开放前必须另行设计威胁模型。
+取消 lifespan waiter 不改变 ownership 顺序。queued Task 保留；running Task 的重启语义仍由
+TaskManager 定义。

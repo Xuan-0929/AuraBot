@@ -149,7 +149,3 @@ class PiProcessTests(unittest.IsolatedAsyncioTestCase):
 
         self.assertFalse(session.exists())
         self.assertEqual(marker.read_text(encoding="utf-8"), "keep")
-
-
-if __name__ == "__main__":
-    unittest.main()

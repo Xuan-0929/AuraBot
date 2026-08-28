@@ -1,8 +1,8 @@
 /**
  * 创建并管理 AuraBot 桌宠、控制台与设置窗口及其非 Task broadcasts。
  *
- * 模块负责窗口位置、尺寸、点击穿透、Live2D/聊天/通知事件投影；不再发送 Task
- * changed/deleted 事件或持有 Task DTO。
+ * 模块负责窗口位置、尺寸、点击穿透、Live2D/聊天/通知事件投影，并仅为 Pet 窗口安装
+ * Main Agent 本地网关 Origin 桥；不发送 Task changed/deleted 事件或持有 Task DTO。
  */
 
 import { join } from "node:path";
@@ -16,6 +16,7 @@ import type { Message } from "@shared/schemas/message";
 import type { PetActivity } from "@shared/contracts/pet";
 import { DEFAULT_PET_SETTINGS, type PetSettings } from "@shared/schemas/petSettings";
 import { createPetCursorPosition } from "./petCursorTracking";
+import { installMainAgentPetOriginBridge } from "./mainAgentOriginBridge";
 import { clampWindowBoundsToWorkArea, placeWindowNearPet, type WindowRectangle } from "./windowPlacement";
 
 let petWindow: BrowserWindow | undefined;
@@ -72,6 +73,7 @@ export function createPetWindow(options: CreatePetWindowOptions = {}): BrowserWi
     backgroundColor: "#00000000",
     webPreferences: sharedWebPreferences()
   });
+  installMainAgentPetOriginBridge(petWindow);
   setPetVisibleOnAllWorkspaces(petWindow);
   petWindow.on("closed", () => {
     petWindow = undefined;

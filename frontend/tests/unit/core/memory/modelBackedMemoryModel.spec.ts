@@ -1,3 +1,7 @@
+/**
+ * Verifies model-backed extraction, merge, relation, and recall at their public structured-output boundary.
+ * Shared config/client helpers keep each case focused on the model result being normalized or rejected.
+ */
 import { describe, expect, it } from "vitest";
 import {
   createMemoryExtractor,
@@ -8,6 +12,20 @@ import {
 } from "@core/memory/modelBackedMemoryModel";
 import { ModelConfigurationError, ModelInvocationError } from "@core/llm/modelErrors";
 import type { MemoryNode } from "@shared/schemas/memory";
+
+const modelConfig = {
+  provider: "openai-compatible" as const,
+  model: "structured-memory-model",
+  enabled: true,
+  baseUrl: "https://api.example.com/v1",
+  apiKey: "test-key"
+};
+
+function clientReturning(value: unknown) {
+  return {
+    complete: async () => typeof value === "string" ? value : JSON.stringify(value)
+  };
+}
 
 const existingHotpotPreference: MemoryNode = {
   id: "memory_hotpot",
@@ -76,19 +94,17 @@ describe("model-backed memory model", () => {
 
   it("extracts structured memory candidates from model JSON", async () => {
     const extractor = new ModelBackedMemoryExtractor({
-      client: {
-        complete: async () =>
-          JSON.stringify({
-            candidates: [
-              {
+      client: clientReturning({
+        candidates: [
+          {
                 type: "event",
                 content: "用户明天要和阿杰去吃火锅",
                 topic: "events",
                 importance: 0.84,
                 startsAt: "2026-05-05T19:00:00.000+08:00",
                 confidence: 0.9
-              },
-              {
+          },
+          {
                 type: "follow_up",
                 content: "提醒用户明天和阿杰吃火锅",
                 topic: "follow_ups",
@@ -98,17 +114,10 @@ describe("model-backed memory model", () => {
                   relationType: "scheduled_for",
                   weight: 0.9
                 }
-              }
-            ]
-          })
-      },
-      config: {
-        provider: "openai-compatible",
-        model: "structured-memory-model",
-        enabled: true,
-        baseUrl: "https://api.example.com/v1",
-        apiKey: "test-key"
-      }
+          }
+        ]
+      }),
+      config: modelConfig
     });
 
     const candidates = await extractor.extract({
@@ -131,16 +140,8 @@ describe("model-backed memory model", () => {
 
   it("propagates invalid model JSON instead of falling back to deterministic extraction", async () => {
     const extractor = new ModelBackedMemoryExtractor({
-      client: {
-        complete: async () => "不是 JSON"
-      },
-      config: {
-        provider: "openai-compatible",
-        model: "structured-memory-model",
-        enabled: true,
-        baseUrl: "https://api.example.com/v1",
-        apiKey: "test-key"
-      }
+      client: clientReturning("不是 JSON"),
+      config: modelConfig
     });
 
     await expect(extractor.extract({
@@ -152,23 +153,14 @@ describe("model-backed memory model", () => {
 
   it("plans semantic merges against existing memory nodes", async () => {
     const planner = new ModelBackedMemoryMergePlanner({
-      client: {
-        complete: async () =>
-          JSON.stringify({
-            action: "update_existing",
-            targetNodeId: "memory_hotpot",
-            mergedContent: "用户喜欢火锅",
-            importance: 0.82,
-            reason: "same stable food preference"
-          })
-      },
-      config: {
-        provider: "openai-compatible",
-        model: "structured-memory-model",
-        enabled: true,
-        baseUrl: "https://api.example.com/v1",
-        apiKey: "test-key"
-      }
+      client: clientReturning({
+        action: "update_existing",
+        targetNodeId: "memory_hotpot",
+        mergedContent: "用户喜欢火锅",
+        importance: 0.82,
+        reason: "same stable food preference"
+      }),
+      config: modelConfig
     });
 
     const decision = await planner.plan({
@@ -190,31 +182,22 @@ describe("model-backed memory model", () => {
 
   it("keeps relation planner edges constrained to known target nodes", async () => {
     const planner = new ModelBackedMemoryRelationPlanner({
-      client: {
-        complete: async () =>
-          JSON.stringify({
-            edges: [
-              {
+      client: clientReturning({
+        edges: [
+          {
                 targetNodeId: "memory_hotpot",
                 relationType: "preference_for",
                 weight: 0.91,
                 reason: "new event involves the user's hotpot preference"
-              },
-              {
+          },
+          {
                 targetNodeId: "invented_id",
                 relationType: "relates_to",
                 weight: 0.7
-              }
-            ]
-          })
-      },
-      config: {
-        provider: "openai-compatible",
-        model: "structured-memory-model",
-        enabled: true,
-        baseUrl: "https://api.example.com/v1",
-        apiKey: "test-key"
-      }
+          }
+        ]
+      }),
+      config: modelConfig
     });
 
     const edges = await planner.plan({
@@ -237,22 +220,13 @@ describe("model-backed memory model", () => {
 
   it("plans recall terms and reranked node ids while filtering unknown nodes", async () => {
     const planner = new ModelBackedMemoryRecallPlanner({
-      client: {
-        complete: async () =>
-          JSON.stringify({
-            queryTerms: ["火锅", "吃的偏好"],
-            targetTypes: ["preference"],
-            rankedNodeIds: ["memory_hotpot", "invented_id"],
-            reason: "the user asks what they usually crave"
-          })
-      },
-      config: {
-        provider: "openai-compatible",
-        model: "structured-memory-model",
-        enabled: true,
-        baseUrl: "https://api.example.com/v1",
-        apiKey: "test-key"
-      }
+      client: clientReturning({
+        queryTerms: ["火锅", "吃的偏好"],
+        targetTypes: ["preference"],
+        rankedNodeIds: ["memory_hotpot", "invented_id"],
+        reason: "the user asks what they usually crave"
+      }),
+      config: modelConfig
     });
 
     const plan = await planner.plan({

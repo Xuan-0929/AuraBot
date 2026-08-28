@@ -1,10 +1,8 @@
-"""Adapt one OpenAI-compatible Chat Completions SSE stream to Main Agent provider chunks.
+"""Adapt OpenAI-compatible Chat Completions to the Main Agent control protocol.
 
-The adapter serializes an immutable InvokeRequest snapshot and frozen tool surface, opens HTTP only
-when that invoke is actually consumed, decodes provider SSE data frames into the mapping protocol
-already accepted by ToolCallAssembler, and owns cancellation/deadline/client shutdown.  Composition
-uses the unavailable provider when credentials are absent, so import, startup and readiness remain
-strictly local and never probe or log a model endpoint or secret.
+Every request sends stable behavioral control, the active Soul, and immutable context facts as separate
+messages. The adapter then decodes SSE tool deltas for ToolCallAssembler and owns lazy transport,
+cancellation and shutdown; unavailable credentials remain an offline-safe silent provider.
 """
 
 from __future__ import annotations
@@ -16,6 +14,18 @@ from typing import Any
 
 from .metrics import LifecycleMetrics
 from .settings import ChatModelSettings
+
+
+MAIN_AGENT_CONTROL_PROMPT = """You are AuraBot's Main Agent control model.
+All user-visible language MUST be emitted through the say_to_user tool. Ordinary assistant content is discarded.
+A silent invoke with no tool calls is valid.
+PREPARE may only perform safe reads and save at most one think note; it must not speak or perform durable actions.
+RESPOND may answer directly. Before a slow read it may speak one short Soul-consistent acknowledgement. For a short emotional or greeting micro-turn, answer directly without search, think notes, or task creation.
+CONTINUE must consume returned observations and then answer or start only one necessary safe read.
+Never mix safe-read tools and durable actions in one invoke.
+Never claim a task has started before a committed task fact exists.
+Never invent search results, memory, task state, system state, or unheard conversation history.
+Follow the frozen tool surface and runtime mode in the user context exactly."""
 
 
 class ProviderUnavailable(RuntimeError):
@@ -67,7 +77,11 @@ class OpenAICompatibleProvider:
         body = {
             "model": self.settings.model_name,
             "stream": True,
-            "messages": [{"role": "system", "content": request.snapshot.prompt}],
+            "messages": [
+                {"role": "system", "content": MAIN_AGENT_CONTROL_PROMPT},
+                {"role": "system", "content": request.snapshot.soul},
+                {"role": "user", "content": request.snapshot.prompt},
+            ],
             "tools": list(request.tool_surface.provider_schemas()),
             "tool_choice": "auto",
         }
@@ -140,6 +154,6 @@ def _http_client() -> Any:
 
 
 __all__ = [
-    "OpenAICompatibleProvider", "ProviderUnavailable", "UnavailableChatProvider",
+    "MAIN_AGENT_CONTROL_PROMPT", "OpenAICompatibleProvider", "ProviderUnavailable", "UnavailableChatProvider",
     "build_chat_provider",
 ]

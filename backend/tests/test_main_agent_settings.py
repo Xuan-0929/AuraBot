@@ -52,6 +52,25 @@ class MainAgentSettingsTests(unittest.TestCase):
         self.assertEqual(settings.chat_model.model_name, "chat-model")
         self.assertEqual(settings.chat_model.api_key, "test-key")
         self.assertEqual(settings.chat_model.timeout_seconds, 17.0)
+        self.assertEqual(settings.web.tavily_api_key, "")
+
+    def test_parses_optional_tavily_key_and_rejects_a_non_mapping_web_section(self):
+        with tempfile.TemporaryDirectory() as directory:
+            root = Path(directory)
+            settings = MainAgentSettings.from_config(
+                {
+                    "app": {"data_dir": "./data", "workspaces": []},
+                    "main_agent": {"web": {"tavily_api_key": "  tavily-secret  "}},
+                    "chat_model": {},
+                },
+                root / "config.yaml",
+            )
+
+        self.assertEqual(settings.web.tavily_api_key, "tavily-secret")
+        with self.assertRaisesRegex(ValueError, "main_agent.web"):
+            MainAgentSettings.from_config(
+                {"app": {}, "main_agent": {"web": []}}, Path("/tmp/config.yaml")
+            )
 
     def test_registry_rejects_unknown_and_path_like_workspace_ids(self):
         with tempfile.TemporaryDirectory() as directory:
@@ -101,7 +120,3 @@ class MainAgentSettingsTests(unittest.TestCase):
                     config[section][key] = value
                     with self.assertRaisesRegex(ValueError, key):
                         MainAgentSettings.from_config(config, Path("/tmp/config.yaml"))
-
-
-if __name__ == "__main__":
-    unittest.main()

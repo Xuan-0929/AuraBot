@@ -1,14 +1,13 @@
-"""Expose thin versioned browse/forget/retry routes for the active profile's Memory bridge.
+"""Expose active-Profile-only browse, forget, and retry routes for Main Agent Memory.
 
-The gateway accepts and emits stable camelCase product DTOs, delegates all state transitions to
-``MemoryBridge``, and maps only known validation/not-found outcomes.  It never returns extraction
-payloads, leases, provider inputs, vectors, Qdrant internals, or raw SQLite errors; the legacy
-``/memory`` router remains separate and unchanged for existing callers.
+Every route carries ``profile_id`` explicitly and delegates to the process-wide active Profile owner.
+That owner rejects inactive identities before touching a database, so the API never opens dormant
+Profile resources or leaks one Profile's memories through another Profile's session.
 """
 
 from __future__ import annotations
 
-from typing import Any, cast
+from typing import Any
 
 from fastapi import APIRouter, Request
 from pydantic import ConfigDict, Field
@@ -24,30 +23,40 @@ class ForgetMemoriesRequest(CamelModel):
     reason: str | None = Field(default=None, max_length=500)
 
 
-router = APIRouter(prefix="/api/v1", tags=["main-agent-memory"])
+router = APIRouter(prefix="/api/v1/profiles/{profile_id}", tags=["main-agent-memory"])
 
 
-def _bridge(request: Request) -> Any:
-    return cast(Any, request.app.state.main_agent_memory)
+def _profiles(request: Request) -> Any:
+    return request.app.state.main_agent_profiles
+
+
+def _active(request: Request, profile_id: str) -> Any | None:
+    profiles = _profiles(request)
+    if profiles.active_profile_id != profile_id:
+        return None
+    return profiles
 
 
 @router.get("/memories")
-async def browse_memories(request: Request, limit: int = 50) -> dict[str, Any]:
+async def browse_memories(profile_id: str, request: Request, limit: int = 50) -> Any:
     if not 1 <= limit <= 100:
         return error_response(400, "invalid_memory_request", "limit must be from 1 to 100")
-    return await _bridge(request).browse(limit=limit)
+    profiles = _active(request, profile_id)
+    if profiles is None:
+        return error_response(409, "profile_not_active", "Profile is not active.")
+    return await profiles.browse_memory(profile_id, limit)
 
 
 @router.post("/memories/forget")
-async def forget_memories(body: ForgetMemoriesRequest, request: Request) -> Any:
+async def forget_memories(profile_id: str, body: ForgetMemoriesRequest, request: Request) -> Any:
+    profiles = _active(request, profile_id)
+    if profiles is None:
+        return error_response(409, "profile_not_active", "Profile is not active.")
     if not body.memory_ids and not body.episode_ids:
-        return error_response(
-            400, "invalid_memory_request", "memoryIds or episodeIds is required"
-        )
+        return error_response(400, "invalid_memory_request", "memoryIds or episodeIds is required")
     try:
-        return await _bridge(request).forget(
-            memory_ids=tuple(body.memory_ids),
-            episode_ids=tuple(body.episode_ids),
+        return await profiles.forget_memory(
+            profile_id, memory_ids=tuple(body.memory_ids), episode_ids=tuple(body.episode_ids),
             reason=body.reason,
         )
     except ValueError as exc:
@@ -55,9 +64,12 @@ async def forget_memories(body: ForgetMemoriesRequest, request: Request) -> Any:
 
 
 @router.post("/memory-jobs/{job_id}/retry")
-async def retry_memory_job(job_id: str, request: Request) -> Any:
+async def retry_memory_job(profile_id: str, job_id: str, request: Request) -> Any:
+    profiles = _active(request, profile_id)
+    if profiles is None:
+        return error_response(409, "profile_not_active", "Profile is not active.")
     try:
-        return await _bridge(request).retry(job_id)
+        return await profiles.retry_memory(profile_id, job_id)
     except KeyError:
         return error_response(404, "memory_job_not_found", "Memory job was not found or is not failed.")
 

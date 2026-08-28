@@ -16,8 +16,13 @@ app:
       path: "."
 
 main_agent:
-  profile_id: default
+  # Electron supplies the active profileId and formatted Soul with each
+  # realtime token request; Backend stores only per-Profile runtime data here.
   profile_dir: profiles
+  # Web tools are exposed to the model only when this key is configured.
+  # Search and extract share one bounded opaque source map; no key keeps both absent.
+  web:
+    tavily_api_key: "${TAVILY_API_KEY:-}"
   # Speech remains disabled by default and does not probe optional providers.
   speech:
     enabled: false

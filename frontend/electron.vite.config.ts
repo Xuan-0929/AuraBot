@@ -1,7 +1,7 @@
 /**
- * Configures Electron main/preload builds plus both the production Renderer and standalone realtime
- * protocol lab HTML entry. Shared aliases keep application code stable while the diagnostic entry remains
- * dependency-free and is emitted beside the normal index page.
+ * Configures Electron main/preload builds plus the single production Renderer entry.
+ * Shared aliases keep application modules stable; the retired realtime protocol lab is deliberately
+ * absent so packaged builds expose only the Pet-owned voice client.
  */
 
 import { resolve } from "node:path";
@@ -49,12 +49,7 @@ export default defineConfig({
       strictPort: true,
     },
     build: {
-      rollupOptions: {
-        input: {
-          app: resolve(__dirname, "index.html"),
-          realtimeTestClient: resolve(__dirname, "realtime-test-client.html"),
-        },
-      },
+      rollupOptions: { input: resolve(__dirname, "index.html") },
     },
     resolve: {
       alias: {

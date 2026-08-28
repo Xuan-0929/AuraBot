@@ -971,7 +971,3 @@ class MemoryFactoryTests(unittest.TestCase):
             self.assertEqual(health["embedding"]["provider"], "HashEmbeddingProvider")
             self.assertEqual(health["embedding"]["dimension"], 16)
             self.assertEqual(health["qdrant"]["collection"], "aurabot_memory_items")
-
-
-if __name__ == "__main__":
-    unittest.main()

@@ -1,55 +1,72 @@
 # 配置与 Backend 生命周期
 
-## 当前配置
+## 配置事实源
 
-| 配置 | owner | 用途 |
+| 配置 | Owner | 用途 |
 | --- | --- | --- |
-| config.yaml | Python Backend | ports、active profile、Memory embedding、speech 与 Task 配置。 |
-| AURABOT_CONFIG_PATH | Python Backend | 覆盖 YAML 路径。 |
-| backend/.python-version | uv | 共享开发 Python 版本。 |
-| config.json / aurabot.config.json | Electron | 模型、Live2D、通知等桌面设置。 |
+| `config.yaml` | Python Backend | ports、Profile 数据根、chat/speech/Web/Memory embedding、Task。 |
+| `AURABOT_CONFIG_PATH` | Python Backend | 覆盖 YAML 路径。 |
+| Electron Profile SQLite | Electron | Active Profile 与结构化 Soul 的唯一事实源。 |
+| `aurabot.config.json` / `config.json` | Electron | 模型、Live2D、通知等桌面设置。 |
 
-新 `task` 段配置 user data、Pi runtime 载体、Node executable 和默认 timeout。
-`task.default_timeout_seconds` 必须在 `1..86400`；缺省为 1800，并且只有 HTTP 请求
-显式提供合法 `timeoutSeconds` 时才会覆盖它，显式 null 不等价于省略。
-并发固定为 5 且不可配置；旧配置仍含 `task.concurrency_limit` 时启动会明确失败。
-旧 task_runtime、task_model、local_mcp_server 和 Electron taskRunner 字段不再读取，
-新段不是兼容映射。
-已有 JSON 文件不主动重写，未知旧字段被忽略。
+`main_agent.profile_id` 已删除。Backend 不读取或创建 `profile.yaml` / `SOUL.md`；Pet 的合法
+realtime token 请求提供 `profileId` 和由 Electron `buildSoulPrompt` 生成的有效 Soul。
 
-`main_agent.profile_id` 选择 lifespan 使用的 profile；缺省为 `default`。该 profile
-顶层只使用 `profile.yaml`、`SOUL.md`、`main-agent.sqlite3`、`memory.sqlite3` 与
-`qdrant/`。`memory.embedding` 缺省为本地 deterministic hash provider，不访问网络。
-`chat_model` 配置 OpenAI-compatible 地址、模型、API key 与流式 deadline；HTTP client 只在
-真实 invoke 消费时创建，缺少 key/地址/模型时 provider 为 local unavailable 并静默 settle。
-speech 缺省禁用，禁用启动路径不构造或探测 STT/TTS SDK/本地模型；启用时读取
-`main_agent.speech.api_key`、模型/voice 与本地 Silero/Smart Turn 资产。
+Profile 运行数据位于：
 
-## 启动
+~~~text
+<app.data_dir>/<main_agent.profile_dir>/<profile_id>/
+├── context.sqlite3
+├── memory.sqlite3
+└── qdrant/
+~~~
 
-1. uv 根据 backend/pyproject.toml 与 backend/uv.lock 准备环境。
-2. backend.main 加载 YAML。
-3. FastAPI lifespan 依次启动 `TaskManager`、单个 event-driven `MemoryWorker`、active-profile
-   `MemoryBridge`、带惰性生产 chat provider 的 `MainAgentRuntime`、realtime admission 与可选
-   `SpeechPipeline`；startup/readiness/health 不对任何付费 Provider 发请求。
-4. Memory recall 始终先读 SQLite FTS；可选 vector branch 最多等待 300 ms，超时或失败
-   只降级为 lexical 结果，不阻塞 realtime runtime lock。
-5. Uvicorn 暴露固定 GET /health、local-only readiness、Memory 管理 API 与版本化 Task REST/SSE。
-6. 开发启动器等待 health 成功，再运行桌面环境。
+`memory.embedding` 缺省为本地 provider。`chat_model` 同时供 Main Agent invoke 和后台结构化
+Memory 提取；缺少 key/地址/model 时请求真实 unavailable，不回退规则提取。
 
-Backend 不创建旧 Task Runtime、不启动 MCP，也不需要旧 Task model key。Pi 的模型、
-认证和资源来自隔离的 `<userData>/pi-agent` Home。
+`main_agent.web.tavily_api_key` 为空时不创建 Tavily client，`web_search` / `web_read` 也不会进入
+ToolSurface。`main_agent.speech.enabled` 默认为 false；speech 未启用、缺 key、缺本地模型/许可证或
+缺 SDK 时 Backend 仍可启动，但 Pet token 请求返回 speech unavailable。
 
-## 退出与失败
+Task 使用 `task` 段；并发固定为 5。旧 `task_runtime`、`task_model`、`local_mcp_server` 和 Electron
+taskRunner 字段不再读取。
 
-- SIGINT/SIGTERM 先停止 realtime/invoke admission，再关闭 speech/runtime、Memory
-  timer/worker/store，最后回收 TaskManager；shutdown 对 cancellation 保持 ownership 顺序。
-- queued 保留；最多五个 running Task 并行 reap 后变为 `paused(backend_shutdown)`；
-  waiting 保持且不持有 Pi。
-- 配置缺失、YAML 无效或必需环境变量缺失时启动失败且不回显 secret。
-- port 6401 被占用时启动器必须报告诊断，不伪装健康。
-- /health 只返回 {"ok":true,"service":"backend"}。
-- `/api/v1/readiness` 只读本地 lifecycle、SQLite schema 与 worker task 状态；不作付费或外部 probe。
+## 启动与首次激活
 
-生产 Pi/Node 打包仍未实现；开发期只允许显式配置 Node，并始终使用项目绝对 Pi CLI。
-完整 lifecycle 与重启 reconciliation 见 [Pi Task Runtime](modules/task-agent.md)。
+~~~mermaid
+sequenceDiagram
+  participant U as Uvicorn
+  participant T as TaskManager
+  participant H as RealtimeHub
+  participant P as Pet
+  participant A as ActiveProfileManager
+  participant R as Profile Resources
+  U->>T: startup
+  U->>H: start accepting tokens
+  Note over U,H: 尚无 Runtime / Speech / Context / Memory / Qdrant
+  P->>H: token(profileId, soul)
+  H->>A: activate
+  A->>R: open Context + Memory + model/tools + Speech
+  A->>H: bind generation
+  H-->>P: one-shot capability
+~~~
+
+`GET /health` 始终精确返回 `{"ok":true,"service":"backend"}`，不探测模型、embedding、Qdrant
+或 Pi。`GET /api/v1/readiness` 只读 lifespan/realtime admission、active Profile identity 及已打开
+Memory 的本地状态。
+
+## Profile 切换与退出
+
+同一 Profile 新 token 只更新 Runtime Soul、递增 generation 并替换 voice session。不同 Profile：
+
+1. 关闭旧 voice session，partial clause 不进入 Context。
+2. Runtime cancel invoke/proposal/Observation；Speech cancel delivery/mic。
+3. Memory 保留 durable pending row，取消 active-only timer/worker并关闭 SQLite/Qdrant。
+4. 关闭 Context、Provider 和 Tavily client。
+5. 打开新 Profile 资源并绑定新 generation。
+
+Backend 退出时顺序为 realtime admission → active Profile → TaskManager。已经由 TaskManager 接受的
+Task 不随 Profile Runtime 退出；Task 事实按 `owner_profile_id` 在 Profile 再激活后回放。
+
+旧 Main Agent 数据不迁移；开发者应删除旧 Profile 目录后重建。生产 Pi/Node 打包仍以
+[Pi Task Runtime](modules/task-agent.md) 为准。

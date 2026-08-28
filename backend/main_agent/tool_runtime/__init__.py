@@ -20,11 +20,11 @@ from .definitions import (
     ToolSurface,
     ToolSurfacePolicy,
 )
-from .harness import ObservationLimiter, ToolHarness
+from .harness import ToolHarness
 from .stream import SayClause, SayTextStream, ToolCallAssembler, segment_say_text
 
 __all__ = [
-    "EffectClass", "EffectFence", "InvokeMode", "InvokeSettlement", "ObservationLimiter", "ObservationOutcome",
+    "EffectClass", "EffectFence", "InvokeMode", "InvokeSettlement", "ObservationOutcome",
     "ResponseGrant", "SayClause", "SayTextStream", "StreamedSpeechReceipt", "ToolCall",
     "ToolCallAssembler", "ToolDefinition", "ToolExecutorError", "ToolHarness", "ToolReceipt", "ToolSurface",
     "ToolSurfacePolicy", "segment_say_text",

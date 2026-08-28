@@ -68,7 +68,3 @@ class RealPiOfflineSmokeTests(unittest.IsolatedAsyncioTestCase):
             stderr = (await process.stderr.read()).decode(errors="replace")
             self.assertEqual(returncode, 0, stderr)
             self.assertNotIn("Extension load failed", stderr)
-
-
-if __name__ == "__main__":
-    unittest.main()

@@ -172,7 +172,3 @@ class PiRpcClientTests(unittest.IsolatedAsyncioTestCase):
         with self.assertRaisesRegex(PiProtocolError, "pending"):
             await pending
         await pending_client.aclose()
-
-
-if __name__ == "__main__":
-    unittest.main()

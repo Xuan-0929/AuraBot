@@ -24,7 +24,13 @@ const electronMock = vi.hoisted(() => {
     public readonly options: BrowserWindowOptions;
     private bounds: Bounds;
     public readonly webContents = {
-      send: vi.fn()
+      id: 42,
+      send: vi.fn(),
+      session: {
+        webRequest: {
+          onBeforeSendHeaders: vi.fn()
+        }
+      }
     };
 
     constructor(options: BrowserWindowOptions) {

@@ -1,10 +1,9 @@
-"""暴露 Main Agent 的配置、Context、快照、调度与渲染交付边界。
+"""暴露单 Active Profile Main Agent 的 Context、Memory、调度、语音与工具边界。
 
-TaskManager 继续只通过 settings 的受信任 WorkspaceRegistry 获取 cwd；实时 runtime 则从此包
-取得 ProfileStore、ContextStore、SnapshotProjector、Observation 安全读取器、TaskBridge 和严格
-单飞 MainAgentRuntime，以及只指向一个 Renderer generation 的不可变 Realtime lease port。
-Provider、Renderer 与 Tool 适配器注入这些边界，不自行读写人格文件、伪造已送达的助手语言或
-绕过 TaskManager。
+Electron 是 Profile/Soul 唯一事实源；Backend 的 ActiveProfileManager 仅按 realtime token 打开
+该 Profile 的运行数据。Runtime 通过 Context、Snapshot、TaskBridge、Tavily/Workspace 工具和
+SpeechService 协作，且只有 Pet 物理 ACK 能提交助手语言。包内不再提供人格文件 Store、多
+Renderer 协议、诊断 transport 或 Memory lease/outbox 抽象。
 """
 
 from .context import ClauseState, ContextStore, FoldedContext, SpeechClause
@@ -12,32 +11,24 @@ from .observations import (
     ObservationExecutorError,
     ObservationLedger,
     ObservationSecurityError,
-    SafeWebReader,
-    SourceRegistry,
-    TavilySearchExecutor,
+    TavilyTools,
     WorkspaceListExecutor,
     WorkspaceReadExecutor,
     WorkspaceReader,
 )
-from .profiles import Profile, ProfileConflictError, ProfileStore, ProfileValidationError, SoulDocument
+from .lifecycle import ActiveProfileManager, ProfileResources
+from .memory import ProfileMemory
 from .realtime import (
-    AUR1_HEADER_SIZE,
-    AudioFrame,
-    AudioFrameKind,
-    AudioFrameTracker,
-    BoundedAudioQueue,
     CapabilityTokens,
-    OutboundWriter,
+    MicFrameQueue,
     ProtocolError,
     RealtimeHub,
-    RendererLeasePort,
+    RendererPort,
     SUBPROTOCOL,
-    pack_audio_frame,
-    parse_audio_frame,
-    validate_control_message,
 )
 from .runtime import (
     ActiveInput,
+    InputSegment,
     InvokeRequest,
     MainAgentRuntime,
     PendingTaskProposal,
@@ -51,14 +42,13 @@ from .snapshot import Snapshot, SnapshotBudget, SnapshotProjector
 from .tasks import TaskBridge
 
 __all__ = [
-    "AUR1_HEADER_SIZE", "ActiveInput", "AudioFrame", "AudioFrameKind", "AudioFrameTracker",
-    "BoundedAudioQueue", "CapabilityTokens", "ClauseState", "ContextStore", "FoldedContext", "InvokeRequest",
-    "MainAgentRuntime", "MainAgentSettings", "PendingTaskProposal", "PendingTrigger", "PrepareAdmissionPolicy", "Profile",
-    "ObservationExecutorError", "ObservationLedger", "ObservationSecurityError", "SafeWebReader",
-    "SourceRegistry", "TavilySearchExecutor", "WorkspaceListExecutor", "WorkspaceReadExecutor",
+    "ActiveInput", "CapabilityTokens", "ClauseState", "ContextStore", "FoldedContext", "InputSegment", "InvokeRequest",
+    "MainAgentRuntime", "MainAgentSettings", "PendingTaskProposal", "PendingTrigger", "PrepareAdmissionPolicy",
+    "ObservationExecutorError", "ObservationLedger", "ObservationSecurityError", "TavilyTools",
+    "WorkspaceListExecutor", "WorkspaceReadExecutor",
     "WorkspaceReader",
-    "ProfileConflictError", "ProfileStore", "ProfileValidationError", "RendererClause", "Snapshot", "TaskBridge",
-    "SnapshotBudget", "SnapshotProjector", "SoulDocument", "SpeechClause", "WorkspaceRegistry",
-    "OutboundWriter", "ProtocolError", "RealtimeHub", "RendererLeasePort", "SUBPROTOCOL", "TaskProposalStatus",
-    "WorkspaceRegistryError", "pack_audio_frame", "parse_audio_frame", "validate_control_message",
+    "ActiveProfileManager", "ProfileMemory", "ProfileResources", "RendererClause", "Snapshot", "TaskBridge",
+    "SnapshotBudget", "SnapshotProjector", "SpeechClause", "WorkspaceRegistry",
+    "MicFrameQueue", "ProtocolError", "RealtimeHub", "RendererPort", "SUBPROTOCOL", "TaskProposalStatus",
+    "WorkspaceRegistryError",
 ]

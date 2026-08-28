@@ -106,7 +106,3 @@ class TaskModelTests(unittest.TestCase):
                     else:
                         with self.assertRaises(TaskStateConflict):
                             validate_status_transition(source, target)
-
-
-if __name__ == "__main__":
-    unittest.main()

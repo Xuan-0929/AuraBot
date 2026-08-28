@@ -1,6 +1,7 @@
 /**
- * Electron 端到端烟测：验证桌宠、主聊天、设置窗口与 Backend 缺席时的明确错误投影。
- * 测试使用隔离 userData 且不启动 Python Backend，确认桌面不会回落到旧 Chat/Memory、
+ * Electron 端到端烟测：验证桌宠、正式语音失败清理、主聊天、设置与 Backend 缺席错误投影。
+ * 测试使用隔离 userData 且不启动 Python Backend，确认桌面不会回落到旧 Chat/Memory；语音用
+ * 本地请求拦截验证真实 UI 生命周期，不访问麦克风、
  * runner、Task IPC、Task UI 或外部服务。
  */
 import { mkdtempSync, rmSync } from "node:fs";
@@ -48,6 +49,23 @@ test("launches the Live2D pet and opens the chat-only Console", async () => {
     const consoleWindow = await openConsole(electronApp, petWindow);
     await expect(consoleWindow.getByPlaceholder("Say something")).toBeVisible();
     await expect(consoleWindow.locator(".console-task-sidebar")).toHaveCount(0);
+  } finally {
+    await cleanup(electronApp, userDataDir);
+  }
+});
+
+test("formal Pet voice toggle reports token failure and returns to a retryable inactive state", async () => {
+  const { electronApp, petWindow, userDataDir } = await launchAuraBot();
+  try {
+    await petWindow.route(
+      "http://127.0.0.1:6401/api/v1/main-agent/realtime-token",
+      (route) => route.abort("connectionrefused")
+    );
+    await petWindow.getByTestId("live2d-model-surface").hover();
+    const voice = petWindow.getByRole("button", { name: "Start voice input" });
+    await voice.click();
+    await expect(voice).toHaveAttribute("data-state", "error");
+    await expect(voice).toHaveAttribute("data-active", "false");
   } finally {
     await cleanup(electronApp, userDataDir);
   }

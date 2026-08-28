@@ -1,10 +1,8 @@
-"""Close the silent Main Agent path through real Context, Memory recall, tools, and delivery.
+"""Close the silent Main Agent path through real Context, Profile Memory, tools, and physical ACK.
 
-This end-to-end test keeps only provider and Renderer as fakes: confirmed desktop text enters the
-real ``MainAgentRuntime``, automatic ``MemoryBridge`` recall projects SQLite truth into the frozen
-Snapshot, a normal ``say_to_user`` provider tool crosses the real harness, and Renderer ACK commits
-the clause to canonical Context.  Voice, search→CONTINUE, and Task proposal→fact companion E2Es live
-beside their richer realtime/runtime/Task fixtures and are listed in the Task-9 verification report.
+Only model and speech delivery are faked: prior profile memory is extracted into the focused store, a
+confirmed user turn recalls it into a real Snapshot, ``say_to_user`` crosses the Harness, and the clause
+enters canonical conversation only after explicit queued/playing/complete Renderer transitions.
 """
 
 from __future__ import annotations
@@ -14,75 +12,71 @@ import unittest
 from pathlib import Path
 
 from backend.main_agent import ContextStore, SnapshotProjector
-from backend.main_agent.memory import MemoryBridge
+from backend.main_agent.memory import ProfileMemory
 from backend.main_agent.runtime import MainAgentRuntime
 from backend.main_agent.tool_runtime import ToolSurfacePolicy
-from backend.memory.stores.sqlite import SQLiteMemoryStore
 from backend.memory.types import MemoryCandidate
 
 
-def tool_delta(index: int, call_id: str, name: str, arguments: str) -> dict:
+def tool_delta(call_id: str, name: str, arguments: str) -> dict:
     return {"choices": [{"delta": {"tool_calls": [{
-        "index": index,
-        "id": call_id,
-        "function": {"name": name, "arguments": arguments},
+        "index": 0, "id": call_id, "function": {"name": name, "arguments": arguments},
     }]}}]}
 
 
+class Extractor:
+    def extract(self, *, content, metadata, memory_type=None, importance=0.5):
+        return ([MemoryCandidate(content="用户喜欢低酸咖啡豆", metadata=metadata)], [])
+
+
 class SilentMainAgentE2ETests(unittest.IsolatedAsyncioTestCase):
-    async def test_confirmed_text_recall_snapshot_provider_and_renderer_ack(self) -> None:
+    async def test_recall_snapshot_provider_say_and_physical_ack(self) -> None:
         with tempfile.TemporaryDirectory() as directory:
             root = Path(directory)
-            memory_store = SQLiteMemoryStore(root / "memory.sqlite3")
-            context_store = ContextStore(root / "main-agent.sqlite3")
-            episode_id = memory_store.create_episode(
-                profile_id="aura",
-                source_type="prior_conversation",
-                source_id="older",
-                role="user",
-                content="以前聊过咖啡",
-                metadata={},
+            context = ContextStore(root / "context.sqlite3")
+            memory = ProfileMemory(
+                profile_id="profile_a", path=root / "memory.sqlite3", extractor=Extractor(),
+                idle_seconds=0.01,
             )
-            memory_id = memory_store.create_memory(
-                profile_id="aura",
-                episode_id=episode_id,
-                candidate=MemoryCandidate(content="用户喜欢低酸咖啡豆"),
+            await memory.startup()
+            await memory.record_confirmed_input(
+                segment_id="prior", content="以前聊过咖啡", input_id="old", revision=1,
             )
-            bridge = MemoryBridge(profile_id="aura", store=memory_store)
+            await memory.wait_until_idle()
             requests = []
+            offers = []
 
-            def provider(request):
+            async def provider(request):
                 requests.append(request)
-                return [tool_delta(0, "say", "say_to_user", '{"text":"记得，选低酸的。"}')]
+                yield tool_delta("say", "say_to_user", '{"text":"记得，选低酸的。"}')
 
-            async def renderer(_clause):
-                return True
+            async def renderer(clause):
+                offers.append(clause)
 
             runtime = MainAgentRuntime(
-                context_store=context_store,
+                context_store=context,
                 snapshot_projector=SnapshotProjector(),
                 tool_policy=ToolSurfacePolicy(),
                 provider=provider,
                 renderer=renderer,
                 executors={},
                 soul="test",
-                memory_bridge=bridge,
+                memory_bridge=memory,
             )
             try:
-                await runtime.startup()
-                await runtime.submit_text("今天想买咖啡豆")
+                await runtime.submit_text("咖啡豆")
                 await runtime.wait_until_idle()
+                clause = offers[0]
+                await runtime.renderer_tts_queued(clause.clause_id)
+                await runtime.renderer_playing(clause.clause_id)
+                await runtime.renderer_ack(clause.clause_id, complete=True)
 
-                self.assertEqual(len(requests), 1)
-                self.assertEqual(requests[0].snapshot.memory_facts[0]["id"], memory_id)
-                self.assertEqual(context_store.fold().transcript, "今天想买咖啡豆")
-                self.assertEqual(context_store.fold().delivered_clauses, ("记得，选低酸的。",))
+                self.assertEqual(requests[0].snapshot.memory_facts[0]["content"], "用户喜欢低酸咖啡豆")
+                self.assertEqual(
+                    [(turn["role"], turn["content"]) for turn in context.fold().conversation_turns],
+                    [("user", "咖啡豆"), ("assistant", "记得，选低酸的。")],
+                )
             finally:
                 await runtime.shutdown()
-                await bridge.shutdown()
-                context_store.close()
-                memory_store.close()
-
-
-if __name__ == "__main__":
-    unittest.main()
+                await memory.shutdown()
+                context.close()

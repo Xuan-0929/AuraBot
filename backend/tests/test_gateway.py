@@ -29,8 +29,7 @@ class GatewayEndpointTests(unittest.TestCase):
         self.assertTrue(global_config.initialized)
         self.assertEqual(response.status_code, 200)
         self.assertEqual(response.json(), {"ok": True, "service": "backend"})
-        self.assertFalse(application.state.main_agent_speech.status.enabled)
-        self.assertEqual(application.state.main_agent_speech.status.reason, "stopped")
+        self.assertIsNone(application.state.main_agent_profiles.active_profile_id)
 
     def test_removed_execution_routes_are_not_registered(self):
         with TestClient(create_app()) as client:
@@ -45,7 +44,3 @@ class GatewayEndpointTests(unittest.TestCase):
                 "/debug/events",
             ):
                 self.assertEqual(client.get(path).status_code, 404, path)
-
-
-if __name__ == "__main__":
-    unittest.main()
