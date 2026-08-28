@@ -1,10 +1,11 @@
 """
-验证 Memory 服务、HTTP 路由、检索组件与持久化适配器的可观察行为。
+验证 Memory 服务、整段对话提炼、HTTP 路由、检索组件与持久化适配器的可观察行为。
 
 测试使用临时 SQLite 和内存向量替身覆盖 remember/recall/forget、提取与排序流程；
 短期记忆缓冲区由独立测试模块负责，避免在本文件重复验证同一契约。
 """
 
+import asyncio
 import json
 import sqlite3
 import tempfile
@@ -25,6 +26,7 @@ from backend.memory.invode import (
     create_memory_router,
 )
 from backend.memory.extraction.schemas import parse_structured_extraction_payload
+from backend.memory.extraction.providers import OpenAICompatibleMemoryExtractionModel
 from backend.memory.consolidation.strategies import (
     ConflictingPreferenceStrategy,
     DuplicateMemoryStrategy,
@@ -82,9 +84,143 @@ class FakeExtractionModel:
         return self.payload
 
 
+class AsyncExtractionModel(FakeExtractionModel):
+    def __init__(self, payload):
+        super().__init__(payload)
+        self.contents = []
+        self.started = asyncio.Event()
+        self.release = asyncio.Event()
+
+    async def extract_memory_payload_async(
+        self, *, content, metadata, memory_type=None, importance=0.5,
+    ):
+        self.contents.append(content)
+        self.started.set()
+        await self.release.wait()
+        return self.payload
+
+
+class BlockingAsyncHttpClient:
+    def __init__(self) -> None:
+        self.started = asyncio.Event()
+        self.cancelled = asyncio.Event()
+        self.closed = asyncio.Event()
+
+    async def __aenter__(self):
+        return self
+
+    async def __aexit__(self, _exc_type, _exc, _traceback):
+        self.closed.set()
+
+    async def post(self, *_args, **_kwargs):
+        self.started.set()
+        try:
+            await asyncio.Future()
+        except asyncio.CancelledError:
+            self.cancelled.set()
+            raise
+
+
 class ReverseMemoryReranker:
     def rerank(self, *, query, memories, analysis, limit):
         return list(reversed(memories))[:limit]
+
+
+class MemoryConversationTests(unittest.IsolatedAsyncioTestCase):
+    async def asyncSetUp(self):
+        self.tmpdir = tempfile.TemporaryDirectory()
+        self.store = SQLiteMemoryStore(Path(self.tmpdir.name) / "memory.sqlite3")
+        self.vector_store = InMemoryVectorStore()
+        self.model = AsyncExtractionModel({
+            "memories": [{
+                "content": "用户喜欢红茶",
+                "memory_type": "preference",
+                "importance": 0.8,
+                "confidence": 0.9,
+                "entities": ["红茶"],
+            }],
+            "entities": [{"name": "红茶"}],
+        })
+        self.service = MemoryService(
+            metadata_store=self.store,
+            vector_store=self.vector_store,
+            embedding_provider=HashEmbeddingProvider(dimension=32),
+            extractor=StructuredMemoryExtractor(self.model),
+        )
+
+    async def asyncTearDown(self):
+        self.store.close()
+        self.tmpdir.cleanup()
+
+    async def test_conversation_is_persisted_once_with_its_stable_source(self):
+        self.model.release.set()
+        turns = (
+            {"role": "user", "content": "我喜欢红茶"},
+            {"role": "assistant", "content": "我记住了。"},
+        )
+
+        first = await self.service.remember_conversation(
+            profile_id="profile-a", turns=turns, source_id="context:1:2",
+        )
+        repeated = await self.service.remember_conversation(
+            profile_id="profile-a", turns=turns, source_id="context:1:2",
+        )
+
+        self.assertEqual(first, repeated)
+        self.assertEqual(self.model.contents, ["user: 我喜欢红茶\nassistant: 我记住了。"])
+        snapshot = self.store.debug_snapshot("profile-a")
+        self.assertEqual(len(snapshot["episodes"]), 1)
+        self.assertEqual(snapshot["episodes"][0]["source_type"], "main_agent_conversation")
+        self.assertEqual(snapshot["episodes"][0]["source_id"], "context:1:2")
+        self.assertEqual([item["content"] for item in snapshot["memories"]], ["用户喜欢红茶"])
+
+    async def test_cancelled_conversation_extraction_writes_nothing(self):
+        task = asyncio.create_task(self.service.remember_conversation(
+            profile_id="profile-a",
+            turns=({"role": "user", "content": "先不要保存"},),
+            source_id="context:1:1",
+        ))
+        await self.model.started.wait()
+
+        task.cancel()
+        with self.assertRaises(asyncio.CancelledError):
+            await task
+
+        snapshot = self.store.debug_snapshot("profile-a")
+        self.assertEqual(snapshot["episodes"], [])
+        self.assertEqual(snapshot["memories"], [])
+        self.assertEqual(self.vector_store.points, {})
+
+    async def test_conversation_rejects_invalid_turns_before_extraction(self):
+        with self.assertRaises(ValueError):
+            await self.service.remember_conversation(
+                profile_id="profile-a",
+                turns=({"role": "tool", "content": "not a conversation turn"},),
+                source_id="context:1:1",
+            )
+        self.assertEqual(self.model.contents, [])
+
+    async def test_openai_async_request_propagates_cancellation_and_closes_client(self):
+        client = BlockingAsyncHttpClient()
+        model = OpenAICompatibleMemoryExtractionModel(
+            base_url="https://memory.invalid/v1",
+            model_name="memory-model",
+            api_key="test-key",
+            timeout_seconds=30,
+            async_client_factory=lambda **_kwargs: client,
+        )
+        task = asyncio.create_task(model.extract_memory_payload_async(
+            content="user: 取消这次提炼",
+            metadata={},
+        ))
+        await client.started.wait()
+
+        task.cancel()
+        with self.assertRaises(asyncio.CancelledError):
+            await task
+
+        self.assertTrue(client.cancelled.is_set())
+        self.assertTrue(client.closed.is_set())
 
 
 class MemoryInvodeTests(unittest.TestCase):

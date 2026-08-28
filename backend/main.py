@@ -1,10 +1,10 @@
-"""Compose AuraBot's Backend around one token-activated Main Agent Profile.
+"""Compose AuraBot around one token-activated Profile and the shared Memory implementation.
 
 Process startup owns only TaskManager, metrics, and the minimal RealtimeHub. The first valid Pet token
 request supplies Electron's Profile identity and effective Soul, causing ``ActiveProfileManager`` to
-open that Profile's Context, focused Memory, model/tools, and SpeechService. A serialized Profile switch
-closes those resources before opening another directory; no Backend Profile/Soul files or inactive
-workers exist. Legacy Console chat and legacy Python Memory modules remain independent.
+open that Profile's Context, ``backend.memory.MemoryService``, model/tools, and SpeechService. A serialized
+Profile switch closes those resources before opening another directory; no inactive Memory worker, second
+schema, Backend Profile file, or Backend Soul file exists.
 """
 
 from __future__ import annotations
@@ -26,12 +26,10 @@ initialize_config()
 
 from .app.gateway.errors import register_backend_exception_handlers
 from .app.gateway.health_routes import router as health_router
-from .app.gateway.memory_routes import router as memory_router
 from .app.gateway.readiness_routes import router as readiness_router
 from .app.gateway.task_routes import register_task_exception_handlers, router as task_router
 from .main_agent.context import ContextStore
 from .main_agent.lifecycle import ActiveProfileManager, ProfileResources
-from .main_agent.memory import ProfileMemory
 from .main_agent.metrics import LifecycleMetrics
 from .main_agent.observations import (
     TavilyTools,
@@ -55,7 +53,9 @@ from .main_agent.tool_runtime import ToolSurfacePolicy
 from .memory.embedding import create_embedding_provider
 from .memory.extraction.providers import OpenAICompatibleMemoryExtractionModel
 from .memory.extractor import StructuredMemoryExtractor
+from .memory.service import MemoryService
 from .memory.stores.qdrant import QdrantLocalVectorStore
+from .memory.stores.sqlite import SQLiteMemoryStore
 from .task.manager import TaskManager
 from .task.settings import TaskSettings
 
@@ -148,7 +148,6 @@ def create_app(
     )
     application.include_router(health_router)
     application.include_router(task_router)
-    application.include_router(memory_router)
     application.include_router(readiness_router)
     application.include_router(main_agent_realtime_router)
     register_task_exception_handlers(application)
@@ -176,12 +175,11 @@ async def _build_profile(
     context = ContextStore(path / "context.sqlite3")
     embedding = create_embedding_provider(config.get("memory", {}).get("embedding", {}))
     vectors = QdrantLocalVectorStore(path=path / "qdrant", vector_size=embedding.dimension)
-    memory = ProfileMemory(
-        profile_id=profile_id,
-        path=path / "memory.sqlite3",
+    memory = MemoryService(
+        metadata_store=SQLiteMemoryStore(path / "memory.sqlite3"),
+        embedding_provider=embedding,
         extractor=build_memory_extractor(settings.chat_model),
         vector_store=vectors,
-        embedding_provider=embedding,
     )
     provider = (provider_factory or build_chat_provider)(settings.chat_model, metrics)
     reader = WorkspaceReader(settings.workspaces)
@@ -213,7 +211,7 @@ async def _build_profile(
         renderer=speech_unavailable,
         executors=executors,
         soul=soul,
-        memory_bridge=memory,
+        memory_service=memory,
         task_manager=manager,
         owner_profile_id=profile_id,
         metrics=metrics,
@@ -230,7 +228,6 @@ async def _build_profile(
         else:
             assert detectors is not None
             resources.speech = _build_speech(settings.speech, hub, runtime, *detectors)
-        await memory.startup()
         await runtime.startup()
         await resources.speech.startup()
         return resources

@@ -4,8 +4,8 @@ Electron supplies the effective Soul when requesting a realtime capability. ``Ac
 validates the Profile identity, creates only its runtime-data directory, increments a generation for
 every replaceable voice session, and keeps an existing same-Profile Runtime alive while updating its
 next-invoke Soul. Switching first clears the old Hub session, then closes Runtime, Speech, Memory,
-Context/provider/tool resources before composing the new Profile. Dormant Profiles own no timers,
-tasks, connections, or Qdrant clients.
+Context/provider/tool resources before composing the new Profile. Memory is the existing Profile-scoped
+``MemoryService``; lifecycle exposes no second browse/job/retry surface and dormant Profiles own nothing.
 """
 
 from __future__ import annotations
@@ -47,7 +47,7 @@ ProfileFactory = Callable[[str, Path, str], Awaitable[ProfileResources]]
 
 
 class ActiveProfileManager:
-    """Own at most one ``ProfileResources`` and expose active-only Memory delegation."""
+    """Own at most one ``ProfileResources`` and serialize Soul refresh or Profile replacement."""
 
     def __init__(self, profile_root: Path, hub: Any, factory: ProfileFactory) -> None:
         self.profile_root = Path(profile_root).resolve()
@@ -108,15 +108,6 @@ class ActiveProfileManager:
                 raise
             self._active = resources
             return generation
-
-    async def browse_memory(self, profile_id: str, limit: int) -> dict[str, Any]:
-        return await self._require_active(profile_id).memory.browse(limit=limit)
-
-    async def forget_memory(self, profile_id: str, **kwargs: Any) -> dict[str, Any]:
-        return await self._require_active(profile_id).memory.forget(**kwargs)
-
-    async def retry_memory(self, profile_id: str, job_id: str) -> dict[str, Any]:
-        return await self._require_active(profile_id).memory.retry(job_id)
 
     async def shutdown(self) -> None:
         """Fence realtime admission and close the sole active Profile, if one exists."""

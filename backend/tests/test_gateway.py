@@ -1,8 +1,7 @@
-"""
-验证 health-only Backend 的公开 HTTP 边界。
+"""验证 Backend 的固定健康响应与已移除 HTTP surface 不会重新注册。
 
-测试通过真实 FastAPI TestClient 检查配置初始化、固定健康响应和旧 Task/Plan
-路径缺席；它不创建任何 Task runtime，也不模拟已退役的应用服务。
+测试通过真实 FastAPI TestClient 检查配置初始化，并确认旧 Task/Plan 路径以及被删除的
+Main-Agent Memory browse/forget/retry 管理面均不出现在 OpenAPI；不创建任何 Profile Runtime。
 """
 
 import os
@@ -44,3 +43,7 @@ class GatewayEndpointTests(unittest.TestCase):
                 "/debug/events",
             ):
                 self.assertEqual(client.get(path).status_code, 404, path)
+            paths = client.get("/openapi.json").json()["paths"]
+            self.assertNotIn("/api/v1/profiles/{profile_id}/memories", paths)
+            self.assertNotIn("/api/v1/profiles/{profile_id}/memories/forget", paths)
+            self.assertNotIn("/api/v1/profiles/{profile_id}/memory-jobs/{job_id}/retry", paths)

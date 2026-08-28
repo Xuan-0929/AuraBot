@@ -1,7 +1,7 @@
-"""Protect durable conversation, causal Observation folding, and bounded prompt projection.
+"""Protect the Profile conversation buffer, causal Observation folding, and prompt projection.
 
 The tests use public SQLite and Snapshot APIs. They verify stable user segments, Renderer-ACK-only assistant
-language, last-event Observation order, and a JSON-native prompt that preserves recent facts under budget.
+language, Memory batch boundaries and cleanup, last-event Observation order, and bounded JSON projection.
 """
 
 from __future__ import annotations
@@ -16,6 +16,54 @@ from backend.main_agent.snapshot import SnapshotBudget, SnapshotProjector
 
 
 class ContextStoreTests(unittest.TestCase):
+    def test_conversation_batch_is_stable_and_clears_only_its_boundary(self) -> None:
+        with tempfile.TemporaryDirectory() as directory:
+            store = ContextStore(Path(directory) / "context.sqlite3")
+            store.append_event("observation", {"id": "o1", "status": "completed"})
+            store.append_event("user_segment", {"segment_id": "s1", "input_id": "i1", "text": "你"})
+            store.append_event("user_segment", {"segment_id": "s1", "input_id": "i1", "text": "你好"})
+            store.create_clause("c1", "我在。")
+            store.transition_clause("c1", ClauseState.TTS_QUEUED)
+            store.transition_clause("c1", ClauseState.PLAYING)
+            self.assertTrue(store.ack_clause("c1", complete=True))
+
+            batch = store.conversation_batch()
+
+            self.assertEqual(batch.source_id, "main-agent-context:2:4")
+            self.assertEqual((batch.first_sequence, batch.through_sequence), (2, 4))
+            self.assertEqual(
+                batch.turns,
+                (
+                    {"role": "user", "content": "你好"},
+                    {"role": "assistant", "content": "我在。"},
+                ),
+            )
+            store.append_event("user_segment", {"segment_id": "s2", "input_id": "i2", "text": "新一轮"})
+            store.clear_conversation_through(batch.through_sequence)
+
+            self.assertEqual(
+                store.fold().conversation_turns,
+                ({"role": "user", "content": "新一轮", "segment_id": "s2"},),
+            )
+            self.assertEqual(store.fold().observations, ({"id": "o1", "status": "completed"},))
+            with self.assertRaises(KeyError):
+                store.get_clause("c1")
+            store.close()
+
+    def test_last_user_activity_survives_reopen_and_can_be_cleared(self) -> None:
+        with tempfile.TemporaryDirectory() as directory:
+            path = Path(directory) / "context.sqlite3"
+            store = ContextStore(path)
+            store.set_last_user_activity(123.5)
+            store.close()
+
+            reopened = ContextStore(path)
+            self.assertEqual(reopened.get_last_user_activity(), 123.5)
+            reopened.clear_last_user_activity()
+            self.assertIsNone(reopened.get_last_user_activity())
+            self.assertIsNone(reopened.conversation_batch())
+            reopened.close()
+
     def test_segments_update_in_place_and_complete_ack_preserves_conversation_order(self) -> None:
         with tempfile.TemporaryDirectory() as directory:
             store = ContextStore(Path(directory) / "context.sqlite3")

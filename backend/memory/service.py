@@ -1,5 +1,14 @@
+"""Own long-term Memory ingestion, retrieval, forgetting, and conversation extraction.
+
+Main Agent submits complete Profile conversation batches through the cancellable async entrypoint; this
+service alone decides which candidates become durable SQLite truth and Qdrant index entries. Existing
+synchronous APIs remain available to diagnostics and legacy callers without a second Memory owner.
+"""
+
 from __future__ import annotations
 
+import asyncio
+from collections.abc import Mapping, Sequence
 from typing import Any
 
 from .consolidator import AddFirstConsolidator
@@ -76,51 +85,75 @@ class MemoryService:
             )
             raise
 
-        entity_ids_by_name = {}
-
-        for entity in entities:
-            entity_ids_by_name[entity.name] = self.metadata_store.upsert_entity(
-                profile_id=profile_id,
-                candidate=entity,
-            )
-
-        memory_ids = []
-
-        for candidate in candidates:
-            memory_id = self.metadata_store.create_memory(
-                profile_id=profile_id,
-                episode_id=episode_id,
-                candidate=candidate,
-            )
-            memory_ids.append(memory_id)
-            self._index_memory(
-                profile_id=profile_id,
-                memory_id=memory_id,
-                episode_id=episode_id,
-                source_type=source_type,
-                candidate=candidate,
-                entity_ids=[
-                    entity_ids_by_name[name]
-                    for name in candidate.entities
-                    if name in entity_ids_by_name
-                ],
-            )
-            self._create_relations_for_new_memory(
-                profile_id=profile_id,
-                episode_id=episode_id,
-                memory_id=memory_id,
-                candidate=candidate,
-            )
-
-        result = {
-            "episode_id": episode_id,
-            "memory_ids": memory_ids,
-            "memory_id": memory_ids[0] if memory_ids else None,
-            "state": "active",
-        }
+        result = self._persist_candidates(
+            profile_id=profile_id,
+            episode_id=episode_id,
+            source_type=source_type,
+            candidates=candidates,
+            entities=entities,
+        )
         self.metadata_store.write_audit_log(
             profile_id=profile_id,
             action="remember",
+            input_summary=content,
+            result_json=result,
+        )
+        return result
+
+    async def remember_conversation(
+        self,
+        *,
+        profile_id: str,
+        turns: Sequence[Mapping[str, str]],
+        source_id: str,
+    ) -> dict[str, Any]:
+        """Extract and persist one stable Main Agent conversation batch exactly once."""
+
+        identifier = str(profile_id).strip()
+        stable_source = str(source_id).strip()
+        if not identifier or not stable_source:
+            raise ValueError("profile_id and source_id must be non-empty")
+        content, turn_count = _conversation_content(turns)
+        source_type = "main_agent_conversation"
+        existing = self.metadata_store.get_episode_by_source(
+            profile_id=identifier,
+            source_type=source_type,
+            source_id=stable_source,
+        )
+        if existing is not None:
+            memory_ids = self.metadata_store.memory_ids_for_episodes(
+                profile_id=identifier,
+                episode_ids=[existing["episode_id"]],
+            )
+            return _result(existing["episode_id"], memory_ids)
+
+        metadata = {"turn_count": turn_count}
+        extract_async = getattr(self.extractor, "extract_async", None)
+        if callable(extract_async):
+            candidates, entities = await extract_async(content=content, metadata=metadata)
+        else:
+            candidates, entities = await asyncio.to_thread(
+                self.extractor.extract, content=content, metadata=metadata
+            )
+        candidates = [validate_memory_candidate(candidate) for candidate in candidates]
+        episode_id = self.metadata_store.create_episode(
+            profile_id=identifier,
+            source_type=source_type,
+            source_id=stable_source,
+            role=None,
+            content=content,
+            metadata=metadata,
+        )
+        result = self._persist_candidates(
+            profile_id=identifier,
+            episode_id=episode_id,
+            source_type=source_type,
+            candidates=candidates,
+            entities=entities,
+        )
+        self.metadata_store.write_audit_log(
+            profile_id=identifier,
+            action="remember_conversation",
             input_summary=content,
             result_json=result,
         )
@@ -237,6 +270,50 @@ class MemoryService:
             },
         }
 
+    def _persist_candidates(
+        self,
+        *,
+        profile_id: str,
+        episode_id: str,
+        source_type: str,
+        candidates: Sequence[MemoryCandidate],
+        entities: Sequence[Any],
+    ) -> dict[str, Any]:
+        entity_ids_by_name = {
+            entity.name: self.metadata_store.upsert_entity(
+                profile_id=profile_id,
+                candidate=entity,
+            )
+            for entity in entities
+        }
+        memory_ids: list[str] = []
+        for candidate in candidates:
+            memory_id = self.metadata_store.create_memory(
+                profile_id=profile_id,
+                episode_id=episode_id,
+                candidate=candidate,
+            )
+            memory_ids.append(memory_id)
+            self._index_memory(
+                profile_id=profile_id,
+                memory_id=memory_id,
+                episode_id=episode_id,
+                source_type=source_type,
+                candidate=candidate,
+                entity_ids=[
+                    entity_ids_by_name[name]
+                    for name in candidate.entities
+                    if name in entity_ids_by_name
+                ],
+            )
+            self._create_relations_for_new_memory(
+                profile_id=profile_id,
+                episode_id=episode_id,
+                memory_id=memory_id,
+                candidate=candidate,
+            )
+        return _result(episode_id, memory_ids)
+
     def _index_memory(
         self,
         *,
@@ -325,4 +402,33 @@ def scalar_payload(metadata: dict[str, Any]) -> dict[str, Any]:
         key: value
         for key, value in metadata.items()
         if isinstance(value, str | int | float | bool)
+    }
+
+
+def _conversation_content(turns: Sequence[Mapping[str, str]]) -> tuple[str, int]:
+    if isinstance(turns, (str, bytes)):
+        raise ValueError("turns must be a non-empty sequence")
+    normalized: list[str] = []
+    for turn in turns:
+        if not isinstance(turn, Mapping):
+            raise ValueError("each conversation turn must be an object")
+        role = turn.get("role")
+        content = turn.get("content")
+        if role not in {"user", "assistant"}:
+            raise ValueError("conversation turn role must be user or assistant")
+        if not isinstance(content, str) or not content.strip():
+            raise ValueError("conversation turn content must be non-empty text")
+        normalized.append(f"{role}: {content.strip()}")
+    if not normalized:
+        raise ValueError("turns must be a non-empty sequence")
+    return "\n".join(normalized), len(normalized)
+
+
+def _result(episode_id: str, memory_ids: Sequence[str]) -> dict[str, Any]:
+    identifiers = list(memory_ids)
+    return {
+        "episode_id": episode_id,
+        "memory_ids": identifiers,
+        "memory_id": identifiers[0] if identifiers else None,
+        "state": "active",
     }

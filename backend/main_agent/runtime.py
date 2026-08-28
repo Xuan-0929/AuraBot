@@ -1,4 +1,4 @@
-"""Own segmented Main Agent input causality, scheduling, grants, and confirmed text delivery.
+"""Own one Profile's conversation control, cancellable Memory idle cycle, tools, and speech delivery.
 
 MainAgentRuntime folds normalized transcript/VAD/EOU facts into one ActiveInput, coalesces control
 triggers into an event-driven single-flight drain deferred outside commit stacks, freezes Snapshot and
@@ -7,11 +7,9 @@ executors detach through an append-only ObservationLedger with same-input reuse;
 ContextStore only after complete acknowledgement. Runtime also owns cancellable three-second Task
 proposals, cancellation-immune Manager commits/controls, and supervised durable Task-event replay;
 current-input proposal identities have a hard admission bound, and canonical Task versions fence stale
-retries. Automatic Memory recall captures immutable coordinates under the scheduler lock, waits outside
-that lock, then revalidates input/revision/context plus a monotonic endpoint generation before snapshot
-publication. In-flight PREPARE recall participates in StrongPause settlement, so stale work cannot start
-after RESPOND. TaskBridge fresh-reads Manager state for owner-safe inspection and optimistic-version
-control.
+retries. Runtime recalls through the existing ``MemoryService`` and, after five idle minutes, submits one
+immutable ContextStore conversation batch to its cancellable extractor; user activity cancels that task and
+only a successful write clears the batch. TaskBridge fresh-reads Manager state for owner-safe inspection.
 """
 
 from __future__ import annotations
@@ -184,8 +182,9 @@ class MainAgentRuntime:
         renderer: RendererPort,
         executors: Mapping[str, Executor],
         soul: str,
-        memory_facts: Sequence[Mapping[str, Any]] | Callable[[], Sequence[Mapping[str, Any]]] = (),
-        memory_bridge: Any | None = None,
+        memory_service: Any | None = None,
+        memory_idle_seconds: float = 300.0,
+        wall_clock: Callable[[], float] | None = None,
         clock: Callable[[], float] | None = None,
         prepare_admission: PrepareAdmissionPolicy | None = None,
         observation_ledger: ObservationLedger | None = None,
@@ -206,14 +205,20 @@ class MainAgentRuntime:
         self.provider = provider
         self.renderer = renderer
         self.soul = soul
-        self.memory_facts = memory_facts
-        self.memory_bridge = memory_bridge
+        if memory_idle_seconds <= 0:
+            raise ValueError("memory_idle_seconds must be positive")
+        if memory_service is not None and owner_profile_id is None:
+            raise ValueError("MemoryService requires owner_profile_id")
+        self.memory_service = memory_service
+        self.memory_idle_seconds = float(memory_idle_seconds)
+        self.wall_clock = wall_clock or time.time
+        self.owner_profile_id = owner_profile_id
         self.metrics = metrics
         self.clock = clock or time.monotonic
         self.prepare_admission = prepare_admission or PrepareAdmissionPolicy()
         self.observation_ledger = observation_ledger or ObservationLedger()
-        if (task_manager is None) != (owner_profile_id is None):
-            raise ValueError("task_manager and owner_profile_id must be configured together")
+        if task_manager is not None and owner_profile_id is None:
+            raise ValueError("task_manager requires owner_profile_id")
         self._proposal_sleep = proposal_sleep or asyncio.sleep
         self._task_event_retry_sleep = task_event_retry_sleep or asyncio.sleep
         self._task_bridge = TaskBridge(task_manager, owner_profile_id) if task_manager is not None else None
@@ -248,6 +253,9 @@ class MainAgentRuntime:
         self._task_control_tasks: set[asyncio.Task[dict[str, Any]]] = set()
         self._task_fact_versions: OrderedDict[str, int] = OrderedDict()
         self._task_event_task: asyncio.Task[None] | None = None
+        self._memory_task: asyncio.Task[None] | None = None
+        self._speech_settled = asyncio.Event()
+        self._speech_settled.set()
 
         runtime_executors = dict(executors)
         for task_tool in (
@@ -298,10 +306,11 @@ class MainAgentRuntime:
         return tuple(self._task_proposals.values())
 
     async def startup(self) -> None:
-        """Start the owner-filtered durable Task event fold when TaskManager integration is configured."""
+        """Start Task events and resume any persisted Profile conversation idle deadline."""
 
         async with self._lock:
             self._ensure_task_event_listener_locked()
+            self._resume_memory_idle_locked()
         self._increment_metric("main.runtime.startup")
 
     async def update_soul(self, soul: str) -> None:
@@ -342,6 +351,7 @@ class MainAgentRuntime:
 
         transcript = _required_text(text, "transcript")
         async with self._lock:
+            self._cancel_memory_task_locked()
             self._cancel_pending_proposals_locked("confirmed_speech")
             self._user_speaking = True
             self._speech_candidate = False
@@ -362,17 +372,17 @@ class MainAgentRuntime:
 
         transcript = _required_text(text, "text submission")
         async with self._lock:
+            self._cancel_memory_task_locked()
             barrier = self._prepare_barrier_locked()
             self._advance_input_locked(transcript, self._new_id("segment"))
             assert self._active_input is not None
-            confirmed_input = self._active_input
             self._user_speaking = False
             self._speech_candidate = False
             self._confirmed_speech = False
             grant = self._create_grant_locked()
             self._merge_trigger_locked(InvokeMode.RESPOND, "explicit_text_submit")
             self._kick_locked()
-        await self._record_confirmed_input(confirmed_input)
+            self._start_memory_idle_locked()
         if barrier is not None:
             await barrier.wait()
         return grant
@@ -381,6 +391,7 @@ class MainAgentRuntime:
         """Fence response effects immediately for an acoustic speech candidate without changing revision."""
 
         async with self._lock:
+            self._cancel_memory_task_locked()
             self._user_speaking = True
             self._speech_candidate = True
             self._confirmed_speech = False
@@ -390,6 +401,7 @@ class MainAgentRuntime:
         """Confirm barge-in, revoke response authority, and cancel current control/speech ownership."""
 
         async with self._lock:
+            self._cancel_memory_task_locked()
             self._user_speaking = True
             self._speech_candidate = False
             self._confirmed_speech = True
@@ -405,6 +417,7 @@ class MainAgentRuntime:
                 }:
                     self.context_store.ack_clause(clause_id, complete=False)
                 self._clause_origins.pop(clause_id, None)
+            self._refresh_speech_settled_locked()
 
     async def vad_stop_candidate(self) -> None:
         """Record acoustic silence only; this event never grants or schedules RESPOND."""
@@ -421,14 +434,13 @@ class MainAgentRuntime:
             self._speech_candidate = False
             self._confirmed_speech = False
             self._resume_pending_proposals_locked()
+            self._resume_memory_idle_locked()
 
     async def eou_incomplete(self) -> bool:
         """Settle response-class work, revoke its grant, then admit only high-priority PREPARE."""
 
         intent = object()
         committed = False
-        confirmed_input: ActiveInput | None = None
-        grant: ResponseGrant | None = None
         async with self._lock:
             self._barrier_intent = intent
             self._control_generation += 1
@@ -504,19 +516,17 @@ class MainAgentRuntime:
                 self._speech_candidate = False
                 self._confirmed_speech = False
                 grant = self._create_grant_locked()
-                confirmed_input = self._active_input
                 self._pending_trigger = None
                 self._merge_trigger_locked(InvokeMode.RESPOND, normalized_reason)
                 self._barrier_intent = None
                 self._kick_locked()
+                self._start_memory_idle_locked()
                 committed = True
             finally:
                 self._lock.release()
         finally:
             if not committed:
                 await asyncio.shield(self._release_barrier_intent(intent))
-        assert grant is not None and confirmed_input is not None
-        await self._record_confirmed_input(confirmed_input)
         return grant
 
     async def request_prepare(self, reason: str, *, high_priority: bool = False) -> bool:
@@ -573,9 +583,11 @@ class MainAgentRuntime:
                 if clause.state in {ClauseState.DRAFT, ClauseState.TTS_QUEUED, ClauseState.PLAYING}:
                     self.context_store.ack_clause(clause_id, complete=False)
                 self._clause_origins.pop(clause_id, None)
+                self._refresh_speech_settled_locked()
                 return False
             accepted = self.context_store.ack_clause(clause_id, complete=complete)
             self._clause_origins.pop(clause_id, None)
+            self._refresh_speech_settled_locked()
             if accepted:
                 self._has_external_commit = True
                 self._context_changed_locked()
@@ -625,10 +637,13 @@ class MainAgentRuntime:
         async with self._lock:
             if self._shutdown:
                 task = self._drain_task
+                memory_task = self._memory_task
             else:
                 first_shutdown = True
                 self._shutdown = True
                 self._pending_trigger = None
+                memory_task = self._memory_task
+                self._cancel_memory_task_locked()
                 self._cancel_pending_proposals_locked("runtime_shutdown")
                 if self._active_invoke is not None:
                     self.harness.cancel(self._active_invoke.request.invoke_id)
@@ -641,6 +656,8 @@ class MainAgentRuntime:
                 event_task.cancel()
         if task is not None and task is not asyncio.current_task():
             await asyncio.gather(task, return_exceptions=True)
+        if memory_task is not None and memory_task is not asyncio.current_task():
+            await asyncio.gather(memory_task, return_exceptions=True)
         durable_tasks = (*proposal_tasks, *commit_tasks, *control_tasks)
         if durable_tasks:
             await asyncio.gather(
@@ -875,24 +892,17 @@ class MainAgentRuntime:
                     )
                     folded = self.context_store.fold()
                     recall_query = active_input.latest_transcript
-                    visible_segment_ids = tuple(
-                        segment.segment_id for segment in active_input.segments
-                    )
-                    visible_segment_texts = tuple(
-                        segment.text for segment in active_input.segments
-                    )
-                if self.memory_bridge is None:
-                    memory_facts = self._memory_facts()
+                if self.memory_service is None:
+                    memory_facts: Sequence[Mapping[str, Any]] = ()
                 else:
                     try:
-                        memory_facts = await self.memory_bridge.recall(
+                        recalled = self.memory_service.recall(
+                            profile_id=self.owner_profile_id,
                             query=recall_query,
-                            revision=recall_identity[1],
-                            input_id=recall_identity[0],
-                            context_version=recall_identity[2],
-                            visible_source_segment_ids=visible_segment_ids,
-                            visible_source_texts=visible_segment_texts,
+                            limit=6,
+                            context_hints={"context_budget_chars": 2_400},
                         )
+                        memory_facts = tuple(recalled.get("memories", ()))
                     except Exception:
                         memory_facts = ()
                 async with self._lock:
@@ -986,6 +996,7 @@ class MainAgentRuntime:
             text = str(call.arguments["text"])
             clause_id = self._new_id("clause")
             self.context_store.create_clause(clause_id, text)
+            self._speech_settled.clear()
             self._clause_origins[clause_id] = (request.input_id, request.revision)
             offer = RendererClause(
                 clause_id,
@@ -1035,6 +1046,7 @@ class MainAgentRuntime:
                 return False
             self.context_store.transition_clause(clause_id, ClauseState.FAILED)
             self._clause_origins.pop(clause_id, None)
+            self._refresh_speech_settled_locked()
             return True
 
     async def _save_think_note(self, call: ToolCall) -> None:
@@ -1650,27 +1662,97 @@ class MainAgentRuntime:
             "response_grant_id": grant.grant_id if grant else None,
         }
 
-    def _memory_facts(self) -> Sequence[Mapping[str, Any]]:
-        value = self.memory_facts() if callable(self.memory_facts) else self.memory_facts
-        return value
+    def _start_memory_idle_locked(self) -> None:
+        """Persist a confirmed-user activity anchor and replace the Profile's idle timer."""
 
-    async def _record_confirmed_input(self, active_input: ActiveInput) -> None:
-        """Reset Memory idle sealing outside the scheduler lock; failures never block dialogue."""
+        if self.memory_service is None or self._shutdown:
+            return
+        self.context_store.set_last_user_activity(self.wall_clock())
+        self._schedule_memory_locked(self.memory_idle_seconds)
 
-        if self.memory_bridge is None:
+    def _resume_memory_idle_locked(self) -> None:
+        """Resume the remaining idle delay for an existing conversation without moving its deadline."""
+
+        if (
+            self.memory_service is None
+            or self._shutdown
+            or self._user_speaking
+            or self._confirmed_speech
+            or self.context_store.conversation_batch() is None
+        ):
             return
-        if not active_input.segments:
-            return
-        segment = active_input.segments[-1]
+        last_activity = self.context_store.get_last_user_activity()
+        if last_activity is None:
+            last_activity = self.wall_clock()
+            self.context_store.set_last_user_activity(last_activity)
+        self._schedule_memory_locked(
+            max(0.0, last_activity + self.memory_idle_seconds - self.wall_clock())
+        )
+
+    def _schedule_memory_locked(self, delay: float) -> None:
+        self._cancel_memory_task_locked()
+        self._memory_task = asyncio.create_task(
+            self._archive_conversation_after(delay),
+            name=f"main-memory-idle-{self.owner_profile_id}",
+        )
+
+    def _cancel_memory_task_locked(self) -> None:
+        task, self._memory_task = self._memory_task, None
+        if task is not None and task is not asyncio.current_task() and not task.done():
+            task.cancel()
+
+    async def _archive_conversation_after(self, delay: float) -> None:
+        """Archive one stable conversation after idle, retaining it across cancellation or failure."""
+
+        current = asyncio.current_task()
         try:
-            await self.memory_bridge.record_confirmed_input(
-                segment_id=segment.segment_id,
-                content=segment.text,
-                input_id=active_input.input_id,
-                revision=active_input.revision,
-            )
-        except Exception:
-            return
+            next_delay = max(0.0, delay)
+            while True:
+                if next_delay:
+                    await asyncio.sleep(next_delay)
+                await self.wait_until_idle()
+                await self._wait_for_speech_settlement()
+                if self._shutdown or self._user_speaking or self._confirmed_speech:
+                    return
+                batch = self.context_store.conversation_batch()
+                if batch is None:
+                    self.context_store.clear_last_user_activity()
+                    return
+                try:
+                    await self.memory_service.remember_conversation(
+                        profile_id=self.owner_profile_id,
+                        turns=batch.turns,
+                        source_id=batch.source_id,
+                    )
+                except asyncio.CancelledError:
+                    raise
+                except Exception:
+                    next_delay = self.memory_idle_seconds
+                    continue
+                if self._shutdown:
+                    return
+                self.context_store.clear_conversation_through(batch.through_sequence)
+                if self.context_store.conversation_batch() is None:
+                    self.context_store.clear_last_user_activity()
+                    return
+                self.context_store.set_last_user_activity(self.wall_clock())
+                next_delay = self.memory_idle_seconds
+        finally:
+            if self._memory_task is current:
+                self._memory_task = None
+
+    async def _wait_for_speech_settlement(self) -> None:
+        while True:
+            async with self._lock:
+                if not self.context_store.has_unsettled_clauses():
+                    self._speech_settled.set()
+                    return
+                self._speech_settled.clear()
+            await self._speech_settled.wait()
+
+    def _refresh_speech_settled_locked(self) -> None:
+        if not self.context_store.has_unsettled_clauses():
+            self._speech_settled.set()
 
     def _context_changed_locked(self, *, refresh_grant: bool = True) -> None:
         self._latest_context_version += 1
@@ -1689,6 +1771,7 @@ class MainAgentRuntime:
             if clause.state in {ClauseState.DRAFT, ClauseState.TTS_QUEUED, ClauseState.PLAYING}:
                 self.context_store.ack_clause(clause_id, complete=False)
             self._clause_origins.pop(clause_id, None)
+        self._refresh_speech_settled_locked()
 
     def _reset_prepare_admission_locked(self) -> None:
         self._prepare_count = 0

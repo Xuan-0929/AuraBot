@@ -13,7 +13,7 @@ flowchart LR
   SPEECH <--> RT["MainAgentRuntime"]
   RT --> MODEL["Chat Model"]
   RT --> CTX["context.sqlite3"]
-  RT --> MEMORY["ProfileMemory<br/>memory.sqlite3 · Qdrant"]
+  RT --> MEMORY["MemoryService<br/>memory.sqlite3 · Qdrant"]
   RT --> TASK["共享 TaskManager"]
   RT --> TOOLS["Tavily · Workspace"]
 ~~~
@@ -261,36 +261,46 @@ stateDiagram-v2
 
 ## 7. Profile Memory
 
-Main Agent 不再向 legacy `SQLiteMemoryStore` 添加 job/lease/outbox 职责。每个 Profile 的聚焦 store
-只有：
+Main Agent 不判断一段对话是否值得记忆，也不拥有第二套 episode、job、worker 或重试状态机。
+`ContextStore` 是唯一的未归档 conversation buffer；既有 `MemoryService` 独占提炼内容、长期保存和
+召回策略。
 
-- `pending_episode`
-- `memory_jobs`
-- `memory_items`
-- `memory_items_fts`
+`ContextStore.conversation_batch()` 只提交两类 canonical turn：stable/final user segment，以及
+Renderer 完整 ACK 后落入 Context 的 assistant clause。partial transcript、未完整播放的回复、
+Observation、Task fact 和 think note 都不进入 Memory 提炼输入。同一 user segment 的多次稳定更新
+按现有 last-write-wins 规则折叠。
 
-confirmed stable segment 在返回前原子 upsert 到 pending row，同 segment ID 原位覆盖。active Profile
-只有一个可替换五分钟 timer。切换/退出只取消 timer，不删除 durable pending row；再次激活时恢复
-剩余时间，超期则立即 seal。
-
-一个 active worker 处理 `extract` 和 `vector_delete` 两种 job。启动把残留 running/indexing 复位为
-pending；结构化结果先写 `result_json`，再进入 indexing。Memory ID 由 episode ID、candidate index、
-canonical content 确定性生成，SQLite/Qdrant upsert 可整 job 重放。失败按 5 / 30 / 300 秒重试，
-之后 failed；手工 retry 回到 pending。模型失败或非法 JSON 不回退规则提取器。
-
-Recall 同时启动 SQLite lexical 和 vector 查询；lexical 必须完成，vector 最多等待 300 ms。结果再
-fresh-read SQLite active truth，因此 forget 立即生效。最多 6 条、2,400 字符，并过滤当前可见
-source segment。
-
-管理 API 只允许 active Profile：
-
-~~~text
-GET  /api/v1/profiles/{profile_id}/memories
-POST /api/v1/profiles/{profile_id}/memories/forget
-POST /api/v1/profiles/{profile_id}/memory-jobs/{job_id}/retry
+~~~mermaid
+stateDiagram-v2
+  [*] --> Collecting
+  Collecting --> Waiting: confirmed text / complete EOU
+  Waiting --> Writing: 300 秒无用户活动
+  Waiting --> Collecting: 新文本 / VAD / STT
+  Writing --> Collecting: 新输入取消 async LLM
+  Writing --> Waiting: 提炼失败，保留 buffer
+  Waiting --> Writing: 再等待 300 秒
+  Writing --> Empty: 成功并清理本批边界
+  Empty --> Collecting: 新输入
 ~~~
 
-inactive Profile 返回稳定 `profile_not_active`，不会为管理请求打开 DB/Qdrant。
+Runtime 在每次 PREPARE、RESPOND、CONTINUE snapshot 构建时直接调用当前 Profile 的
+`MemoryService.recall`，最多请求 6 条、2,400 字符；召回失败按空记忆 fail-soft，不影响回答。
+
+用户确认输入结束后，Runtime 持久化最后活动时间并启动 300 秒 idle timer。新文本、VAD start 或
+有效 STT 会取消 timer 和正在进行的异步 LLM 请求；噪声 VAD 被拒绝后按原 deadline 恢复。到期后，
+Runtime 先等待 control invoke 与 Speech Ledger 收敛，再把完整批次原样交给
+`MemoryService.remember_conversation`。失败或取消保留 Context，仍空闲时 300 秒后重试；提炼得到
+零条长期记忆也属于成功。只有 Memory 成功返回后才按 `through_sequence` 清理本批 conversation，
+边界后的新输入和非 conversation 事件不受影响。
+
+批次 `source_id` 由 Context 事件边界稳定生成。MemoryService 对同一
+`profile_id + main_agent_conversation + source_id` 幂等，因此崩溃后重试不会再次调用 LLM 或重复
+创建长期记忆。Profile 切换和 Backend shutdown 只取消 timer/LLM，不清理 Context；重新激活时从
+`context.sqlite3` 的最后活动时间恢复剩余 idle 时间。
+
+Main Agent 不再暴露 Profile 专用 Memory browse/forget/retry HTTP 路由。每个 Profile 仍以独立目录
+隔离 `context.sqlite3`、`memory.sqlite3` 和 `qdrant/`，同时所有 Memory 调用都携带 `profile_id`，
+形成物理目录与查询条件的双重隔离。
 
 ## 8. 安全边界与验收
 

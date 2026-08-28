@@ -1,21 +1,25 @@
-"""Close the silent Main Agent path through real Context, Profile Memory, tools, and physical ACK.
+"""Close Main Agent through real Context, existing MemoryService, tools, idle archive, and ACK.
 
-Only model and speech delivery are faked: prior profile memory is extracted into the focused store, a
-confirmed user turn recalls it into a real Snapshot, ``say_to_user`` crosses the Harness, and the clause
-enters canonical conversation only after explicit queued/playing/complete Renderer transitions.
+Only external model and speech delivery are controlled: prior Profile memory is recalled into a real
+Snapshot, ``say_to_user`` crosses the Harness, physical ACK enters Context, then idle conversation
+ingestion returns to MemoryService and clears the submitted Context buffer.
 """
 
 from __future__ import annotations
 
+import asyncio
 import tempfile
 import unittest
 from pathlib import Path
 
 from backend.main_agent import ContextStore, SnapshotProjector
-from backend.main_agent.memory import ProfileMemory
 from backend.main_agent.runtime import MainAgentRuntime
 from backend.main_agent.tool_runtime import ToolSurfacePolicy
-from backend.memory.types import MemoryCandidate
+from backend.memory.embedding import HashEmbeddingProvider
+from backend.memory.extractor import StructuredMemoryExtractor
+from backend.memory.service import MemoryService
+from backend.memory.stores.qdrant import QdrantLocalVectorStore
+from backend.memory.stores.sqlite import SQLiteMemoryStore
 
 
 def tool_delta(call_id: str, name: str, arguments: str) -> dict:
@@ -24,9 +28,23 @@ def tool_delta(call_id: str, name: str, arguments: str) -> dict:
     }]}}]}
 
 
-class Extractor:
-    def extract(self, *, content, metadata, memory_type=None, importance=0.5):
-        return ([MemoryCandidate(content="用户喜欢低酸咖啡豆", metadata=metadata)], [])
+class ExtractionModel:
+    payload = {
+        "memories": [{
+            "content": "用户喜欢低酸咖啡豆",
+            "memory_type": "preference",
+            "importance": 0.8,
+            "confidence": 0.9,
+            "entities": ["低酸咖啡豆"],
+        }],
+        "entities": [{"name": "低酸咖啡豆"}],
+    }
+
+    def extract_memory_payload(self, **_kwargs):
+        return self.payload
+
+    async def extract_memory_payload_async(self, **_kwargs):
+        return self.payload
 
 
 class SilentMainAgentE2ETests(unittest.IsolatedAsyncioTestCase):
@@ -34,15 +52,17 @@ class SilentMainAgentE2ETests(unittest.IsolatedAsyncioTestCase):
         with tempfile.TemporaryDirectory() as directory:
             root = Path(directory)
             context = ContextStore(root / "context.sqlite3")
-            memory = ProfileMemory(
-                profile_id="profile_a", path=root / "memory.sqlite3", extractor=Extractor(),
-                idle_seconds=0.01,
+            embedding = HashEmbeddingProvider(dimension=32)
+            memory = MemoryService(
+                metadata_store=SQLiteMemoryStore(root / "memory.sqlite3"),
+                vector_store=QdrantLocalVectorStore(path=root / "qdrant", vector_size=32),
+                embedding_provider=embedding,
+                extractor=StructuredMemoryExtractor(ExtractionModel()),
             )
-            await memory.startup()
-            await memory.record_confirmed_input(
-                segment_id="prior", content="以前聊过咖啡", input_id="old", revision=1,
+            memory.remember(
+                profile_id="profile_a", content="以前聊过咖啡", source_type="chat",
+                source_id="prior",
             )
-            await memory.wait_until_idle()
             requests = []
             offers = []
 
@@ -61,7 +81,9 @@ class SilentMainAgentE2ETests(unittest.IsolatedAsyncioTestCase):
                 renderer=renderer,
                 executors={},
                 soul="test",
-                memory_bridge=memory,
+                memory_service=memory,
+                owner_profile_id="profile_a",
+                memory_idle_seconds=0.01,
             )
             try:
                 await runtime.submit_text("咖啡豆")
@@ -70,13 +92,17 @@ class SilentMainAgentE2ETests(unittest.IsolatedAsyncioTestCase):
                 await runtime.renderer_tts_queued(clause.clause_id)
                 await runtime.renderer_playing(clause.clause_id)
                 await runtime.renderer_ack(clause.clause_id, complete=True)
+                async with asyncio.timeout(1):
+                    while context.conversation_batch() is not None:
+                        await asyncio.sleep(0.001)
 
                 self.assertEqual(requests[0].snapshot.memory_facts[0]["content"], "用户喜欢低酸咖啡豆")
-                self.assertEqual(
-                    [(turn["role"], turn["content"]) for turn in context.fold().conversation_turns],
-                    [("user", "咖啡豆"), ("assistant", "记得，选低酸的。")],
-                )
+                self.assertEqual(context.fold().conversation_turns, ())
+                self.assertTrue(any(
+                    episode["source_type"] == "main_agent_conversation"
+                    for episode in memory.debug("profile_a")["episodes"]
+                ))
             finally:
                 await runtime.shutdown()
-                await memory.shutdown()
+                memory.close()
                 context.close()

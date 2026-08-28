@@ -1,8 +1,8 @@
-"""Verify MainAgentRuntime conversation control and Observation continuation at public boundaries.
+"""Verify MainAgentRuntime conversation, idle Memory, and Observation control at public boundaries.
 
 These tests cover ActiveInput causality, trigger priority, StrongPause, grants/effect fences, detached
-Observation continuation with bounded real Snapshots, and physical Renderer ACK. They avoid private
-scheduler dicts, task names, diagnostic histories, and fake Renderer compatibility branches.
+Observation continuation, cancellable conversation archiving, bounded real Snapshots, and physical Renderer
+ACK. They avoid private scheduler dictionaries, task names, and fake Renderer compatibility branches.
 """
 
 from __future__ import annotations
@@ -62,7 +62,7 @@ class RuntimeTestCase(unittest.IsolatedAsyncioTestCase):
         self.store.close()
         self.directory.cleanup()
 
-    def runtime(self, provider, *, executors=None, renderer=None) -> MainAgentRuntime:
+    def runtime(self, provider, *, executors=None, renderer=None, **kwargs) -> MainAgentRuntime:
         runtime = MainAgentRuntime(
             context_store=self.store,
             snapshot_projector=SnapshotProjector(),
@@ -73,6 +73,7 @@ class RuntimeTestCase(unittest.IsolatedAsyncioTestCase):
             renderer=renderer or self.renderer,
             executors=executors or {},
             soul="test soul",
+            **kwargs,
         )
         self.runtimes.append(runtime)
         return runtime
@@ -82,6 +83,153 @@ class RuntimeTestCase(unittest.IsolatedAsyncioTestCase):
             while len(provider.requests) < count:
                 await runtime.wait_until_idle()
                 await asyncio.sleep(0.001)
+
+
+class MemoryServiceDouble:
+    def __init__(self, outcomes=()) -> None:
+        self.outcomes = deque(outcomes)
+        self.batches = []
+        self.completed = asyncio.Event()
+        self.recall_result = {"memories": []}
+
+    def recall(self, **_kwargs):
+        return self.recall_result
+
+    async def remember_conversation(self, **kwargs):
+        self.batches.append(kwargs)
+        outcome = self.outcomes.popleft() if self.outcomes else {"state": "active"}
+        if isinstance(outcome, BaseException):
+            raise outcome
+        self.completed.set()
+        return outcome
+
+
+class BlockingMemoryService(MemoryServiceDouble):
+    def __init__(self) -> None:
+        super().__init__()
+        self.started = asyncio.Event()
+        self.cancelled = asyncio.Event()
+
+    async def remember_conversation(self, **kwargs):
+        self.batches.append(kwargs)
+        self.started.set()
+        try:
+            await asyncio.Future()
+        except asyncio.CancelledError:
+            self.cancelled.set()
+            raise
+
+
+class ConversationMemoryLifecycleTests(RuntimeTestCase):
+    async def test_startup_immediately_archives_an_expired_persisted_idle_deadline(self) -> None:
+        self.store.append_event(
+            "user_segment",
+            {"segment_id": "persisted", "input_id": "input-old", "text": "跨重启保留"},
+        )
+        self.store.set_last_user_activity(10.0)
+        memory = MemoryServiceDouble()
+        runtime = self.runtime(
+            ScriptedProvider(), memory_service=memory, owner_profile_id="profile-a",
+            memory_idle_seconds=300.0, wall_clock=lambda: 400.0,
+        )
+
+        await runtime.startup()
+        await asyncio.wait_for(memory.completed.wait(), 1)
+
+        self.assertEqual(
+            memory.batches[0]["turns"],
+            ({"role": "user", "content": "跨重启保留"},),
+        )
+        self.assertEqual(self.store.fold().conversation_turns, ())
+        self.assertIsNone(self.store.get_last_user_activity())
+
+    async def test_idle_archive_waits_for_assistant_delivery_to_settle(self) -> None:
+        memory = MemoryServiceDouble()
+        provider = ScriptedProvider((tool_delta("say", "say_to_user", '{"text":"我记住了。"}'),))
+        runtime = self.runtime(
+            provider, memory_service=memory, owner_profile_id="profile-a",
+            memory_idle_seconds=0.01,
+        )
+
+        await runtime.submit_text("我喜欢红茶")
+        await runtime.wait_until_idle()
+        await asyncio.sleep(0.03)
+        self.assertEqual(memory.batches, [])
+
+        clause = self.offers[0]
+        await runtime.renderer_tts_queued(clause.clause_id)
+        await runtime.renderer_playing(clause.clause_id)
+        await runtime.renderer_ack(clause.clause_id, complete=True)
+        await asyncio.wait_for(memory.completed.wait(), 1)
+
+        self.assertEqual(
+            memory.batches[0]["turns"],
+            (
+                {"role": "user", "content": "我喜欢红茶"},
+                {"role": "assistant", "content": "我记住了。"},
+            ),
+        )
+
+    async def test_confirmed_text_is_archived_after_idle_and_success_clears_only_conversation(self) -> None:
+        memory = MemoryServiceDouble()
+        runtime = self.runtime(
+            ScriptedProvider(), memory_service=memory, owner_profile_id="profile-a",
+            memory_idle_seconds=0.01,
+        )
+        self.store.append_event("observation", {"id": "o1", "status": "completed"})
+
+        await runtime.submit_text("我喜欢红茶")
+        await asyncio.wait_for(memory.completed.wait(), 1)
+
+        self.assertEqual(memory.batches[0]["profile_id"], "profile-a")
+        self.assertEqual(memory.batches[0]["turns"], ({"role": "user", "content": "我喜欢红茶"},))
+        self.assertEqual(self.store.fold().conversation_turns, ())
+        self.assertEqual(self.store.fold().observations, ({"id": "o1", "status": "completed"},))
+        self.assertIsNone(self.store.get_last_user_activity())
+
+    async def test_vad_start_cancels_inflight_extraction_without_clearing_buffer(self) -> None:
+        memory = BlockingMemoryService()
+        runtime = self.runtime(
+            ScriptedProvider(), memory_service=memory, owner_profile_id="profile-a",
+            memory_idle_seconds=0.01,
+        )
+        await runtime.submit_text("先保留这段")
+        await asyncio.wait_for(memory.started.wait(), 1)
+
+        await runtime.vad_start()
+        await asyncio.wait_for(memory.cancelled.wait(), 1)
+
+        self.assertEqual(
+            [turn["content"] for turn in self.store.fold().conversation_turns],
+            ["先保留这段"],
+        )
+
+    async def test_failed_write_retries_after_another_idle_interval(self) -> None:
+        memory = MemoryServiceDouble((RuntimeError("temporary"), {"state": "active"}))
+        runtime = self.runtime(
+            ScriptedProvider(), memory_service=memory, owner_profile_id="profile-a",
+            memory_idle_seconds=0.01,
+        )
+
+        await runtime.submit_text("失败后再试")
+        await asyncio.wait_for(memory.completed.wait(), 1)
+
+        self.assertEqual(len(memory.batches), 2)
+        self.assertEqual(self.store.fold().conversation_turns, ())
+
+    async def test_recall_memories_are_projected_into_each_invoke_snapshot(self) -> None:
+        memory = MemoryServiceDouble()
+        memory.recall_result = {"memories": [{"memory_id": "m1", "content": "用户喜欢红茶"}]}
+        provider = ScriptedProvider(())
+        runtime = self.runtime(
+            provider, memory_service=memory, owner_profile_id="profile-a",
+            memory_idle_seconds=60,
+        )
+
+        await runtime.submit_text("还记得吗")
+        await runtime.wait_until_idle()
+
+        self.assertEqual(provider.requests[0].snapshot.memory_facts[0]["content"], "用户喜欢红茶")
 
 
 class ActiveInputAndSchedulingTests(RuntimeTestCase):

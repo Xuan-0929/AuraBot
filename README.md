@@ -10,7 +10,7 @@ AuraBot 是一个 desktop-first 的陪伴型 AI 项目。默认界面是常驻�
 | Desktop | Electron + Vue + TypeScript + Vite，可运行桌宠、控制台和设置窗口。 |
 | Live2D | 内置 Hiyori 示例模型，支持拖动、点击穿透、光标跟随与状态动作。 |
 | Chat | 普通文字聊天、pet quick chat、模型调用和消息持久化。 |
-| Memory | Active Profile 自动 lexical-first recall、跨重启五分钟 episode seal、统一 extraction/vector-delete jobs，以及显式 Profile 管理 API 已实现。 |
+| Memory | Active Profile 使用既有 MemoryService 召回；Main Agent 在用户空闲五分钟后提交完整对话 buffer，提炼可被新输入取消，成功后才清理已提交内容。 |
 | Backend | FastAPI 启动只持有 Task、Realtime 与 active-profile owner；首个 Pet token 才惰性组合 Main/Memory/Speech，health/readiness 不作付费 probe。 |
 | Task | 两表同步 SQLite、固定五槽 FIFO、Pi RPC、控制/业务事件与 Main Agent proposal/事实回流已实现；桌面 Task UI 仍未开放。 |
 
@@ -24,7 +24,7 @@ flowchart LR
   DESKTOP["Electron / Vue<br/>Chat · Live2D"] --> GATEWAY["Python FastAPI Gateway<br/>realtime · readiness · Task API"]
   GATEWAY --> ACTIVE["单 ActiveProfileManager"]
   ACTIVE --> MAIN["MainAgentRuntime<br/>Snapshot · Speech"]
-  MAIN --> MEMORY["profile memory.sqlite3<br/>FTS · unified jobs · Qdrant"]
+  MAIN --> MEMORY["Profile MemoryService<br/>memory.sqlite3 · Qdrant"]
   MAIN --> TM["Python TaskManager<br/>Control Plane"]
   TM --> PI["Pi RPC processes<br/>Execution Plane"]
 ~~~
@@ -80,8 +80,8 @@ curl http://127.0.0.1:6401/health
 ~~~
 
 本地 readiness 使用 `GET /api/v1/readiness`；它只读取 lifespan、active Profile 与已打开
-Memory 的本地状态，不调用模型、embedding、Qdrant health 或 Pi subprocess。Memory 管理路径为
-`/api/v1/profiles/{profileId}/memories` 及其 forget/retry 子路径，只允许当前 active Profile。
+Memory 的本地状态，不调用模型、embedding、Qdrant health 或 Pi subprocess。Main Agent 不再提供
+专用的 Memory browse/forget/retry HTTP 管理面；开发与诊断能力保留在 Memory 模块自身边界内。
 
 ## Task Runtime 配置
 

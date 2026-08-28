@@ -17,14 +17,12 @@ Main Agent 附加路径：
 
 - `POST /api/v1/main-agent/realtime-token`：严格 Origin；JSON body 为 `profileId` + `soul`。
 - `WS /api/v1/main-agent/realtime`：一次性 capability + `aurabot.main-agent.v1`。
-- `GET /api/v1/profiles/{profileId}/memories`。
-- `POST /api/v1/profiles/{profileId}/memories/forget`。
-- `POST /api/v1/profiles/{profileId}/memory-jobs/{jobId}/retry`。
 - `GET /api/v1/readiness`：只读本地 owner 状态，不 probe 外部服务。
 - `GET /api/v1/metrics`：bounded counters/timing，不包含对话内容。
 
-Memory API 只允许 active Profile；不匹配返回 `409 profile_not_active`，不会临时打开 inactive DB。
-已知 domain error 使用稳定 envelope；未知异常统一返回脱敏 `500 internal_error`。
+Main Agent 不提供 Profile 专用 Memory browse/forget/retry API，也不会为 HTTP 管理请求打开 inactive
+Profile 的 DB/Qdrant。已知 domain error 使用稳定 envelope；未知异常统一返回脱敏
+`500 internal_error`。
 
 ## Process 与 Profile ownership
 
@@ -36,13 +34,13 @@ flowchart TB
   ACTIVE -->|0 或 1| PROFILE["ProfileResources"]
   PROFILE --> RT["MainAgentRuntime"]
   PROFILE --> SPEECH["SpeechService"]
-  PROFILE --> MEMORY["ProfileMemory"]
+  PROFILE --> MEMORY["MemoryService"]
   PROFILE --> CONTEXT["ContextStore"]
   PROFILE --> CLIENTS["Chat/Tavily clients"]
 ~~~
 
 Process startup 不创建 ProfileResources。合法 token 请求才激活；Profile switch 串行关闭旧资源后
-打开新资源。inactive Profile 没有 timer、worker、DB connection 或 Qdrant client。
+打开新资源。inactive Profile 没有 timer、DB connection 或 Qdrant client。
 
 Profile 数据：
 
@@ -66,27 +64,27 @@ Mic queue 最多 50 frames，满时丢最旧。Speech delivery 串行且等待�
 
 ## Memory durability
 
-`memory.sqlite3` 只有 pending episode、统一 jobs、items 和 FTS。active Profile 的单 worker 处理
-`extract` / `vector_delete`：
+Main Agent 的 `ContextStore` 是唯一未归档 conversation buffer。stable/final user segment 与 Renderer
+完整 ACK 的 assistant clause 形成稳定批次；partial transcript、内部 Observation/Task/think 事件不提交。
 
 ~~~mermaid
-stateDiagram-v2
-  [*] --> pending
-  pending --> running
-  running --> indexing: extraction result persisted
-  indexing --> completed: SQLite + Qdrant upsert
-  running --> pending: retry 5/30/300s
-  indexing --> pending: retry 5/30/300s
-  running --> failed: retries exhausted
-  indexing --> failed: retries exhausted
-  failed --> pending: manual retry
+flowchart LR
+  INPUT["confirmed input"] --> BUFFER["context.sqlite3<br/>conversation buffer"]
+  BUFFER -->|idle 300s| INGEST["MemoryService.remember_conversation"]
+  INGEST -->|async LLM| STORE["memory.sqlite3 + Qdrant"]
+  STORE -->|成功，含零 memories| CLEAR["按 through_sequence 清理"]
+  INGEST -->|失败或取消| KEEP["保留 buffer"]
+  KEEP -->|仍空闲 300s| INGEST
+  INPUT -.->|text / VAD / STT 取消| INGEST
 ~~~
 
-启动把残留 running/indexing 复位为 pending。Memory ID 确定性生成，整 job 可重放。forget 先删除
-SQLite truth；Qdrant delete 失败写同一 jobs 表的 vector_delete，不创建 outbox。
+长耗时提炼使用可取消 async HTTP。取消发生在 LLM 阶段时不创建 episode 或长期记忆；LLM 成功后复用
+既有 MemoryService 的本地 SQLite/Qdrant 持久化链路。同一 Profile 和稳定 batch `source_id` 的重试
+幂等。Memory 成功（包括提炼结果为空）后 Runtime 才清理本批 Context；失败、取消、Profile switch
+或 shutdown 都保留 buffer。最后用户活动时间持久化在 `context.sqlite3`，重新激活后恢复剩余 idle 时间。
 
-Recall 同时启动 lexical/vector；lexical 必须完成，vector 最多等待 300 ms。最终 fresh-read SQLite，
-所以 forget 对同一 query 立即生效。
+每次 control snapshot 直接调用 `MemoryService.recall`。召回策略、提炼规则与长期存储均归 Memory
+模块所有；Main Agent 不缓存、筛选或重新实现 lexical/vector 合并。
 
 ## Shutdown
 

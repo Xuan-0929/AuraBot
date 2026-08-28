@@ -1,5 +1,12 @@
+"""Turn raw content into validated Memory candidates for synchronous and async ingestion paths.
+
+Legacy calls remain synchronous. Main Agent conversation ingestion prefers a model's cancellable async
+boundary and otherwise offloads the synchronous extractor, while all schema parsing stays shared here.
+"""
+
 from __future__ import annotations
 
+import asyncio
 import re
 from typing import Any, Protocol
 
@@ -33,6 +40,37 @@ class StructuredMemoryExtractor:
         importance: float = 0.5,
     ) -> tuple[list[MemoryCandidate], list[EntityCandidate]]:
         payload = self.model.extract_memory_payload(
+            content=content,
+            metadata=metadata,
+            memory_type=memory_type,
+            importance=importance,
+        )
+        return parse_structured_extraction_payload(
+            payload,
+            base_metadata=metadata,
+            default_importance=importance,
+        )
+
+    async def extract_async(
+        self,
+        *,
+        content: str,
+        metadata: dict[str, Any],
+        memory_type: str | None = None,
+        importance: float = 0.5,
+    ) -> tuple[list[MemoryCandidate], list[EntityCandidate]]:
+        """Extract through a cancellable model when available, preserving one validation path."""
+
+        extract = getattr(self.model, "extract_memory_payload_async", None)
+        if not callable(extract):
+            return await asyncio.to_thread(
+                self.extract,
+                content=content,
+                metadata=metadata,
+                memory_type=memory_type,
+                importance=importance,
+            )
+        payload = await extract(
             content=content,
             metadata=metadata,
             memory_type=memory_type,

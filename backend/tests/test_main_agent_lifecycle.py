@@ -1,8 +1,8 @@
-"""Verify the single-active-Profile lifecycle and its token-generation switching contract.
+"""Verify single-active-Profile resource isolation and token-generation switching.
 
 The tests use resource-level fakes at the composition seam while exercising real directory validation,
-serialized replacement, Soul updates, teardown order, and active-only Memory delegation. They do not
-recreate the deleted Backend ProfileStore or personality files.
+serialized replacement, Soul updates, and teardown order. They do not recreate deleted Backend Profile,
+personality, or Main-Agent-specific Memory management surfaces.
 """
 
 from __future__ import annotations
@@ -57,14 +57,7 @@ class Owner:
 
 
 class Memory(Owner):
-    async def browse(self, *, limit):
-        return {"profileId": self.profile_id, "limit": limit}
-
-    async def forget(self, **kwargs):
-        return {"forgottenMemoryIds": list(kwargs["memory_ids"])}
-
-    async def retry(self, job_id):
-        return {"jobId": job_id, "state": "pending"}
+    """Profile-owned closeable matching the existing MemoryService lifecycle only."""
 
 
 class ActiveProfileManagerTests(unittest.IsolatedAsyncioTestCase):
@@ -121,7 +114,7 @@ class ActiveProfileManagerTests(unittest.IsolatedAsyncioTestCase):
             self.assertFalse((root / "profile_a" / "SOUL.md").exists())
             await manager.shutdown()
 
-    async def test_invalid_or_inactive_profile_never_opens_a_directory(self) -> None:
+    async def test_invalid_profile_never_opens_a_directory(self) -> None:
         calls: list[str] = []
         hub = Hub(calls)
 
@@ -137,8 +130,6 @@ class ActiveProfileManagerTests(unittest.IsolatedAsyncioTestCase):
             with self.assertRaises(ValueError):
                 await manager.activate("../escape", "Soul")
             await manager.activate("profile_a", "Soul")
-            with self.assertRaises(RuntimeError):
-                await manager.browse_memory("profile_b", 10)
             self.assertFalse((root.parent / "escape").exists())
             await manager.shutdown()
 

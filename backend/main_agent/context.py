@@ -1,8 +1,8 @@
-"""Persist ordered conversation, Observation, and renderer-delivery truth in one SQLite file.
+"""Persist one Profile's conversation buffer, observations, tasks, and renderer-delivery truth.
 
 The runtime records stable utterance identities, observations, think notes and Task facts as append-only
-events. Folding merges each Observation's latest fact in last-event order, updates utterances in their causal
-positions, and publishes assistant language only after Renderer ACK.
+events. Conversation batches expose only final user segments and physically delivered assistant clauses to
+Memory; a successful Memory write clears exactly that batch boundary while preserving unrelated facts.
 """
 
 from __future__ import annotations
@@ -58,6 +58,16 @@ class FoldedContext:
     task_facts: tuple[dict[str, Any], ...]
 
 
+@dataclass(frozen=True, slots=True)
+class ConversationBatch:
+    """One immutable, restart-stable slice of the unarchived conversation buffer."""
+
+    source_id: str
+    first_sequence: int
+    through_sequence: int
+    turns: tuple[dict[str, str], ...]
+
+
 class ContextStore:
     """Small synchronous SQLite owner for one profile's canonical context and delivery ledger."""
 
@@ -83,6 +93,10 @@ class ContextStore:
                   state TEXT NOT NULL CHECK(state IN (
                     'draft','tts_queued','playing','delivered','interrupted','failed'
                   ))
+                );
+                CREATE TABLE IF NOT EXISTS context_metadata (
+                  key TEXT PRIMARY KEY,
+                  value TEXT NOT NULL
                 );
                 """
             )
@@ -223,6 +237,114 @@ class ContextStore:
             task_facts=tuple(task_facts[key] for key in sorted(task_facts)),
         )
 
+    def conversation_batch(self) -> ConversationBatch | None:
+        """Return the current Memory-ready conversation with a precise event cleanup boundary."""
+
+        with self._lock:
+            rows = self._connection.execute(
+                "SELECT sequence, event_type, payload_json FROM context_events "
+                "WHERE event_type IN ('user_segment','assistant_clause') ORDER BY sequence"
+            ).fetchall()
+        if not rows:
+            return None
+        turns: list[dict[str, str]] = []
+        segment_positions: dict[str, int] = {}
+        for row in rows:
+            payload = json.loads(row["payload_json"])
+            if row["event_type"] == "user_segment":
+                segment_id = payload.get("segment_id")
+                text = payload.get("text")
+                if not isinstance(segment_id, str) or not isinstance(text, str):
+                    continue
+                turn = {"role": "user", "content": text}
+                position = segment_positions.get(segment_id)
+                if position is None:
+                    segment_positions[segment_id] = len(turns)
+                    turns.append(turn)
+                else:
+                    turns[position] = turn
+            else:
+                text = payload.get("text")
+                if isinstance(text, str):
+                    turns.append({"role": "assistant", "content": text})
+        if not turns:
+            return None
+        first_sequence = int(rows[0]["sequence"])
+        through_sequence = int(rows[-1]["sequence"])
+        return ConversationBatch(
+            source_id=f"main-agent-context:{first_sequence}:{through_sequence}",
+            first_sequence=first_sequence,
+            through_sequence=through_sequence,
+            turns=tuple(turns),
+        )
+
+    def clear_conversation_through(self, through_sequence: int) -> None:
+        """Atomically discard one successful Memory batch and its terminal speech-ledger rows."""
+
+        if isinstance(through_sequence, bool) or not isinstance(through_sequence, int):
+            raise TypeError("through_sequence must be an integer")
+        with self._transaction() as db:
+            rows = db.execute(
+                "SELECT payload_json FROM context_events "
+                "WHERE sequence <= ? AND event_type = 'assistant_clause'",
+                (through_sequence,),
+            ).fetchall()
+            clause_ids = [
+                payload["clause_id"]
+                for payload in (json.loads(row["payload_json"]) for row in rows)
+                if isinstance(payload.get("clause_id"), str) and payload["clause_id"]
+            ]
+            db.execute(
+                "DELETE FROM context_events WHERE sequence <= ? "
+                "AND event_type IN ('user_segment','assistant_clause')",
+                (through_sequence,),
+            )
+            if clause_ids:
+                placeholders = ",".join("?" for _ in clause_ids)
+                db.execute(
+                    f"DELETE FROM speech_clauses WHERE clause_id IN ({placeholders}) "
+                    "AND state IN ('delivered','interrupted','failed')",
+                    tuple(clause_ids),
+                )
+
+    def set_last_user_activity(self, timestamp: float) -> None:
+        """Persist the wall-clock anchor used to resume the Profile's Memory idle deadline."""
+
+        value = float(timestamp)
+        if not math.isfinite(value) or value < 0:
+            raise ValueError("last user activity must be a finite non-negative timestamp")
+        with self._transaction() as db:
+            db.execute(
+                "INSERT INTO context_metadata(key,value) VALUES('last_user_activity',?) "
+                "ON CONFLICT(key) DO UPDATE SET value=excluded.value",
+                (repr(value),),
+            )
+
+    def get_last_user_activity(self) -> float | None:
+        """Load the persisted Memory idle anchor, if this Profile has an unarchived conversation."""
+
+        with self._lock:
+            row = self._connection.execute(
+                "SELECT value FROM context_metadata WHERE key='last_user_activity'"
+            ).fetchone()
+        return None if row is None else float(row["value"])
+
+    def clear_last_user_activity(self) -> None:
+        """Remove the idle anchor after the corresponding conversation batch is archived."""
+
+        with self._transaction() as db:
+            db.execute("DELETE FROM context_metadata WHERE key='last_user_activity'")
+
+    def has_unsettled_clauses(self) -> bool:
+        """Report whether physically audible assistant text can still change the conversation batch."""
+
+        with self._lock:
+            row = self._connection.execute(
+                "SELECT 1 FROM speech_clauses "
+                "WHERE state IN ('draft','tts_queued','playing') LIMIT 1"
+            ).fetchone()
+        return row is not None
+
     @contextmanager
     def _transaction(self) -> Iterator[sqlite3.Connection]:
         with self._lock:
@@ -278,4 +400,4 @@ def _clause_from_row(row: sqlite3.Row) -> SpeechClause:
     return SpeechClause(str(row["clause_id"]), str(row["text"]), ClauseState(row["state"]), int(row["sequence"]))
 
 
-__all__ = ["ClauseState", "ContextStore", "FoldedContext", "SpeechClause"]
+__all__ = ["ClauseState", "ContextStore", "ConversationBatch", "FoldedContext", "SpeechClause"]
