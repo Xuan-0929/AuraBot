@@ -25,16 +25,13 @@ async def readiness(request: Request) -> dict[str, Any]:
             getattr(getattr(application.state, "main_agent_realtime", None), "accepting", False)
         ),
     }
-    memory = getattr(application.state, "main_agent_memory", None)
+    profiles = getattr(application.state, "main_agent_profiles", None)
+    memory = getattr(profiles, "memory", None)
     local_status = getattr(memory, "local_status", None)
     if callable(local_status):
         value = local_status()
         components["memory"] = await value if inspect.isawaitable(value) else value
-    worker = getattr(application.state, "main_agent_memory_worker", None)
-    components["memoryWorker"] = {
-        "running": bool(getattr(worker, "live_task", None))
-        if hasattr(worker, "live_task") else bool(getattr(worker, "started", False))
-    }
+    components["activeProfileId"] = getattr(profiles, "active_profile_id", None)
     return {
         "ready": bool(getattr(application.state, "backend_ready", False)),
         "components": components,

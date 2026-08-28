@@ -1,23 +1,16 @@
 /**
- * Owns the formal Pet window's aurabot.main-agent.v1 voice session from one mic-button gesture through
- * token acquisition, WebSocket lease, 16 kHz microphone upload, clause-tagged TTS playback, and physical
- * cursor ACK. It combines an immediate local energy candidate with the backend's authoritative playback
- * block, keeps paused PCM queued, and flushes only for cancel/stop/overrun/session teardown. The Console
- * text chat remains outside this module, and motion/expression fields are intentionally not interpreted.
+ * Owns the Pet window's single profile-bound Main Agent voice session. It acquires a one-shot token,
+ * opens the minimal WebSocket protocol, captures raw 16 kHz PCM, plays the current raw TTS clause in
+ * the same AudioContext, and ACKs only the physical playback cursor. Local RMS and server VAD gates
+ * pause without dropping audio; cancel, overrun, replacement, and teardown share one cleanup path.
  */
-
-import {
-  TtsFrameTracker,
-  encodeMicFrame,
-  parseTtsFrame,
-} from "../realtime-test-client/protocol";
 
 const SUBPROTOCOL = "aurabot.main-agent.v1";
 const DEFAULT_GATEWAY_URL = "http://127.0.0.1:6401";
 const MAX_SOCKET_BACKLOG = 128 * 1024;
 
 export type MainAgentRealtimeState = "off" | "connecting" | "active" | "error";
-
+export interface VoiceProfile { profileId: string; soul: string; }
 export interface MainAgentRealtimeClientOptions {
   gatewayUrl?: string;
   onState?: (state: MainAgentRealtimeState, detail?: string) => void;
@@ -25,41 +18,27 @@ export interface MainAgentRealtimeClientOptions {
 }
 
 export class PlaybackGate {
-  private localCandidatePaused = false;
-  private serverPlaybackBlocked = false;
-
-  constructor(serverPlaybackBlocked = false) {
-    this.serverPlaybackBlocked = serverPlaybackBlocked;
-  }
+  private localPaused = false;
+  private serverPaused = true;
 
   setLocalCandidate(value: boolean): "pause" | "resume" | null {
-    const before = this.blocked;
-    this.localCandidatePaused = value;
-    return this.transition(before);
+    return this.change(() => { this.localPaused = value; });
   }
 
   setServerBlocked(value: boolean): "pause" | "resume" | null {
+    return this.change(() => { this.serverPaused = value; });
+  }
+
+  get blocked(): boolean { return this.localPaused || this.serverPaused; }
+
+  private change(update: () => void): "pause" | "resume" | null {
     const before = this.blocked;
-    this.serverPlaybackBlocked = value;
-    return this.transition(before);
-  }
-
-  get blocked(): boolean {
-    return this.localCandidatePaused || this.serverPlaybackBlocked;
-  }
-
-  private transition(before: boolean): "pause" | "resume" | null {
-    if (before === this.blocked) return null;
-    return this.blocked ? "pause" : "resume";
+    update();
+    return before === this.blocked ? null : this.blocked ? "pause" : "resume";
   }
 }
 
-interface CurrentClause {
-  id: string;
-  text: string;
-  settled: boolean;
-}
-
+interface CurrentClause { id: string; settled: boolean; cancelled: boolean; }
 interface WorkletMessage {
   type: "frame" | "candidate" | "released" | "clause-complete" | "overrun";
   samples?: Int16Array;
@@ -72,21 +51,11 @@ export class MainAgentRealtimeClient {
   private readonly onClause: NonNullable<MainAgentRealtimeClientOptions["onClause"]>;
   private state: MainAgentRealtimeState = "off";
   private socket: WebSocket | null = null;
-  private sequence = 0;
-  private readonly pendingCommands = new Map<string, string>();
-  private rendererEpoch = 0;
+  private context: AudioContext | null = null;
+  private stream: MediaStream | null = null;
+  private playback: AudioWorkletNode | null = null;
   private generation = 0;
-  private micStreamId = 1;
-  private micFrameSequence = 0;
-  private micSampleStart = 0n;
-  private micDiscontinuity = false;
-  private micStream: MediaStream | null = null;
-  private micContext: AudioContext | null = null;
-  private playbackContext: AudioContext | null = null;
-  private playbackNode: AudioWorkletNode | null = null;
-  private playbackPending: Promise<AudioWorkletNode | null> | null = null;
-  private gate = new PlaybackGate(true);
-  private readonly ttsTracker = new TtsFrameTracker();
+  private gate = new PlaybackGate();
   private clause: CurrentClause | null = null;
 
   constructor(options: MainAgentRealtimeClientOptions = {}) {
@@ -95,27 +64,23 @@ export class MainAgentRealtimeClient {
     this.onClause = options.onClause ?? (() => undefined);
   }
 
-  get currentState(): MainAgentRealtimeState {
-    return this.state;
-  }
+  get currentState(): MainAgentRealtimeState { return this.state; }
 
-  async start(): Promise<void> {
+  async start(profile: VoiceProfile): Promise<void> {
     if (this.state === "connecting" || this.state === "active") return;
     const generation = ++this.generation;
-    this.resetSessionCoordinates();
-    this.gate = new PlaybackGate(true);
+    this.gate = new PlaybackGate();
     this.setState("connecting");
     try {
       const response = await fetch(`${this.gatewayUrl}/api/v1/main-agent/realtime-token`, {
         method: "POST",
+        headers: { "content-type": "application/json" },
+        body: JSON.stringify(profile),
       });
       if (!response.ok) throw new Error(`realtime token returned HTTP ${response.status}`);
       const body = await response.json() as { token?: unknown };
-      if (typeof body.token !== "string" || !body.token) {
-        throw new Error("realtime token response is invalid");
-      }
-      if (generation !== this.generation) return;
-      this.openSocket(body.token, generation);
+      if (typeof body.token !== "string" || !body.token) throw new Error("invalid realtime token");
+      if (generation === this.generation) this.openSocket(body.token, generation);
     } catch (error) {
       if (generation === this.generation) await this.fail(error);
     }
@@ -127,8 +92,8 @@ export class MainAgentRealtimeClient {
     this.setState("off");
   }
 
-  async toggle(): Promise<void> {
-    if (this.state === "off" || this.state === "error") await this.start();
+  async toggle(profile: VoiceProfile): Promise<void> {
+    if (this.state === "off" || this.state === "error") await this.start(profile);
     else await this.stop();
   }
 
@@ -139,44 +104,25 @@ export class MainAgentRealtimeClient {
     const socket = new WebSocket(url, [SUBPROTOCOL, `aurabot.capability.${token}`]);
     socket.binaryType = "arraybuffer";
     this.socket = socket;
-    socket.onopen = () => {
-      if (!this.isCurrent(socket, generation)) return;
-      this.sendControl({
-        type: "session.open",
-        command_id: crypto.randomUUID(),
-        client_id: crypto.randomUUID(),
-        mode: "voice",
-      });
-    };
     socket.onmessage = (message) => {
-      if (!this.isCurrent(socket, generation)) return;
+      if (!this.current(socket, generation)) return;
       if (typeof message.data === "string") {
         try {
-          void this.handleControl(JSON.parse(message.data) as Record<string, unknown>, generation);
-        } catch (error) {
-          void this.fail(error);
+          void this.handleControl(
+            JSON.parse(message.data) as Record<string, unknown>, generation,
+          ).catch((error) => this.fail(error));
         }
-      } else {
-        void this.handleTts(message.data as ArrayBuffer, generation);
-      }
+        catch (error) { void this.fail(error); }
+      } else this.appendTts(message.data as ArrayBuffer);
     };
-    socket.onerror = () => {
-      if (this.isCurrent(socket, generation)) void this.fail(new Error("realtime transport error"));
-    };
-    socket.onclose = () => {
-      if (this.isCurrent(socket, generation)) void this.fail(new Error("realtime connection closed"));
-    };
+    socket.onerror = () => { if (this.current(socket, generation)) void this.fail("realtime transport error"); };
+    socket.onclose = () => { if (this.current(socket, generation)) void this.fail("realtime connection closed"); };
   }
 
   private async handleControl(event: Record<string, unknown>, generation: number): Promise<void> {
     switch (event.type) {
-      case "session.opened":
-        this.rendererEpoch = Number(event.renderer_epoch);
-        await this.startMicrophone(generation);
-        break;
-      case "state.snapshot":
-        this.rendererEpoch = Number(event.renderer_epoch);
-        this.applyGate(this.gate.setServerBlocked(event.playback_blocked !== false));
+      case "session.ready":
+        await this.startAudio(generation);
         break;
       case "playback.pause":
         this.applyGate(this.gate.setServerBlocked(true));
@@ -185,38 +131,38 @@ export class MainAgentRealtimeClient {
         this.applyGate(this.gate.setServerBlocked(false));
         break;
       case "clause.offer": {
-        const id = String(event.clause_id);
-        const text = String(event.text ?? "");
-        this.clause = { id, text, settled: false };
-        this.onClause(text);
+        const id = String(event.clause_id ?? "");
+        if (!id || this.clause) throw new Error("invalid clause offer");
+        this.clause = { id, settled: false, cancelled: false };
+        this.playback?.port.postMessage({ type: "offer", clauseId: id });
+        this.onClause(String(event.text ?? ""));
         break;
       }
-      case "clause.cancel":
-        if (this.clause?.id === event.clause_id) this.cancelClause();
+      case "clause.audio_end": {
+        const clause = this.clause;
+        if (!clause || clause.id !== event.clause_id) throw new Error("audio_end has no current clause");
+        this.playback?.port.postMessage({ type: "finish", clauseId: clause.id });
         break;
-      case "command.ack": {
-        const commandId = String(event.command_id ?? "");
-        const commandType = this.pendingCommands.get(commandId);
-        this.pendingCommands.delete(commandId);
-        if (event.status === "rejected" && commandType === "mic.start") {
-          await this.fail(new Error(`mic.start rejected: ${String(event.code ?? "unknown")}`));
+      }
+      case "clause.cancel": {
+        const clause = this.clause;
+        if (clause && clause.id === event.clause_id) {
+          clause.cancelled = true;
+          clause.settled = true;
+          this.flushClause();
         }
         break;
       }
-      case "playback.stop":
-        this.flushPlayback();
-        break;
-      case "session.replaced":
       case "session.error":
-        await this.fail(new Error(String(event.type)));
+        await this.fail(String(event.code ?? "session error"));
         break;
       default:
         break;
     }
   }
 
-  private async startMicrophone(generation: number): Promise<void> {
-    if (this.micContext || generation !== this.generation) return;
+  private async startAudio(generation: number): Promise<void> {
+    if (this.context || generation !== this.generation) return;
     try {
       const stream = await navigator.mediaDevices.getUserMedia({
         audio: { channelCount: 1, echoCancellation: true },
@@ -226,192 +172,106 @@ export class MainAgentRealtimeClient {
         return;
       }
       const context = new AudioContext();
-      this.micStream = stream;
-      this.micContext = context;
-      await context.audioWorklet.addModule(
-        new URL("../realtime-test-client/mic-worklet.js", import.meta.url),
-      );
+      await context.audioWorklet.addModule(new URL("./audio-worklet.js", import.meta.url));
       if (generation !== this.generation) {
         stream.getTracks().forEach((track) => track.stop());
         await context.close();
         return;
       }
-      const capture = new AudioWorkletNode(context, "aurabot-mic-capture");
-      capture.port.onmessage = (message: MessageEvent<WorkletMessage>) => {
-        if (generation !== this.generation) return;
-        if (message.data.type === "frame" && message.data.samples) {
-          this.sendMicFrame(message.data.samples);
-        } else if (message.data.type === "candidate") {
-          this.applyGate(this.gate.setLocalCandidate(true));
-        } else if (message.data.type === "released") {
-          this.applyGate(this.gate.setLocalCandidate(false));
-        }
-      };
-      context.createMediaStreamSource(stream).connect(capture);
-      this.sendCommand("mic.start");
+      const mic = new AudioWorkletNode(context, "aurabot-mic-capture");
+      const playback = new AudioWorkletNode(context, "aurabot-tts-playback", { outputChannelCount: [1] });
+      mic.port.onmessage = (message: MessageEvent<WorkletMessage>) => this.handleMic(message.data, generation);
+      playback.port.onmessage = (message: MessageEvent<WorkletMessage>) => this.handlePlayback(message.data);
+      context.createMediaStreamSource(stream).connect(mic);
+      playback.connect(context.destination);
+      await context.resume();
+      this.stream = stream;
+      this.context = context;
+      this.playback = playback;
+      this.applyGate(this.gate.setServerBlocked(false));
       this.setState("active");
     } catch (error) {
       await this.fail(error);
     }
   }
 
-  private sendMicFrame(samples: Int16Array): void {
-    const socket = this.socket;
-    if (!socket || socket.readyState !== WebSocket.OPEN) return;
-    if (socket.bufferedAmount > MAX_SOCKET_BACKLOG) {
-      this.micDiscontinuity = true;
-      this.micFrameSequence += 1;
-      this.micSampleStart += 320n;
+  private handleMic(message: WorkletMessage, generation: number): void {
+    if (generation !== this.generation) return;
+    if (message.type === "candidate") this.applyGate(this.gate.setLocalCandidate(true));
+    else if (message.type === "released") this.applyGate(this.gate.setLocalCandidate(false));
+    else if (message.type === "frame" && message.samples) {
+      const socket = this.socket;
+      if (socket?.readyState === WebSocket.OPEN && socket.bufferedAmount <= MAX_SOCKET_BACKLOG) {
+        const bytes = new Uint8Array(new ArrayBuffer(message.samples.byteLength));
+        bytes.set(new Uint8Array(
+          message.samples.buffer, message.samples.byteOffset, message.samples.byteLength,
+        ));
+        socket.send(bytes.buffer);
+      }
+    }
+  }
+
+  private appendTts(encoded: ArrayBuffer): void {
+    if (!this.clause || this.clause.settled || encoded.byteLength === 0 || encoded.byteLength % 2 !== 0) {
+      void this.fail("TTS PCM has no active clause or is malformed");
       return;
     }
-    socket.send(encodeMicFrame(samples, {
-      streamId: this.micStreamId,
-      frameSequence: this.micFrameSequence,
-      sampleStart: this.micSampleStart,
-      discontinuity: this.micDiscontinuity,
-    }));
-    this.micDiscontinuity = false;
-    this.micFrameSequence += 1;
-    this.micSampleStart += 320n;
+    const samples = new Int16Array(encoded);
+    this.playback?.port.postMessage({ type: "append", samples }, [samples.buffer]);
   }
 
-  private async handleTts(encoded: ArrayBuffer, generation: number): Promise<void> {
-    try {
-      const frame = parseTtsFrame(encoded);
-      if (this.ttsTracker.accept(frame) === "duplicate") return;
-      const clause = this.clause;
-      if (!clause || clause.settled) throw new Error("TTS frame has no active clause");
-      const node = await this.ensurePlayback(generation);
-      if (!node || generation !== this.generation) return;
-      node.port.postMessage({
-        type: "append",
-        clauseId: clause.id,
-        samples: frame.samples,
-        final: frame.final,
-      }, [frame.samples.buffer]);
-      this.applyGate(this.gate.blocked ? "pause" : "resume");
-    } catch (error) {
-      await this.fail(error);
-    }
-  }
-
-  private async ensurePlayback(generation: number): Promise<AudioWorkletNode | null> {
-    if (this.playbackNode) return this.playbackNode;
-    if (this.playbackPending) return this.playbackPending;
-    const pending = (async () => {
-      const context = new AudioContext();
-      this.playbackContext = context;
-      await context.audioWorklet.addModule(
-        new URL("../realtime-test-client/playback-worklet.js", import.meta.url),
-      );
-      if (generation !== this.generation) {
-        if (this.playbackContext === context) this.playbackContext = null;
-        await context.close();
-        return null;
-      }
-      const node = new AudioWorkletNode(context, "aurabot-tts-playback", {
-        outputChannelCount: [1],
-      });
-      node.port.onmessage = (message: MessageEvent<WorkletMessage>) => {
-        if (message.data.type === "clause-complete" && message.data.clauseId) {
-          this.completeClause(message.data.clauseId);
-        } else if (message.data.type === "overrun") {
-          this.interruptClause();
-        }
-      };
-      node.connect(context.destination);
-      await context.resume();
-      this.playbackNode = node;
-      return node;
-    })().finally(() => {
-      if (this.playbackPending === pending) this.playbackPending = null;
-    });
-    this.playbackPending = pending;
-    return pending;
+  private handlePlayback(message: WorkletMessage): void {
+    if (message.type === "clause-complete" && message.clauseId) this.completeClause(message.clauseId);
+    else if (message.type === "overrun") this.interruptClause();
   }
 
   private completeClause(clauseId: string): void {
     const clause = this.clause;
     if (!clause || clause.id !== clauseId || clause.settled) return;
     clause.settled = true;
-    this.sendCommand("renderer.ack", {
-      renderer_epoch: this.rendererEpoch,
-      clause_id: clause.id,
-      complete: true,
-    });
-    this.clause = null;
-    this.onClause(null);
+    this.send({ type: "renderer.ack", clause_id: clause.id, complete: true });
+    this.flushClause(false);
   }
 
   private interruptClause(): void {
     const clause = this.clause;
-    if (clause && !clause.settled) {
+    if (clause && !clause.settled && !clause.cancelled) {
       clause.settled = true;
-      this.sendCommand("renderer.ack", {
-        renderer_epoch: this.rendererEpoch,
-        clause_id: clause.id,
-        complete: false,
-      });
+      this.send({ type: "renderer.ack", clause_id: clause.id, complete: false });
     }
-    this.flushPlayback();
+    this.flushClause();
   }
 
-  private cancelClause(): void {
-    if (this.clause) this.clause.settled = true;
-    this.flushPlayback();
-  }
-
-  private flushPlayback(): void {
-    this.playbackNode?.port.postMessage({ type: "flush", reason: "renderer_control" });
-    this.ttsTracker.cancelActive();
+  private flushClause(flush = true): void {
+    if (flush) this.playback?.port.postMessage({ type: "flush" });
     this.clause = null;
     this.onClause(null);
   }
 
   private applyGate(transition: "pause" | "resume" | null): void {
-    if (transition) this.playbackNode?.port.postMessage({ type: transition });
+    if (transition) this.playback?.port.postMessage({ type: transition });
   }
 
-  private sendCommand(type: string, fields: Record<string, unknown> = {}): void {
-    const commandId = crypto.randomUUID();
-    this.pendingCommands.set(commandId, type);
-    if (!this.sendControl({ type, command_id: commandId, ...fields })) {
-      this.pendingCommands.delete(commandId);
-    }
-  }
-
-  private sendControl(event: Record<string, unknown>): boolean {
+  private send(event: Record<string, unknown>): boolean {
     const socket = this.socket;
     if (!socket || socket.readyState !== WebSocket.OPEN) return false;
-    socket.send(JSON.stringify({ ...event, seq: ++this.sequence }));
+    socket.send(JSON.stringify(event));
     return true;
   }
 
-  private isCurrent(socket: WebSocket, generation: number): boolean {
+  private current(socket: WebSocket, generation: number): boolean {
     return this.socket === socket && this.generation === generation;
   }
 
   private async fail(error: unknown): Promise<void> {
     ++this.generation;
     await this.teardown(false);
-    const detail = error instanceof Error ? error.message : String(error);
-    this.setState("error", detail);
+    this.setState("error", error instanceof Error ? error.message : String(error));
   }
 
-  private async teardown(sendCommands: boolean): Promise<void> {
+  private async teardown(sendPartial: boolean): Promise<void> {
+    if (sendPartial) this.interruptClause();
     const socket = this.socket;
-    if (sendCommands && socket?.readyState === WebSocket.OPEN) {
-      const clause = this.clause;
-      if (clause && !clause.settled) {
-        clause.settled = true;
-        this.sendCommand("renderer.ack", {
-          renderer_epoch: this.rendererEpoch,
-          clause_id: clause.id,
-          complete: false,
-        });
-      }
-      this.sendCommand("mic.stop");
-    }
     this.socket = null;
     if (socket) {
       socket.onopen = null;
@@ -420,33 +280,15 @@ export class MainAgentRealtimeClient {
       socket.onclose = null;
       socket.close();
     }
-    this.micStream?.getTracks().forEach((track) => track.stop());
-    this.micStream = null;
-    const micContext = this.micContext;
-    const playbackContext = this.playbackContext;
-    this.micContext = null;
-    this.playbackContext = null;
-    this.playbackNode?.port.postMessage({ type: "flush", reason: "teardown" });
-    this.playbackNode = null;
-    this.playbackPending = null;
-    this.ttsTracker.reset();
-    this.pendingCommands.clear();
+    this.stream?.getTracks().forEach((track) => track.stop());
+    this.stream = null;
+    this.playback?.port.postMessage({ type: "flush" });
+    this.playback = null;
+    const context = this.context;
+    this.context = null;
     this.clause = null;
     this.onClause(null);
-    await Promise.allSettled([
-      micContext?.close() ?? Promise.resolve(),
-      playbackContext?.close() ?? Promise.resolve(),
-    ]);
-    this.resetSessionCoordinates();
-  }
-
-  private resetSessionCoordinates(): void {
-    this.sequence = 0;
-    this.rendererEpoch = 0;
-    this.micStreamId += 1;
-    this.micFrameSequence = 0;
-    this.micSampleStart = 0n;
-    this.micDiscontinuity = false;
+    if (context) await context.close();
   }
 
   private setState(state: MainAgentRealtimeState, detail?: string): void {

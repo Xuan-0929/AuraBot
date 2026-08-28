@@ -98,6 +98,12 @@ class WorkspaceRegistry:
             roots[workspace_id] = path if path.is_absolute() else config_root / path
         return cls(roots)
 
+    @property
+    def ids(self) -> tuple[str, ...]:
+        """Return configured public identifiers without exposing mutable path storage."""
+
+        return tuple(self._roots)
+
     @staticmethod
     def _validate_id(workspace_id: object) -> str:
         if not isinstance(workspace_id, str):

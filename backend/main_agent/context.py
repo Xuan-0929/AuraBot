@@ -52,8 +52,6 @@ class SpeechClause:
 class FoldedContext:
     """The latest prompt-relevant state folded deterministically from canonical event history."""
 
-    transcript: str
-    delivered_clauses: tuple[str, ...]
     conversation_turns: tuple[dict[str, Any], ...]
     observations: tuple[dict[str, Any], ...]
     think_note: str | None
@@ -185,19 +183,16 @@ class ContextStore:
             ).fetchall()
         conversation: list[dict[str, Any]] = []
         segment_positions: dict[str, int] = {}
-        delivered: list[str] = []
         observations: dict[str, dict[str, Any]] = {}
         task_facts: dict[str, dict[str, Any]] = {}
         think_note: str | None = None
         for row in rows:
             payload = json.loads(row["payload_json"])
             event_type = row["event_type"]
-            if event_type in {"transcript", "user_segment"} and isinstance(payload.get("text"), str):
-                segment_id = (
-                    payload.get("segment_id")
-                    if event_type == "user_segment" and isinstance(payload.get("segment_id"), str)
-                    else "legacy-transcript"
-                )
+            if event_type == "user_segment" and isinstance(payload.get("text"), str):
+                segment_id = payload.get("segment_id")
+                if not isinstance(segment_id, str):
+                    continue
                 turn = {"role": "user", "content": payload["text"], "segment_id": segment_id}
                 position = segment_positions.get(segment_id)
                 if position is None:
@@ -206,7 +201,6 @@ class ContextStore:
                 else:
                     conversation[position] = turn
             elif event_type == "assistant_clause" and isinstance(payload.get("text"), str):
-                delivered.append(payload["text"])
                 conversation.append({
                     "role": "assistant",
                     "content": payload["text"],
@@ -219,10 +213,6 @@ class ContextStore:
             elif event_type == "task_fact" and isinstance(payload.get("id"), str):
                 task_facts[payload["id"]] = payload
         return FoldedContext(
-            transcript="\n".join(
-                item["content"] for item in conversation if item["role"] == "user"
-            ),
-            delivered_clauses=tuple(delivered),
             conversation_turns=tuple(conversation),
             observations=tuple(observations[key] for key in sorted(observations)),
             think_note=think_note,

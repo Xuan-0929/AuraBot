@@ -1,6 +1,7 @@
 import { describe, expect, it } from "vitest";
 import { ModelBackedChatModel } from "@core/llm/modelBackedChatModel";
 import { ModelInvocationError } from "@core/llm/modelErrors";
+import { buildSoulPrompt } from "@core/profiles/soulPrompt";
 import type { ChatCompletionRequest } from "@core/llm/openAiCompatibleClient";
 import type { Soul } from "@shared/schemas/profile";
 
@@ -97,5 +98,6 @@ describe("ModelBackedChatModel", () => {
     expect(request?.messages[0]?.content).toContain("不要说自己是 AI、模型或机器人");
     expect(request?.messages[0]?.content).toContain("不要像客服或机器人");
     expect(request?.messages[1]?.content).toContain("长期陪伴用户的桌面伴侣和助手");
+    expect(request?.messages[0]?.content).toBe(buildSoulPrompt(companionSoul));
   });
 });

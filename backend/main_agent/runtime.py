@@ -22,8 +22,8 @@ import json
 import re
 import time
 import uuid
-from collections import OrderedDict, deque
-from collections.abc import AsyncIterable, Awaitable, Callable, Iterable, Mapping, Sequence
+from collections import OrderedDict
+from collections.abc import AsyncIterable, Awaitable, Callable, Mapping, Sequence
 from dataclasses import dataclass, replace
 from enum import StrEnum
 from typing import Any
@@ -39,7 +39,6 @@ from .tool_runtime import (
     InvokeMode,
     InvokeSettlement,
     ObservationOutcome,
-    ObservationLimiter,
     ResponseGrant,
     ToolCall,
     ToolExecutorError,
@@ -49,10 +48,9 @@ from .tool_runtime import (
 )
 
 
-ProviderChunks = Iterable[Mapping[str, Any]] | AsyncIterable[Mapping[str, Any]]
-ProviderPort = Callable[["InvokeRequest"], ProviderChunks | Awaitable[ProviderChunks]]
-RendererPort = Callable[["RendererClause"], Any]
-Executor = Callable[[ToolCall], Any]
+ProviderPort = Callable[["InvokeRequest"], AsyncIterable[Mapping[str, Any]]]
+RendererPort = Callable[["RendererClause"], Awaitable[None]]
+Executor = Callable[[ToolCall], Awaitable[Any]]
 
 
 @dataclass(frozen=True, slots=True)
@@ -111,8 +109,6 @@ class RendererClause:
     invoke_id: str
     input_id: str
     revision: int
-    motion_token: str | None = None
-    expression_token: str | None = None
 
 
 @dataclass(slots=True)
@@ -173,7 +169,6 @@ _PUNCTUATED = re.compile(r"[。！？!?；;.]\s*$")
 _ENGLISH_WORD = re.compile(r"[A-Za-z0-9]+(?:['’-][A-Za-z0-9]+)*")
 _PROPOSAL_LIMIT_PER_INPUT = 256
 _TASK_VERSION_LIMIT = 512
-_INVOKE_HISTORY_LIMIT = 128
 
 
 class MainAgentRuntime:
@@ -194,7 +189,7 @@ class MainAgentRuntime:
         clock: Callable[[], float] | None = None,
         prepare_admission: PrepareAdmissionPolicy | None = None,
         observation_ledger: ObservationLedger | None = None,
-        observation_limiter: ObservationLimiter | None = None,
+        observation_semaphore: asyncio.Semaphore | None = None,
         proposal_sleep: Callable[[float], Awaitable[None]] | None = None,
         task_event_retry_sleep: Callable[[float], Awaitable[None]] | None = None,
         task_manager: Any | None = None,
@@ -244,7 +239,6 @@ class MainAgentRuntime:
         self._last_prepare_at: float | None = None
         self._last_prepare_units = 0
         self._prepare_wait_started_at: float | None = None
-        self._requests: deque[InvokeRequest] = deque(maxlen=_INVOKE_HISTORY_LIMIT)
         self._clause_origins: dict[str, tuple[str, int]] = {}
         self._observation_origins: dict[str, tuple[str, int]] = {}
         self._task_proposals: OrderedDict[str, PendingTaskProposal] = OrderedDict()
@@ -278,7 +272,7 @@ class MainAgentRuntime:
             state_provider=self._effect_fence,
             observation_acceptance_hook=self._observation_accepted,
             observation_completion_hook=self._observation_completed,
-            observation_limiter=observation_limiter,
+            observation_semaphore=observation_semaphore,
         )
 
     @property
@@ -298,12 +292,6 @@ class MainAgentRuntime:
         return self._pending_trigger
 
     @property
-    def invoke_requests(self) -> tuple[InvokeRequest, ...]:
-        """Return provider requests for diagnostics without exposing mutable scheduler collections."""
-
-        return tuple(self._requests)
-
-    @property
     def task_proposals(self) -> tuple[PendingTaskProposal, ...]:
         """Return immutable proposal views in acceptance order for diagnostics and UI projection."""
 
@@ -315,6 +303,13 @@ class MainAgentRuntime:
         async with self._lock:
             self._ensure_task_event_listener_locked()
         self._increment_metric("main.runtime.startup")
+
+    async def update_soul(self, soul: str) -> None:
+        """Apply Electron's effective Soul to snapshots created after this serialized update."""
+
+        effective = _required_text(soul, "soul")
+        async with self._lock:
+            self.soul = effective
 
     async def wait_for_task_proposals(self) -> None:
         """Wait for currently scheduled proposal timers/commits without waiting on the event listener."""
@@ -410,11 +405,6 @@ class MainAgentRuntime:
                 }:
                     self.context_store.ack_clause(clause_id, complete=False)
                 self._clause_origins.pop(clause_id, None)
-            cancel_speech = getattr(self.renderer, "cancel_current", None)
-        if callable(cancel_speech):
-            result = cancel_speech("confirmed_barge_in")
-            if inspect.isawaitable(result):
-                await result
 
     async def vad_stop_candidate(self) -> None:
         """Record acoustic silence only; this event never grants or schedules RESPOND."""
@@ -583,11 +573,9 @@ class MainAgentRuntime:
                 if clause.state in {ClauseState.DRAFT, ClauseState.TTS_QUEUED, ClauseState.PLAYING}:
                     self.context_store.ack_clause(clause_id, complete=False)
                 self._clause_origins.pop(clause_id, None)
-                self._notify_renderer_ack(clause_id, complete=False)
                 return False
             accepted = self.context_store.ack_clause(clause_id, complete=complete)
             self._clause_origins.pop(clause_id, None)
-            self._notify_renderer_ack(clause_id, complete=bool(complete and accepted))
             if accepted:
                 self._has_external_commit = True
                 self._context_changed_locked()
@@ -887,7 +875,12 @@ class MainAgentRuntime:
                     )
                     folded = self.context_store.fold()
                     recall_query = active_input.latest_transcript
-                    recall_segment_id = f"{active_input.input_id}:{active_input.revision}"
+                    visible_segment_ids = tuple(
+                        segment.segment_id for segment in active_input.segments
+                    )
+                    visible_segment_texts = tuple(
+                        segment.text for segment in active_input.segments
+                    )
                 if self.memory_bridge is None:
                     memory_facts = self._memory_facts()
                 else:
@@ -897,8 +890,8 @@ class MainAgentRuntime:
                             revision=recall_identity[1],
                             input_id=recall_identity[0],
                             context_version=recall_identity[2],
-                            visible_source_segment_ids=(recall_segment_id,),
-                            visible_source_texts=(recall_query,),
+                            visible_source_segment_ids=visible_segment_ids,
+                            visible_source_texts=visible_segment_texts,
                         )
                     except Exception:
                         memory_facts = ()
@@ -946,7 +939,6 @@ class MainAgentRuntime:
                     )
                     active = _ActiveInvoke(request, asyncio.Event())
                     self._active_invoke = active
-                    self._requests.append(request)
                     self._settle_preinvoke_locked(preinvoke_settled)
                 try:
                     request.settlement = await self.harness.run(
@@ -972,14 +964,7 @@ class MainAgentRuntime:
         started_at = time.monotonic()
         self._increment_metric("main.invoke.started")
         try:
-            source = self.provider(request)
-            if inspect.isawaitable(source):
-                source = await source
-            if hasattr(source, "__aiter__"):
-                async for chunk in source:  # type: ignore[union-attr]
-                    yield chunk
-                return
-            for chunk in source:  # type: ignore[union-attr]
+            async for chunk in self.provider(request):
                 yield chunk
         finally:
             observe = getattr(self.metrics, "observe", None)
@@ -1001,9 +986,6 @@ class MainAgentRuntime:
             text = str(call.arguments["text"])
             clause_id = self._new_id("clause")
             self.context_store.create_clause(clause_id, text)
-            physical_states = bool(getattr(self.renderer, "tracks_physical_states", False))
-            if not physical_states:
-                self.context_store.transition_clause(clause_id, ClauseState.TTS_QUEUED)
             self._clause_origins[clause_id] = (request.input_id, request.revision)
             offer = RendererClause(
                 clause_id,
@@ -1011,29 +993,14 @@ class MainAgentRuntime:
                 request.invoke_id,
                 request.input_id,
                 request.revision,
-                _optional_text(call.arguments.get("motion_token")),
-                _optional_text(call.arguments.get("expression_token")),
             )
         try:
-            result = self.renderer(offer)
-            if not physical_states:
-                async with self._lock:
-                    clause = self.context_store.get_clause(clause_id)
-                    if clause.state is ClauseState.TTS_QUEUED:
-                        self.context_store.transition_clause(clause_id, ClauseState.PLAYING)
-            if inspect.isawaitable(result):
-                result = await result
-            if isinstance(result, bool):
-                await self.renderer_ack(clause_id, complete=result)
+            await self.renderer(offer)
         except asyncio.CancelledError:
             await self.renderer_ack(clause_id, complete=False)
             raise
         except BaseException:
-            async with self._lock:
-                clause = self.context_store.get_clause(clause_id)
-                if clause.state in {ClauseState.DRAFT, ClauseState.TTS_QUEUED, ClauseState.PLAYING}:
-                    self.context_store.transition_clause(clause_id, ClauseState.FAILED)
-                self._clause_origins.pop(clause_id, None)
+            await self.renderer_failed(clause_id)
             raise
 
     async def renderer_tts_queued(self, clause_id: str) -> bool:
@@ -1054,6 +1021,20 @@ class MainAgentRuntime:
             if clause.state is not ClauseState.TTS_QUEUED:
                 return False
             self.context_store.transition_clause(clause_id, ClauseState.PLAYING)
+            return True
+
+    async def renderer_failed(self, clause_id: str) -> bool:
+        """Mark a queue, TTS, or Renderer failure without publishing assistant language."""
+
+        async with self._lock:
+            try:
+                clause = self.context_store.get_clause(clause_id)
+            except KeyError:
+                return False
+            if clause.state not in {ClauseState.DRAFT, ClauseState.TTS_QUEUED, ClauseState.PLAYING}:
+                return False
+            self.context_store.transition_clause(clause_id, ClauseState.FAILED)
+            self._clause_origins.pop(clause_id, None)
             return True
 
     async def _save_think_note(self, call: ToolCall) -> None:
@@ -1676,21 +1657,18 @@ class MainAgentRuntime:
     async def _record_confirmed_input(self, active_input: ActiveInput) -> None:
         """Reset Memory idle sealing outside the scheduler lock; failures never block dialogue."""
 
-        record = getattr(self.memory_bridge, "record_confirmed_input", None)
-        if not callable(record):
+        if self.memory_bridge is None:
             return
         if not active_input.segments:
             return
         segment = active_input.segments[-1]
         try:
-            result = record(
+            await self.memory_bridge.record_confirmed_input(
                 segment_id=segment.segment_id,
                 content=segment.text,
                 input_id=active_input.input_id,
                 revision=active_input.revision,
             )
-            if inspect.isawaitable(result):
-                await result
         except Exception:
             return
 
@@ -1698,13 +1676,6 @@ class MainAgentRuntime:
         self._latest_context_version += 1
         if refresh_grant:
             self._refresh_grant_locked()
-
-    def _notify_renderer_ack(self, clause_id: str, *, complete: bool) -> None:
-        """Resolve an optional ACK-aware renderer after the DeliveryLedger has settled the clause."""
-
-        acknowledge = getattr(self.renderer, "acknowledge", None)
-        if callable(acknowledge):
-            acknowledge(clause_id, complete=complete)
 
     def _interrupt_stale_clauses_locked(self) -> None:
         current = self._active_input
@@ -1748,10 +1719,6 @@ def _required_text(value: object, label: str) -> str:
     if not isinstance(value, str) or not value.strip():
         raise ValueError(f"{label} must be non-empty text")
     return value
-
-
-def _optional_text(value: object) -> str | None:
-    return value if isinstance(value, str) and value else None
 
 
 def _json_safe(value: Any) -> Any:

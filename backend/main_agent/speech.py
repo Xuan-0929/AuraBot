@@ -1,4 +1,4 @@
-"""Own the optional speech pipeline, true-streaming providers, and lazy local VAD/EOU sessions.
+"""Own the active Profile's async speech providers, local VAD/EOU, input coordinator, and delivery.
 
 DashScope-specific callback fields and credentials terminate inside the adapters and become
 ``TranscriptUpdate`` facts
@@ -6,26 +6,25 @@ before Main Agent Core can observe them.  TTS exposes only clause audio bytes.  
 v3.2 share process-wide ONNX sessions, verify both model and license assets before loading, and configure
 ONNX Runtime for sequential single-thread CPU inference; missing optional packages or assets are reported
 as unavailable capabilities rather than preventing a non-speech Backend from importing or starting.
-``SpeechPipeline`` is the single lifespan owner that drains RealtimeHub microphone frames into the
-coordinator and supervises sequential clause delivery; its default disabled form starts no worker.
+``SpeechService`` drains the active RealtimeHub microphone queue and supervises sequential clause delivery;
+it owns only speech resources and never shuts down MainAgentRuntime.
 """
 
 from __future__ import annotations
 
 import asyncio
 import importlib
-import inspect
 import time
 import uuid
 from collections import deque
-from collections.abc import AsyncIterable, Callable, Mapping
+from collections.abc import AsyncIterable, Awaitable, Callable, Mapping
 from dataclasses import dataclass
 from pathlib import Path
 from threading import Lock
 from typing import Any, Protocol, runtime_checkable
 
 
-TranscriptSink = Callable[["TranscriptUpdate"], Any]
+TranscriptSink = Callable[["TranscriptUpdate"], Awaitable[None]]
 _CLEANUP_TIMEOUT_SECONDS = 0.25
 
 
@@ -74,8 +73,6 @@ class SpeechOutputProvider(Protocol):
 
     def synthesize(self, text: str) -> AsyncIterable[bytes]: ...
 
-    async def cancel(self) -> None: ...
-
 
 class SpeechProviderUnavailable(RuntimeError):
     """Stable optional-provider failure suitable for capability degradation and diagnostics."""
@@ -121,8 +118,6 @@ class _DashScopeSttSession:
         except BaseException:
             self._fail_sink()
             return
-        if not inspect.isawaitable(result):
-            return
         task = self._owner_loop.create_task(result)
         self._sink_tasks.add(task)
         task.add_done_callback(self._sink_done)
@@ -153,7 +148,7 @@ class _DashScopeSttSession:
             await asyncio.gather(*tuple(self._sink_tasks), return_exceptions=True)
         try:
             await asyncio.wait_for(
-                _call_maybe_blocking(self._transport.stop),
+                asyncio.to_thread(self._transport.stop),
                 _CLEANUP_TIMEOUT_SECONDS,
             )
         except BaseException:
@@ -164,7 +159,7 @@ class _DashScopeSttSession:
             raise RuntimeError("STT session is closed")
         if not isinstance(pcm16le, bytes) or not pcm16le:
             raise ValueError("STT audio must be non-empty bytes")
-        await _maybe_await(self._transport.send_audio_frame(pcm16le))
+        await asyncio.to_thread(self._transport.send_audio_frame, pcm16le)
 
     async def close(self) -> None:
         if self._closed:
@@ -178,7 +173,7 @@ class _DashScopeSttSession:
         if self._sink_tasks:
             await asyncio.gather(*tuple(self._sink_tasks), return_exceptions=True)
         await asyncio.wait_for(
-            _call_maybe_blocking(self._transport.stop),
+            asyncio.to_thread(self._transport.stop),
             _CLEANUP_TIMEOUT_SECONDS,
         )
 
@@ -223,12 +218,12 @@ class DashScopeStreamingSttProvider:
                 options["api_key"] = self._api_key
             transport = self._transport_factory(**options)
             session = _DashScopeSttSession(transport, owner_loop, on_update)
-            await _call_maybe_blocking(transport.start)
+            await asyncio.to_thread(transport.start)
         except BaseException as exc:
-            if transport is not None and callable(getattr(transport, "stop", None)):
+            if transport is not None:
                 try:
                     await asyncio.wait_for(
-                        _call_maybe_blocking(transport.stop),
+                        asyncio.to_thread(transport.stop),
                         _CLEANUP_TIMEOUT_SECONDS,
                     )
                 except BaseException:
@@ -247,7 +242,7 @@ class DashScopeStreamingSttProvider:
 
 
 class DashScopeSpeechOutputProvider:
-    """Adapt configured DashScope TTS to ordered PCM chunks with explicit cancellation."""
+    """Create one independent callback-streaming DashScope transport per synthesized clause."""
 
     def __init__(
         self,
@@ -261,8 +256,6 @@ class DashScopeSpeechOutputProvider:
         self.voice = _required_text(voice, "TTS voice")
         self._api_key = api_key.strip()
         self._transport_factory = transport_factory or _dashscope_tts_transport
-        self._current: Any | None = None
-        self._lock = asyncio.Lock()
 
     async def synthesize(self, text: str):
         clause = _required_text(text, "TTS clause")
@@ -273,33 +266,14 @@ class DashScopeSpeechOutputProvider:
             transport = self._transport_factory(**options)
         except (ImportError, ModuleNotFoundError) as exc:
             raise SpeechProviderUnavailable("DashScope TTS dependency is unavailable") from exc
-        async with self._lock:
-            self._current = transport
+        source = self._callback_stream(transport, clause)
         try:
-            stream = getattr(transport, "stream", None)
-            if callable(stream):
-                async for chunk in self._callback_stream(transport, clause, stream):
-                    yield chunk
-                return
-            source = await _call_maybe_blocking(transport.synthesize, clause)
-            if hasattr(source, "__aiter__"):
-                async for chunk in source:
-                    yield _audio_chunk(chunk)
-            elif isinstance(source, bytes):
-                yield _audio_chunk(source)
-            else:
-                iterator = iter(source)
-                while True:
-                    present, chunk = await asyncio.to_thread(_next_sync_chunk, iterator)
-                    if not present:
-                        break
-                    yield _audio_chunk(chunk)
+            async for chunk in source:
+                yield chunk
         finally:
-            async with self._lock:
-                if self._current is transport:
-                    self._current = None
+            await source.aclose()
 
-    async def _callback_stream(self, transport: Any, clause: str, stream: Any):
+    async def _callback_stream(self, transport: Any, clause: str):
         """Bridge SDK callback threads into one bounded async PCM stream."""
 
         queue: asyncio.Queue[tuple[str, Any]] = asyncio.Queue(maxsize=32)
@@ -322,15 +296,13 @@ class DashScopeSpeechOutputProvider:
                     queue.put_nowait(("error", SpeechProviderUnavailable(
                         "DashScope TTS callback queue overflowed"
                     )))
-                    cancel = getattr(transport, "cancel", None)
-                    if callable(cancel):
-                        cancel()
+                    transport.cancel()
 
             loop.call_soon_threadsafe(enqueue)
 
         def run_stream() -> None:
             try:
-                stream(
+                transport.stream(
                     clause,
                     lambda chunk: publish("data", chunk),
                     lambda: publish("complete"),
@@ -353,17 +325,8 @@ class DashScopeSpeechOutputProvider:
                     raise SpeechProviderUnavailable("DashScope TTS streaming failed") from value
         finally:
             if not worker.done():
-                cancel = getattr(transport, "cancel", None)
-                if callable(cancel):
-                    await _call_maybe_blocking(cancel)
+                await asyncio.to_thread(transport.cancel)
             await asyncio.gather(worker, return_exceptions=True)
-
-    async def cancel(self) -> None:
-        async with self._lock:
-            transport = self._current
-        if transport is not None and callable(getattr(transport, "cancel", None)):
-            await _call_maybe_blocking(transport.cancel)
-
 
 @dataclass(frozen=True, slots=True)
 class SpeechCapabilityStatus:
@@ -670,20 +633,20 @@ class SpeechInputCoordinator:
                 self._stop_issued = False
                 self._confirmed = False
                 self._speech_frames = 0
-                await _maybe_await(self.runtime.vad_start())
+                await self.runtime.vad_start()
             self._silence_frames = 0
             self._speech_frames += 1
             if not self._confirmed and self._speech_frames >= self.confirm_frames:
                 self._confirmed = True
                 await self._playback("speech_confirmed")
-                await _maybe_await(self.runtime.confirm_speech())
+                await self.runtime.confirm_speech()
             return
 
         self._silence_frames += 1
         if self._stop_issued or self._silence_frames < self.stop_frames:
             return
         self._stop_issued = True
-        await _maybe_await(self.runtime.vad_stop_candidate())
+        await self.runtime.vad_stop_candidate()
         if not self._confirmed:
             await self._reject_candidate()
             await self._finish_turn()
@@ -719,7 +682,7 @@ class SpeechInputCoordinator:
         self._has_transcript = False
         self._segment_id = str(uuid.uuid4())
         await self._playback("speech_candidate_started")
-        await _maybe_await(self.runtime.vad_start())
+        await self.runtime.vad_start()
         if self.stt_provider is None:
             return
         try:
@@ -736,12 +699,12 @@ class SpeechInputCoordinator:
         if not self._confirmed:
             self._confirmed = True
             await self._playback("speech_confirmed")
-            await _maybe_await(self.runtime.confirm_speech())
-        await _maybe_await(self.runtime.update_transcript(
+            await self.runtime.confirm_speech()
+        await self.runtime.update_transcript(
             update.full_text,
             segment_id=self._segment_id,
             request_prepare=bool(update.stable_prefix),
-        ))
+        )
 
     async def _resolve_endpoint(self, generation: int) -> None:
         candidate_at = self.clock()
@@ -756,23 +719,23 @@ class SpeechInputCoordinator:
                     await self.sleep(delay)
                 if self._endpoint_current(generation):
                     await self._playback("speech_endpoint", complete=True)
-                    await _maybe_await(self.runtime.endpoint_fallback())
+                    await self.runtime.endpoint_fallback()
                     finish = True
                 return
             if probability >= self.eou_threshold:
                 if self._endpoint_current(generation):
                     await self._playback("speech_endpoint", complete=True)
-                    await _maybe_await(self.runtime.eou_complete())
+                    await self.runtime.eou_complete()
                     finish = True
                 return
             await self._playback("speech_endpoint", complete=False)
-            await _maybe_await(self.runtime.eou_incomplete())
+            await self.runtime.eou_incomplete()
             deadline = candidate_at + self.incomplete_fallback_seconds
             while self._endpoint_current(generation):
                 remaining = deadline - self.clock()
                 if remaining <= 0:
                     await self._playback("speech_endpoint", complete=True)
-                    await _maybe_await(self.runtime.endpoint_fallback())
+                    await self.runtime.endpoint_fallback()
                     finish = True
                     return
                 await self.sleep(min(self.eou_recheck_seconds, round(remaining, 9)))
@@ -780,7 +743,7 @@ class SpeechInputCoordinator:
                     return
                 if self.clock() >= deadline:
                     await self._playback("speech_endpoint", complete=True)
-                    await _maybe_await(self.runtime.endpoint_fallback())
+                    await self.runtime.endpoint_fallback()
                     finish = True
                     return
                 try:
@@ -792,7 +755,7 @@ class SpeechInputCoordinator:
                     probability = None
                 if probability is not None and probability >= self.eou_threshold:
                     await self._playback("speech_endpoint", complete=True)
-                    await _maybe_await(self.runtime.eou_complete())
+                    await self.runtime.eou_complete()
                     finish = True
                     return
         except TimeoutError:
@@ -801,14 +764,14 @@ class SpeechInputCoordinator:
                 await self.sleep(delay)
             if self._endpoint_current(generation):
                 await self._playback("speech_endpoint", complete=True)
-                await _maybe_await(self.runtime.endpoint_fallback())
+                await self.runtime.endpoint_fallback()
                 finish = True
         except asyncio.CancelledError:
             raise
         except Exception:
             if self._endpoint_current(generation):
                 await self._playback("speech_endpoint", complete=True)
-                await _maybe_await(self.runtime.endpoint_fallback())
+                await self.runtime.endpoint_fallback()
             finish = True
         finally:
             if finish and self._endpoint_current(generation):
@@ -821,7 +784,7 @@ class SpeechInputCoordinator:
         if self.vad is None:
             return None
         try:
-            value = await _call_maybe_blocking(self.vad.speech_probability, frame)
+            value = await asyncio.to_thread(self.vad.speech_probability, frame)
         except Exception:
             return None
         return float(value) if isinstance(value, (int, float)) and not isinstance(value, bool) else None
@@ -830,7 +793,7 @@ class SpeechInputCoordinator:
         if self.eou is None:
             return None
         try:
-            value = await _call_maybe_blocking(
+            value = await asyncio.to_thread(
                 self.eou.completion_probability, b"".join(self.audio)
             )
         except Exception:
@@ -856,18 +819,22 @@ class SpeechInputCoordinator:
 
     async def _playback(self, method_name: str, **fields: Any) -> None:
         lifecycle = self.playback_lifecycle
-        method = getattr(lifecycle, method_name, None)
-        if not callable(method):
-            return
         try:
-            await _maybe_await(method(**fields))
+            if method_name == "speech_candidate_started":
+                await lifecycle.speech_candidate_started()
+            elif method_name == "speech_confirmed":
+                await lifecycle.speech_confirmed()
+            elif method_name == "speech_candidate_rejected":
+                await lifecycle.speech_candidate_rejected()
+            else:
+                await lifecycle.speech_endpoint(**fields)
         except Exception:
             # Renderer transport failure must not terminate microphone recognition.
             pass
 
     async def _reject_candidate(self) -> None:
         await self._playback("speech_candidate_rejected")
-        await _maybe_await(self.runtime.reject_speech_candidate())
+        await self.runtime.reject_speech_candidate()
 
     async def _finish_turn(self) -> None:
         await self._close_stt()
@@ -880,51 +847,22 @@ class SpeechInputCoordinator:
         self._segment_id = None
         self.pre_roll.clear()
         self.audio.clear()
-        reset = getattr(self.vad, "reset", None)
-        if callable(reset):
+        if self.vad is not None:
             try:
-                await _call_maybe_blocking(reset)
+                await asyncio.to_thread(self.vad.reset)
             except Exception:
                 pass
 
 
-@dataclass(frozen=True, slots=True)
-class SpeechPipelineStatus:
-    """Truthful lifecycle/capability state exposed by Backend composition."""
+class SpeechService:
+    """Own the active Profile's coordinator, delivery worker, and one microphone consumer."""
 
-    enabled: bool
-    reason: str
-
-
-class SpeechPipeline:
-    """Supervise one realtime microphone consumer and the optional speech-output worker."""
-
-    def __init__(
-        self,
-        hub: Any,
-        *,
-        coordinator: SpeechInputCoordinator | Any | None = None,
-        delivery: "ClauseSpeechDelivery | Any | None" = None,
-        runtime: Any | None = None,
-        enabled: bool = False,
-        disabled_reason: str = "speech_disabled",
-    ) -> None:
-        if enabled and coordinator is None:
-            raise ValueError("enabled speech pipeline requires a coordinator")
+    def __init__(self, hub: Any, coordinator: Any, delivery: Any) -> None:
         self.hub = hub
         self.coordinator = coordinator
         self.delivery = delivery
-        self.runtime = runtime
-        self._configured_enabled = bool(enabled)
-        self._status = SpeechPipelineStatus(False, disabled_reason)
         self._mic_task: asyncio.Task[None] | None = None
         self._closed = False
-
-    @classmethod
-    def disabled(cls, hub: Any, *, reason: str = "speech_disabled") -> "SpeechPipeline":
-        """Create the no-SDK/no-model default capability owner."""
-
-        return cls(hub, enabled=False, disabled_reason=reason)
 
     @classmethod
     def compose(
@@ -932,215 +870,120 @@ class SpeechPipeline:
         hub: Any,
         runtime: Any,
         *,
-        stt_provider: StreamingSttProvider | None,
+        stt_provider: StreamingSttProvider,
         output_provider: SpeechOutputProvider,
-        vad: Any | None,
-        eou: Any | None,
-        **coordinator_options: Any,
-    ) -> "SpeechPipeline":
-        """Bind Task9-provided runtime/providers to the production realtime transport."""
-
-        delivery = ClauseSpeechDelivery(
-            output_provider,
-            hub.acquire_renderer_port,
-            settle_clause=runtime.renderer_ack,
-            mark_queued=getattr(runtime, "renderer_tts_queued", None),
-            mark_playing=getattr(runtime, "renderer_playing", None),
-        )
+        vad: Any,
+        eou: Any,
+    ) -> "SpeechService":
+        delivery = ClauseSpeechDelivery(output_provider, hub.acquire_renderer_port, runtime)
         runtime.renderer = delivery
-        hub.runtime = runtime
-        coordinator = SpeechInputCoordinator(
-            runtime,
-            stt_provider=stt_provider,
-            vad=vad,
-            eou=eou,
-            playback_lifecycle=hub,
-            **coordinator_options,
-        )
         return cls(
             hub,
-            coordinator=coordinator,
-            delivery=delivery,
-            runtime=runtime,
-            enabled=True,
+            SpeechInputCoordinator(
+                runtime,
+                stt_provider=stt_provider,
+                vad=vad,
+                eou=eou,
+                playback_lifecycle=hub,
+            ),
+            delivery,
         )
 
-    @property
-    def status(self) -> SpeechPipelineStatus:
-        return self._status
-
-    @property
-    def live_tasks(self) -> tuple[asyncio.Task[Any], ...]:
-        tasks = (self._mic_task, getattr(self.delivery, "_worker", None))
-        return tuple(task for task in tasks if task is not None and not task.done())
-
     async def startup(self) -> None:
-        """Start only explicitly enabled components and degrade without aborting Backend startup."""
-
         if self._closed:
-            raise RuntimeError("speech pipeline is closed")
-        if not self._configured_enabled:
-            return
+            raise RuntimeError("speech service is closed")
         if self._mic_task is not None and not self._mic_task.done():
             return
-        try:
-            if self.delivery is not None:
-                await _maybe_await(self.delivery.startup())
-            self._mic_task = asyncio.create_task(
-                self._consume_mic(), name="main-agent-speech-mic"
-            )
-            self._status = SpeechPipelineStatus(True, "running")
-        except Exception:
-            self._status = SpeechPipelineStatus(False, "speech_startup_failed")
+        await self.delivery.startup()
+        self._mic_task = asyncio.create_task(self._consume_mic(), name="main-agent-speech-mic")
+
+    def acknowledge(self, clause_id: str, *, complete: bool) -> bool:
+        return self.delivery.acknowledge(clause_id, complete=complete)
+
+    async def cancel_current(self, reason: str) -> None:
+        await self.delivery.cancel_current(reason)
 
     async def shutdown(self) -> None:
-        """Fence microphone work, close the active turn, then settle the output worker."""
-
         if self._closed:
             return
         self._closed = True
-        task = self._mic_task
-        self._mic_task = None
-        if task is not None and not task.done():
+        task, self._mic_task = self._mic_task, None
+        if task is not None:
             task.cancel()
             await asyncio.gather(task, return_exceptions=True)
-        if self.coordinator is not None:
-            try:
-                await _maybe_await(self.coordinator.close())
-            except BaseException:
-                pass
-        if self.delivery is not None:
-            try:
-                await _maybe_await(self.delivery.shutdown())
-            except BaseException:
-                pass
-        if self.runtime is not None:
-            try:
-                await _maybe_await(self.runtime.shutdown())
-            except BaseException:
-                pass
-        self._status = SpeechPipelineStatus(False, "stopped")
+        await self.coordinator.close()
+        await self.delivery.shutdown()
 
     async def _consume_mic(self) -> None:
-        try:
-            while True:
-                frame = await self.hub.mic_queue.get()
-                await _maybe_await(self.coordinator.accept_mic_frame(frame.payload))
-        except asyncio.CancelledError:
-            raise
-        except BaseException:
-            self._status = SpeechPipelineStatus(False, "mic_consumer_failed")
+        while True:
+            frame = await self.hub.mic_queue.get()
+            await self.coordinator.accept_mic_frame(frame)
 
 
 @dataclass(frozen=True, slots=True)
 class _SpeechJob:
     clause: Any
-    generation: int
 
 
 class ClauseSpeechDelivery:
-    """Accept clauses promptly and supervise their serial synthesis/playback through ACK settlement.
-
-    MainAgentRuntime remains the DeliveryLedger owner.  The callable only transfers bounded ownership
-    to one worker so a control invoke never waits for physical playback; the worker advances in order
-    only after Runtime forwards Renderer ACK.  Failure, timeout, cancellation, replacement, and shutdown
-    all interrupt the lease offer and invoke the optional idempotent ledger-settlement fallback.
-    """
-
-    tracks_physical_states = True
+    """Serialize TTS clauses and wait for the Pet's physical ACK before advancing."""
 
     def __init__(
         self,
         provider: SpeechOutputProvider,
-        renderer_port_factory: Callable[[], Any],
+        renderer_port_factory: Callable[[], Awaitable[Any]],
+        runtime: Any,
         *,
-        settle_clause: Callable[..., Any] | None = None,
-        mark_queued: Callable[[str], Any] | None = None,
-        mark_playing: Callable[[str], Any] | None = None,
         max_pending_clauses: int = 16,
         ack_timeout_seconds: float = 30.0,
-        cancel_timeout_seconds: float = 0.25,
     ) -> None:
         if max_pending_clauses < 1:
             raise ValueError("pending speech clause bound must be positive")
-        if ack_timeout_seconds <= 0 or cancel_timeout_seconds <= 0:
-            raise ValueError("speech delivery timeouts must be positive")
+        if ack_timeout_seconds <= 0:
+            raise ValueError("speech ACK timeout must be positive")
         self.provider = provider
         self.renderer_port_factory = renderer_port_factory
-        self.settle_clause = settle_clause
-        self.mark_queued = mark_queued
-        self.mark_playing = mark_playing
+        self.runtime = runtime
         self.ack_timeout_seconds = ack_timeout_seconds
-        self.cancel_timeout_seconds = cancel_timeout_seconds
         self._queue: asyncio.Queue[_SpeechJob] = asyncio.Queue(max_pending_clauses)
         self._waiters: dict[str, asyncio.Future[bool]] = {}
         self._current_clause_id: str | None = None
         self._current_port: Any | None = None
         self._worker: asyncio.Task[None] | None = None
         self._delivery_task: asyncio.Task[None] | None = None
-        self._owner_loop: asyncio.AbstractEventLoop | None = None
         self._closed = False
-        self._current_cancel_reason: str | None = None
-        self._cancel_generation = 0
-        self._stream_id = 0
 
     async def startup(self) -> None:
-        """Start the single delivery owner on its application event loop."""
-
         if self._closed:
             raise RuntimeError("speech delivery is closed")
-        loop = asyncio.get_running_loop()
         if self._worker is not None and not self._worker.done():
-            if self._owner_loop is not loop:
-                raise RuntimeError("speech delivery belongs to another event loop")
             return
-        self._owner_loop = loop
-        self._worker = loop.create_task(self._run(), name="main-agent-speech-delivery")
+        self._worker = asyncio.create_task(self._run(), name="main-agent-speech-delivery")
 
     async def __call__(self, clause: Any) -> None:
-        """Transfer one clause into the bounded worker queue and return without awaiting playback."""
-
-        _required_text(getattr(clause, "clause_id", None), "clause id")
+        clause_id = _required_text(getattr(clause, "clause_id", None), "clause id")
         _required_text(getattr(clause, "text", None), "clause text")
         await self.startup()
         try:
-            self._queue.put_nowait(_SpeechJob(clause, self._cancel_generation))
+            self._queue.put_nowait(_SpeechJob(clause))
         except asyncio.QueueFull as exc:
+            await self.runtime.renderer_failed(clause_id)
             raise SpeechProviderUnavailable("speech delivery queue is full") from exc
-        if self.mark_queued is not None:
-            await _maybe_await(self.mark_queued(str(clause.clause_id)))
+        await self.runtime.renderer_tts_queued(clause_id)
 
     async def _run(self) -> None:
-        try:
-            while True:
-                job = await self._queue.get()
-                if job.generation != self._cancel_generation:
-                    try:
-                        await self._settle_interrupted(str(job.clause.clause_id))
-                    finally:
-                        self._queue.task_done()
-                    continue
-                task = asyncio.create_task(
-                    self._deliver(job), name="main-agent-speech-clause"
-                )
-                self._delivery_task = task
-                try:
-                    await task
-                except asyncio.CancelledError:
-                    if asyncio.current_task() is not None and asyncio.current_task().cancelling():
-                        raise
-                except BaseException:
-                    await self._settle_interrupted(str(job.clause.clause_id))
-                finally:
-                    if self._delivery_task is task:
-                        self._delivery_task = None
-                    self._queue.task_done()
-        except asyncio.CancelledError:
-            task = self._delivery_task
-            if task is not None and not task.done():
-                task.cancel()
-                await asyncio.gather(task, return_exceptions=True)
-            raise
+        while True:
+            job = await self._queue.get()
+            task = asyncio.create_task(self._deliver(job), name="main-agent-speech-clause")
+            self._delivery_task = task
+            try:
+                await task
+            except asyncio.CancelledError:
+                if asyncio.current_task() and asyncio.current_task().cancelling():
+                    raise
+            finally:
+                self._delivery_task = None
+                self._queue.task_done()
 
     async def _deliver(self, job: _SpeechJob) -> None:
         clause = job.clause
@@ -1148,85 +991,62 @@ class ClauseSpeechDelivery:
         loop = asyncio.get_running_loop()
         waiter = loop.create_future()
         self._waiters[clause_id] = waiter
-        port = None
-        complete = False
+        port: Any | None = None
+        failed = False
         try:
-            port = self.renderer_port_factory()
-            if inspect.isawaitable(port):
-                port = await port
+            port = await self.renderer_port_factory()
             if port is None:
-                return
-            if job.generation != self._cancel_generation:
-                return
+                raise SpeechProviderUnavailable("renderer is unavailable")
             self._current_clause_id = clause_id
             self._current_port = port
-            if await _maybe_await(port.offer_clause(clause)) is not None:
-                return
-            if job.generation != self._cancel_generation:
-                return
-            await self._stream_clause(port, str(clause.text))
-            try:
-                complete = await asyncio.wait_for(
-                    asyncio.shield(waiter), self.ack_timeout_seconds
-                )
-            except TimeoutError:
-                complete = False
+            if await port.offer_clause(clause) is not None:
+                raise SpeechProviderUnavailable("renderer rejected clause")
+            played = False
+            buffer = bytearray()
+            async for chunk in self.provider.synthesize(str(clause.text)):
+                buffer.extend(_audio_chunk(chunk))
+                size = len(buffer) - len(buffer) % 2
+                if not size:
+                    continue
+                payload = bytes(buffer[:size])
+                del buffer[:size]
+                if await port.send_audio(payload) is not None:
+                    raise SpeechProviderUnavailable("renderer rejected audio")
+                if not played:
+                    played = True
+                    await self.runtime.renderer_playing(clause_id)
+            if buffer:
+                raise SpeechProviderUnavailable("TTS ended on a partial PCM sample")
+            if not played:
+                raise SpeechProviderUnavailable("TTS returned no audio")
+            if await port.finish_audio(clause_id) is not None:
+                raise SpeechProviderUnavailable("renderer rejected audio end")
+            if not await asyncio.wait_for(asyncio.shield(waiter), self.ack_timeout_seconds):
+                await self.runtime.renderer_ack(clause_id, complete=False)
         except asyncio.CancelledError:
             raise
         except BaseException:
-            complete = False
+            failed = True
+            await self.runtime.renderer_failed(clause_id)
         finally:
             self._waiters.pop(clause_id, None)
-            try:
-                if not complete:
-                    await self._safe_cancel_provider()
-            finally:
+            if failed and port is not None:
                 try:
-                    if not complete and port is not None:
-                        await self._safe_cancel_port_clause(
-                            port, clause_id,
-                            self._current_cancel_reason or "delivery_interrupted",
-                        )
-                finally:
-                    try:
-                        if not complete:
-                            await self._settle_interrupted(clause_id)
-                    finally:
-                        if self._current_clause_id == clause_id:
-                            self._current_clause_id = None
-                            self._current_port = None
-                            self._current_cancel_reason = None
+                    await port.cancel_clause(clause_id, "delivery_failed")
+                except BaseException:
+                    pass
+            if self._current_clause_id == clause_id:
+                self._current_clause_id = None
+                self._current_port = None
 
     def acknowledge(self, clause_id: str, *, complete: bool) -> bool:
-        """Resolve exactly one live playback waiter after Runtime has applied its ledger ACK."""
-
         waiter = self._waiters.get(clause_id)
         if waiter is None or waiter.done():
             return False
-        loop = self._owner_loop
-        if loop is None or loop.is_closed():
-            return False
-
-        def resolve() -> None:
-            if not waiter.done():
-                waiter.set_result(bool(complete))
-
-        try:
-            if asyncio.get_running_loop() is loop:
-                resolve()
-            else:
-                loop.call_soon_threadsafe(resolve)
-        except RuntimeError:
-            try:
-                loop.call_soon_threadsafe(resolve)
-            except RuntimeError:
-                return False
+        waiter.set_result(bool(complete))
         return True
 
     async def cancel_current(self, reason: str = "confirmed_barge_in") -> None:
-        """Cancel the current clause and settle every queued clause from its response generation."""
-
-        self._cancel_generation += 1
         drained: list[_SpeechJob] = []
         while True:
             try:
@@ -1234,25 +1054,25 @@ class ClauseSpeechDelivery:
             except asyncio.QueueEmpty:
                 break
         clause_id = self._current_clause_id
+        port = self._current_port
         task = self._delivery_task
-        self._current_cancel_reason = reason
-        try:
-            for job in drained:
+        for job in drained:
+            await self.runtime.renderer_ack(str(job.clause.clause_id), complete=False)
+            self._queue.task_done()
+        if clause_id is not None:
+            if port is not None:
                 try:
-                    await self._settle_interrupted(str(job.clause.clause_id))
-                finally:
-                    self._queue.task_done()
-            await self._safe_cancel_provider()
-        finally:
-            if clause_id is not None:
-                self.acknowledge(clause_id, complete=False)
-            if task is not None and not task.done():
-                task.cancel()
-                await asyncio.gather(task, return_exceptions=True)
+                    await port.cancel_clause(clause_id, reason)
+                except BaseException:
+                    pass
+            else:
+                await self.runtime.renderer_ack(clause_id, complete=False)
+            self.acknowledge(clause_id, complete=False)
+        if task is not None and not task.done():
+            task.cancel()
+            await asyncio.gather(task, return_exceptions=True)
 
     async def shutdown(self) -> None:
-        """Interrupt current and queued clauses, settle them, and leave no worker task behind."""
-
         if self._closed:
             return
         self._closed = True
@@ -1262,78 +1082,6 @@ class ClauseSpeechDelivery:
             worker.cancel()
             await asyncio.gather(worker, return_exceptions=True)
         self._worker = None
-        while True:
-            try:
-                job = self._queue.get_nowait()
-            except asyncio.QueueEmpty:
-                break
-            try:
-                await self._settle_interrupted(str(job.clause.clause_id))
-            finally:
-                self._queue.task_done()
-
-    async def _safe_cancel_provider(self) -> None:
-        try:
-            await asyncio.wait_for(self.provider.cancel(), self.cancel_timeout_seconds)
-        except BaseException:
-            pass
-
-    async def _settle_interrupted(self, clause_id: str) -> None:
-        if self.settle_clause is None:
-            return
-        try:
-            await _maybe_await(self.settle_clause(clause_id, complete=False))
-        except BaseException:
-            pass
-
-    async def _stream_clause(self, port: Any, text: str) -> None:
-        from .realtime import AudioFrame, AudioFrameKind, FINAL_FLAG
-
-        self._stream_id = (self._stream_id + 1) & 0xFFFFFFFF
-        if self._stream_id == 0:
-            self._stream_id = 1
-        sequence = 0
-        sample_start = 0
-        buffer = bytearray()
-        playing = False
-
-        async def queue(payload: bytes, flags: int) -> None:
-            nonlocal sequence, sample_start, playing
-            result = await _maybe_await(port.queue_tts(AudioFrame(
-                AudioFrameKind.TTS, flags, self._stream_id, sequence, sample_start, payload,
-            )))
-            if result is not None:
-                raise RuntimeError(f"renderer rejected TTS frame: {result}")
-            if not playing:
-                playing = True
-                if self.mark_playing is not None:
-                    await _maybe_await(self.mark_playing(str(self._current_clause_id)))
-            sequence += 1
-            sample_start += 480
-
-        async for chunk in self.provider.synthesize(text):
-            buffer.extend(chunk)
-            while len(buffer) >= 960:
-                payload = bytes(buffer[:960])
-                del buffer[:960]
-                await queue(payload, 0)
-        if len(buffer) % 2:
-            raise ValueError("TTS PCM chunk ended on a partial sample")
-        payload = bytes(buffer).ljust(960, b"\0")
-        await queue(payload, FINAL_FLAG)
-
-    async def _safe_cancel_port_clause(
-        self, port: Any, clause_id: str, reason: str
-    ) -> None:
-        cancel = getattr(port, "cancel_clause", None)
-        if callable(cancel):
-            try:
-                await asyncio.wait_for(
-                    _call_maybe_blocking(cancel, clause_id, reason),
-                    self.cancel_timeout_seconds,
-                )
-            except BaseException:
-                pass
 
 
 def _normalize_dashscope_event(event: Any) -> TranscriptUpdate | None:
@@ -1418,17 +1166,15 @@ class _DashScopeTtsTransport:
         )
         self._synthesizer.streaming_call(text)
         self._synthesizer.streaming_complete()
-        on_complete()
 
     def cancel(self) -> None:
-        cancel = getattr(self._synthesizer, "streaming_cancel", None)
-        if callable(cancel):
-            cancel()
+        if self._synthesizer is not None:
+            self._synthesizer.streaming_cancel()
 
 
 def _dashscope_tts_transport(**kwargs: Any) -> _DashScopeTtsTransport:
     tts = importlib.import_module("dashscope.audio.tts_v2")
-    audio_format = getattr(tts.AudioFormat, "PCM_24000HZ_MONO_16BIT")
+    audio_format = tts.AudioFormat.PCM_24000HZ_MONO_16BIT
     return _DashScopeTtsTransport(tts, {
         "model": kwargs["model_name"],
         "voice": kwargs["voice"],
@@ -1440,26 +1186,6 @@ def _dashscope_tts_transport(**kwargs: Any) -> _DashScopeTtsTransport:
 def _smart_turn_feature_extractor() -> Any:
     transformers = importlib.import_module("transformers")
     return transformers.WhisperFeatureExtractor(chunk_length=8)
-
-
-async def _maybe_await(value: Any) -> Any:
-    return await value if inspect.isawaitable(value) else value
-
-
-async def _call_maybe_blocking(function: Callable[..., Any], *args: Any) -> Any:
-    """Run synchronous provider SDK work in the shared executor without blocking the owner loop."""
-
-    if inspect.iscoroutinefunction(function):
-        return await function(*args)
-    value = await asyncio.to_thread(function, *args)
-    return await value if inspect.isawaitable(value) else value
-
-
-def _next_sync_chunk(iterator: Any) -> tuple[bool, Any]:
-    try:
-        return True, next(iterator)
-    except StopIteration:
-        return False, None
 
 
 def _required_text(value: object, label: str) -> str:
@@ -1477,7 +1203,7 @@ def _audio_chunk(value: Any) -> bytes:
 __all__ = [
     "ClauseSpeechDelivery", "DashScopeSpeechOutputProvider", "DashScopeStreamingSttProvider", "SileroVadDetector",
     "SmartTurnDetector", "SpeechCapabilityStatus", "SpeechInputCoordinator", "SpeechOutputProvider",
-    "SpeechPipeline", "SpeechPipelineStatus",
+    "SpeechService",
     "SpeechProviderUnavailable", "StreamingSttProvider", "StreamingSttSession",
     "TranscriptUpdate",
 ]

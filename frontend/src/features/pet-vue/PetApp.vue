@@ -70,6 +70,7 @@ import {
   MainAgentRealtimeClient,
   type MainAgentRealtimeState
 } from "../../main-agent-realtime/client";
+import { buildSoulPrompt } from "../../core/profiles/soulPrompt";
 import { useAuraBotStore } from "../../app/store";
 import { t } from "../../i18n";
 import {
@@ -171,7 +172,15 @@ watch(
 );
 
 function handleVoiceToggle() {
-  void mainAgentRealtime.toggle();
+  const profile = petStore.profile;
+  if (!profile) {
+    mainAgentRealtimeState.value = "error";
+    return;
+  }
+  void mainAgentRealtime.toggle({
+    profileId: profile.id,
+    soul: buildSoulPrompt(profile.soul)
+  });
 }
 
 function handleCanvasReady(canvas: HTMLCanvasElement) {

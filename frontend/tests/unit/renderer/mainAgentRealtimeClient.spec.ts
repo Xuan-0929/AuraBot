@@ -1,7 +1,7 @@
 /**
- * Exercises the formal Pet Main Agent client as one browser-side lifecycle with deterministic media and
- * transport doubles. It proves token acquisition, voice lease opening, mic admission, clause playback,
- * physical-cursor complete ACK, bubble cleanup, and teardown without requiring microphone hardware.
+ * Verifies the Pet's minimal voice-session contract at browser boundaries. The suite covers profile-bound
+ * token acquisition, one shared AudioContext, raw microphone/TTS PCM, server/local playback gates, physical
+ * cursor ACK, and one teardown path without relying on the removed diagnostic protocol or real hardware.
  */
 
 import { afterEach, describe, expect, it, vi } from "vitest";
@@ -28,10 +28,15 @@ class FakeAudioWorkletNode {
 }
 
 class FakeAudioContext {
+  static readonly instances: FakeAudioContext[] = [];
   readonly audioWorklet = { addModule: vi.fn(async () => undefined) };
   readonly destination = {};
   readonly close = vi.fn(async () => undefined);
   readonly resume = vi.fn(async () => undefined);
+
+  constructor() {
+    FakeAudioContext.instances.push(this);
+  }
 
   createMediaStreamSource(): { connect: () => void } {
     return { connect: () => undefined };
@@ -72,16 +77,6 @@ class FakeWebSocket {
   }
 }
 
-function finalTtsFrame(): ArrayBuffer {
-  const encoded = new ArrayBuffer(24 + 960);
-  const bytes = new Uint8Array(encoded);
-  bytes.set(new TextEncoder().encode("AUR1"));
-  const view = new DataView(encoded);
-  view.setUint8(4, 2);
-  view.setUint8(5, 2);
-  return encoded;
-}
-
 function sentControls(socket: FakeWebSocket): Array<Record<string, unknown>> {
   return socket.sent
     .filter((value): value is string => typeof value === "string")
@@ -93,16 +88,16 @@ describe("formal Pet Main Agent realtime client", () => {
     vi.unstubAllGlobals();
     FakeWebSocket.instances.length = 0;
     FakeAudioWorkletNode.instances.length = 0;
+    FakeAudioContext.instances.length = 0;
   });
 
-  it("automatically ACKs only after the playback cursor completes the offered clause", async () => {
-    let commandId = 0;
+  it("binds profile and soul, streams raw PCM, and ACKs only after physical playback", async () => {
     const stopTrack = vi.fn();
-    vi.stubGlobal("fetch", vi.fn(async () => ({
+    const fetchMock = vi.fn(async () => ({
       ok: true,
       json: async () => ({ token: "one-shot-token" }),
-    })));
-    vi.stubGlobal("crypto", { randomUUID: () => `00000000-0000-4000-8000-${String(++commandId).padStart(12, "0")}` });
+    }));
+    vi.stubGlobal("fetch", fetchMock);
     vi.stubGlobal("navigator", {
       mediaDevices: {
         getUserMedia: vi.fn(async () => ({ getTracks: () => [{ stop: stopTrack }] })),
@@ -118,24 +113,39 @@ describe("formal Pet Main Agent realtime client", () => {
       onClause: (text) => clauses.push(text),
     });
 
-    await client.start();
+    await client.start({ profileId: "profile_default", soul: "名字：Aura\n语气：自然" });
+    expect(fetchMock).toHaveBeenCalledWith(
+      "http://127.0.0.1:6401/api/v1/main-agent/realtime-token",
+      expect.objectContaining({
+        method: "POST",
+        headers: { "content-type": "application/json" },
+        body: JSON.stringify({ profileId: "profile_default", soul: "名字：Aura\n语气：自然" }),
+      }),
+    );
     const socket = FakeWebSocket.instances[0];
     expect(socket.protocols).toEqual([
       "aurabot.main-agent.v1",
       "aurabot.capability.one-shot-token",
     ]);
     socket.open();
-    expect(sentControls(socket)[0]?.type).toBe("session.open");
-
-    socket.message(JSON.stringify({
-      type: "session.opened",
-      renderer_epoch: 9,
-      mode: "voice",
-    }));
+    expect(sentControls(socket)).toEqual([]);
+    socket.message(JSON.stringify({ type: "session.ready" }));
     await vi.waitFor(() => {
-      expect(sentControls(socket).some((event) => event.type === "mic.start")).toBe(true);
+      expect(FakeAudioWorkletNode.instances.some(
+        (node) => node.processorName === "aurabot-mic-capture",
+      )).toBe(true);
     });
     expect(states).toContain("active");
+    expect(FakeAudioContext.instances).toHaveLength(1);
+
+    const mic = FakeAudioWorkletNode.instances.find(
+      (node) => node.processorName === "aurabot-mic-capture",
+    );
+    mic?.port.onmessage?.({
+      data: { type: "frame", samples: new Int16Array(320).fill(7) },
+    } as MessageEvent);
+    const micFrame = socket.sent.find((value): value is ArrayBuffer => value instanceof ArrayBuffer);
+    expect(micFrame?.byteLength).toBe(640);
 
     socket.message(JSON.stringify({
       type: "clause.offer",
@@ -143,7 +153,8 @@ describe("formal Pet Main Agent realtime client", () => {
       text: "真实播放后再确认",
     }));
     expect(clauses.at(-1)).toBe("真实播放后再确认");
-    socket.message(finalTtsFrame());
+    socket.message(new Int16Array(480).fill(100).buffer);
+    socket.message(JSON.stringify({ type: "clause.audio_end", clause_id: "clause-9" }));
     await vi.waitFor(() => {
       expect(FakeAudioWorkletNode.instances.some(
         (node) => node.processorName === "aurabot-tts-playback",
@@ -159,7 +170,6 @@ describe("formal Pet Main Agent realtime client", () => {
     } as MessageEvent);
     const ack = sentControls(socket).find((event) => event.type === "renderer.ack");
     expect(ack).toMatchObject({
-      renderer_epoch: 9,
       clause_id: "clause-9",
       complete: true,
     });
@@ -168,5 +178,63 @@ describe("formal Pet Main Agent realtime client", () => {
     await client.stop();
     expect(stopTrack).toHaveBeenCalledOnce();
     expect(states.at(-1)).toBe("off");
+  });
+
+  it("keeps local and server pause independent and sends at most one partial ACK on teardown", async () => {
+    vi.stubGlobal("fetch", vi.fn(async () => ({ ok: true, json: async () => ({ token: "token" }) })));
+    vi.stubGlobal("navigator", {
+      mediaDevices: { getUserMedia: vi.fn(async () => ({ getTracks: () => [] })) },
+    });
+    vi.stubGlobal("WebSocket", FakeWebSocket);
+    vi.stubGlobal("AudioContext", FakeAudioContext);
+    vi.stubGlobal("AudioWorkletNode", FakeAudioWorkletNode);
+    const client = new MainAgentRealtimeClient();
+
+    await client.start({ profileId: "profile_default", soul: "Aura" });
+    const socket = FakeWebSocket.instances[0];
+    socket.open();
+    socket.message(JSON.stringify({ type: "session.ready" }));
+    await vi.waitFor(() => expect(FakeAudioWorkletNode.instances).toHaveLength(2));
+    socket.message(JSON.stringify({ type: "clause.offer", clause_id: "c1", text: "hello" }));
+    const mic = FakeAudioWorkletNode.instances.find((node) => node.processorName === "aurabot-mic-capture");
+    const playback = FakeAudioWorkletNode.instances.find((node) => node.processorName === "aurabot-tts-playback");
+    const resumeCount = () => playback?.port.sent.filter(
+      (value) => (value as { type?: string }).type === "resume",
+    ).length ?? 0;
+    const initialResumes = resumeCount();
+    mic?.port.onmessage?.({ data: { type: "candidate" } } as MessageEvent);
+    socket.message(JSON.stringify({ type: "playback.pause" }));
+    mic?.port.onmessage?.({ data: { type: "released" } } as MessageEvent);
+    expect(resumeCount()).toBe(initialResumes);
+    socket.message(JSON.stringify({ type: "playback.resume" }));
+    expect(resumeCount()).toBe(initialResumes + 1);
+
+    await client.stop();
+    const partial = sentControls(socket).filter(
+      (event) => event.type === "renderer.ack" && event.complete === false,
+    );
+    expect(partial).toHaveLength(1);
+  });
+
+  it("fully tears down a session when microphone permission is denied", async () => {
+    vi.stubGlobal("fetch", vi.fn(async () => ({ ok: true, json: async () => ({ token: "token" }) })));
+    vi.stubGlobal("navigator", {
+      mediaDevices: { getUserMedia: vi.fn(async () => { throw new Error("permission denied"); }) },
+    });
+    vi.stubGlobal("WebSocket", FakeWebSocket);
+    vi.stubGlobal("AudioContext", FakeAudioContext);
+    vi.stubGlobal("AudioWorkletNode", FakeAudioWorkletNode);
+    const states: string[] = [];
+    const client = new MainAgentRealtimeClient({ onState: (state) => states.push(state) });
+
+    await client.start({ profileId: "profile_default", soul: "Aura" });
+    const socket = FakeWebSocket.instances[0];
+    socket.open();
+    socket.message(JSON.stringify({ type: "session.ready" }));
+    await vi.waitFor(() => expect(client.currentState).toBe("error"));
+
+    expect(socket.readyState).toBe(3);
+    expect(FakeAudioContext.instances).toHaveLength(0);
+    expect(states.at(-1)).toBe("error");
   });
 });
