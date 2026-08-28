@@ -64,4 +64,3 @@ Excluded:
 - Forget immediately removes a memory from same-revision recall through SQLite authority.
 - Existing legacy Memory data remains present but receives no chat/debug/proactive mutation.
 - Backend focused/full tests, frontend unit/integration tests, typecheck and build pass.
-
