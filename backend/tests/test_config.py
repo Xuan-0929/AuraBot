@@ -211,7 +211,3 @@ task_runtime:
         self.assertEqual(runtime_config.gateway_model["api_key"], "gateway-secret")
         self.assertNotIn("task_model", runtime_config)
         self.assertEqual(runtime_config.task["default_timeout_seconds"], 1800)
-
-
-if __name__ == "__main__":
-    unittest.main()

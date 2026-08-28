@@ -120,7 +120,3 @@ class MainAgentSettingsTests(unittest.TestCase):
                     config[section][key] = value
                     with self.assertRaisesRegex(ValueError, key):
                         MainAgentSettings.from_config(config, Path("/tmp/config.yaml"))
-
-
-if __name__ == "__main__":
-    unittest.main()

@@ -89,7 +89,3 @@ class MetricsTests(unittest.TestCase):
         self.assertLessEqual(len(snapshot["counters"]), 3)
         self.assertLessEqual(len(snapshot["timings"]), 3)
         self.assertTrue(all(item["samples"] <= 4 for item in snapshot["timings"].values()))
-
-
-if __name__ == "__main__":
-    unittest.main()

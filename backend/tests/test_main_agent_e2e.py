@@ -80,7 +80,3 @@ class SilentMainAgentE2ETests(unittest.IsolatedAsyncioTestCase):
                 await runtime.shutdown()
                 await memory.shutdown()
                 context.close()
-
-
-if __name__ == "__main__":
-    unittest.main()

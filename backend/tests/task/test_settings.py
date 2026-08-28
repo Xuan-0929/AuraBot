@@ -137,7 +137,3 @@ class TaskSettingsTests(unittest.TestCase):
                             {"task": {"default_timeout_seconds": timeout}},
                             config_root=root,
                         )
-
-
-if __name__ == "__main__":
-    unittest.main()

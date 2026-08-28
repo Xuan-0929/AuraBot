@@ -90,7 +90,6 @@ class ActiveProfileManagerTests(unittest.IsolatedAsyncioTestCase):
             self.assertEqual(manager.runtime.soul, "Soul A2")
             self.assertEqual(hub.active_generation, 2)
             await manager.shutdown()
-
     async def test_profile_switch_closes_old_voice_before_owned_resources(self) -> None:
         calls: list[str] = []
         hub = Hub(calls)
@@ -175,7 +174,3 @@ class ActiveProfileManagerTests(unittest.IsolatedAsyncioTestCase):
             )
             self.assertEqual(manager.runtime.profile_id, "profile_a")
             await manager.shutdown()
-
-
-if __name__ == "__main__":
-    unittest.main()

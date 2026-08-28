@@ -198,7 +198,3 @@ class TaskBridgeTests(unittest.IsolatedAsyncioTestCase):
                 "foreign", "pause_task", {"task_id": str(foreign.id)},
             ))
         self.assertEqual(raised.exception.code, "task_not_found")
-
-
-if __name__ == "__main__":
-    unittest.main()

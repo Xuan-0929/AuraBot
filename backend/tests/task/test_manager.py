@@ -337,7 +337,3 @@ class TaskManagerTests(unittest.IsolatedAsyncioTestCase):
         await self.manager.delete_task(task.id)
         events = self.manager._store.events_after(0, task.id, 100)
         self.assertEqual([event.type for event in events].count("task.deleted"), 1)
-
-
-if __name__ == "__main__":
-    unittest.main()

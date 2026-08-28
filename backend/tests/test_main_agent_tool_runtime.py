@@ -179,7 +179,3 @@ class ToolHarnessTests(unittest.IsolatedAsyncioTestCase):
             tool_surface=self.surface,
         )
         self.assertEqual(settlement.receipts[0].code, "stale_invoke")
-
-
-if __name__ == "__main__":
-    unittest.main()

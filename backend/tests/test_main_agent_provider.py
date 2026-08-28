@@ -106,7 +106,3 @@ class OpenAICompatibleProviderTests(unittest.IsolatedAsyncioTestCase):
         )
         self.assertEqual([chunk async for chunk in provider(SimpleNamespace())], [])
         self.assertEqual(constructed, 0)
-
-
-if __name__ == "__main__":
-    unittest.main()

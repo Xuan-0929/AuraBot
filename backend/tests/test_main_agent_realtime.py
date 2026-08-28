@@ -192,7 +192,3 @@ class GatewayTests(unittest.TestCase):
             json={"profileId": "profile_default", "soul": "Aura"},
         )
         self.assertEqual(response.status_code, 403)
-
-
-if __name__ == "__main__":
-    unittest.main()

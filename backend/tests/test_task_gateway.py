@@ -144,7 +144,6 @@ class FakeTaskManager:
             payload={"from": "running", "to": "completed"},
         )
 
-
 class TaskGatewayTests(unittest.TestCase):
     def setUp(self):
         self.manager = FakeTaskManager()
@@ -440,7 +439,3 @@ class TaskGatewayTests(unittest.TestCase):
             status_values,
             ["queued", "running", "waiting", "paused", "completed", "failed", "cancelled"],
         )
-
-
-if __name__ == "__main__":
-    unittest.main()

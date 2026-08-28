@@ -107,7 +107,3 @@ class SnapshotProjectorTests(unittest.TestCase):
         self.assertEqual(prompt["allowed_tool_surface"][0]["function"]["name"], "say_to_user")
         self.assertEqual(prompt["conversation"][-1]["segment_id"], "19")
         self.assertLessEqual(len(snapshot.prompt), 900)
-
-
-if __name__ == "__main__":
-    unittest.main()

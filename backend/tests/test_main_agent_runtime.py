@@ -259,7 +259,3 @@ class ClauseSegmentationTests(unittest.TestCase):
         clauses = segment_say_text(text, final=True)
         self.assertEqual("".join(clauses), text)
         self.assertTrue(all(clauses))
-
-
-if __name__ == "__main__":
-    unittest.main()

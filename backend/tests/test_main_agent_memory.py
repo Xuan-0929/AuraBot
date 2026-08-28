@@ -188,7 +188,3 @@ class ActiveProfileMemoryRoutesTests(unittest.TestCase):
         self.assertEqual(inactive.status_code, 409)
         self.assertEqual(inactive.json()["error"]["code"], "profile_not_active")
         self.assertEqual(forgotten.json()["forgottenMemoryIds"], ["mem-1"])
-
-
-if __name__ == "__main__":
-    unittest.main()

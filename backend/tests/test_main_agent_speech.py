@@ -254,7 +254,3 @@ class SpeechServiceTests(unittest.IsolatedAsyncioTestCase):
         self.assertEqual(coordinator.frames, [b"\0" * 640])
         self.assertTrue(coordinator.closed)
         self.assertEqual(runtime.shutdown_calls, 0)
-
-
-if __name__ == "__main__":
-    unittest.main()

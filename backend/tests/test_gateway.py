@@ -44,7 +44,3 @@ class GatewayEndpointTests(unittest.TestCase):
                 "/debug/events",
             ):
                 self.assertEqual(client.get(path).status_code, 404, path)
-
-
-if __name__ == "__main__":
-    unittest.main()

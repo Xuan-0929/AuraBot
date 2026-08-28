@@ -374,7 +374,3 @@ class TaskStoreTests(unittest.TestCase):
         self.assertIn(source.id, self.store.deleted_task_ids())
         with self.assertRaises(TaskNotFound):
             self.store.get_task(source.id)
-
-
-if __name__ == "__main__":
-    unittest.main()

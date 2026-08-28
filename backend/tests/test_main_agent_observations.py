@@ -125,7 +125,3 @@ class WorkspaceReaderTests(unittest.TestCase):
             for path in ("binary", "secret.key", "link"):
                 with self.assertRaises(ObservationSecurityError):
                     reader.read("repo", path)
-
-
-if __name__ == "__main__":
-    unittest.main()
