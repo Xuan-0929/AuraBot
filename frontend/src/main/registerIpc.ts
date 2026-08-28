@@ -9,7 +9,8 @@ import { ipcMain } from "electron";
 import type { AppServices } from "@core/bootstrap/createServices";
 import type {
   AgentStatus,
-  SendChatMessageInput
+  SendChatMessageInput,
+  SendChatMessageResult
 } from "@shared/contracts/chat";
 import type { BackendStatus } from "@shared/contracts/backend";
 import type { Live2DModelState } from "@shared/contracts/live2dModel";
@@ -57,6 +58,7 @@ export interface WindowController {
     patch: Partial<Omit<NotificationSettings, "permissionState">>
   ): NotificationSettings;
   recordUserActivity(): void;
+  sendChatMessage(input: SendChatMessageInput): Promise<SendChatMessageResult>;
   getPetSettings(): PetSettings;
   updatePetSettings(patch: PetSettingsPatch): PetSettings;
   setPetMousePassthrough(enabled: boolean): void;
@@ -72,16 +74,6 @@ export interface WindowController {
 }
 
 export function registerIpc(services: AppServices, windows: WindowController): void {
-  const petActivityCursors = new Map<string, number>();
-  const broadcastSentences = (message: Message, flushRemainder = false) => {
-    const result = buildAssistantMessagePetActivities(message, {
-      startIndex: petActivityCursors.get(message.id) ?? 0,
-      flushRemainder
-    });
-    petActivityCursors.set(message.id, result.nextIndex);
-    result.activities.forEach((activity) => windows.broadcastPetActivity(activity));
-  };
-
   ipcMain.handle(IPC_CHANNELS.getInitialState, () => {
     const profile = services.profileService.getOrSeedActiveProfile();
     const session = services.sessionRepository.getOrCreateMainSession(profile.id);
@@ -187,31 +179,28 @@ export function registerIpc(services: AppServices, windows: WindowController): v
 
   ipcMain.handle(
     IPC_CHANNELS.sendChatMessage,
-    async (_event, input: SendChatMessageInput) => {
-      windows.recordUserActivity();
-      const result = await services.chatOrchestrator.sendMessage(input, {
-        onAssistantMessageCreated: (message) => {
-          windows.broadcastAgentStatus("typing");
-          windows.broadcastChatMessage(message);
-          broadcastSentences(message);
-        },
-        onAssistantMessageUpdated: (message) => {
-          windows.broadcastChatMessageUpdated(message);
-          broadcastSentences(message);
-        }
-      });
-      windows.broadcastAgentStatus(result.agentStatus);
-      if (result.assistantMessage) {
-        broadcastSentences(result.assistantMessage, true);
-      }
-      return result;
-    }
+    (_event, input: SendChatMessageInput) => sendChatMessageThroughOwner(windows, input)
   );
 
   ipcMain.handle(IPC_CHANNELS.getEventLogs, () => services.eventLogService.list());
   ipcMain.handle(IPC_CHANNELS.getMemoryDebugSnapshot, () =>
     buildLocalMemoryDebugSnapshot(services)
   );
+}
+
+type ChatOwnerWindowController = Pick<
+  WindowController,
+  "recordUserActivity" | "sendChatMessage" | "broadcastAgentStatus"
+>;
+
+export async function sendChatMessageThroughOwner(
+  owner: ChatOwnerWindowController,
+  input: SendChatMessageInput
+): Promise<SendChatMessageResult> {
+  owner.recordUserActivity();
+  const result = await owner.sendChatMessage(input);
+  owner.broadcastAgentStatus(result.agentStatus);
+  return result;
 }
 
 function buildLocalMemoryDebugSnapshot(services: AppServices): MemoryDebugSnapshot {

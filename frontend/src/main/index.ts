@@ -1,13 +1,14 @@
 /**
- * 启动 Electron 桌面进程并组合非 Task services、窗口、IPC 与主动能力。
+ * 启动 Electron 桌面进程并组合窗口、IPC、Python Main Agent 实时会话与主动能力。
  *
- * bootstrap 使用 userData 执行 SQLite 清理迁移，初始化 Chat/Memory/Live2D/通知，
- * 并只探测 health-only Backend；它不创建 Task runner、repository 或 broadcasts。
+ * bootstrap 使用 userData 初始化展示仓库与设置，由 Electron Main 持有带 Origin 的
+ * Backend WebSocket；聊天 clause 只投影到消息表，不再走旧 Chat/Memory 编排链路。
  */
 
 import { existsSync, mkdirSync, writeFileSync } from "node:fs";
 import { join } from "node:path";
 import { app, BrowserWindow, Notification, shell } from "electron";
+import WebSocket from "ws";
 import { createServices, type AppServices } from "@core/bootstrap/createServices";
 import { createLive2DModelRegistry, type Live2DModelRegistry } from "@core/live2d/modelRegistry";
 import { MemoryService } from "@core/memory/memoryService";
@@ -17,6 +18,11 @@ import { createGateModel } from "@core/llm/gateModel";
 import { createModelHealthService, type ModelHealthService } from "@core/llm/modelHealth";
 import { createVoiceAdapter } from "@core/voice/voiceAdapter";
 import { getBackendStatus } from "./backendGatewayClient";
+import { MainAgentChatProjection } from "./mainAgentChatProjection";
+import {
+  MainAgentRealtimeClient,
+  type RealtimeSocket
+} from "./mainAgentRealtimeClient";
 import {
   createMemoryExtractor,
   createMemoryMergePlanner,
@@ -43,7 +49,7 @@ import { Live2DModelStore } from "./live2dModelStore";
 import { NotificationSettingsStore } from "./notificationSettingsStore";
 import { PetWindowStateStore } from "./petWindowStateStore";
 import { SystemNotificationService } from "./systemNotificationService";
-import { registerIpc } from "./registerIpc";
+import { buildAssistantMessagePetActivities, registerIpc } from "./registerIpc";
 import {
   updateUserModelProviderSettings,
   updateUserProactiveSettings
@@ -70,6 +76,10 @@ let modelHealthService: ModelHealthService | undefined;
 let modelHealthSnapshot: PublicModelHealthMap | undefined;
 let live2dModelRegistry: Live2DModelRegistry | undefined;
 let systemNotificationService: SystemNotificationService | undefined;
+let mainAgentRealtimeClient: MainAgentRealtimeClient | undefined;
+let mainAgentChatProjection: MainAgentChatProjection | undefined;
+
+const MAIN_AGENT_GATEWAY_URL = "http://127.0.0.1:6401";
 
 if (process.env.AURABOT_USER_DATA_DIR) {
   app.setPath("userData", process.env.AURABOT_USER_DATA_DIR);
@@ -96,6 +106,43 @@ async function bootstrap(): Promise<void> {
     modelRootPath: resolveLive2DModelRootPath()
   });
   petWindowStateStore = new PetWindowStateStore(userDataPath);
+  const petActivityCursors = new Map<string, number>();
+  const broadcastProjectedMessage = (message: import("@shared/schemas/message").Message) => {
+    const result = buildAssistantMessagePetActivities(message, {
+      startIndex: petActivityCursors.get(message.id) ?? 0,
+      flushRemainder: true
+    });
+    petActivityCursors.set(message.id, result.nextIndex);
+    result.activities.forEach((activity) => broadcastPetActivity(activity));
+  };
+  mainAgentRealtimeClient = new MainAgentRealtimeClient({
+    baseUrl: MAIN_AGENT_GATEWAY_URL,
+    createWebSocket: (url, protocols, options) => new WebSocket(
+      url,
+      [...protocols],
+      { origin: options.origin }
+    ) as unknown as RealtimeSocket,
+    onClauseOffer: (offer) => mainAgentChatProjection!.deliverClause(offer)
+  });
+  mainAgentChatProjection = new MainAgentChatProjection({
+    profileService: services.profileService,
+    sessionRepository: services.sessionRepository,
+    messageRepository: services.messageRepository,
+    eventLogService: services.eventLogService,
+    realtimeClient: mainAgentRealtimeClient,
+    onAssistantMessageCreated: (message) => {
+      broadcastAgentStatus("typing");
+      broadcastChatMessage(message);
+      broadcastProjectedMessage(message);
+      broadcastAgentStatus("idle");
+    },
+    onAssistantMessageUpdated: (message) => {
+      broadcastAgentStatus("typing");
+      broadcastChatMessageUpdated(message);
+      broadcastProjectedMessage(message);
+      broadcastAgentStatus("idle");
+    }
+  });
   registerIpc(services, {
     openConsoleWindow,
     openSettingsWindow,
@@ -111,6 +158,7 @@ async function bootstrap(): Promise<void> {
     getNotificationSettings: () => getNotificationSettings(),
     updateNotificationSettings: (patch) => updateNotificationSettings(patch),
     recordUserActivity: () => proactiveTriggerEngine?.recordUserActivity(),
+    sendChatMessage: (input) => mainAgentChatProjection!.sendMessage(input),
     getPetSettings: () => petSettingsStore?.get() ?? {
       clickThroughPet: false,
       displayLanguage: "en"
@@ -328,6 +376,7 @@ app.on("window-all-closed", () => {
 
 app.on("before-quit", () => {
   proactiveTriggerEngine?.stop();
+  mainAgentRealtimeClient?.close();
   services?.database.close();
 });
 
