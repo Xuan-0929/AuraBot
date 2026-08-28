@@ -1,8 +1,8 @@
-"""Persist Canonical Context events and clause-level renderer delivery truth in one SQLite file.
+"""Persist ordered user segments and clause-level renderer delivery truth in one SQLite file.
 
-The runtime records mutable transcript, observation, think-note and Task facts as append-only events.
-Renderer ACK is the only path that atomically changes a speech clause to delivered and writes its
-assistant clause event, so SnapshotProjector never leaks unheard draft language to later invokes.
+The runtime records stable utterance identities, observations, think notes and Task facts as append-only
+events. Folding updates one utterance in place while preserving its causal position among delivered
+assistant clauses. Renderer ACK remains the only path that publishes assistant language to context.
 """
 
 from __future__ import annotations
@@ -54,6 +54,7 @@ class FoldedContext:
 
     transcript: str
     delivered_clauses: tuple[str, ...]
+    conversation_turns: tuple[dict[str, Any], ...]
     observations: tuple[dict[str, Any], ...]
     think_note: str | None
     task_facts: tuple[dict[str, Any], ...]
@@ -182,7 +183,8 @@ class ContextStore:
             rows = self._connection.execute(
                 "SELECT sequence, event_type, payload_json FROM context_events ORDER BY sequence"
             ).fetchall()
-        transcript = ""
+        conversation: list[dict[str, Any]] = []
+        segment_positions: dict[str, int] = {}
         delivered: list[str] = []
         observations: dict[str, dict[str, Any]] = {}
         task_facts: dict[str, dict[str, Any]] = {}
@@ -190,10 +192,26 @@ class ContextStore:
         for row in rows:
             payload = json.loads(row["payload_json"])
             event_type = row["event_type"]
-            if event_type == "transcript" and isinstance(payload.get("text"), str):
-                transcript = payload["text"]
+            if event_type in {"transcript", "user_segment"} and isinstance(payload.get("text"), str):
+                segment_id = (
+                    payload.get("segment_id")
+                    if event_type == "user_segment" and isinstance(payload.get("segment_id"), str)
+                    else "legacy-transcript"
+                )
+                turn = {"role": "user", "content": payload["text"], "segment_id": segment_id}
+                position = segment_positions.get(segment_id)
+                if position is None:
+                    segment_positions[segment_id] = len(conversation)
+                    conversation.append(turn)
+                else:
+                    conversation[position] = turn
             elif event_type == "assistant_clause" and isinstance(payload.get("text"), str):
                 delivered.append(payload["text"])
+                conversation.append({
+                    "role": "assistant",
+                    "content": payload["text"],
+                    "clause_id": payload.get("clause_id", ""),
+                })
             elif event_type == "observation" and isinstance(payload.get("id"), str):
                 observations[payload["id"]] = payload
             elif event_type == "think_note" and isinstance(payload.get("text"), str):
@@ -201,8 +219,11 @@ class ContextStore:
             elif event_type == "task_fact" and isinstance(payload.get("id"), str):
                 task_facts[payload["id"]] = payload
         return FoldedContext(
-            transcript=transcript,
+            transcript="\n".join(
+                item["content"] for item in conversation if item["role"] == "user"
+            ),
             delivered_clauses=tuple(delivered),
+            conversation_turns=tuple(conversation),
             observations=tuple(observations[key] for key in sorted(observations)),
             think_note=think_note,
             task_facts=tuple(task_facts[key] for key in sorted(task_facts)),

@@ -1,7 +1,7 @@
 /**
  * Drives the standalone aurabot.main-agent.v1 protocol lab. It acquires one-shot capabilities, owns the
- * browser session/control sequence, streams worklet microphone frames, validates and plays TTS frames,
- * renders the authoritative event timeline, and exposes deliberate gap/duplicate/epoch/backpressure faults.
+ * browser session/control sequence, reuses the formal Renderer worklets for local pause and physical-cursor
+ * ACK, renders the authoritative event timeline, and exposes deliberate protocol faults/manual commands.
  */
 
 import {
@@ -38,15 +38,15 @@ let micContext: AudioContext | null = null;
 let micStream: MediaStream | null = null;
 let playbackContext: AudioContext | null = null;
 let playbackNode: AudioWorkletNode | null = null;
-let playbackAllowed = false;
+let localCandidatePaused = false;
+let serverPlaybackBlocked = true;
 
 element<HTMLButtonElement>("acquire").onclick = acquireToken;
 element<HTMLButtonElement>("connect").onclick = connect;
 element<HTMLButtonElement>("submit-text").onclick = () => command("text.submit", { text: textInput.value });
 element<HTMLButtonElement>("candidate").onclick = () => {
-  playbackAllowed = false;
-  playbackNode?.port.postMessage({ type: "flush" });
-  ttsTracker.cancelActive();
+  serverPlaybackBlocked = true;
+  syncPlaybackGate();
   command("speech.candidate");
 };
 element<HTMLButtonElement>("rejected").onclick = () => command("speech.rejected");
@@ -105,7 +105,8 @@ function connect(): void {
   socket = nextSocket;
   socketScope.install(nextSocket);
   nextSocket.binaryType = "arraybuffer";
-  playbackAllowed = false;
+  serverPlaybackBlocked = true;
+  localCandidatePaused = false;
   ttsTracker.reset();
   setStatus("connecting");
   nextSocket.onopen = () => {
@@ -131,7 +132,8 @@ function connect(): void {
   nextSocket.onclose = (event) => {
     if (!socketScope.clear(nextSocket)) return;
     socket = null;
-    playbackAllowed = false;
+    serverPlaybackBlocked = true;
+    localCandidatePaused = false;
     setStatus("offline");
     record("socket.closed", `${event.code} ${event.reason}`.trim());
     void stopMic(false);
@@ -149,7 +151,14 @@ function handleControl(owner: WebSocket, event: Record<string, unknown>): void {
   } else if (event.type === "state.snapshot") {
     rendererEpoch = Number(event.renderer_epoch);
     mode = event.mode === "text" ? "text" : "voice";
-    playbackAllowed = mode === "voice" && event.playback_blocked === false;
+    serverPlaybackBlocked = mode !== "voice" || event.playback_blocked !== false;
+    syncPlaybackGate();
+  } else if (event.type === "playback.pause") {
+    serverPlaybackBlocked = true;
+    syncPlaybackGate();
+  } else if (event.type === "playback.resume") {
+    serverPlaybackBlocked = false;
+    syncPlaybackGate();
   } else if (event.type === "clause.offer") {
     clauseId = String(event.clause_id);
     clauseNode.textContent = JSON.stringify(event, null, 2);
@@ -161,10 +170,11 @@ function handleControl(owner: WebSocket, event: Record<string, unknown>): void {
       event.type === "playback.stop"
       && (event.reason === "speech_candidate" || event.reason === "mode_switch")
     ) {
-      playbackAllowed = false;
+      serverPlaybackBlocked = true;
     }
   } else if (event.type === "session.replaced") {
-    playbackAllowed = false;
+    serverPlaybackBlocked = true;
+    localCandidatePaused = false;
     playbackNode?.port.postMessage({ type: "flush" });
     ttsTracker.reset();
     clauseId = null;
@@ -184,7 +194,15 @@ async function startMic(): Promise<void> {
     await micContext.audioWorklet.addModule(new URL("./mic-worklet.js", import.meta.url));
     const source = micContext.createMediaStreamSource(micStream);
     const capture = new AudioWorkletNode(micContext, "aurabot-mic-capture");
-    capture.port.onmessage = (event: MessageEvent<Int16Array>) => sendMicSamples(event.data);
+    capture.port.onmessage = (event: MessageEvent<{
+      type: "frame" | "candidate" | "released";
+      samples?: Int16Array;
+    }>) => {
+      if (event.data.type === "frame" && event.data.samples) sendMicSamples(event.data.samples);
+      if (event.data.type === "candidate") localCandidatePaused = true;
+      if (event.data.type === "released") localCandidatePaused = false;
+      syncPlaybackGate();
+    };
     source.connect(capture);
     record("mic.capture", `${micContext.sampleRate} Hz browser → 16000 Hz protocol`);
   } catch (error) {
@@ -238,18 +256,20 @@ function sendBackpressureBurst(): void {
 async function handleTts(owner: WebSocket, encoded: ArrayBuffer): Promise<void> {
   try {
     const frame = parseTtsFrame(encoded);
-    if (!playbackAllowed) {
-      record("tts.dropped", "authoritative playback gate is closed");
-      return;
-    }
     const ordering = ttsTracker.accept(frame);
     if (ordering === "duplicate") {
       record("tts.duplicate", `${frame.streamId}:${frame.frameSequence}`);
       return;
     }
     const node = await ensurePlayback();
-    if (!socketScope.isCurrent(owner) || !playbackAllowed) return;
-    node.port.postMessage(frame.samples, [frame.samples.buffer]);
+    if (!socketScope.isCurrent(owner) || !clauseId) return;
+    node.port.postMessage({
+      type: "append",
+      clauseId,
+      samples: frame.samples,
+      final: frame.final,
+    }, [frame.samples.buffer]);
+    syncPlaybackGate();
   } catch (error) {
     record("tts.error", message(error));
     ttsTracker.cancelActive();
@@ -264,10 +284,12 @@ async function ensurePlayback(): Promise<AudioWorkletNode> {
     await context.audioWorklet.addModule(new URL("./playback-worklet.js", import.meta.url));
     const node = new AudioWorkletNode(context, "aurabot-tts-playback", { outputChannelCount: [1] });
     playbackNode = node;
-    node.port.onmessage = (event: MessageEvent<{ type: string }>) => {
+    node.port.onmessage = (event: MessageEvent<{ type: string; clauseId?: string }>) => {
       if (event.data.type === "overrun") {
         record("tts.overrun", "playback queue flushed");
         ackClause(false);
+      } else if (event.data.type === "clause-complete" && event.data.clauseId === clauseId) {
+        ackClause(true);
       }
     };
     node.connect(context.destination);
@@ -278,7 +300,7 @@ async function ensurePlayback(): Promise<AudioWorkletNode> {
 async function setMode(next: "voice" | "text"): Promise<void> {
   if (next === mode) return;
   if (next === "text") await stopMic(false);
-  playbackAllowed = false;
+  serverPlaybackBlocked = true;
   playbackNode?.port.postMessage({ type: "flush" });
   ttsTracker.cancelActive();
   command("mode.set", { renderer_epoch: faults.rendererEpoch(rendererEpoch), mode: next });
@@ -294,6 +316,14 @@ function ackClause(complete: boolean): void {
     renderer_epoch: faults.rendererEpoch(rendererEpoch),
     clause_id: clauseId,
     complete,
+  });
+  clauseId = null;
+  clauseNode.textContent = "No active clause.";
+}
+
+function syncPlaybackGate(): void {
+  playbackNode?.port.postMessage({
+    type: localCandidatePaused || serverPlaybackBlocked ? "pause" : "resume",
   });
 }
 

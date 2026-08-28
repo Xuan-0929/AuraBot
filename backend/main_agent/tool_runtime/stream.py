@@ -1,4 +1,4 @@
-"""Assemble provider tool deltas and incrementally decode stable ``say_to_user.text`` clauses.
+"""Assemble provider tool deltas and incrementally decode ordered ``say_to_user`` fields.
 
 Provider adapters may split call ids, names, JSON arguments, escape sequences, and Unicode surrogate
 pairs at arbitrary boundaries.  This module normalizes common Chat Completions/Responses shapes into
@@ -17,7 +17,6 @@ from typing import Any
 from .definitions import ToolCall
 
 
-_TEXT_START = re.compile(r'^\s*\{\s*"text"\s*:\s*"')
 _CLAUSE_END = frozenset("。！？!?；;\n")
 _SOFT_END = frozenset("，,、：:—- \t")
 _SOFT_LENGTH = 24
@@ -40,6 +39,8 @@ class SayTextStream:
         self._closed = False
         self.invalid = False
         self.error_code: str | None = None
+        self.motion_token: str | None = None
+        self.expression_token: str | None = None
 
     @property
     def complete_text(self) -> str:
@@ -66,10 +67,16 @@ class SayTextStream:
             raise TypeError("tool argument fragments must be strings")
         self._raw += fragment
         if self._position is None:
-            match = _TEXT_START.search(self._raw)
-            if match is None:
+            try:
+                located = _locate_text_string(self._raw)
+            except ValueError:
+                self._reject("malformed_arguments")
                 return ()
-            self._position = match.end()
+            if located is None:
+                return ()
+            self._position, metadata = located
+            self.motion_token = metadata.get("motion_token")
+            self.expression_token = metadata.get("expression_token")
         clauses: list[str] = []
         while not self._closed and self._position < len(self._raw):
             position = self._position
@@ -160,6 +167,8 @@ class SayClause:
     index: int
     call_id: str
     text: str
+    motion_token: str | None = None
+    expression_token: str | None = None
 
 
 @dataclass(slots=True)
@@ -229,8 +238,15 @@ class ToolCallAssembler:
             return ()
         for index in sorted(self._calls):
             partial = self._calls[index]
+            stream = partial.say_stream
             clauses.extend(
-                SayClause(index, partial.call_id or f"call_{index}", text)
+                SayClause(
+                    index,
+                    partial.call_id or f"call_{index}",
+                    text,
+                    stream.motion_token if stream else None,
+                    stream.expression_token if stream else None,
+                )
                 for text in partial.pending_clauses
             )
         return tuple(clauses)
@@ -541,6 +557,66 @@ def _next_clause_length(text: str) -> int | None:
         if index >= _HARD_LENGTH:
             return _HARD_LENGTH
     return None
+
+
+def _locate_text_string(raw: str) -> tuple[int, dict[str, str]] | None:
+    """Find a top-level text string after any complete preceding JSON members."""
+
+    index = _skip_space(raw, 0)
+    if index >= len(raw):
+        return None
+    if raw[index] != "{":
+        raise ValueError("tool arguments must start with an object")
+    index += 1
+    metadata: dict[str, str] = {}
+    decoder = json.JSONDecoder()
+    while True:
+        index = _skip_space(raw, index)
+        if index >= len(raw):
+            return None
+        if raw[index] == "}":
+            return None
+        if raw[index] != '"':
+            raise ValueError("object key must be a string")
+        try:
+            key, end = decoder.raw_decode(raw, index)
+        except json.JSONDecodeError:
+            return None
+        if not isinstance(key, str):
+            raise ValueError("object key must be text")
+        index = _skip_space(raw, end)
+        if index >= len(raw):
+            return None
+        if raw[index] != ":":
+            raise ValueError("object key must be followed by a colon")
+        index = _skip_space(raw, index + 1)
+        if index >= len(raw):
+            return None
+        if key == "text":
+            if raw[index] != '"':
+                raise ValueError("text must be a string")
+            return index + 1, metadata
+        try:
+            value, end = decoder.raw_decode(raw, index)
+        except json.JSONDecodeError:
+            return None
+        if key in {"motion_token", "expression_token"} and isinstance(value, str):
+            metadata[key] = value
+        index = _skip_space(raw, end)
+        if index >= len(raw):
+            return None
+        if raw[index] == ",":
+            index += 1
+            continue
+        if raw[index] == "}":
+            return None
+        raise ValueError("object member must end with comma or brace")
+
+
+def _skip_space(raw: str, index: int) -> int:
+    while index < len(raw) and raw[index] in " \t\r\n":
+        index += 1
+    return index
 
 
 class _DuplicateKeyError(ValueError):

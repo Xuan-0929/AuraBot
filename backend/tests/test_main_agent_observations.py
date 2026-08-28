@@ -184,7 +184,10 @@ class ObservationRuntimeTests(unittest.IsolatedAsyncioTestCase):
         runtime = MainAgentRuntime(
             context_store=self.store,
             snapshot_projector=SnapshotProjector(),
-            tool_policy=ToolSurfacePolicy(workspace_ids=("repo",)),
+            tool_policy=ToolSurfacePolicy(
+                workspace_ids=("repo",),
+                observation_tools=("web_search", "web_read"),
+            ),
             provider=provider,
             renderer=renderer,
             executors=executors,

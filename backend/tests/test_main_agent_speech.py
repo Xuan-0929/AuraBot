@@ -88,6 +88,39 @@ class FakeTtsTransport:
 
 
 class ProviderBoundaryTests(unittest.IsolatedAsyncioTestCase):
+    async def test_dashscope_tts_yields_callback_audio_before_stream_completion(self) -> None:
+        release = threading.Event()
+        completed = threading.Event()
+
+        class StreamingTransport:
+            def stream(self, text, on_data, on_complete, _on_error) -> None:
+                self.text = text
+                on_data(b"first")
+                release.wait(1)
+                on_data(b"second")
+                completed.set()
+                on_complete()
+
+            def cancel(self) -> None:
+                release.set()
+
+        transport = StreamingTransport()
+        provider = DashScopeSpeechOutputProvider(
+            "cosyvoice-v3-flash",
+            voice="longanyang",
+            transport_factory=lambda **_kwargs: transport,
+        )
+        stream = provider.synthesize("你好。")
+
+        first = await asyncio.wait_for(anext(stream), 0.2)
+
+        self.assertEqual(first, b"first")
+        self.assertFalse(completed.is_set())
+        release.set()
+        self.assertEqual(await anext(stream), b"second")
+        with self.assertRaises(StopAsyncIteration):
+            await anext(stream)
+
     async def test_dashscope_stt_normalizes_private_sentence_events(self) -> None:
         transports: list[FakeSttTransport] = []
         updates: list[TranscriptUpdate] = []
@@ -544,6 +577,7 @@ class FakeEou:
 class FakeSpeechRuntime:
     def __init__(self) -> None:
         self.calls: list[tuple] = []
+        self.transcript_segment_ids: list[str | None] = []
 
     async def vad_start(self) -> None:
         self.calls.append(("vad_start",))
@@ -557,7 +591,14 @@ class FakeSpeechRuntime:
     async def reject_speech_candidate(self) -> None:
         self.calls.append(("rejected",))
 
-    async def update_transcript(self, text: str, *, request_prepare: bool = True) -> None:
+    async def update_transcript(
+        self,
+        text: str,
+        *,
+        segment_id: str | None = None,
+        request_prepare: bool = True,
+    ) -> None:
+        self.transcript_segment_ids.append(segment_id)
         self.calls.append(("transcript", text, request_prepare))
 
     async def eou_incomplete(self) -> bool:
@@ -569,6 +610,23 @@ class FakeSpeechRuntime:
 
     async def endpoint_fallback(self) -> None:
         self.calls.append(("endpoint_fallback",))
+
+
+class FakePlaybackLifecycle:
+    def __init__(self) -> None:
+        self.calls: list[str] = []
+
+    async def speech_candidate_started(self) -> None:
+        self.calls.append("candidate")
+
+    async def speech_candidate_rejected(self) -> None:
+        self.calls.append("rejected")
+
+    async def speech_confirmed(self) -> None:
+        self.calls.append("confirmed")
+
+    async def speech_endpoint(self, *, complete: bool) -> None:
+        self.calls.append("complete" if complete else "incomplete")
 
 
 class ControlledClock:
@@ -636,6 +694,53 @@ class SpeechInputTests(unittest.IsolatedAsyncioTestCase):
             ("transcript", "你好", False),
             ("transcript", "你好呀", True),
         ])
+        self.assertEqual(len(set(runtime.transcript_segment_ids)), 1)
+        self.assertIsInstance(runtime.transcript_segment_ids[0], str)
+
+    async def test_new_stt_session_gets_a_new_stable_segment_id(self) -> None:
+        runtime = FakeSpeechRuntime()
+        stt = FakeSttProvider()
+        self.coordinator = SpeechInputCoordinator(
+            runtime,
+            stt_provider=stt,
+            vad=FakeVad(0.9, 0.9),
+            pre_roll_frames=1,
+        )
+
+        await self.coordinator.accept_mic_frame(bytes(640))
+        await stt.sinks[0](TranscriptUpdate("第一段", "第一段", "", "stable"))
+        await self.coordinator._finish_turn()
+        await self.coordinator.accept_mic_frame(bytes(640))
+        await stt.sinks[1](TranscriptUpdate("第二段", "第二段", "", "stable"))
+
+        self.assertEqual(len(runtime.transcript_segment_ids), 2)
+        self.assertNotEqual(
+            runtime.transcript_segment_ids[0], runtime.transcript_segment_ids[1]
+        )
+
+    async def test_authoritative_playback_lifecycle_tracks_vad_and_complete_eou(self) -> None:
+        runtime = FakeSpeechRuntime()
+        lifecycle = FakePlaybackLifecycle()
+        stt = FakeSttProvider()
+        probabilities = [0.9] * 8 + [0.0] * 15
+        self.coordinator = SpeechInputCoordinator(
+            runtime,
+            stt_provider=stt,
+            vad=FakeVad(*probabilities),
+            eou=FakeEou(0.9),
+            playback_lifecycle=lifecycle,
+        )
+
+        for index, _ in enumerate(probabilities):
+            await self.coordinator.accept_mic_frame(bytes(640))
+            if index == 0:
+                await stt.sinks[0](TranscriptUpdate("完成", "完成", "", "stable"))
+        await self.coordinator.wait_for_endpoint()
+
+        self.assertEqual(
+            lifecycle.calls,
+            ["candidate", "confirmed", "complete"],
+        )
 
     async def test_short_noise_is_rejected_and_never_reaches_endpoint(self) -> None:
         runtime = FakeSpeechRuntime()
@@ -872,6 +977,38 @@ def renderer_clause(clause_id: str, text: str):
 
 
 class ClauseSpeechDeliveryTests(unittest.IsolatedAsyncioTestCase):
+    async def test_queue_and_first_renderer_frame_drive_distinct_ledger_callbacks(self) -> None:
+        release = asyncio.Event()
+
+        class GatedOutput(FakeSpeechOutput):
+            async def synthesize(self, text: str):
+                self.texts.append(text)
+                await release.wait()
+                yield bytes(960)
+
+        transitions: list[tuple[str, str]] = []
+        lease = FakeRendererLease()
+        delivery = ClauseSpeechDelivery(
+            GatedOutput(),
+            lambda: lease,
+            mark_queued=lambda clause_id: transitions.append((clause_id, "queued")),
+            mark_playing=lambda clause_id: transitions.append((clause_id, "playing")),
+        )
+
+        await delivery(renderer_clause("physical", "按阶段播放"))
+        await asyncio.sleep(0)
+        self.assertEqual(transitions, [("physical", "queued")])
+
+        release.set()
+        while not lease.frames:
+            await asyncio.sleep(0)
+        self.assertEqual(transitions, [
+            ("physical", "queued"),
+            ("physical", "playing"),
+        ])
+        self.assertTrue(delivery.acknowledge("physical", complete=True))
+        await delivery.shutdown()
+
     async def test_enqueue_returns_before_renderer_ack_and_worker_keeps_ownership(self) -> None:
         output = FakeSpeechOutput()
         lease = FakeRendererLease()

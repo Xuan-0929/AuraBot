@@ -31,6 +31,10 @@ from backend.main_agent.tool_runtime import InvokeMode, ToolSurfacePolicy
 from backend.memory.stores.sqlite import SQLiteMemoryStore
 from backend.memory.stores.qdrant import QdrantLocalVectorStore
 from backend.memory.types import MemoryCandidate
+from backend.memory.extractor import StructuredMemoryExtractor
+from backend.memory.extraction.providers import OpenAICompatibleMemoryExtractionModel
+from backend.main import build_memory_extractor
+from backend.main_agent.settings import ChatModelSettings
 
 
 class StaticEmbedding:
@@ -38,6 +42,68 @@ class StaticEmbedding:
 
     def embed(self, _text: str) -> list[float]:
         return [1.0, 0.0]
+
+
+class OpenAICompatibleMemoryExtractionTests(unittest.TestCase):
+    def test_production_factory_uses_the_chat_model_backed_structured_extractor(self) -> None:
+        extractor = build_memory_extractor(
+            ChatModelSettings("https://model.example/v1", "chat", "secret", 23)
+        )
+
+        self.assertIsInstance(extractor, StructuredMemoryExtractor)
+        self.assertIsInstance(extractor.model, OpenAICompatibleMemoryExtractionModel)
+
+    def test_model_payload_is_strict_json_and_flows_through_structured_extractor(self) -> None:
+        class Response:
+            def raise_for_status(self) -> None:
+                return None
+
+            def json(self):
+                return {
+                    "choices": [{"message": {"content": (
+                        '{"memories":[{"content":"用户喜欢低酸咖啡豆",'
+                        '"memory_type":"preference","importance":0.8,'
+                        '"confidence":0.9,"entities":["低酸咖啡豆"]}],'
+                        '"entities":[{"name":"低酸咖啡豆"}]}'
+                    )}}]
+                }
+
+        class Client:
+            def __init__(self) -> None:
+                self.request = None
+
+            def __enter__(self):
+                return self
+
+            def __exit__(self, *_args) -> None:
+                return None
+
+            def post(self, url, **kwargs):
+                self.request = (url, kwargs)
+                return Response()
+
+        client = Client()
+        model = OpenAICompatibleMemoryExtractionModel(
+            base_url="https://model.example/v1",
+            model_name="memory-capable-chat",
+            api_key="secret",
+            timeout_seconds=17,
+            client_factory=lambda **_kwargs: client,
+        )
+        extractor = StructuredMemoryExtractor(model)
+
+        memories, entities = extractor.extract(
+            content="我喜欢低酸咖啡豆",
+            metadata={"source_segment_ids": ["utterance-1"]},
+        )
+
+        self.assertEqual(memories[0].content, "用户喜欢低酸咖啡豆")
+        self.assertEqual(memories[0].metadata["source_segment_ids"], ["utterance-1"])
+        self.assertEqual([entity.name for entity in entities], ["低酸咖啡豆"])
+        url, request = client.request
+        self.assertEqual(url, "https://model.example/v1/chat/completions")
+        self.assertEqual(request["json"]["model"], "memory-capable-chat")
+        self.assertEqual(request["headers"]["authorization"], "Bearer secret")
 
 
 class ControlledVectorStore:
@@ -321,7 +387,7 @@ class RuntimeRecallFenceTests(unittest.IsolatedAsyncioTestCase):
             await runtime.wait_until_idle()
 
             self.assertEqual(len(requests), 1)
-            self.assertEqual(requests[0].snapshot.transcript, "second")
+            self.assertEqual(requests[0].snapshot.transcript, "first\nsecond")
             self.assertEqual(requests[0].snapshot.memory_facts[0]["id"], "memory-2")
         finally:
             await runtime.shutdown()

@@ -86,7 +86,10 @@ class RuntimeTestCase(unittest.IsolatedAsyncioTestCase):
         runtime = MainAgentRuntime(
             context_store=self.store,
             snapshot_projector=SnapshotProjector(),
-            tool_policy=ToolSurfacePolicy(workspace_ids=("repo",)),
+            tool_policy=ToolSurfacePolicy(
+                workspace_ids=("repo",),
+                observation_tools=("web_search", "web_read"),
+            ),
             provider=provider,
             renderer=renderer or self.renderer,
             executors=executors or {},
@@ -107,7 +110,10 @@ class TriggerAndGrantTests(RuntimeTestCase):
             await runtime.wait_until_idle()
 
         self.assertLessEqual(len(runtime.invoke_requests), 128)
-        self.assertEqual(runtime.invoke_requests[-1].snapshot.transcript, "input 139")
+        self.assertEqual(
+            runtime.invoke_requests[-1].snapshot.conversation_turns[-1]["content"],
+            "input 139",
+        )
 
     async def test_confirmed_barge_in_revokes_grant_and_cancels_control_but_noise_does_not(self) -> None:
         started = asyncio.Event()
@@ -378,6 +384,30 @@ class TriggerAndGrantTests(RuntimeTestCase):
         self.assertEqual(
             {item["function"]["name"] for item in request.snapshot.allowed_tool_surface},
             request.tool_surface.names,
+        )
+
+    async def test_stt_segments_replace_one_utterance_and_append_the_next(self) -> None:
+        provider = ScriptedProvider([])
+        runtime = self.runtime(provider)
+
+        await runtime.update_transcript(
+            "第一版", segment_id="utterance-1", request_prepare=False
+        )
+        await runtime.update_transcript(
+            "第一句话", segment_id="utterance-1", request_prepare=False
+        )
+        await runtime.update_transcript(
+            "再补充一句", segment_id="utterance-2", request_prepare=False
+        )
+
+        self.assertEqual(
+            [(item.segment_id, item.text) for item in runtime.active_input.segments],
+            [("utterance-1", "第一句话"), ("utterance-2", "再补充一句")],
+        )
+        self.assertEqual(runtime.active_input.latest_transcript, "第一句话\n再补充一句")
+        self.assertEqual(
+            [item["content"] for item in self.store.fold().conversation_turns],
+            ["第一句话", "再补充一句"],
         )
 
     async def test_revision_advance_revokes_the_old_grant_and_interrupts_unheard_clauses(self) -> None:

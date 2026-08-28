@@ -1,4 +1,4 @@
-"""Define the Main Agent's approved tool catalog, effect model, and dynamic exposure policy.
+"""Define the Main Agent's approved tool catalog, effect model, and executable exposure policy.
 
 This module is the deterministic trust boundary between an immutable invoke snapshot and provider
 tool schemas.  It physically omits effects unavailable to an invoke mode, builds workspace/avatar
@@ -203,6 +203,7 @@ class ToolSurfacePolicy:
         motion_tokens: Sequence[str] = (),
         expression_tokens: Sequence[str] = (),
         task_controls: Sequence[str] = (),
+        observation_tools: Sequence[str] = (),
         max_calls: int = 8,
         max_durable_calls: int = 1,
         max_note_calls: int = 1,
@@ -216,11 +217,18 @@ class ToolSurfacePolicy:
         unknown_controls = set(controls) - set(_TASK_CONTROLS)
         if unknown_controls:
             raise ValueError(f"unknown task controls: {', '.join(sorted(unknown_controls))}")
+        observations = tuple(dict.fromkeys(observation_tools))
+        unknown_observations = set(observations) - {"web_search", "web_read"}
+        if unknown_observations:
+            raise ValueError(
+                f"unknown observation tools: {', '.join(sorted(unknown_observations))}"
+            )
         self._definitions = _approved_definitions(
             tuple(sorted(set(workspace_ids))),
             tuple(sorted(set(motion_tokens))),
             tuple(sorted(set(expression_tokens))),
             controls,
+            observations,
         )
 
     @property
@@ -338,7 +346,7 @@ _TASK_CONTROLS = (
 
 def _approved_definitions(
     workspace_ids: tuple[str, ...], motion_tokens: tuple[str, ...], expression_tokens: tuple[str, ...],
-    task_controls: tuple[str, ...],
+    task_controls: tuple[str, ...], observation_tools: tuple[str, ...],
 ) -> dict[str, ToolDefinition]:
     """Construct the fixed catalog while injecting only trusted dynamic enum values."""
 
@@ -361,15 +369,18 @@ def _approved_definitions(
                 "recommended_next_step": _text(maximum=500),
             }, ("current_understanding",)),
         ),
-        ToolDefinition(
+    ]
+    observation_definitions = {
+        "web_search": ToolDefinition(
             "web_search", "Start a safe web search Observation.", EffectClass.SAFE_READ,
             _object({"query": _text(maximum=1_000)}, ("query",)),
         ),
-        ToolDefinition(
+        "web_read": ToolDefinition(
             "web_read", "Read a previously registered public web source.", EffectClass.SAFE_READ,
             _object({"source_id": _text(maximum=128)}, ("source_id",)),
         ),
-    ]
+    }
+    definitions.extend(observation_definitions[name] for name in observation_tools)
     if workspace_ids:
         workspace = _text(maximum=64, enum=workspace_ids)
         definitions.extend((

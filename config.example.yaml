@@ -18,6 +18,10 @@ app:
 main_agent:
   profile_id: default
   profile_dir: profiles
+  # Web tools are exposed to the model only when this key is configured.
+  # Search and read share one opaque SourceRegistry; no key keeps both absent.
+  web:
+    tavily_api_key: "${TAVILY_API_KEY:-}"
   # Speech remains disabled by default and does not probe optional providers.
   speech:
     enabled: false

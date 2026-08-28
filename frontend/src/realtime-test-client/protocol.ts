@@ -1,8 +1,7 @@
 /**
- * Implements the browser half of aurabot.main-agent.v1 framing, stream ordering, connection scoping, and
- * deterministic fault knobs. The standalone realtime lab uses these helpers to upload mic frames, validate
- * TTS, initialize playback exactly once, and reject callbacks from replaced sockets; production chat UI is
- * deliberately independent from this diagnostic protocol surface.
+ * Implements the shared browser half of aurabot.main-agent.v1 framing and stream ordering. The formal Pet
+ * Renderer and standalone diagnostic client both use these exact AUR1 encoders/validators; connection
+ * scoping and deterministic fault knobs remain available to the lab without creating a second protocol.
  */
 
 export const AUR1_HEADER_BYTES = 24;

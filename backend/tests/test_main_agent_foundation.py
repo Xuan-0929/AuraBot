@@ -16,6 +16,7 @@ from pathlib import Path
 
 from backend.main_agent.context import ClauseState, ContextStore
 from backend.main_agent.profiles import (
+    DEFAULT_SOUL,
     ProfileConflictError,
     ProfileStore,
     ProfileValidationError,
@@ -24,6 +25,13 @@ from backend.main_agent.snapshot import SnapshotBudget, SnapshotProjector
 
 
 class ProfileStoreTests(unittest.TestCase):
+    def test_new_profiles_receive_the_nonempty_default_soul(self) -> None:
+        with tempfile.TemporaryDirectory() as directory:
+            profile = ProfileStore(Path(directory)).create("aura")
+
+            self.assertEqual(profile.soul.text, DEFAULT_SOUL)
+            self.assertTrue(profile.soul.text.strip())
+
     def test_create_read_update_and_recoverable_archive_profile(self) -> None:
         with tempfile.TemporaryDirectory() as directory:
             root = Path(directory) / "profiles"
@@ -162,6 +170,35 @@ class ProfileStoreTests(unittest.TestCase):
 
 
 class ContextStoreTests(unittest.TestCase):
+    def test_user_segments_update_in_place_and_keep_causal_conversation_order(self) -> None:
+        with tempfile.TemporaryDirectory() as directory:
+            store = ContextStore(Path(directory) / "main-agent.sqlite3")
+            store.append_event(
+                "user_segment",
+                {"segment_id": "utterance-1", "input_id": "input-1", "text": "第一版"},
+            )
+            store.append_event(
+                "user_segment",
+                {"segment_id": "utterance-1", "input_id": "input-1", "text": "第一句话"},
+            )
+            store.create_clause("clause-1", "我听到了。")
+            store.transition_clause("clause-1", ClauseState.TTS_QUEUED)
+            store.transition_clause("clause-1", ClauseState.PLAYING)
+            store.ack_clause("clause-1", complete=True)
+            store.append_event(
+                "user_segment",
+                {"segment_id": "utterance-2", "input_id": "input-1", "text": "再补充一句"},
+            )
+
+            folded = store.fold()
+
+            self.assertEqual(folded.transcript, "第一句话\n再补充一句")
+            self.assertEqual(folded.conversation_turns, (
+                {"role": "user", "content": "第一句话", "segment_id": "utterance-1"},
+                {"role": "assistant", "content": "我听到了。", "clause_id": "clause-1"},
+                {"role": "user", "content": "再补充一句", "segment_id": "utterance-2"},
+            ))
+
     def test_public_events_cannot_forge_delivered_assistant_language_or_non_json_values(self) -> None:
         with tempfile.TemporaryDirectory() as directory:
             store = ContextStore(Path(directory) / "main-agent.sqlite3")
@@ -250,6 +287,25 @@ class ContextStoreTests(unittest.TestCase):
 
 
 class SnapshotProjectorTests(unittest.TestCase):
+    def test_prompt_contains_conversation_without_duplicating_soul_or_legacy_text_sections(self) -> None:
+        with tempfile.TemporaryDirectory() as directory:
+            store = ContextStore(Path(directory) / "main-agent.sqlite3")
+            store.append_event(
+                "user_segment",
+                {"segment_id": "utterance-1", "input_id": "input-1", "text": "你好"},
+            )
+            snapshot = SnapshotProjector().project(store.fold(), soul="温柔但直接")
+
+            prompt = json.loads(snapshot.prompt)
+
+            self.assertEqual(prompt["conversation"], [
+                {"role": "user", "content": "你好", "segment_id": "utterance-1"},
+            ])
+            self.assertNotIn("soul", prompt)
+            self.assertNotIn("transcript", prompt)
+            self.assertNotIn("delivered_clauses", prompt)
+            self.assertEqual(snapshot.soul, "温柔但直接")
+
     def test_rejects_total_budget_that_cannot_represent_a_json_object(self) -> None:
         with self.assertRaises(ValueError):
             SnapshotBudget(max_prompt_chars=1)
@@ -268,7 +324,7 @@ class SnapshotProjectorTests(unittest.TestCase):
             store.ack_clause("one", complete=True)
 
             projector = SnapshotProjector(
-                SnapshotBudget(max_prompt_chars=360, soul_chars=32, transcript_chars=32,
+                SnapshotBudget(max_prompt_chars=600, soul_chars=32, transcript_chars=32,
                 delivered_chars=32, observation_chars=128, memory_chars=32,
                                runtime_chars=32, tool_chars=32)
             )
@@ -281,7 +337,7 @@ class SnapshotProjectorTests(unittest.TestCase):
                 runtime_state={"user_speaking": False}, allowed_tools=[{"name": "placeholder"}],
             )
             self.assertEqual(first.prompt, second.prompt)
-            self.assertLessEqual(len(first.prompt), 360)
+            self.assertLessEqual(len(first.prompt), 600)
             self.assertEqual(first.transcript, "用户问题")
             self.assertEqual(first.delivered_clauses, ("已听见",))
             self.assertEqual(tuple(item["id"] for item in first.observations), ("a", "b"))
@@ -307,8 +363,9 @@ class SnapshotProjectorTests(unittest.TestCase):
             self.assertLessEqual(len(snapshot.prompt), 260)
             self.assertIn("runtime_state", prompt)
             self.assertIn("allowed_tool_surface", prompt)
-            self.assertEqual(prompt["transcript"], snapshot.transcript)
-            self.assertEqual(prompt["soul"], snapshot.soul)
+            self.assertEqual(prompt["conversation"], [dict(item) for item in snapshot.conversation_turns])
+            self.assertNotIn("transcript", prompt)
+            self.assertNotIn("soul", prompt)
             self.assertEqual(prompt["runtime_state"], dict(snapshot.runtime_state))
             self.assertEqual(prompt["allowed_tool_surface"], [dict(item) for item in snapshot.allowed_tool_surface])
             with self.assertRaises(ValueError):

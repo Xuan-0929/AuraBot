@@ -37,8 +37,21 @@ def delta(index: int, call_id: str, name: str, arguments: str) -> dict:
 
 class ToolSurfaceTests(unittest.TestCase):
     def setUp(self) -> None:
-        self.policy = ToolSurfacePolicy(workspace_ids=("repo",), motion_tokens=("happy",))
+        self.policy = ToolSurfacePolicy(
+            workspace_ids=("repo",),
+            motion_tokens=("happy",),
+            observation_tools=("web_search", "web_read"),
+        )
         self.grant = ResponseGrant("grant", "input", 2, 8)
+
+    def test_observation_tools_are_exposed_only_when_explicitly_enabled(self) -> None:
+        disabled = ToolSurfacePolicy(observation_tools=())
+        enabled = ToolSurfacePolicy(observation_tools=("web_search", "web_read"))
+
+        self.assertIsNone(disabled.definition("web_search"))
+        self.assertIsNone(disabled.definition("web_read"))
+        self.assertIsNotNone(enabled.definition("web_search"))
+        self.assertIsNotNone(enabled.definition("web_read"))
 
     def freeze(self, mode, *, grant=None, current_grant=None, speech_candidate=False,
                confirmed_speech=False):
@@ -112,6 +125,27 @@ class ToolSurfaceTests(unittest.TestCase):
 
 
 class StreamingParserTests(unittest.TestCase):
+    def test_streams_text_after_preceding_fields_and_preserves_known_metadata(self) -> None:
+        parser = ToolCallAssembler()
+
+        clauses = parser.feed(delta(
+            0,
+            "say",
+            "say_to_user",
+            '{"motion_token":"happy","extra":{"nested":true},"text":"你好。后',
+        ))
+
+        self.assertEqual([item.text for item in clauses], ["你好。"])
+        self.assertEqual(clauses[0].motion_token, "happy")
+        self.assertIsNone(clauses[0].expression_token)
+        parser.feed(delta(0, "", "", '续","expression_token":"smile"}'))
+        self.assertEqual(parser.finish()[0].arguments, {
+            "motion_token": "happy",
+            "extra": {"nested": True},
+            "text": "你好。后续",
+            "expression_token": "smile",
+        })
+
     def test_assembles_interleaved_calls_from_arbitrary_provider_chunks(self) -> None:
         parser = ToolCallAssembler()
         parser.feed(delta(0, "say", "say_to_user", '{"te'))
@@ -321,6 +355,7 @@ class ToolHarnessTests(unittest.IsolatedAsyncioTestCase):
 
     def harness(self, *, state_provider=True, observation_completion_hook=None,
                 cancel_tombstone_limit=256, **policy_options) -> ToolHarness:
+        policy_options.setdefault("observation_tools", ("web_search", "web_read"))
         policy = ToolSurfacePolicy(workspace_ids=("repo",), **policy_options)
         provider = (lambda: self.fence) if state_provider else None
         return ToolHarness(
@@ -416,7 +451,9 @@ class ToolHarnessTests(unittest.IsolatedAsyncioTestCase):
             raise RuntimeError("scheduler unavailable")
 
         harness = ToolHarness(
-            ToolSurfacePolicy(), self.executors, state_provider=broken_state
+            ToolSurfacePolicy(observation_tools=("web_search", "web_read")),
+            self.executors,
+            state_provider=broken_state,
         )
         settlement = await self.invoke([
             delta(0, "read", "web_search", '{"query":"x"}'),
@@ -646,7 +683,11 @@ class ToolHarnessTests(unittest.IsolatedAsyncioTestCase):
 
         executors = dict(self.executors)
         executors["web_search"] = slow
-        harness = ToolHarness(ToolSurfacePolicy(), executors, state_provider=lambda: self.fence)
+        harness = ToolHarness(
+            ToolSurfacePolicy(observation_tools=("web_search", "web_read")),
+            executors,
+            state_provider=lambda: self.fence,
+        )
         settlement = await self.invoke(
             [delta(0, "read", "web_search", '{"query":"x"}')], harness=harness
         )
@@ -668,7 +709,7 @@ class ToolHarnessTests(unittest.IsolatedAsyncioTestCase):
         executors = dict(self.executors)
         executors["web_search"] = execute
         harness = ToolHarness(
-            ToolSurfacePolicy(), executors,
+            ToolSurfacePolicy(observation_tools=("web_search", "web_read")), executors,
             observation_limiter=ObservationLimiter(3),
         )
         held = ToolCall(
@@ -714,7 +755,8 @@ class ToolHarnessTests(unittest.IsolatedAsyncioTestCase):
         executors = dict(self.executors)
         executors["web_search"] = fail
         harness = ToolHarness(
-            ToolSurfacePolicy(), executors, state_provider=lambda: self.fence,
+            ToolSurfacePolicy(observation_tools=("web_search", "web_read")),
+            executors, state_provider=lambda: self.fence,
             observation_completion_hook=forwarded.append,
         )
         settlement = await self.invoke(
@@ -729,7 +771,11 @@ class ToolHarnessTests(unittest.IsolatedAsyncioTestCase):
     async def test_missing_observation_executor_is_rejected_instead_of_marked_detached(self) -> None:
         executors = dict(self.executors)
         del executors["web_search"]
-        harness = ToolHarness(ToolSurfacePolicy(), executors, state_provider=lambda: self.fence)
+        harness = ToolHarness(
+            ToolSurfacePolicy(observation_tools=("web_search", "web_read")),
+            executors,
+            state_provider=lambda: self.fence,
+        )
         settlement = await self.invoke(
             [delta(0, "read", "web_search", '{"query":"x"}')], harness=harness
         )
@@ -776,7 +822,7 @@ class ToolHarnessTests(unittest.IsolatedAsyncioTestCase):
     async def test_cancel_tombstones_are_bounded_lru_entries(self) -> None:
         active = "a"
         harness = ToolHarness(
-            ToolSurfacePolicy(), self.executors,
+            ToolSurfacePolicy(observation_tools=("web_search", "web_read")), self.executors,
             state_provider=lambda: replace(self.fence, active_invoke_id=active),
             cancel_tombstone_limit=2,
         )
@@ -826,7 +872,7 @@ class ToolHarnessTests(unittest.IsolatedAsyncioTestCase):
     async def test_external_cancel_while_waiting_cleans_registration_for_retry(self) -> None:
         active = "first"
         harness = ToolHarness(
-            ToolSurfacePolicy(), self.executors,
+            ToolSurfacePolicy(observation_tools=("web_search", "web_read")), self.executors,
             state_provider=lambda: replace(self.fence, active_invoke_id=active),
         )
         release = asyncio.Event()

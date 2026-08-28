@@ -16,7 +16,10 @@ import {
   parseTtsFrame,
 } from "@renderer/realtime-test-client/protocol";
 // @ts-expect-error The raw AudioWorklet module intentionally has no production TypeScript dependency.
-import { ContinuousPcm16Resampler } from "@renderer/realtime-test-client/mic-worklet.js";
+import { ContinuousPcm16Resampler, LocalSpeechGate } from "@renderer/realtime-test-client/mic-worklet.js";
+// @ts-expect-error The raw AudioWorklet module exports a pure queue for deterministic tests.
+import { ClausePlaybackQueue } from "@renderer/realtime-test-client/playback-worklet.js";
+import { PlaybackGate } from "@renderer/main-agent-realtime/client";
 
 describe("main-agent realtime browser protocol", () => {
   it("writes the exact 24-byte AUR1 little-endian header", () => {
@@ -76,6 +79,45 @@ describe("main-agent realtime browser protocol", () => {
       }
       expect(output).toBe(expected);
     }
+  });
+
+  it("pauses within one loud 20ms frame and releases only after 200ms of quiet", () => {
+    const gate = new LocalSpeechGate();
+    const loud = new Int16Array(320).fill(Math.round(0.03 * 32767));
+    const quiet = new Int16Array(320);
+
+    expect(gate.accept(loud)).toBe("candidate");
+    for (let frame = 0; frame < 9; frame += 1) {
+      expect(gate.accept(quiet)).toBeNull();
+    }
+    expect(gate.accept(quiet)).toBe("released");
+  });
+
+  it("keeps paused PCM and completes a clause once its final source sample is consumed", () => {
+    const queue = new ClausePlaybackQueue({ outputSampleRate: 24_000, maxQueuedSamples: 32 });
+    expect(queue.append({
+      clauseId: "clause-1",
+      samples: new Int16Array([100, 200, 300, 400]),
+      final: true,
+    })).toEqual([]);
+
+    queue.pause();
+    expect(queue.render(new Float32Array(8))).toEqual([]);
+    expect(queue.queuedSamples).toBe(4);
+    queue.resume();
+    expect(queue.render(new Float32Array(3))).toEqual([]);
+    expect(queue.render(new Float32Array(1))).toEqual([
+      { type: "clause-complete", clauseId: "clause-1" },
+    ]);
+    expect(queue.render(new Float32Array(8))).toEqual([]);
+  });
+
+  it("resumes after a local false positive only when the server gate is also open", () => {
+    const gate = new PlaybackGate();
+    expect(gate.setLocalCandidate(true)).toBe("pause");
+    expect(gate.setServerBlocked(true)).toBeNull();
+    expect(gate.setLocalCandidate(false)).toBeNull();
+    expect(gate.setServerBlocked(false)).toBe("resume");
   });
 
   it("shares playback initialization and scopes callbacks to only the current socket", async () => {

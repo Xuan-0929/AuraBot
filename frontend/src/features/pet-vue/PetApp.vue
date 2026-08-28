@@ -1,7 +1,7 @@
 <!--
-  桌宠窗口：组合 Live2D 舞台、主动消息气泡、控制按钮与窗口缩放交互。
-  它从共享 store 读取聊天/Memory 驱动的宠物状态，不渲染或控制任何 Task 数据；
-  Live2D 运动与窗口交互仍分别委托给 motion store 和 preload IPC。
+  桌宠窗口：组合 Live2D 舞台、Main Agent 正式语音 Renderer、主动消息气泡、控制按钮与窗口缩放。
+  Main Agent clause 在真实播放期间覆盖主动活动并由 AudioWorklet 游标自动确认；页面仍不渲染或
+  控制 Task 数据，Live2D 运动与窗口交互分别委托给 motion store 和 preload IPC。
 -->
 <template>
   <main
@@ -14,8 +14,8 @@
     @pointerleave="void clickThrough.handlePointerLeave()"
     @wheel="handleWheel"
   >
-    <aside v-if="petStore.petActivity" class="pet-message-bubble" :aria-label="t(petStore.displayLanguage, 'petMessage')">
-      {{ petStore.petActivity.message }}
+    <aside v-if="mainAgentClauseText || petStore.petActivity" class="pet-message-bubble" :aria-label="t(petStore.displayLanguage, 'petMessage')">
+      {{ mainAgentClauseText ?? petStore.petActivity?.message }}
     </aside>
 
     <div class="desktop-pet-model-shell pet-vue-model-shell" data-testid="live2d-model-surface">
@@ -37,6 +37,7 @@
         :visible="true"
         :display-language="petStore.displayLanguage"
         :voice-input-active="isVoiceInputActive"
+        :voice-input-state="mainAgentRealtimeState"
         @hovering-change="(value) => (isControlsHovering = value)"
         @console-open="() => void petStore.openConsoleWindow()"
         @voice-toggle="handleVoiceToggle"
@@ -63,8 +64,12 @@
 </template>
 
 <script setup lang="ts">
-import { computed, ref, watch } from "vue";
+import { computed, onBeforeUnmount, ref, watch } from "vue";
 import type { PetResizeDirection } from "@shared/contracts/ipc";
+import {
+  MainAgentRealtimeClient,
+  type MainAgentRealtimeState
+} from "../../main-agent-realtime/client";
 import { useAuraBotStore } from "../../app/store";
 import { t } from "../../i18n";
 import {
@@ -83,8 +88,11 @@ const petStore = useAuraBotStore();
 const motionQueueStore = useMotionQueueStore();
 
 const isControlsHovering = ref(false);
-/** Placeholder “mic open” state until the real voice pipeline toggles recording. */
-const isVoiceInputActive = ref(false);
+const mainAgentRealtimeState = ref<MainAgentRealtimeState>("off");
+const mainAgentClauseText = ref<string | null>(null);
+const isVoiceInputActive = computed(
+  () => mainAgentRealtimeState.value === "connecting" || mainAgentRealtimeState.value === "active"
+);
 const isInteractiveAreaHovering = ref(false);
 const isResizeGripHovering = ref(false);
 const resizeDraggingDirection = ref<PetResizeDirection | null>(null);
@@ -92,6 +100,19 @@ const pointerAt = ref<{ x: number; y: number } | undefined>(undefined);
 const canvasRef = ref<HTMLCanvasElement | null>(null);
 const live2dViewTransform = ref(readStoredLive2DViewTransform(window.localStorage));
 const live2dZoomRequest = ref<{ id: number; deltaY: number; focalPoint: { x: number; y: number } } | undefined>(undefined);
+
+const mainAgentRealtime = new MainAgentRealtimeClient({
+  onState: (state) => {
+    mainAgentRealtimeState.value = state;
+  },
+  onClause: (text) => {
+    mainAgentClauseText.value = text;
+  }
+});
+
+onBeforeUnmount(() => {
+  void mainAgentRealtime.stop();
+});
 
 const clickThrough = useClickThrough({
   enabled: computed(() => petStore.petSettings.clickThroughPet),
@@ -150,9 +171,7 @@ watch(
 );
 
 function handleVoiceToggle() {
-  isVoiceInputActive.value = !isVoiceInputActive.value;
-  // Reserved interface: voice pipeline will be implemented in a later phase.
-  console.info("[pet-vue] voice toggle reserved");
+  void mainAgentRealtime.toggle();
 }
 
 function handleCanvasReady(canvas: HTMLCanvasElement) {

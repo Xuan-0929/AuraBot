@@ -1,4 +1,4 @@
-"""Own Main Agent input causality, control scheduling, grants, and renderer-confirmed text delivery.
+"""Own segmented Main Agent input causality, scheduling, grants, and confirmed text delivery.
 
 MainAgentRuntime folds normalized transcript/VAD/EOU facts into one ActiveInput, coalesces control
 triggers into an event-driven single-flight drain deferred outside commit stacks, freezes Snapshot and
@@ -56,12 +56,21 @@ Executor = Callable[[ToolCall], Any]
 
 
 @dataclass(frozen=True, slots=True)
+class InputSegment:
+    """One stable utterance identity whose STT snapshots replace text in place."""
+
+    segment_id: str
+    text: str
+
+
+@dataclass(frozen=True, slots=True)
 class ActiveInput:
-    """The current lightweight causal scope and its latest stable transcript revision."""
+    """The current causal scope, ordered utterances, and their composed transcript."""
 
     input_id: str
     revision: int
     latest_transcript: str
+    segments: tuple[InputSegment, ...] = ()
 
 
 @dataclass(frozen=True, slots=True)
@@ -331,8 +340,10 @@ class MainAgentRuntime:
             self._cancel_proposal_locked(proposal, "explicit_cancel")
             return True
 
-    async def update_transcript(self, text: str, *, request_prepare: bool = True) -> bool:
-        """Replace the latest stable ActiveInput transcript, advance revision, and optionally checkpoint."""
+    async def update_transcript(
+        self, text: str, *, segment_id: str | None = None, request_prepare: bool = True
+    ) -> bool:
+        """Update one stable utterance, advance revision, and optionally checkpoint."""
 
         transcript = _required_text(text, "transcript")
         async with self._lock:
@@ -340,9 +351,13 @@ class MainAgentRuntime:
             self._user_speaking = True
             self._speech_candidate = False
             self._confirmed_speech = True
-            if self._active_input is not None and self._active_input.latest_transcript == transcript:
+            identifier = self._segment_id_locked(segment_id)
+            if (
+                self._active_input is not None
+                and any(item.segment_id == identifier and item.text == transcript for item in self._active_input.segments)
+            ):
                 return False
-            self._advance_input_locked(transcript)
+            self._advance_input_locked(transcript, identifier)
             admitted = request_prepare and self._request_prepare_locked("stable_transcript", False)
             self._kick_locked()
             return bool(admitted)
@@ -353,7 +368,7 @@ class MainAgentRuntime:
         transcript = _required_text(text, "text submission")
         async with self._lock:
             barrier = self._prepare_barrier_locked()
-            self._advance_input_locked(transcript)
+            self._advance_input_locked(transcript, self._new_id("segment"))
             assert self._active_input is not None
             confirmed_input = self._active_input
             self._user_speaking = False
@@ -650,21 +665,41 @@ class MainAgentRuntime:
         if first_shutdown:
             self._increment_metric("main.runtime.shutdown")
 
-    def _advance_input_locked(self, transcript: str) -> None:
+    def _segment_id_locked(self, segment_id: str | None) -> str:
+        if segment_id is not None:
+            return _required_text(segment_id, "segment id")
+        if self._active_input is not None and not self._has_external_commit and self._active_input.segments:
+            return self._active_input.segments[-1].segment_id
+        return self._new_id("segment")
+
+    def _advance_input_locked(self, transcript: str, segment_id: str) -> None:
         previous = self._active_input
         if previous is None or self._has_external_commit:
-            self._active_input = ActiveInput(self._new_id("input"), 1, transcript)
+            segments = (InputSegment(segment_id, transcript),)
+            self._active_input = ActiveInput(self._new_id("input"), 1, transcript, segments)
             self._has_external_commit = False
             self._reset_prepare_admission_locked()
             if previous is not None:
                 self._retire_proposals_for_input_locked(previous.input_id)
         else:
+            segments = list(previous.segments)
+            for index, item in enumerate(segments):
+                if item.segment_id == segment_id:
+                    segments[index] = InputSegment(segment_id, transcript)
+                    break
+            else:
+                segments.append(InputSegment(segment_id, transcript))
+            composed = "\n".join(item.text for item in segments)
             self._active_input = ActiveInput(
-                previous.input_id, previous.revision + 1, transcript
+                previous.input_id, previous.revision + 1, composed, tuple(segments)
             )
         self._response_grant = None
         self._pending_trigger = None
-        self.context_store.append_event("transcript", {"text": transcript})
+        self.context_store.append_event("user_segment", {
+            "segment_id": segment_id,
+            "input_id": self._active_input.input_id,
+            "text": transcript,
+        })
         self._context_changed_locked(refresh_grant=False)
         self._interrupt_stale_clauses_locked()
         if self._active_invoke is not None and self._active_invoke.request.mode is not InvokeMode.PREPARE:
@@ -966,8 +1001,9 @@ class MainAgentRuntime:
             text = str(call.arguments["text"])
             clause_id = self._new_id("clause")
             self.context_store.create_clause(clause_id, text)
-            self.context_store.transition_clause(clause_id, ClauseState.TTS_QUEUED)
-            self.context_store.transition_clause(clause_id, ClauseState.PLAYING)
+            physical_states = bool(getattr(self.renderer, "tracks_physical_states", False))
+            if not physical_states:
+                self.context_store.transition_clause(clause_id, ClauseState.TTS_QUEUED)
             self._clause_origins[clause_id] = (request.input_id, request.revision)
             offer = RendererClause(
                 clause_id,
@@ -980,6 +1016,11 @@ class MainAgentRuntime:
             )
         try:
             result = self.renderer(offer)
+            if not physical_states:
+                async with self._lock:
+                    clause = self.context_store.get_clause(clause_id)
+                    if clause.state is ClauseState.TTS_QUEUED:
+                        self.context_store.transition_clause(clause_id, ClauseState.PLAYING)
             if inspect.isawaitable(result):
                 result = await result
             if isinstance(result, bool):
@@ -994,6 +1035,26 @@ class MainAgentRuntime:
                     self.context_store.transition_clause(clause_id, ClauseState.FAILED)
                 self._clause_origins.pop(clause_id, None)
             raise
+
+    async def renderer_tts_queued(self, clause_id: str) -> bool:
+        """Advance a delivery-owned clause only after bounded queue admission."""
+
+        async with self._lock:
+            clause = self.context_store.get_clause(clause_id)
+            if clause.state is not ClauseState.DRAFT:
+                return False
+            self.context_store.transition_clause(clause_id, ClauseState.TTS_QUEUED)
+            return True
+
+    async def renderer_playing(self, clause_id: str) -> bool:
+        """Advance a clause only after its first PCM frame enters the active Renderer."""
+
+        async with self._lock:
+            clause = self.context_store.get_clause(clause_id)
+            if clause.state is not ClauseState.TTS_QUEUED:
+                return False
+            self.context_store.transition_clause(clause_id, ClauseState.PLAYING)
+            return True
 
     async def _save_think_note(self, call: ToolCall) -> None:
         note = json.dumps(
@@ -1618,10 +1679,13 @@ class MainAgentRuntime:
         record = getattr(self.memory_bridge, "record_confirmed_input", None)
         if not callable(record):
             return
+        if not active_input.segments:
+            return
+        segment = active_input.segments[-1]
         try:
             result = record(
-                segment_id=f"{active_input.input_id}:{active_input.revision}",
-                content=active_input.latest_transcript,
+                segment_id=segment.segment_id,
+                content=segment.text,
                 input_id=active_input.input_id,
                 revision=active_input.revision,
             )
@@ -1749,6 +1813,7 @@ def _observation_json(value: Any) -> Any:
 
 __all__ = [
     "ActiveInput",
+    "InputSegment",
     "InvokeRequest",
     "MainAgentRuntime",
     "PendingTrigger",

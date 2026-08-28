@@ -1,3 +1,8 @@
+<!--
+  桌宠悬浮控制组：提供 Console、正式 Main Agent 麦克风和窗口拖动入口。
+  组件只渲染外部传入的 realtime active/error 状态并转发用户事件；语音连接、媒体资源与
+  clause 播放均由 PetApp 的 MainAgentRealtimeClient 持有，避免在视觉组件中复制状态机。
+-->
 <template>
   <div
     class="pet-quick-controls pet-vue-quick-controls"
@@ -55,6 +60,7 @@
           class="pet-action-button pet-vue-circle-btn pet-action-voice"
           type="button"
           :data-active="voiceInputActive ? 'true' : 'false'"
+          :data-state="voiceInputState"
           :aria-label="t(displayLanguage, 'startVoiceInput')"
           @click="emit('voiceToggle')"
         >
@@ -127,10 +133,12 @@ withDefaults(
   defineProps<{
     visible: boolean;
     displayLanguage: DisplayLanguage;
-    /** When true, mic is “open” (listening); dims when false. Placeholder until voice pipeline exists. */
+    /** True while the formal Main Agent mic session is connecting or listening. */
     voiceInputActive?: boolean;
+    /** Real transport state, exposed for active/error styling without inventing a second UI state machine. */
+    voiceInputState?: "off" | "connecting" | "active" | "error";
   }>(),
-  { voiceInputActive: false }
+  { voiceInputActive: false, voiceInputState: "off" }
 );
 
 const emit = defineEmits<{
@@ -314,6 +322,11 @@ function handleDragPointerEnd(event: PointerEvent) {
   opacity: 1;
   filter: drop-shadow(0 0.5px 0 rgba(255, 255, 255, 0.55))
     drop-shadow(0 1px 1.5px rgba(45, 32, 24, 0.35)) brightness(1.14);
+}
+
+.pet-action-voice[data-state="error"] {
+  outline: 2px solid rgba(220, 38, 38, 0.7);
+  outline-offset: 1px;
 }
 
 .pet-vue-circle-btn:active:not(.pet-action-drag):not(:disabled) {

@@ -1,6 +1,7 @@
 # Main Agent
 
-> 设计状态：已确认，待实现。
+> 实现状态：P0 与本轮 P1 契约已接入；Live2D motion/expression capability registration（P1-1）
+> 仍明确延期，不应从保留的 token 字段推断为已实现。
 >
 > 本文是 AuraBot Main Agent、实时语音对话控制面和主对话上下文的架构事实源。
 > 它定义产品语义、运行时契约、允许的效果和验收标准，不规定 Python 包目录、类拆分、
@@ -211,8 +212,13 @@ Runtime 只维护一个轻量因果作用域 `ActiveInput`：
 ActiveInput
 - input_id
 - revision
+- segments（按首次出现顺序保存稳定 segment_id 与该 utterance 最新文本）
 - latest_transcript
 ```
+
+每个 STT session 创建一个稳定 `segment_id`；partial、stable 与 final 更新复用同一 ID 并原位覆盖。
+同一 ActiveInput 中后续新 utterance 使用新 ID 并追加。手工文本同样生成独立 ID。Context 写入开放事件
+`user_segment {segment_id, input_id, text}`，因此同一 utterance 不会因 revision 重复进入历史。
 
 每当当前输入的稳定内容发生可见变化，`revision` 和 Context 版本按需前进。
 所有异步产物必须能追溯到其 `input_id`、来源 revision 和来源 invoke。
@@ -425,6 +431,10 @@ Observation 的普通 progress 不应默认触发 CONTINUE；完成、失败或�
 
 ## 9. Main Agent 控制流
 
+生产 Provider 的消息顺序固定为：Main Agent control `system`、effective Soul `system`、不可变
+Snapshot JSON `user`。Snapshot 不重复 Soul，也不再分别重复 transcript 与 delivered assistant 文本。
+新 Profile 写入默认陪伴型 Soul；已有空 `SOUL.md` 只做运行时 fallback，不覆写用户文件。
+
 Main Agent 的系统提示必须呈现类似程序控制流图的决策顺序，而不是一句模糊的“先理解，再回答”。
 
 ```mermaid
@@ -494,6 +504,9 @@ S3  DURABLE ACTION
 6. `task_assign` 前若模型还需要搜索结果，必须先完成安全读取，再由后续 CONTINUE invoke 决定任务参数。
 7. acknowledgment 后允许约 5 到 15 秒自然静默，不得每隔数秒机械重复“还在查”。
 8. 只有真正有用的阶段变化或等待显著超出预期时，才考虑再次进度说明。
+9. ToolSurface 只能暴露真实注册的执行器：未配置 Tavily key 时 `web_search` 与 `web_read` 同时消失；
+   配置后两者共享同一 `SourceRegistry`，`web_read` 只接受该 registry 产生的 opaque `source_id`。
+10. Workspace observation tools 同样只按已配置 workspace 暴露，不能出现“模型看得到、生产执行不了”的工具。
 
 允许的典型组合：
 
@@ -691,12 +704,54 @@ failed
 6. 下一次 Snapshot 只注入 delivered clauses。
 7. Clause 应足够短，使被打断时最多重说很短内容；具体分句算法由实现阶段调优。
 
+物理状态绑定如下，不允许 Runtime 在接受文本时提前伪造播放状态：
+
+```mermaid
+stateDiagram-v2
+  [*] --> DRAFT: 接受 say_to_user
+  DRAFT --> TTS_QUEUED: delivery 队列接收
+  DRAFT --> FAILED: 队列或 Renderer 初始化失败
+  TTS_QUEUED --> PLAYING: offer 后首个 PCM frame 进入当前 lease
+  TTS_QUEUED --> INTERRUPTED: cancel / replacement / shutdown
+  TTS_QUEUED --> FAILED: TTS 或 transport 失败
+  PLAYING --> DELIVERED: Worklet 游标越过 final sample + complete ACK
+  PLAYING --> INTERRUPTED: partial ACK / barge-in / replacement
+  PLAYING --> FAILED: 播放或 transport 故障
+```
+
 Token 或 word 级 delivered 需要 TTS timestamps、forced alignment、sample cursor 和中文分词适配，首期明确延期。
 
 ## 16. Barge-in 与新语音
 
 Renderer 检测到用户开口后，必须在本地立即暂停当前音频，不等待后端、LLM 或 TTS 返回。
 随后将 VAD 和播放状态报告给 Python Runtime。
+
+正式 Pet Renderer 使用两层播放门：`localCandidatePaused` 来自 20ms PCM 的轻量 RMS 门，
+`serverPlaybackBlocked` 来自后端 Silero 与会话状态；只有两者都为 false 时 Worklet 游标才移动。
+本地门初始 noise floor 为 0.005，非 candidate 时以 alpha 0.05 更新；attack 为
+`max(0.020, noiseFloor × 3.0)`，单帧触发暂停；release 为
+`max(0.012, noiseFloor × 1.8)`，连续 10 帧（200ms）安静才释放。本地误报只恢复队列，
+不修改 Context；Silero reject 才解除服务端门，confirm 才 flush/cancel。
+
+```mermaid
+sequenceDiagram
+  participant Mic as Pet Mic Worklet
+  participant Pet as Formal Renderer
+  participant Hub as RealtimeHub
+  participant Vad as Silero/STT/EOU
+  participant Play as Playback Worklet
+  Mic-->>Pet: local candidate
+  Pet->>Play: pause（保留 PCM）
+  Vad->>Hub: candidate / reject / confirm
+  Hub-->>Pet: playback.pause / resume / clause.cancel
+  Play-->>Pet: final sample consumed
+  Pet->>Hub: renderer.ack complete=true
+```
+
+`clause.offer` 文本在播放期间显示于 Pet 气泡；Worklet 真实消费 final source sample 后只发送一次
+complete ACK。pause 不清队列；cancel、stop、overrun、连接关闭或用户关闭才 flush，客户端主动终止
+最多发送一次 partial ACK。Electron packaged 模式只为 Pet `webContentsId` 且只对
+`http/ws://127.0.0.1:6401/*` 将 Origin 规范化为 `http://127.0.0.1:6400`；后端不接受 null、file 或通配 Origin。
 
 正式确认用户语音后：
 
@@ -711,6 +766,9 @@ Renderer 检测到用户开口后，必须在本地立即暂停当前音频，�
 Runtime 不要求 LLM 判断用户是否正在说话，也不允许 LLM 覆盖播放事实。
 
 ## 17. Live2D 能力注册
+
+> 当前实现说明：本节仍是目标契约，本轮明确不实现 capability registration。协议可保留
+> `motion_token` / `expression_token`，但正式 Renderer 不解释、不注册、也不驱动 Live2D。
 
 AuraBot 必须读取当前 Live2D 模型 manifest，并注册实际可用的动作和表情能力。
 
@@ -802,6 +860,12 @@ TaskManager 接受后：
 
 Canonical Context 是主对话唯一事实源。每次 Prompt 使用确定性 projector 构建，不把数据库或日志全文直接倾倒给模型。
 
+Projector 将 `user_segment` 与只来自完整 Renderer ACK 的 `assistant_clause` 按因果顺序折叠成
+`conversation_turns`。相同 segment ID 更新其第一次出现的位置；旧 `transcript` 事件兼容折叠为一个
+用户 turn。未播放、部分播放、interrupted 或 failed clause 永不进入 conversation。只读
+`transcript` / `delivered_clauses` 继续兼容内部检查，但 Provider JSON 只发送 conversation，
+总字符预算仍为 12,000。
+
 应保留：
 
 - 当前用户输入和稳定 transcript；
@@ -844,6 +908,11 @@ Memory 检索足够快时，应在 invoke Snapshot 构建阶段完成，并作�
 8. Memory 写入失败或变慢不能阻塞实时 Main Agent。
 
 五分钟是 Memory episode 的 seal 边界，不是 Context 可见性的延迟，也不是话题结束判断。
+
+生产 Memory 提取复用 `chat_model` 配置，以短生命周期 OpenAI-compatible HTTP client 请求严格 JSON；
+响应必须经 `json.loads` 与既有 schema parser，不接受 Markdown fence 或宽松修复，也不静默回退规则提取器。
+模型不可用或 JSON 非法沿用 job retry/failure 语义。每个确认稳定的 utterance 只用其 `segment_id`
+作为幂等坐标写入 episode，慢提取运行在 MemoryWorker 后台，不阻塞新对话。
 
 ## 20. 短情感对话的零负担路径
 

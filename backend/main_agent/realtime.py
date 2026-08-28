@@ -2,10 +2,11 @@
 
 The module issues origin-bound one-shot capabilities, validates bounded JSON and 24-byte AUR1 PCM
 frames, arbitrates one process-global Renderer lease, and translates only normalized desktop events to
-MainAgentRuntime. It also owns event-driven bounded media queues, loop-affine session command ports, and a
-control-priority writer; media is never copied to a replacement lease. Speech providers remain outside
-this module and may consume the bounded mic queue or capture an immutable ``RendererLeasePort`` before
-offering clauses or enqueueing 24 kHz TTS frames.
+MainAgentRuntime. It also owns event-driven bounded media queues, loop-affine session command ports, a
+control-priority writer, and the authoritative Renderer playback gate driven by backend VAD lifecycle
+events; media is never copied to a replacement lease. Speech providers remain outside this module and
+may consume the bounded mic queue or capture an immutable ``RendererLeasePort`` before offering clauses
+or enqueueing 24 kHz TTS frames.
 
 Protocol v1 control types are intentionally explicit: client ``session.open``, ``text.submit``,
 ``mic.start``, ``mic.stop``, ``speech.candidate``, ``speech.rejected``, ``speech.confirmed``,
@@ -1021,6 +1022,99 @@ class RealtimeHub:
                 return None
             return RendererLeasePort(self, session, session.epoch)
 
+    async def speech_candidate_started(self) -> None:
+        """Pause the current voice Renderer as soon as backend VAD sees a candidate."""
+
+        async with self._lease_lock:
+            session = self._session
+            if (
+                session is None
+                or not session.opened
+                or not session.ready
+                or session.revoked
+                or session.mode != "voice"
+                or not session.mic_active
+            ):
+                return
+            already_blocked = session.speech_candidate and session.playback_blocked
+            session.speech_candidate = True
+            session.playback_blocked = True
+            epoch = session.epoch
+        if not already_blocked:
+            await session.queue_control(
+                "playback.pause",
+                expected_epoch=epoch,
+                renderer_epoch=epoch,
+                reason="speech_candidate",
+            )
+
+    async def speech_candidate_rejected(self) -> None:
+        """Release a false-positive VAD block without discarding queued playback."""
+
+        async with self._lease_lock:
+            session = self._session
+            if session is None or not session.opened or session.revoked:
+                return
+            had_candidate = session.speech_candidate
+            session.speech_candidate = False
+            session.playback_blocked = session.mode == "text"
+            epoch = session.epoch
+            voice = session.mode == "voice"
+        if had_candidate and voice:
+            await session.queue_control(
+                "playback.resume",
+                expected_epoch=epoch,
+                renderer_epoch=epoch,
+                reason="speech_rejected",
+            )
+            await session.queue_control(
+                "state.snapshot",
+                expected_epoch=epoch,
+                **self.snapshot(session),
+            )
+
+    async def speech_confirmed(self) -> None:
+        """Flush offered and queued speech after authoritative barge-in confirmation."""
+
+        async with self._lease_lock:
+            session = self._session
+            if (
+                session is None
+                or not session.opened
+                or session.revoked
+                or not session.speech_candidate
+            ):
+                return
+            session.playback_blocked = True
+        await _cancel_playback(session, "confirmed_barge_in")
+
+    async def speech_endpoint(self, *, complete: bool) -> None:
+        """Keep incomplete speech blocked, or reopen voice delivery immediately before RESPOND."""
+
+        async with self._lease_lock:
+            session = self._session
+            if session is None or not session.opened or session.revoked:
+                return
+            epoch = session.epoch
+            if complete:
+                session.speech_candidate = False
+                session.playback_blocked = session.mode == "text"
+            else:
+                session.playback_blocked = True
+            voice = session.mode == "voice"
+        if complete and voice:
+            await session.queue_control(
+                "playback.resume",
+                expected_epoch=epoch,
+                renderer_epoch=epoch,
+                reason="eou_complete",
+            )
+        await session.queue_control(
+            "state.snapshot",
+            expected_epoch=epoch,
+            **self.snapshot(session),
+        )
+
     def _require_port_locked(self, port: RendererLeasePort) -> _Session:
         session = port._session
         if (
@@ -1464,7 +1558,11 @@ async def _handle_control_owned(
                 confirm = getattr(session.hub.runtime, "confirm_speech", None)
                 if callable(confirm):
                     await _maybe_await(confirm())
-                await _maybe_await(session.hub.runtime.update_transcript(transcript, request_prepare=False))
+                await _maybe_await(session.hub.runtime.update_transcript(
+                    transcript,
+                    segment_id=f"diagnostic-{command_id}",
+                    request_prepare=False,
+                ))
                 if complete:
                     await _maybe_await(session.hub.runtime.eou_complete())
                 else:

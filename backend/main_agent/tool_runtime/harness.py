@@ -376,7 +376,12 @@ class ToolHarness:
         )
         if code:
             return code
-        call = ToolCall(clause.call_id, "say_to_user", {"text": clause.text}, clause.index)
+        arguments = {"text": clause.text}
+        if clause.motion_token is not None:
+            arguments["motion_token"] = clause.motion_token
+        if clause.expression_token is not None:
+            arguments["expression_token"] = clause.expression_token
+        call = ToolCall(clause.call_id, "say_to_user", arguments, clause.index)
         result = await self._execute_control(call, invoke_id, cancel_event)
         return None if result == "accepted" else result
 

@@ -1,5 +1,5 @@
 """
-组合 AuraBot FastAPI Backend、固定健康路由、Main Agent 实时/语音网关与 Python Pi Task Control Plane。
+组合 AuraBot FastAPI Backend、Main Agent 真实工具/Memory/语音网关与 Python Pi Task Control Plane。
 
 模块导入时只加载经过白名单过滤的 YAML；FastAPI lifespan 组合并启动 TaskManager、一个
 process-wide MemoryWorker、active-profile MemoryBridge、MainAgentRuntime、RealtimeHub 与
@@ -40,8 +40,11 @@ from .main_agent.context import ContextStore
 from .main_agent.memory import MemoryBridge, MemoryWorker
 from .main_agent.metrics import LifecycleMetrics
 from .main_agent.provider import build_chat_provider
-from .main_agent.observations import WorkspaceListExecutor, WorkspaceReadExecutor, WorkspaceReader
-from .main_agent.profiles import ProfileConflictError, ProfileStore, ProfileValidationError
+from .main_agent.observations import (
+    SafeWebReader, SourceRegistry, TavilySearchExecutor,
+    WorkspaceListExecutor, WorkspaceReadExecutor, WorkspaceReader,
+)
+from .main_agent.profiles import DEFAULT_SOUL, ProfileConflictError, ProfileStore, ProfileValidationError
 from .main_agent.realtime import RealtimeHub, router as main_agent_realtime_router
 from .main_agent.runtime import MainAgentRuntime
 from .main_agent.settings import MainAgentSettings
@@ -55,12 +58,24 @@ from .main_agent.speech import (
 )
 from .main_agent.tool_runtime import ToolSurfacePolicy
 from .memory.embedding import create_embedding_provider
-from .memory.extractor import RuleBasedMemoryExtractor
+from .memory.extractor import StructuredMemoryExtractor
+from .memory.extraction.providers import OpenAICompatibleMemoryExtractionModel
 from .memory.stores.qdrant import QdrantLocalVectorStore
 from .memory.stores.sqlite import SQLiteMemoryStore
 
 
 logger = logging.getLogger(__name__)
+
+
+def build_memory_extractor(settings: Any) -> StructuredMemoryExtractor:
+    """Build the lazy structured Memory adapter from the existing chat-model role."""
+
+    return StructuredMemoryExtractor(OpenAICompatibleMemoryExtractionModel(
+        base_url=settings.base_url,
+        model_name=settings.model_name,
+        api_key=settings.api_key,
+        timeout_seconds=settings.timeout_seconds,
+    ))
 
 
 def build_task_manager() -> TaskManager:
@@ -221,7 +236,7 @@ def _build_default_main_agent(
         profile = profiles.read(profile_id)
     except ProfileValidationError:
         try:
-            profile = profiles.create(profile_id, soul="")
+            profile = profiles.create(profile_id)
         except ProfileConflictError:
             profile = profiles.read(profile_id)
     closeables: list[Any] = []
@@ -238,7 +253,7 @@ def _build_default_main_agent(
             store=store,
             vector_store=vectors,
             embedding_provider=embedding,
-            extractor=RuleBasedMemoryExtractor(),
+            extractor=build_memory_extractor(settings.chat_model),
             worker=worker,
             metrics=metrics,
         )
@@ -246,6 +261,18 @@ def _build_default_main_agent(
     if runtime is None:
         context = ContextStore(profile.path / "main-agent.sqlite3")
         reader = WorkspaceReader(settings.workspaces)
+        executors: dict[str, Any] = {
+            "workspace_list": WorkspaceListExecutor(reader),
+            "workspace_read": WorkspaceReadExecutor(reader),
+        }
+        observation_tools: tuple[str, ...] = ()
+        if settings.web.tavily_api_key:
+            sources = SourceRegistry()
+            executors.update({
+                "web_search": TavilySearchExecutor(settings.web.tavily_api_key, sources),
+                "web_read": SafeWebReader(sources),
+            })
+            observation_tools = ("web_search", "web_read")
 
         async def renderer(clause: Any) -> bool | None:
             port = await hub.acquire_renderer_port()
@@ -265,6 +292,7 @@ def _build_default_main_agent(
             snapshot_projector=SnapshotProjector(),
             tool_policy=ToolSurfacePolicy(
                 workspace_ids=workspace_ids,
+                observation_tools=observation_tools,
                 task_controls=(
                     "inspect_tasks", "answer_task_question", "pause_task",
                     "resume_task", "cancel_task",
@@ -272,11 +300,8 @@ def _build_default_main_agent(
             ),
             provider=provider,
             renderer=renderer,
-            executors={
-                "workspace_list": WorkspaceListExecutor(reader),
-                "workspace_read": WorkspaceReadExecutor(reader),
-            },
-            soul=profile.soul.text,
+            executors=executors,
+            soul=profile.soul.text.strip() or DEFAULT_SOUL,
             memory_bridge=bridge,
             task_manager=manager,
             owner_profile_id=profile.profile_id,

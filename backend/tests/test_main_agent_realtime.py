@@ -81,7 +81,13 @@ class FakeRuntime:
     async def reject_speech_candidate(self) -> None:
         self.calls.append(("speech_rejected",))
 
-    async def update_transcript(self, text: str, *, request_prepare: bool = True) -> None:
+    async def update_transcript(
+        self,
+        text: str,
+        *,
+        segment_id: str | None = None,
+        request_prepare: bool = True,
+    ) -> None:
         self.calls.append(("transcript", text, request_prepare))
 
     async def eou_complete(self) -> None:
@@ -1113,6 +1119,41 @@ class RealtimeGatewayTests(unittest.TestCase):
                 ["playback.resume", "state.snapshot", "command.ack"],
             )
             self.assertIsNone(websocket.portal.call(port.queue_tts, frame))
+
+    def test_backend_vad_lifecycle_controls_the_same_renderer_playback_gate(self) -> None:
+        with self.connect() as websocket:
+            self.open(websocket)
+            websocket.send_json({"type": "mic.start", "seq": 2, "command_id": str(uuid.uuid4())})
+            websocket.receive_json()
+
+            websocket.portal.call(self.hub.speech_candidate_started)
+            self.assertEqual(websocket.receive_json()["type"], "playback.pause")
+            self.assertTrue(self.hub._session.playback_blocked)
+
+            websocket.portal.call(self.hub.speech_candidate_rejected)
+            rejected = [websocket.receive_json(), websocket.receive_json()]
+            self.assertEqual(
+                [event["type"] for event in rejected],
+                ["playback.resume", "state.snapshot"],
+            )
+            self.assertFalse(self.hub._session.playback_blocked)
+
+            websocket.portal.call(self.hub.speech_candidate_started)
+            self.assertEqual(websocket.receive_json()["type"], "playback.pause")
+            websocket.portal.call(self.hub.speech_confirmed)
+            self.assertEqual(websocket.receive_json()["type"], "playback.stop")
+
+            websocket.portal.call(lambda: self.hub.speech_endpoint(complete=False))
+            self.assertEqual(websocket.receive_json()["type"], "state.snapshot")
+            self.assertTrue(self.hub._session.playback_blocked)
+
+            websocket.portal.call(lambda: self.hub.speech_endpoint(complete=True))
+            completed = [websocket.receive_json(), websocket.receive_json()]
+            self.assertEqual(
+                [event["type"] for event in completed],
+                ["playback.resume", "state.snapshot"],
+            )
+            self.assertFalse(self.hub._session.playback_blocked)
 
     def test_mic_stop_without_candidate_does_not_forge_a_vad_endpoint(self) -> None:
         with self.connect() as websocket:

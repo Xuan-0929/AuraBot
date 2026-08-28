@@ -1,4 +1,4 @@
-"""暴露 Main Agent 的配置、Context、快照、调度与渲染交付边界。
+"""暴露 Main Agent 的分段输入、配置、Context、快照、调度与渲染交付边界。
 
 TaskManager 继续只通过 settings 的受信任 WorkspaceRegistry 获取 cwd；实时 runtime 则从此包
 取得 ProfileStore、ContextStore、SnapshotProjector、Observation 安全读取器、TaskBridge 和严格
@@ -38,6 +38,7 @@ from .realtime import (
 )
 from .runtime import (
     ActiveInput,
+    InputSegment,
     InvokeRequest,
     MainAgentRuntime,
     PendingTaskProposal,
@@ -52,7 +53,7 @@ from .tasks import TaskBridge
 
 __all__ = [
     "AUR1_HEADER_SIZE", "ActiveInput", "AudioFrame", "AudioFrameKind", "AudioFrameTracker",
-    "BoundedAudioQueue", "CapabilityTokens", "ClauseState", "ContextStore", "FoldedContext", "InvokeRequest",
+    "BoundedAudioQueue", "CapabilityTokens", "ClauseState", "ContextStore", "FoldedContext", "InputSegment", "InvokeRequest",
     "MainAgentRuntime", "MainAgentSettings", "PendingTaskProposal", "PendingTrigger", "PrepareAdmissionPolicy", "Profile",
     "ObservationExecutorError", "ObservationLedger", "ObservationSecurityError", "SafeWebReader",
     "SourceRegistry", "TavilySearchExecutor", "WorkspaceListExecutor", "WorkspaceReadExecutor",

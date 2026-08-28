@@ -1,4 +1,4 @@
-"""Project folded Canonical Context into a deterministic, immutable and bounded LLM prompt snapshot.
+"""Project ordered Canonical Context into a deterministic, immutable and bounded LLM fact snapshot.
 
 This module deliberately does no scheduling or tool execution: ContextStore supplies only delivered/folded
 facts, ProfileStore supplies Soul, and MainAgentRuntime supplies read-only facts plus the exact frozen
@@ -26,6 +26,7 @@ class SnapshotBudget:
     soul_chars: int = 2_000
     transcript_chars: int = 2_000
     delivered_chars: int = 2_000
+    conversation_chars: int = 4_000
     observation_chars: int = 3_000
     memory_chars: int = 2_400
     runtime_chars: int = 800
@@ -36,7 +37,7 @@ class SnapshotBudget:
             value < 0
             for value in (
                 self.max_prompt_chars, self.soul_chars, self.transcript_chars,
-                self.delivered_chars, self.observation_chars, self.memory_chars,
+                self.delivered_chars, self.conversation_chars, self.observation_chars, self.memory_chars,
                 self.runtime_chars, self.tool_chars,
             )
         ):
@@ -51,6 +52,7 @@ class Snapshot:
 
     transcript: str
     delivered_clauses: tuple[str, ...]
+    conversation_turns: tuple[Mapping[str, Any], ...]
     soul: str
     observations: tuple[Mapping[str, Any], ...]
     think_note: str | None
@@ -85,10 +87,9 @@ class SnapshotProjector:
         memory = _freeze_records(memory_facts)
         tools = _freeze_records(allowed_tools)
         runtime = _freeze_mapping(runtime_state or {})
+        conversation = _freeze_ordered_records(context.conversation_turns)
         sections = {
-            "soul": _clip(soul, self.budget.soul_chars),
-            "transcript": _clip(context.transcript, self.budget.transcript_chars),
-            "delivered_clauses": _clip_sequence(context.delivered_clauses, self.budget.delivered_chars),
+            "conversation": _clip_recent_json_records(conversation, self.budget.conversation_chars),
             "observations": _clip_json_records(observations, self.budget.observation_chars),
             "think_note": _clip(context.think_note, self.budget.observation_chars) if context.think_note else None,
             "task_facts": _clip_json_records(task_facts, self.budget.observation_chars),
@@ -101,8 +102,10 @@ class SnapshotProjector:
         sections = _fit_total_budget(sections, self.budget.max_prompt_chars)
         prompt = _canonical(sections)
         return Snapshot(
-            transcript=sections["transcript"], delivered_clauses=tuple(sections["delivered_clauses"]),
-            soul=sections["soul"], observations=tuple(_freeze_records(sections["observations"])),
+            transcript=_clip(context.transcript, self.budget.transcript_chars),
+            delivered_clauses=tuple(_clip_sequence(context.delivered_clauses, self.budget.delivered_chars)),
+            conversation_turns=tuple(_freeze_ordered_records(sections["conversation"])),
+            soul=_clip(soul, self.budget.soul_chars), observations=tuple(_freeze_records(sections["observations"])),
             think_note=sections["think_note"],
             task_facts=tuple(_freeze_records(sections["task_facts"])),
             memory_facts=tuple(_freeze_records(sections["memory_facts"])),
@@ -121,6 +124,10 @@ def _freeze_mapping(value: Mapping[str, Any]) -> Mapping[str, Any]:
 
 def _freeze_records(records: Sequence[Mapping[str, Any]]) -> tuple[Mapping[str, Any], ...]:
     return tuple(_freeze_mapping(record) for record in sorted(records, key=lambda item: _canonical(item)))
+
+
+def _freeze_ordered_records(records: Sequence[Mapping[str, Any]]) -> tuple[Mapping[str, Any], ...]:
+    return tuple(_freeze_mapping(record) for record in records)
 
 
 def _freeze(value: Any) -> Any:
@@ -178,6 +185,21 @@ def _clip_json_records(records: Sequence[Mapping[str, Any]], limit: int) -> list
     return result
 
 
+def _clip_recent_json_records(records: Sequence[Mapping[str, Any]], limit: int) -> list[dict[str, Any]]:
+    """Keep the newest complete conversation turns while preserving their causal order."""
+
+    result: list[dict[str, Any]] = []
+    remaining = limit
+    for record in reversed(records):
+        encoded = _canonical(record)
+        if len(encoded) > remaining:
+            break
+        result.append(json.loads(encoded))
+        remaining -= len(encoded)
+    result.reverse()
+    return result
+
+
 def _clip_json_mapping(mapping: Mapping[str, Any], limit: int) -> dict[str, Any]:
     encoded = _canonical(mapping)
     return json.loads(encoded) if len(encoded) <= limit else {}
@@ -187,7 +209,7 @@ def _fit_total_budget(sections: dict[str, Any], limit: int) -> dict[str, Any]:
     """Trim variable facts only; runtime/tool sections always remain explicit control structure."""
 
     projected = dict(sections)
-    for key in ("memory_facts", "task_facts", "observations", "think_note", "delivered_clauses", "soul", "transcript"):
+    for key in ("memory_facts", "task_facts", "observations", "think_note", "conversation"):
         if len(_canonical(projected)) <= limit:
             return projected
         projected[key] = [] if isinstance(projected[key], list) else {} if isinstance(projected[key], dict) else ""

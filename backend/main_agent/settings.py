@@ -1,4 +1,4 @@
-"""解析 Main Agent 的局部设置、语音模型引用并维护共享的受信任工作区目录。
+"""解析 Main Agent 的模型、语音、Web 与路径设置并维护受信任工作区目录。
 
 配置加载器保留原始 YAML 后，本模块把 app/main_agent/chat_model 段变成不可变路径设置；
 WorkspaceRegistry 只接受由配置声明的真实目录，TaskManager 用它将 workspace_id 解析为
@@ -198,6 +198,22 @@ class ChatModelSettings:
 
 
 @dataclass(frozen=True, slots=True)
+class WebSettings:
+    """Optional public-web credentials; an empty key means no web capability."""
+
+    tavily_api_key: str = ""
+
+    @classmethod
+    def from_config(cls, raw: Mapping[str, Any]) -> "WebSettings":
+        if not isinstance(raw, Mapping):
+            raise ValueError("main_agent.web must be a mapping.")
+        value = raw.get("tavily_api_key", "")
+        if not isinstance(value, str):
+            raise ValueError("main_agent.web.tavily_api_key must be text.")
+        return cls(value.strip())
+
+
+@dataclass(frozen=True, slots=True)
 class MainAgentSettings:
     """Typed Main Agent paths shared by profile storage and workspace-aware services."""
 
@@ -206,6 +222,7 @@ class MainAgentSettings:
     workspaces: WorkspaceRegistry
     chat_model: ChatModelSettings
     speech: SpeechSettings
+    web: WebSettings
 
     @classmethod
     def from_config(
@@ -230,10 +247,11 @@ class MainAgentSettings:
             speech=SpeechSettings.from_config(
                 main_agent.get("speech", {}), config_root=root
             ),
+            web=WebSettings.from_config(main_agent.get("web", {})),
         )
 
 
 __all__ = [
-    "ChatModelSettings", "MainAgentSettings", "SpeechSettings", "WorkspaceRegistry",
+    "ChatModelSettings", "MainAgentSettings", "SpeechSettings", "WebSettings", "WorkspaceRegistry",
     "WorkspaceRegistryError",
 ]

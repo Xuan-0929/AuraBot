@@ -1,4 +1,4 @@
-"""管理受信任 Profile 目录及 SOUL 的乐观并发读写。
+"""管理受信任 Profile 目录、默认人格及 SOUL 的乐观并发读写。
 
 本模块是 Main Agent 人格文件的唯一文件系统边界：它创建并验证 profile.yaml、SOUL.md、
 main-agent.sqlite3、memory.sqlite3 和 qdrant/，以 SHA-256 ETag 防止覆盖外部编辑，并以原子
@@ -24,6 +24,9 @@ import yaml
 _PROFILE_ID = re.compile(r"[A-Za-z0-9][A-Za-z0-9_-]{0,63}\Z")
 _MAX_SOUL_BYTES = 32 * 1024
 _PROFILE_CHILDREN = frozenset({"profile.yaml", "SOUL.md", "main-agent.sqlite3", "memory.sqlite3", "qdrant"})
+DEFAULT_SOUL = """你是 AuraBot，一个亲近、可靠的陪伴型助手。
+表达自然、简短、直接，优先回应用户真正关心的事实和感受。
+不要朗读内部系统状态，不要声称自己完成了尚未完成的事情，也不要编造事实。"""
 
 
 class ProfileError(RuntimeError):
@@ -70,7 +73,7 @@ class ProfileStore:
         self._lock = RLock()
         self._last_known_good: dict[str, SoulDocument] = {}
 
-    def create(self, profile_id: str, *, soul: str = "") -> Profile:
+    def create(self, profile_id: str, *, soul: str = DEFAULT_SOUL) -> Profile:
         """Create all owned profile artifacts together, refusing duplicate identifiers."""
 
         identifier = self._validate_id(profile_id)
@@ -369,6 +372,7 @@ def _fsync_dir(path: Path) -> None:
 
 
 __all__ = [
+    "DEFAULT_SOUL",
     "Profile",
     "ProfileConflictError",
     "ProfileError",

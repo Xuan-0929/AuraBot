@@ -27,6 +27,8 @@ from backend.main import create_app
 from backend.main_agent.provider import OpenAICompatibleProvider, build_chat_provider
 from backend.main_agent.realtime import RealtimeHub
 from backend.main_agent.settings import ChatModelSettings, MainAgentSettings
+from backend.main_agent.observations import SafeWebReader, TavilySearchExecutor
+from backend.main_agent.profiles import DEFAULT_SOUL
 from backend.main_agent.tool_runtime import ToolCallAssembler
 
 
@@ -87,7 +89,7 @@ class OpenAICompatibleProviderTests(unittest.IsolatedAsyncioTestCase):
             "type": "function", "function": {"name": "say_to_user"},
         },))
         request = SimpleNamespace(
-            snapshot=SimpleNamespace(prompt='{"transcript":"hi"}'),
+            snapshot=SimpleNamespace(prompt='{"conversation":[{"role":"user","content":"hi"}]}', soul="可靠、简短"),
             tool_surface=surface,
         )
 
@@ -102,9 +104,17 @@ class OpenAICompatibleProviderTests(unittest.IsolatedAsyncioTestCase):
         method, url, kwargs = client.requests[0]
         self.assertEqual((method, url), ("POST", "https://model.example/v1/chat/completions"))
         self.assertEqual(kwargs["json"]["model"], "chat-model")
-        self.assertEqual(kwargs["json"]["messages"], [
-            {"role": "system", "content": '{"transcript":"hi"}'},
-        ])
+        messages = kwargs["json"]["messages"]
+        self.assertEqual([message["role"] for message in messages], ["system", "system", "user"])
+        self.assertIn("say_to_user", messages[0]["content"])
+        self.assertIn("PREPARE", messages[0]["content"])
+        self.assertIn("RESPOND", messages[0]["content"])
+        self.assertIn("CONTINUE", messages[0]["content"])
+        self.assertEqual(messages[1], {"role": "system", "content": "可靠、简短"})
+        self.assertEqual(messages[2], {
+            "role": "user",
+            "content": '{"conversation":[{"role":"user","content":"hi"}]}',
+        })
         self.assertEqual(kwargs["json"]["tools"], [{
             "type": "function", "function": {"name": "say_to_user"},
         }])
@@ -135,6 +145,57 @@ class OpenAICompatibleProviderTests(unittest.IsolatedAsyncioTestCase):
 
 
 class ProductionProviderCompositionTests(unittest.TestCase):
+    def test_production_surface_matches_configured_web_executors_and_default_soul(self) -> None:
+        class Owner:
+            async def startup(self) -> None:
+                return None
+
+            async def shutdown(self) -> None:
+                return None
+
+        class Memory(Owner):
+            async def recall(self, **_kwargs):
+                return ()
+
+            async def record_confirmed_input(self, **_kwargs) -> None:
+                return None
+
+        for api_key, expected in (("", set()), ("tavily-secret", {"web_search", "web_read"})):
+            with self.subTest(api_key=bool(api_key)), tempfile.TemporaryDirectory() as directory:
+                root = Path(directory).resolve()
+                settings = MainAgentSettings.from_config(
+                    {
+                        "app": {"data_dir": str(root / "data"), "workspaces": []},
+                        "main_agent": {"web": {"tavily_api_key": api_key}},
+                        "chat_model": {},
+                    },
+                    root / "config.yaml",
+                )
+                with patch("backend.main.MainAgentSettings.from_config", return_value=settings):
+                    app = create_app(
+                        task_manager=Owner(),
+                        memory_bridge=Memory(),
+                        memory_worker=Owner(),
+                    )
+                    with TestClient(app):
+                        runtime = app.state.main_agent_runtime
+                        actual = {
+                            name for name in ("web_search", "web_read")
+                            if runtime.tool_policy.definition(name) is not None
+                        }
+                        self.assertEqual(actual, expected)
+                        self.assertEqual(
+                            {
+                                name for name in ("web_search", "web_read")
+                                if name in runtime.harness.executors
+                            },
+                            expected,
+                        )
+                        if api_key:
+                            self.assertIsInstance(runtime.harness.executors["web_search"], TavilySearchExecutor)
+                            self.assertIsInstance(runtime.harness.executors["web_read"], SafeWebReader)
+                        self.assertEqual(runtime.soul, DEFAULT_SOUL)
+
     def test_testclient_text_submit_streams_a_say_tool_through_the_real_runtime(self) -> None:
         class Owner:
             async def startup(self) -> None:
