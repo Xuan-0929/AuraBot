@@ -1,8 +1,8 @@
 /**
- * 调度仍保留的 Memory follow-up 与 idle nudge 主动触达。
+ * 调度可选的旧 Memory follow-up 与独立 idle nudge 主动触达。
  *
- * 引擎定时检查 Memory 和用户空闲时间，生成 PetActivity、系统通知与审计事件；它
- * 不读取 Task 状态、不调度定时 Task，也不会因历史 active Task 抑制 idle nudge。
+ * 所有权切换后生产环境关闭旧 Memory follow-up 的读取/完成写入，但保留 idle nudge；
+ * 引擎不读取 Task 状态、不调度定时 Task，也不会因历史 active Task 抑制 idle nudge。
  */
 
 import { randomUUID } from "node:crypto";
@@ -23,6 +23,7 @@ export interface ProactiveTriggerEngineDependencies {
 }
 
 export interface ProactiveTriggerEngineOptions {
+  memoryFollowUpsEnabled?: boolean;
   pollIntervalMs?: number;
   followUpLookaheadMs?: number;
   idleThresholdMs?: number;
@@ -40,6 +41,7 @@ export class ProactiveTriggerEngine {
   private followUpLookaheadMs: number;
   private idleThresholdMs: number;
   private idleCooldownMs: number;
+  private memoryFollowUpsEnabled: boolean;
   private lastUserActivityAtMs = Date.now();
   private lastIdleNudgeAtMs: number | undefined;
 
@@ -48,6 +50,7 @@ export class ProactiveTriggerEngine {
     options: ProactiveTriggerEngineOptions = {}
   ) {
     this.pollIntervalMs = options.pollIntervalMs ?? DEFAULT_POLL_INTERVAL_MS;
+    this.memoryFollowUpsEnabled = options.memoryFollowUpsEnabled ?? true;
     this.followUpLookaheadMs = options.followUpLookaheadMs ?? 0;
     this.idleThresholdMs = options.idleThresholdMs ?? DEFAULT_IDLE_THRESHOLD_MS;
     this.idleCooldownMs = options.idleCooldownMs ?? DEFAULT_IDLE_COOLDOWN_MS;
@@ -62,6 +65,7 @@ export class ProactiveTriggerEngine {
       this.stop();
     }
     this.pollIntervalMs = options.pollIntervalMs ?? this.pollIntervalMs;
+    this.memoryFollowUpsEnabled = options.memoryFollowUpsEnabled ?? this.memoryFollowUpsEnabled;
     this.followUpLookaheadMs = options.followUpLookaheadMs ?? this.followUpLookaheadMs;
     this.idleThresholdMs = options.idleThresholdMs ?? this.idleThresholdMs;
     this.idleCooldownMs = options.idleCooldownMs ?? this.idleCooldownMs;
@@ -88,7 +92,9 @@ export class ProactiveTriggerEngine {
 
   async checkTriggers(nowIso = new Date().toISOString()): Promise<PetActivity[]> {
     const profile = this.dependencies.profileService.getOrSeedActiveProfile();
-    const emitted = await this.checkDueFollowUps(profile.id, nowIso);
+    const emitted = this.memoryFollowUpsEnabled
+      ? await this.checkDueFollowUps(profile.id, nowIso)
+      : [];
     const idle = await this.checkIdleNudge({
       profileId: profile.id,
       soul: profile.soul,

@@ -223,7 +223,10 @@ async function bootstrap(): Promise<void> {
         });
       }
     }
-  }, services.config.proactive);
+  }, {
+    ...services.config.proactive,
+    memoryFollowUpsEnabled: false
+  });
   proactiveTriggerEngine.start();
 }
 

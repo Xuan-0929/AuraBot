@@ -49,4 +49,31 @@ describe("ProactiveTriggerEngine", () => {
 
     expect(await engine.checkTriggers("2026-08-19T00:00:30.000Z")).toEqual([]);
   });
+
+  it("disables legacy Memory follow-ups while retaining idle nudge", async () => {
+    const services = createTestServices("aurabot-proactive-owner-cutover-");
+    const retrieveDueFollowUps = vi.spyOn(services.memoryService, "retrieveDueFollowUps");
+    const completeFollowUps = vi.spyOn(services.memoryService, "completeFollowUps");
+    const engine = new ProactiveTriggerEngine(
+      {
+        profileService: services.profileService,
+        memoryService: services.memoryService,
+        eventLogService: services.eventLogService,
+        voiceAdapter: services.voiceAdapter,
+        broadcastPetActivity: vi.fn()
+      },
+      {
+        memoryFollowUpsEnabled: false,
+        idleThresholdMs: 1,
+        idleCooldownMs: 60_000
+      }
+    );
+    engine.recordUserActivity("2026-08-19T00:00:00.000Z");
+
+    const activities = await engine.checkTriggers("2026-08-19T00:01:00.000Z");
+
+    expect(activities.map((activity) => activity.kind)).toEqual(["proactive_idle"]);
+    expect(retrieveDueFollowUps).not.toHaveBeenCalled();
+    expect(completeFollowUps).not.toHaveBeenCalled();
+  });
 });
