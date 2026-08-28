@@ -1,8 +1,7 @@
-"""Protects Main Agent's durable conversation and bounded prompt projection through public SQLite APIs.
+"""Protect durable conversation, causal Observation folding, and bounded prompt projection.
 
-The tests intentionally ignore removed ProfileStore files and snapshot container internals. They verify the
-remaining product truth: stable user segments keep causal position, only physical complete ACK publishes
-assistant language, and one JSON-native prompt snapshot preserves authority under the 12k budget.
+The tests use public SQLite and Snapshot APIs. They verify stable user segments, Renderer-ACK-only assistant
+language, last-event Observation order, and a JSON-native prompt that preserves recent facts under budget.
 """
 
 from __future__ import annotations
@@ -60,6 +59,19 @@ class ContextStoreTests(unittest.TestCase):
             self.assertEqual(store.fold().conversation_turns, ())
             store.close()
 
+    def test_observations_keep_only_latest_state_in_last_event_order(self) -> None:
+        with tempfile.TemporaryDirectory() as directory:
+            store = ContextStore(Path(directory) / "context.sqlite3")
+            store.append_event("observation", {"id": "a", "kind": "web_search", "status": "running"})
+            store.append_event("observation", {"id": "z", "kind": "web_search", "status": "completed"})
+            store.append_event("observation", {"id": "a", "kind": "web_search", "status": "completed"})
+
+            observations = store.fold().observations
+
+            self.assertEqual([item["id"] for item in observations], ["z", "a"])
+            self.assertEqual([item["status"] for item in observations], ["completed", "completed"])
+            store.close()
+
 
 class SnapshotProjectorTests(unittest.TestCase):
     def test_snapshot_has_one_conversation_representation_and_independent_json_payload(self) -> None:
@@ -107,3 +119,19 @@ class SnapshotProjectorTests(unittest.TestCase):
         self.assertEqual(prompt["allowed_tool_surface"][0]["function"]["name"], "say_to_user")
         self.assertEqual(prompt["conversation"][-1]["segment_id"], "19")
         self.assertLessEqual(len(snapshot.prompt), 900)
+
+    def test_oversized_old_observation_does_not_hide_small_latest_observation(self) -> None:
+        context = FoldedContext(
+            conversation_turns=(),
+            observations=(
+                {"id": "old", "kind": "web_read", "status": "completed", "result": {"content": "x" * 5000}},
+                {"id": "latest", "kind": "web_search", "status": "completed", "result": {"ok": True}},
+            ),
+            think_note=None,
+            task_facts=(),
+        )
+
+        snapshot = SnapshotProjector().project(context, soul="Aura")
+
+        self.assertEqual([item["id"] for item in snapshot.observations], ["latest"])
+        self.assertLessEqual(len(snapshot.prompt), 12_000)

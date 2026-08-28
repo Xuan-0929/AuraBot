@@ -1,11 +1,10 @@
-"""Persist and recall one active Profile's Main Agent memories with one local worker.
+"""Persist, recall, and durably forget one active Profile's memories with one local worker.
 
 ``ProfileMemory`` owns exactly one ``memory.sqlite3`` plus optional embedding/Qdrant adapters. Stable
 segments are durably upserted into one pending episode before returning; a replaceable five-minute
 timer seals that episode into the same job table used for extraction retries and deferred vector
-deletes. One same-loop worker processes only the active Profile, while recall always fresh-reads SQLite
-truth and treats the 300 ms vector branch as optional. The legacy ``backend.memory`` service remains
-unchanged and is used only for its provider protocols and structured extractor.
+deletes. Durable episode/memory tombstones fence extraction and indexing across races and restarts. One
+same-loop worker processes only the active Profile; recall fresh-reads SQLite and treats vectors as optional.
 """
 
 from __future__ import annotations
@@ -57,6 +56,14 @@ CREATE TABLE IF NOT EXISTS memory_items (
     updated_at REAL NOT NULL
 );
 CREATE VIRTUAL TABLE IF NOT EXISTS memory_items_fts USING fts5(memory_id UNINDEXED, content);
+CREATE TABLE IF NOT EXISTS forgotten_episodes (
+    episode_id TEXT PRIMARY KEY,
+    forgotten_at REAL NOT NULL
+);
+CREATE TABLE IF NOT EXISTS forgotten_memories (
+    memory_id TEXT PRIMARY KEY,
+    forgotten_at REAL NOT NULL
+);
 CREATE INDEX IF NOT EXISTS memory_jobs_ready ON memory_jobs(state, next_attempt_at);
 CREATE INDEX IF NOT EXISTS memory_items_episode ON memory_items(episode_id);
 """
@@ -268,29 +275,50 @@ class ProfileMemory:
         episode_ids: Sequence[str] = (),
         reason: str | None = None,
     ) -> dict[str, Any]:
-        """Delete SQLite truth immediately and durably retry only a failed vector delete."""
+        """Persist revocation and delete current SQLite/vector truth for episodes or memory IDs."""
 
         del reason
         db = self._require_db()
-        requested = [str(value) for value in memory_ids if str(value)]
-        episodes = [str(value) for value in episode_ids if str(value)]
-        if episodes:
-            placeholders = ",".join("?" for _ in episodes)
-            requested.extend(row[0] for row in db.execute(
-                f"SELECT memory_id FROM memory_items WHERE episode_id IN ({placeholders})", episodes
-            ))
-        identifiers = list(dict.fromkeys(requested))
-        if identifiers:
-            placeholders = ",".join("?" for _ in identifiers)
-            db.execute(f"DELETE FROM memory_items WHERE memory_id IN ({placeholders})", identifiers)
-            db.execute(f"DELETE FROM memory_items_fts WHERE memory_id IN ({placeholders})", identifiers)
+        requested = list(dict.fromkeys(str(value) for value in memory_ids if str(value)))
+        episodes = list(dict.fromkeys(str(value) for value in episode_ids if str(value)))
+        now = float(self.clock())
+        db.execute("BEGIN IMMEDIATE")
+        try:
+            db.executemany(
+                "INSERT OR IGNORE INTO forgotten_episodes(episode_id,forgotten_at) VALUES(?,?)",
+                ((episode_id, now) for episode_id in episodes),
+            )
+            identifiers = list(requested)
+            if episodes:
+                placeholders = ",".join("?" for _ in episodes)
+                identifiers.extend(row[0] for row in db.execute(
+                    f"SELECT memory_id FROM memory_items WHERE episode_id IN ({placeholders})", episodes
+                ))
+                db.execute(
+                    f"UPDATE memory_jobs SET state='completed',last_error=NULL,updated_at=? "
+                    f"WHERE kind='extract' AND episode_id IN ({placeholders}) AND state!='completed'",
+                    (now, *episodes),
+                )
+            identifiers = list(dict.fromkeys(identifiers))
+            db.executemany(
+                "INSERT OR IGNORE INTO forgotten_memories(memory_id,forgotten_at) VALUES(?,?)",
+                ((memory_id, now) for memory_id in identifiers),
+            )
+            if identifiers:
+                placeholders = ",".join("?" for _ in identifiers)
+                db.execute(f"DELETE FROM memory_items WHERE memory_id IN ({placeholders})", identifiers)
+                db.execute(f"DELETE FROM memory_items_fts WHERE memory_id IN ({placeholders})", identifiers)
             db.commit()
-            if self.vector_store is not None:
-                try:
+        except BaseException:
+            db.rollback()
+            raise
+        if identifiers and self.vector_store is not None:
+            try:
+                async with self._vector_semaphore:
                     await asyncio.to_thread(self.vector_store.delete, identifiers)
-                except Exception as exc:
-                    self._insert_job("vector_delete", None, {"memory_ids": identifiers}, str(exc))
-                    self._wake.set()
+            except Exception as exc:
+                self._insert_job("vector_delete", None, {"memory_ids": identifiers}, str(exc))
+                self._wake.set()
         return {"forgottenCount": len(identifiers), "forgottenMemoryIds": identifiers}
 
     async def retry(self, job_id: str) -> dict[str, Any]:
@@ -445,6 +473,9 @@ class ProfileMemory:
         return db.execute("SELECT * FROM memory_jobs WHERE job_id=?", (row["job_id"],)).fetchone()
 
     async def _process_extract(self, job: sqlite3.Row) -> None:
+        if self._episode_forgotten(job["episode_id"]):
+            self._complete_job(job["job_id"])
+            return
         payload = json.loads(job["payload_json"])
         result = json.loads(job["result_json"]) if job["result_json"] else None
         if result is None:
@@ -459,6 +490,9 @@ class ProfileMemory:
                 self.extractor.extract, content=content, metadata=metadata,
                 memory_type=None, importance=0.5,
             )
+            if self._episode_forgotten(job["episode_id"]):
+                self._complete_job(job["job_id"])
+                return
             result = {"memories": [_candidate(candidate) for candidate in candidates]}
             db = self._require_db()
             now = float(self.clock())
@@ -471,6 +505,8 @@ class ProfileMemory:
         self._complete_job(job["job_id"])
 
     async def _index_result(self, episode_id: str, result: Mapping[str, Any]) -> None:
+        if self._episode_forgotten(episode_id):
+            return
         for index, raw in enumerate(result["memories"]):
             candidate = validate_memory_candidate(MemoryCandidate(**raw))
             memory_id = "memory-" + hashlib.sha256(
@@ -479,29 +515,43 @@ class ProfileMemory:
             now = float(self.clock())
             metadata = dict(candidate.metadata)
             db = self._require_db()
-            db.execute(
-                "INSERT INTO memory_items VALUES(?,?,?,?,?,?,?,?,?) ON CONFLICT(memory_id) DO UPDATE "
-                "SET memory_type=excluded.memory_type,content=excluded.content,metadata_json=excluded.metadata_json,"
-                "importance=excluded.importance,confidence=excluded.confidence,updated_at=excluded.updated_at",
-                (memory_id, episode_id, candidate.memory_type, candidate.content, _json(metadata),
-                 candidate.importance, candidate.confidence, now, now),
-            )
-            db.execute("DELETE FROM memory_items_fts WHERE memory_id=?", (memory_id,))
-            db.execute("INSERT INTO memory_items_fts(memory_id,content) VALUES(?,?)", (memory_id, candidate.content))
-            db.commit()
+            db.execute("BEGIN IMMEDIATE")
+            try:
+                if self._forgotten(db, episode_id, memory_id):
+                    db.commit()
+                    continue
+                db.execute(
+                    "INSERT INTO memory_items VALUES(?,?,?,?,?,?,?,?,?) ON CONFLICT(memory_id) DO UPDATE "
+                    "SET memory_type=excluded.memory_type,content=excluded.content,metadata_json=excluded.metadata_json,"
+                    "importance=excluded.importance,confidence=excluded.confidence,updated_at=excluded.updated_at",
+                    (memory_id, episode_id, candidate.memory_type, candidate.content, _json(metadata),
+                     candidate.importance, candidate.confidence, now, now),
+                )
+                db.execute("DELETE FROM memory_items_fts WHERE memory_id=?", (memory_id,))
+                db.execute(
+                    "INSERT INTO memory_items_fts(memory_id,content) VALUES(?,?)", (memory_id, candidate.content)
+                )
+                db.commit()
+            except BaseException:
+                db.rollback()
+                raise
             if self.vector_store is not None and self.embedding_provider is not None:
                 vector = await asyncio.to_thread(self.embedding_provider.embed, candidate.content)
-                await asyncio.to_thread(
-                    self.vector_store.upsert, memory_id, vector,
-                    {"memory_id": memory_id, "profile_id": self.profile_id, "episode_id": episode_id,
-                     "content": candidate.content, "memory_type": candidate.memory_type},
-                )
+                async with self._vector_semaphore:
+                    if self._forgotten(self._require_db(), episode_id, memory_id):
+                        continue
+                    await asyncio.to_thread(
+                        self.vector_store.upsert, memory_id, vector,
+                        {"memory_id": memory_id, "profile_id": self.profile_id, "episode_id": episode_id,
+                         "content": candidate.content, "memory_type": candidate.memory_type},
+                    )
 
     async def _process_vector_delete(self, job: sqlite3.Row) -> None:
         if self.vector_store is not None:
-            await asyncio.to_thread(
-                self.vector_store.delete, json.loads(job["payload_json"])["memory_ids"]
-            )
+            async with self._vector_semaphore:
+                await asyncio.to_thread(
+                    self.vector_store.delete, json.loads(job["payload_json"])["memory_ids"]
+                )
         self._complete_job(job["job_id"])
 
     def _complete_job(self, job_id: str) -> None:
@@ -524,7 +574,8 @@ class ProfileMemory:
             state = "failed"
             next_at = now
         db.execute(
-            "UPDATE memory_jobs SET state=?,next_attempt_at=?,last_error=?,updated_at=? WHERE job_id=?",
+            "UPDATE memory_jobs SET state=?,next_attempt_at=?,last_error=?,updated_at=? "
+            "WHERE job_id=? AND state IN ('running','indexing')",
             (state, next_at, str(error)[:1000], now, job["job_id"]),
         )
         db.commit()
@@ -534,7 +585,8 @@ class ProfileMemory:
             return
         now = float(self.clock())
         self._db.execute(
-            "UPDATE memory_jobs SET state='pending',next_attempt_at=?,updated_at=? WHERE job_id=?",
+            "UPDATE memory_jobs SET state='pending',next_attempt_at=?,updated_at=? "
+            "WHERE job_id=? AND state IN ('running','indexing')",
             (now, now, job_id),
         )
         self._db.commit()
@@ -605,6 +657,19 @@ class ProfileMemory:
         if self._db is None:
             raise RuntimeError("Profile Memory is not active")
         return self._db
+
+    def _episode_forgotten(self, episode_id: str) -> bool:
+        return self._forgotten(self._require_db(), episode_id)
+
+    @staticmethod
+    def _forgotten(db: sqlite3.Connection, episode_id: str, memory_id: str | None = None) -> bool:
+        if db.execute(
+            "SELECT 1 FROM forgotten_episodes WHERE episode_id=?", (episode_id,)
+        ).fetchone() is not None:
+            return True
+        return memory_id is not None and db.execute(
+            "SELECT 1 FROM forgotten_memories WHERE memory_id=?", (memory_id,)
+        ).fetchone() is not None
 
 
 def _candidate(candidate: MemoryCandidate) -> dict[str, Any]:

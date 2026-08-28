@@ -1,8 +1,8 @@
-"""Verify MainAgentRuntime's retained conversation-control semantics at public async boundaries.
+"""Verify MainAgentRuntime conversation control and Observation continuation at public boundaries.
 
 These tests cover ActiveInput causality, trigger priority, StrongPause, grants/effect fences, detached
-Observation continuation, and physical Renderer ACK. They intentionally avoid private scheduler dicts,
-task names, task-factory failures, diagnostic histories, and fake Renderer compatibility branches.
+Observation continuation with bounded real Snapshots, and physical Renderer ACK. They avoid private
+scheduler dicts, task names, diagnostic histories, and fake Renderer compatibility branches.
 """
 
 from __future__ import annotations
@@ -13,8 +13,9 @@ import unittest
 from collections import deque
 from pathlib import Path
 
-from backend.main_agent import ContextStore, SnapshotProjector
+from backend.main_agent import ContextStore, SnapshotProjector, WorkspaceReadExecutor, WorkspaceReader
 from backend.main_agent.runtime import MainAgentRuntime, RendererClause
+from backend.main_agent.settings import WorkspaceRegistry
 from backend.main_agent.tool_runtime import InvokeMode, ToolSurfacePolicy
 from backend.main_agent.tool_runtime.stream import segment_say_text
 
@@ -75,6 +76,12 @@ class RuntimeTestCase(unittest.IsolatedAsyncioTestCase):
         )
         self.runtimes.append(runtime)
         return runtime
+
+    async def wait_for_requests(self, runtime: MainAgentRuntime, provider: ScriptedProvider, count: int) -> None:
+        async with asyncio.timeout(1):
+            while len(provider.requests) < count:
+                await runtime.wait_until_idle()
+                await asyncio.sleep(0.001)
 
 
 class ActiveInputAndSchedulingTests(RuntimeTestCase):
@@ -218,6 +225,69 @@ class EffectsObservationAndDeliveryTests(RuntimeTestCase):
         ])
         observations = self.store.fold().observations
         self.assertEqual(observations[-1]["status"], "completed")
+
+    async def test_large_search_result_is_visible_in_bounded_continue_snapshot(self) -> None:
+        async def search(_call):
+            return {
+                "query": "AuraBot",
+                "results": [{
+                    "source_id": "source-1",
+                    "title": "AuraBot",
+                    "snippet": "search-result-" + "x" * 5000,
+                }],
+            }
+
+        provider = ScriptedProvider(
+            (tool_delta("search-large", "web_search", '{"query":"AuraBot"}'),),
+            (),
+        )
+        runtime = self.runtime(provider, executors={"web_search": search})
+
+        await runtime.submit_text("search")
+        await self.wait_for_requests(runtime, provider, 2)
+
+        continuation = provider.requests[1]
+        self.assertEqual(continuation.mode, InvokeMode.CONTINUE)
+        self.assertEqual(len(continuation.snapshot.observations), 1)
+        observation = continuation.snapshot.observations[0]
+        self.assertEqual(observation["status"], "completed")
+        self.assertTrue(observation["truncated"])
+        self.assertIn("search-result", observation["result"]["results"][0]["snippet"])
+        self.assertLessEqual(len(continuation.snapshot.prompt), 12_000)
+
+    async def test_large_workspace_read_keeps_content_and_next_page_in_continue_snapshot(self) -> None:
+        root = Path(self.directory.name).resolve() / "workspace"
+        root.mkdir()
+        (root / "large.txt").write_text(
+            "".join(f"line-{index:03d}-" + "x" * 110 + "\n" for index in range(200)),
+            encoding="utf-8",
+        )
+        reader = WorkspaceReader(WorkspaceRegistry({"repo": root}))
+        provider = ScriptedProvider(
+            (tool_delta(
+                "workspace-large",
+                "workspace_read",
+                '{"workspace_id":"repo","path":"large.txt","start_line":1,"max_lines":200}',
+            ),),
+            (),
+        )
+        runtime = self.runtime(
+            provider,
+            executors={"workspace_read": WorkspaceReadExecutor(reader)},
+        )
+
+        await runtime.submit_text("read workspace")
+        await self.wait_for_requests(runtime, provider, 2)
+
+        continuation = provider.requests[1]
+        canonical = self.store.fold().observations[-1]
+        observation = continuation.snapshot.observations[0]
+        self.assertEqual(canonical["status"], "completed")
+        self.assertEqual(observation["kind"], "workspace_read")
+        self.assertTrue(observation["truncated"])
+        self.assertTrue(observation["result"]["content"])
+        self.assertIsNotNone(observation["result"]["next_start_line"])
+        self.assertLessEqual(len(continuation.snapshot.prompt), 12_000)
 
     async def test_only_complete_playing_ack_commits_assistant_text(self) -> None:
         provider = ScriptedProvider((

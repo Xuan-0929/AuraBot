@@ -1,8 +1,8 @@
-"""Projects one profile's canonical facts into the bounded JSON payload consumed by control invokes.
+"""Project canonical profile facts into the bounded JSON payload consumed by control invokes.
 
 ContextStore supplies ordered heard conversation; Runtime supplies current state, Memory, and the frozen tool
-surface. The projector makes one JSON round-trip copy, keeps required runtime/tool authority, and evicts the
-oldest complete variable facts until the payload fits. Soul remains a separate provider system message.
+surface. The projector prioritizes the latest Observation with a deterministic compact fallback, keeps
+runtime/tool authority, and evicts older variable facts until the payload fits. Soul is a separate system message.
 """
 
 from __future__ import annotations
@@ -71,7 +71,7 @@ class SnapshotProjector:
         if not isinstance(soul, str):
             raise TypeError("soul must be text")
         conversation = _recent(context.conversation_turns, self.budget.conversation_chars)
-        observations = _records(context.observations, self.budget.observation_chars)
+        observations = _observations(context.observations, self.budget.observation_chars)
         memory = _records(memory_facts, self.budget.memory_chars)
         task_facts = _copy(context.task_facts)
         runtime = _object(runtime_state or {})
@@ -129,6 +129,127 @@ def _records(values: Sequence[Mapping[str, Any]], limit: int) -> list[dict[str, 
         result.append(copied)
         used += size
     return result
+
+
+def _observations(values: Sequence[Mapping[str, Any]], limit: int) -> list[dict[str, Any]]:
+    """Pack newest facts first; compact only the newest oversized fact and skip oversized older facts."""
+
+    result: list[dict[str, Any]] = []
+    used = 0
+    for index, value in enumerate(reversed(values)):
+        copied = _object(value)
+        size = len(_encode(copied))
+        if used + size <= limit:
+            result.append(copied)
+            used += size
+            continue
+        if index == 0:
+            compact = _compact_observation(copied, limit - used)
+            if compact is not None:
+                result.append(compact)
+                used += len(_encode(compact))
+    result.reverse()
+    return result
+
+
+def _compact_observation(value: Mapping[str, Any], limit: int) -> dict[str, Any] | None:
+    kind = str(value.get("kind", ""))[:64]
+    compact: dict[str, Any] = {
+        "id": str(value.get("id", ""))[:256],
+        "kind": kind,
+        "status": str(value.get("status", ""))[:32],
+        "request": _compact_request(kind, value.get("request")),
+        "truncated": True,
+    }
+    if compact["status"] == "failed":
+        compact["error_type"] = str(value.get("error_type", "ExecutorError"))[:128]
+        return compact if len(_encode(compact)) <= limit else None
+
+    raw_result = value.get("result")
+    if kind == "web_search" and isinstance(raw_result, Mapping):
+        results = raw_result.get("results")
+        compact["result"] = {
+            "query": str(raw_result.get("query", ""))[:400],
+            "results": [
+                {
+                    "source_id": str(item.get("source_id", ""))[:128],
+                    "title": str(item.get("title", ""))[:160],
+                    "snippet": str(item.get("snippet", ""))[:400],
+                }
+                for item in (results if isinstance(results, list) else ())[:3]
+                if isinstance(item, Mapping)
+            ],
+        }
+        while compact["result"]["results"] and len(_encode(compact)) > limit:
+            compact["result"]["results"].pop()
+    elif kind == "workspace_list" and isinstance(raw_result, Mapping):
+        items = raw_result.get("items")
+        compact["result"] = {
+            "workspace_id": str(raw_result.get("workspace_id", ""))[:64],
+            "path": str(raw_result.get("path", ""))[:512],
+            "items": [
+                {
+                    "name": str(item.get("name", ""))[:120],
+                    "type": str(item.get("type", ""))[:32],
+                    "size": item.get("size", 0),
+                }
+                for item in (items if isinstance(items, list) else ())[:10]
+                if isinstance(item, Mapping)
+            ],
+            "truncated": bool(raw_result.get("truncated", False)),
+        }
+        while compact["result"]["items"] and len(_encode(compact)) > limit:
+            compact["result"]["items"].pop()
+    elif kind == "workspace_read" and isinstance(raw_result, Mapping):
+        projected = {
+            "workspace_id": str(raw_result.get("workspace_id", ""))[:64],
+            "path": str(raw_result.get("path", ""))[:512],
+            "start_line": raw_result.get("start_line"),
+            "next_start_line": raw_result.get("next_start_line"),
+            "content": "",
+        }
+        compact["result"] = projected
+        _fit_text(compact, projected, "content", str(raw_result.get("content", "")), limit)
+    elif kind == "web_read" and isinstance(raw_result, Mapping):
+        projected = {
+            "source_id": str(raw_result.get("source_id", ""))[:128],
+            "content": "",
+        }
+        compact["result"] = projected
+        _fit_text(compact, projected, "content", str(raw_result.get("content", "")), limit)
+    else:
+        projected = {"preview": ""}
+        compact["result"] = projected
+        _fit_text(compact, projected, "preview", _encode(raw_result), limit)
+    return compact if len(_encode(compact)) <= limit else None
+
+
+def _compact_request(kind: str, raw: Any) -> dict[str, Any]:
+    if not isinstance(raw, Mapping):
+        return {}
+    fields = {
+        "web_search": ("query",),
+        "web_read": ("source_id",),
+        "workspace_list": ("workspace_id", "path"),
+        "workspace_read": ("workspace_id", "path", "start_line", "max_lines"),
+    }.get(kind, tuple(sorted(str(key) for key in raw)[:8]))
+    result: dict[str, Any] = {}
+    for key in fields:
+        item = raw.get(key)
+        result[key] = item[:512] if isinstance(item, str) else item
+    return _object(result)
+
+
+def _fit_text(record: dict[str, Any], owner: dict[str, Any], key: str, text: str, limit: int) -> None:
+    low, high = 0, len(text)
+    while low < high:
+        middle = (low + high + 1) // 2
+        owner[key] = text[:middle]
+        if len(_encode(record)) <= limit:
+            low = middle
+        else:
+            high = middle - 1
+    owner[key] = text[:low]
 
 
 def _recent(values: Sequence[Mapping[str, Any]], limit: int) -> list[dict[str, Any]]:

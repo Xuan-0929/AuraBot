@@ -1,4 +1,4 @@
-"""Protects Observation identity, Tavily's search/extract contract, and workspace trust boundaries.
+"""Protect Observation identity, bounded web results, and workspace trust boundaries.
 
 Tests use the public async executors and filesystem results. Removed DNS-pinned HTTP parsing, deadline thread
 pools, Harness-owned dedupe caches, and limiter internals are deliberately absent because Tavily now performs
@@ -64,6 +64,15 @@ class ObservationLedgerTests(unittest.TestCase):
         self.assertFalse(duplicate)
         self.assertEqual(terminal, again)
 
+    def test_fold_uses_last_fact_order_instead_of_identifier_order(self) -> None:
+        ledger = ObservationLedger()
+        ledger.start("a", input_id="i1", revision=1, kind="web_search", arguments={"query": "first"})
+        ledger.start("z", input_id="i1", revision=1, kind="web_search", arguments={"query": "second"})
+        ledger.settle("z", "completed", {"ok": "second"})
+        ledger.settle("a", "completed", {"ok": "first"})
+
+        self.assertEqual([item["id"] for item in ledger.fold()], ["z", "a"])
+
 
 class TavilyToolsTests(unittest.IsolatedAsyncioTestCase):
     async def test_search_registers_bounded_sources_and_read_uses_managed_extract(self) -> None:
@@ -86,7 +95,7 @@ class TavilyToolsTests(unittest.IsolatedAsyncioTestCase):
             "format": "markdown",
             "include_images": False,
         })
-        self.assertLessEqual(len(read["content"].encode()), 65_536)
+        self.assertLessEqual(len(read["content"].encode()), 16 * 1024)
         await tools.aclose()
         self.assertTrue(client.closed)
 

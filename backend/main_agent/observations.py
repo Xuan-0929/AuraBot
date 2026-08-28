@@ -1,9 +1,9 @@
-"""Provides canonical Observation state, Tavily search/extract tools, and bounded workspace reads.
+"""Provide causal Observation state plus bounded Tavily and workspace read executors.
 
 Runtime owns one ObservationLedger for request reuse and terminal persistence. TavilyTools shares a small
 opaque source map across ``web_search`` and ``web_read`` and delegates public-page extraction to Tavily's
-managed API. WorkspaceReader independently keeps descriptor-based no-follow, secret, binary, size, and paging
-boundaries for configured local roots. All tool executors expose one async callable shape.
+managed API. Producer content fits Runtime's JSON scalar boundary; WorkspaceReader also enforces no-follow,
+secret, binary, file-size, and paging boundaries beneath configured roots.
 """
 
 from __future__ import annotations
@@ -24,7 +24,7 @@ from .settings import WorkspaceRegistry, WorkspaceRegistryError
 from .tool_runtime import ToolCall
 
 
-_MAX_CONTEXT_BYTES = 64 * 1024
+_MAX_CONTEXT_BYTES = 16 * 1024
 _MAX_WORKSPACE_FILE_BYTES = 1024 * 1024
 _MAX_WORKSPACE_ITEMS = 200
 _MAX_WORKSPACE_SCAN = 2_000
@@ -110,7 +110,7 @@ class ObservationLedger:
         return _copy(fact) if fact and fact["status"] != "running" else None
 
     def fold(self) -> tuple[dict[str, Any], ...]:
-        return tuple(_copy(self._latest[key]) for key in sorted(self._latest))
+        return tuple(_copy(value) for value in self._latest.values())
 
     def _trim(self) -> None:
         while len(self._latest) >= _OBSERVATION_HISTORY_LIMIT:

@@ -1,8 +1,8 @@
-"""Persist ordered user segments and clause-level renderer delivery truth in one SQLite file.
+"""Persist ordered conversation, Observation, and renderer-delivery truth in one SQLite file.
 
 The runtime records stable utterance identities, observations, think notes and Task facts as append-only
-events. Folding updates one utterance in place while preserving its causal position among delivered
-assistant clauses. Renderer ACK remains the only path that publishes assistant language to context.
+events. Folding merges each Observation's latest fact in last-event order, updates utterances in their causal
+positions, and publishes assistant language only after Renderer ACK.
 """
 
 from __future__ import annotations
@@ -183,7 +183,7 @@ class ContextStore:
             ).fetchall()
         conversation: list[dict[str, Any]] = []
         segment_positions: dict[str, int] = {}
-        observations: dict[str, dict[str, Any]] = {}
+        observations: dict[str, tuple[int, dict[str, Any]]] = {}
         task_facts: dict[str, dict[str, Any]] = {}
         think_note: str | None = None
         for row in rows:
@@ -207,14 +207,18 @@ class ContextStore:
                     "clause_id": payload.get("clause_id", ""),
                 })
             elif event_type == "observation" and isinstance(payload.get("id"), str):
-                observations[payload["id"]] = payload
+                previous = observations.get(payload["id"])
+                merged = {**previous[1], **payload} if previous is not None else payload
+                observations[payload["id"]] = (int(row["sequence"]), merged)
             elif event_type == "think_note" and isinstance(payload.get("text"), str):
                 think_note = payload["text"]
             elif event_type == "task_fact" and isinstance(payload.get("id"), str):
                 task_facts[payload["id"]] = payload
         return FoldedContext(
             conversation_turns=tuple(conversation),
-            observations=tuple(observations[key] for key in sorted(observations)),
+            observations=tuple(
+                payload for _sequence, payload in sorted(observations.values(), key=lambda item: item[0])
+            ),
             think_note=think_note,
             task_facts=tuple(task_facts[key] for key in sorted(task_facts)),
         )
