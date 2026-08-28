@@ -1,8 +1,8 @@
 /**
- * 定义 Electron 对 health-only Python Backend 的状态投影。
+ * 定义 Electron 对 Python Backend health 与 Memory 管理面的公共投影。
  *
- * gateway 只保证 ok/service；该契约不再模拟已删除的端点注册表或前端地址，
- * 设置页只基于探测结果与固定 health 地址展示在线状态。
+ * DTO 只包含 active Memory 与公开 job 摘要，不包含提取 payload、lease、向量、SQLite
+ * 或 Qdrant 内部字段；Task 与 Main Agent 实时协议仍由各自边界管理。
  */
 
 export interface BackendGatewayHealth {
@@ -15,4 +15,38 @@ export interface BackendStatus {
   checkedAt: string;
   gateway?: BackendGatewayHealth;
   error?: string;
+}
+
+export interface BackendMemoryItem {
+  memoryId: string;
+  episodeId: string;
+  type: string;
+  content: string;
+  createdAt: string;
+  updatedAt: string;
+}
+
+export interface BackendMemoryJob {
+  jobId: string;
+  kind: "extraction" | "vectorDelete" | "vectorUpsert";
+  state: string;
+  attemptCount: number;
+  lastError: string | null;
+  updatedAt: string | null;
+}
+
+export interface BackendMemorySnapshot {
+  items: BackendMemoryItem[];
+  jobs: BackendMemoryJob[];
+}
+
+export interface ForgetBackendMemoriesInput {
+  memoryIds: string[];
+  episodeIds: string[];
+  reason?: string;
+}
+
+export interface ForgetBackendMemoriesResult {
+  forgottenCount: number;
+  memoryIds: string[];
 }
