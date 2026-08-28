@@ -1,6 +1,7 @@
 /**
- * Electron 端到端烟测：验证桌宠、主聊天、设置窗口与 Task 迁移期固定回复。
- * 测试使用隔离 userData 和确定性模型，不调用 runner、Task IPC、Task UI 或外部服务。
+ * Electron 端到端烟测：验证桌宠、主聊天、设置窗口与 Backend 缺席时的明确错误投影。
+ * 测试使用隔离 userData 且不启动 Python Backend，确认桌面不会回落到旧 Chat/Memory、
+ * runner、Task IPC、Task UI 或外部服务。
  */
 import { mkdtempSync, rmSync } from "node:fs";
 import { tmpdir } from "node:os";
@@ -52,22 +53,22 @@ test("launches the Live2D pet and opens the chat-only Console", async () => {
   }
 });
 
-test("returns the fixed unavailable message for a Task request", async () => {
+test("returns the explicit Main Agent unavailable message when Backend is absent", async () => {
   const { electronApp, petWindow, userDataDir } = await launchAuraBot();
   try {
     const consoleWindow = await openConsole(electronApp, petWindow);
     await consoleWindow.getByPlaceholder("Say something").fill("帮我写一份周报");
     await consoleWindow.getByPlaceholder("Say something").press("Enter");
     await expect(consoleWindow.getByLabel("Conversation messages"))
-      .toContainText("Task 功能正在迁移，当前暂不可用。");
+      .toContainText("主 Agent 暂时不可用，请确认本地 Backend 已启动后重试。");
     await expect(petWindow.getByLabel("Pet message"))
-      .toContainText("Task 功能正在迁移，当前暂不可用。");
+      .toContainText("主 Agent 暂时不可用，请确认本地 Backend 已启动后重试。");
   } finally {
     await cleanup(electronApp, userDataDir);
   }
 });
 
-test("broadcasts the Task unavailable message from Pet to Console", async () => {
+test("broadcasts the Main Agent unavailable message from Pet to Console", async () => {
   const { electronApp, petWindow, userDataDir } = await launchAuraBot();
   try {
     const consoleWindow = await openConsole(electronApp, petWindow);
@@ -78,7 +79,7 @@ test("broadcasts the Task unavailable message from Pet to Console", async () => 
       });
     });
     await expect(consoleWindow.getByLabel("Conversation messages"))
-      .toContainText("Task 功能正在迁移，当前暂不可用。");
+      .toContainText("主 Agent 暂时不可用，请确认本地 Backend 已启动后重试。");
   } finally {
     await cleanup(electronApp, userDataDir);
   }
