@@ -2218,7 +2218,7 @@ textarea {
 
 .memory-debug-metrics {
   display: grid;
-  grid-template-columns: repeat(4, minmax(72px, 1fr));
+  grid-template-columns: repeat(2, minmax(72px, 1fr));
   gap: 8px;
 }
 
@@ -2289,6 +2289,10 @@ textarea {
   gap: 10px;
 }
 
+.memory-debug-grid-owner {
+  grid-template-columns: repeat(2, minmax(0, 1fr));
+}
+
 .memory-debug-column {
   min-width: 0;
 }
@@ -2314,6 +2318,31 @@ textarea {
   background: rgba(255, 255, 255, 0.68);
 }
 
+.memory-debug-item-heading {
+  display: flex;
+  gap: 8px;
+  align-items: center;
+  justify-content: space-between;
+}
+
+.memory-debug-action {
+  min-height: 26px;
+  padding: 4px 8px;
+  border: 1px solid rgba(41, 65, 67, 0.18);
+  border-radius: 7px;
+  background: rgba(244, 249, 247, 0.92);
+  color: #344041;
+  font: inherit;
+  font-size: 10px;
+  font-weight: 800;
+  cursor: pointer;
+}
+
+.memory-debug-action:disabled {
+  cursor: wait;
+  opacity: 0.55;
+}
+
 .memory-debug-kicker {
   display: block;
   overflow: hidden;
@@ -2332,6 +2361,17 @@ textarea {
   color: #263334;
   font-size: 12px;
   line-height: 1.38;
+}
+
+.memory-debug-item time {
+  display: block;
+  margin-top: 5px;
+  color: #657172;
+  font-size: 10px;
+}
+
+.memory-debug-job-error {
+  color: #9a3f2c !important;
 }
 
 @media (max-width: 720px) {

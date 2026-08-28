@@ -1,12 +1,18 @@
 /**
  * 定义 Electron Main、Preload 与 Renderer 的非 Task IPC 公共边界。
  *
- * API 覆盖聊天、Memory debug、模型/桌宠/通知设置、窗口与 Backend health；所有 Task
- * channels、详情、debug、文件动作和事件订阅均已移除。
+ * API 覆盖聊天、Python Memory 管理、模型/桌宠/通知设置、窗口与 Backend health；
+ * 所有 Task channels、详情、文件动作和事件订阅均已移除。
  */
 
 import type { AppInitialState, SendChatMessageInput, SendChatMessageResult } from "./chat";
-import type { BackendStatus } from "./backend";
+import type {
+  BackendMemoryJob,
+  BackendMemorySnapshot,
+  BackendStatus,
+  ForgetBackendMemoriesInput,
+  ForgetBackendMemoriesResult
+} from "./backend";
 import type { Live2DModelState } from "./live2dModel";
 import type { NotificationSettings } from "./notificationSettings";
 import type { PersonaSettings } from "./personaSettings";
@@ -19,7 +25,6 @@ import type {
   PublicModelHealth,
   PublicModelHealthMap
 } from "./settings";
-import type { MemoryEdge, MemoryNode, MemorySummary } from "../schemas/memory";
 import type { Message } from "../schemas/message";
 import type { PetSettings, PetSettingsPatch } from "../schemas/petSettings";
 import type { Profile } from "../schemas/profile";
@@ -54,7 +59,9 @@ export const IPC_CHANNELS = {
   chatMessageUpdated: "chat:message-updated",
   sendChatMessage: "chat:send-message",
   getEventLogs: "debug:get-event-logs",
-  getMemoryDebugSnapshot: "debug:get-memory-snapshot"
+  getMemoryDebugSnapshot: "debug:get-memory-snapshot",
+  forgetMemories: "memory:forget",
+  retryMemoryJob: "memory:retry-job"
 } as const;
 
 export interface EventLogRecord {
@@ -64,33 +71,7 @@ export interface EventLogRecord {
   createdAt: string;
 }
 
-export interface MemoryRecallDebugTrace {
-  query: string;
-  recallPlan: {
-    queryTerms: string[];
-    targetTypes: MemoryNode["type"][];
-    rankedNodeIds: string[];
-  };
-  seedNodeIds: string[];
-  expandedNodeIds: string[];
-  returnedNodeIds: string[];
-  traversedEdges: Array<{
-    sourceNodeId: string;
-    targetNodeId: string;
-    relationType?: MemoryEdge["relationType"] | string;
-    weight?: number;
-    depth: number;
-  }>;
-}
-
-export interface MemoryDebugSnapshot {
-  generatedAt: string;
-  nodes: MemoryNode[];
-  edges: MemoryEdge[];
-  summaries: MemorySummary[];
-  recentEvents: EventLogRecord[];
-  lastRecallTrace?: MemoryRecallDebugTrace;
-}
+export type MemoryDebugSnapshot = BackendMemorySnapshot;
 
 export interface PetCursorPosition {
   screenX: number;
@@ -138,4 +119,6 @@ export interface AuraBotApi {
   sendChatMessage(input: SendChatMessageInput): Promise<SendChatMessageResult>;
   getEventLogs(): Promise<EventLogRecord[]>;
   getMemoryDebugSnapshot(): Promise<MemoryDebugSnapshot>;
+  forgetMemories(input: ForgetBackendMemoriesInput): Promise<ForgetBackendMemoriesResult>;
+  retryMemoryJob(jobId: string): Promise<BackendMemoryJob>;
 }

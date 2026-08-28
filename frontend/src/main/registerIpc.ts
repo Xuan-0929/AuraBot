@@ -1,8 +1,8 @@
 /**
  * 注册 Electron 当前保留的窗口、聊天、模型、Memory、桌宠与通知 IPC handlers。
  *
- * 初始状态和 debug 数据来自本地非 Task services，Backend 只用于 health；聊天流通过
- * typed broadcasts 投影给 Renderer，所有 Task channels 与文件动作已删除。
+ * 初始展示状态来自本地非 Task services；聊天和 Memory 管理分别委托给注入的 Python
+ * owner 客户端，再通过 typed IPC/broadcast 投影给 Renderer。
  */
 
 import { ipcMain } from "electron";
@@ -12,7 +12,12 @@ import type {
   SendChatMessageInput,
   SendChatMessageResult
 } from "@shared/contracts/chat";
-import type { BackendStatus } from "@shared/contracts/backend";
+import type {
+  BackendMemoryJob,
+  BackendStatus,
+  ForgetBackendMemoriesInput,
+  ForgetBackendMemoriesResult
+} from "@shared/contracts/backend";
 import type { Live2DModelState } from "@shared/contracts/live2dModel";
 import type { NotificationSettings } from "@shared/contracts/notificationSettings";
 import type { PersonaSettings } from "@shared/contracts/personaSettings";
@@ -50,6 +55,9 @@ export interface WindowController {
   testModelConnection(role: ModelRoleKey): Promise<PublicModelHealth>;
   updateProactiveSettings(patch: ProactiveSettingsPatch): Promise<PublicAppConfig>;
   getBackendStatus(): Promise<BackendStatus>;
+  getMemoryDebugSnapshot(): Promise<MemoryDebugSnapshot>;
+  forgetMemories(input: ForgetBackendMemoriesInput): Promise<ForgetBackendMemoriesResult>;
+  retryMemoryJob(jobId: string): Promise<BackendMemoryJob>;
   updatePersonaSettings(settings: PersonaSettings): Profile;
   getLive2DModelState(): Live2DModelState;
   setCurrentLive2DModel(modelId: string): Live2DModelState;
@@ -183,8 +191,14 @@ export function registerIpc(services: AppServices, windows: WindowController): v
   );
 
   ipcMain.handle(IPC_CHANNELS.getEventLogs, () => services.eventLogService.list());
-  ipcMain.handle(IPC_CHANNELS.getMemoryDebugSnapshot, () =>
-    buildLocalMemoryDebugSnapshot(services)
+  ipcMain.handle(IPC_CHANNELS.getMemoryDebugSnapshot, () => windows.getMemoryDebugSnapshot());
+  ipcMain.handle(
+    IPC_CHANNELS.forgetMemories,
+    (_event, input: ForgetBackendMemoriesInput) => windows.forgetMemories(input)
+  );
+  ipcMain.handle(
+    IPC_CHANNELS.retryMemoryJob,
+    (_event, jobId: string) => windows.retryMemoryJob(jobId)
   );
 }
 
@@ -201,21 +215,6 @@ export async function sendChatMessageThroughOwner(
   const result = await owner.sendChatMessage(input);
   owner.broadcastAgentStatus(result.agentStatus);
   return result;
-}
-
-function buildLocalMemoryDebugSnapshot(services: AppServices): MemoryDebugSnapshot {
-  const profile = services.profileService.getOrSeedActiveProfile();
-  const memory = services.memoryService.retrieveForProfile(profile.id);
-  return {
-    generatedAt: new Date().toISOString(),
-    nodes: memory.nodes,
-    edges: memory.edges,
-    summaries: memory.summaries,
-    recentEvents: services.eventLogService
-      .list(80)
-      .filter((event) => event.eventType.startsWith("memory.")),
-    lastRecallTrace: services.memoryService.getLastRecallTrace()
-  };
 }
 
 export interface BuildAssistantMessagePetActivitiesOptions {

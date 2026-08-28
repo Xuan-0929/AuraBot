@@ -1,8 +1,8 @@
 /**
  * 通过 contextBridge 向 Renderer 暴露最小、类型化的非 Task Electron API。
  *
- * 每个方法只转发保留的共享 IPC channel；不暴露本地文件路径解析，也不再注册
- * Task controls、Task events、debug 或结果文件动作。
+ * 每个方法只转发保留的共享 IPC channel；Memory 浏览、忘记和重试由 Main 转交
+ * Python owner，不暴露本地路径、Task controls、payload 或 lease 内部字段。
  */
 
 import { contextBridge, ipcRenderer } from "electron";
@@ -72,7 +72,9 @@ const api: AuraBotApi = {
   sendChatMessage: (input: SendChatMessageInput) =>
     ipcRenderer.invoke(IPC_CHANNELS.sendChatMessage, input),
   getEventLogs: () => ipcRenderer.invoke(IPC_CHANNELS.getEventLogs),
-  getMemoryDebugSnapshot: () => ipcRenderer.invoke(IPC_CHANNELS.getMemoryDebugSnapshot)
+  getMemoryDebugSnapshot: () => ipcRenderer.invoke(IPC_CHANNELS.getMemoryDebugSnapshot),
+  forgetMemories: (input) => ipcRenderer.invoke(IPC_CHANNELS.forgetMemories, input),
+  retryMemoryJob: (jobId) => ipcRenderer.invoke(IPC_CHANNELS.retryMemoryJob, jobId)
 };
 
 contextBridge.exposeInMainWorld("aurabot", api);

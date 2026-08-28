@@ -1,62 +1,67 @@
+<!--
+  展示 Python Memory owner 的 active items 与公开 job 摘要，并发出忘记/重试意图。
+
+  组件不读取旧 memory_nodes/edges/summaries，也不接触提取 payload、lease、向量或
+  SQLite 内部字段；所有 mutation 由页面经 Store/IPC 委托给 Backend。
+-->
 <template>
-  <template v-if="snapshot">
+  <p v-if="error" class="memory-debug-empty backend-status-error" role="alert">{{ error }}</p>
+  <p v-else-if="loading" class="memory-debug-empty" aria-live="polite">
+    {{ t(displayLanguage, "memoryLoading") }}
+  </p>
+  <template v-else-if="snapshot">
     <div class="memory-debug-metrics" :aria-label="t(displayLanguage, 'memoryDebugMetrics')">
-      <span>{{ t(displayLanguage, "nodes") }} {{ snapshot.nodes.length }}</span>
-      <span>{{ t(displayLanguage, "edges") }} {{ snapshot.edges.length }}</span>
-      <span>{{ t(displayLanguage, "summaries") }} {{ snapshot.summaries.length }}</span>
-      <span>{{ t(displayLanguage, "events") }} {{ snapshot.recentEvents.length }}</span>
+      <span>{{ t(displayLanguage, "activeMemories") }} {{ snapshot.items.length }}</span>
+      <span>{{ t(displayLanguage, "memoryJobs") }} {{ snapshot.jobs.length }}</span>
     </div>
-    <section
-      v-if="snapshot.lastRecallTrace"
-      class="memory-debug-recall"
-      :aria-label="t(displayLanguage, 'lastMemoryRecallTrace')"
-    >
-      <div class="memory-debug-recall-header">
-        <h2>{{ t(displayLanguage, "lastRecall") }}</h2>
-        <span>{{ t(displayLanguage, "seeds") }} {{ snapshot.lastRecallTrace.seedNodeIds.length }}</span>
-        <span>{{ t(displayLanguage, "expanded") }} {{ snapshot.lastRecallTrace.expandedNodeIds.length }}</span>
-        <span>{{ t(displayLanguage, "returned") }} {{ snapshot.lastRecallTrace.returnedNodeIds.length }}</span>
-      </div>
-      <p class="memory-debug-query">{{ snapshot.lastRecallTrace.query }}</p>
-      <div class="memory-debug-chip-row">
-        <span v-for="term in snapshot.lastRecallTrace.recallPlan.queryTerms" :key="term">{{ term }}</span>
-        <span v-for="type in snapshot.lastRecallTrace.recallPlan.targetTypes" :key="type">{{ type }}</span>
-      </div>
-      <div class="memory-debug-path-list">
-        <p v-for="edge in snapshot.lastRecallTrace.traversedEdges.slice(0, 6)" :key="`${edge.sourceNodeId}-${edge.targetNodeId}-${edge.relationType ?? 'relates_to'}-${edge.depth}`">
-          {{ shortId(edge.sourceNodeId) }} -&gt; {{ shortId(edge.targetNodeId) }} /
-          {{ edge.relationType ?? "relates_to" }} / d{{ edge.depth
-          }}{{ typeof edge.weight === "number" ? ` / ${edge.weight.toFixed(2)}` : "" }}
-        </p>
-      </div>
-    </section>
-    <div class="memory-debug-grid">
-      <section class="memory-debug-column">
-        <h2>{{ t(displayLanguage, "nodes") }}</h2>
-        <div class="memory-debug-list">
-          <article v-for="node in snapshot.nodes.slice(0, 8)" :key="node.id" class="memory-debug-item">
-            <span class="memory-debug-kicker">{{ node.type }} / {{ node.state }} / {{ node.importance.toFixed(2) }}</span>
-            <p>{{ node.content }}</p>
+    <div class="memory-debug-grid memory-debug-grid-owner">
+      <section class="memory-debug-column" :aria-label="t(displayLanguage, 'activeMemories')">
+        <h2>{{ t(displayLanguage, "activeMemories") }}</h2>
+        <div v-if="snapshot.items.length" class="memory-debug-list">
+          <article v-for="memory in snapshot.items" :key="memory.memoryId" class="memory-debug-item">
+            <div class="memory-debug-item-heading">
+              <span class="memory-debug-kicker">{{ memory.type }} / {{ shortId(memory.memoryId) }}</span>
+              <button
+                type="button"
+                class="memory-debug-action"
+                data-memory-action="forget"
+                :disabled="loading"
+                :aria-label="`${t(displayLanguage, 'forgetMemory')}: ${memory.content}`"
+                @click="emit('forget', memory.memoryId)"
+              >
+                {{ t(displayLanguage, "forget") }}
+              </button>
+            </div>
+            <p>{{ memory.content }}</p>
+            <time :datetime="memory.updatedAt">{{ formatTime(memory.updatedAt) }}</time>
           </article>
         </div>
+        <p v-else class="memory-debug-empty">{{ t(displayLanguage, "noActiveMemories") }}</p>
       </section>
-      <section class="memory-debug-column">
-        <h2>{{ t(displayLanguage, "edges") }}</h2>
-        <div class="memory-debug-list">
-          <article v-for="edge in snapshot.edges.slice(0, 8)" :key="edge.id" class="memory-debug-item">
-            <span class="memory-debug-kicker">{{ edge.relationType }}</span>
-            <p>{{ shortId(edge.sourceNodeId) }} -&gt; {{ shortId(edge.targetNodeId) }} / {{ edge.weight.toFixed(2) }}</p>
+      <section class="memory-debug-column" :aria-label="t(displayLanguage, 'memoryJobs')">
+        <h2>{{ t(displayLanguage, "memoryJobs") }}</h2>
+        <div v-if="snapshot.jobs.length" class="memory-debug-list">
+          <article v-for="job in snapshot.jobs" :key="job.jobId" class="memory-debug-item">
+            <div class="memory-debug-item-heading">
+              <span class="memory-debug-kicker">{{ job.kind }} / {{ job.state }}</span>
+              <button
+                v-if="job.state === 'failed'"
+                type="button"
+                class="memory-debug-action"
+                data-memory-action="retry"
+                :disabled="loading"
+                :aria-label="`${t(displayLanguage, 'retryMemoryJob')}: ${job.jobId}`"
+                @click="emit('retry', job.jobId)"
+              >
+                {{ t(displayLanguage, "retry") }}
+              </button>
+            </div>
+            <p>{{ t(displayLanguage, "attemptCount") }} {{ job.attemptCount }}</p>
+            <p v-if="job.lastError" class="memory-debug-job-error">{{ job.lastError }}</p>
+            <time v-if="job.updatedAt" :datetime="job.updatedAt">{{ formatTime(job.updatedAt) }}</time>
           </article>
         </div>
-      </section>
-      <section class="memory-debug-column">
-        <h2>{{ t(displayLanguage, "recentEvents") }}</h2>
-        <div class="memory-debug-list">
-          <article v-for="event in snapshot.recentEvents.slice(0, 8)" :key="event.id" class="memory-debug-item">
-            <span class="memory-debug-kicker">{{ formatTime(event.createdAt) }}</span>
-            <p>{{ event.eventType }}</p>
-          </article>
-        </div>
+        <p v-else class="memory-debug-empty">{{ t(displayLanguage, "noMemoryJobs") }}</p>
       </section>
     </div>
   </template>
@@ -64,20 +69,27 @@
 </template>
 
 <script setup lang="ts">
-import type { MemoryDebugSnapshot } from "@shared/contracts/ipc";
+import type { BackendMemorySnapshot } from "@shared/contracts/backend";
 import type { PetSettings } from "@shared/schemas/petSettings";
 import { t } from "../../i18n";
 
 withDefaults(
   defineProps<{
-    snapshot?: MemoryDebugSnapshot;
+    snapshot?: BackendMemorySnapshot;
     displayLanguage?: PetSettings["displayLanguage"];
+    loading?: boolean;
+    error?: string;
   }>(),
-  { displayLanguage: "en" }
+  { displayLanguage: "en", loading: false }
 );
 
+const emit = defineEmits<{
+  forget: [memoryId: string];
+  retry: [jobId: string];
+}>();
+
 function shortId(value: string): string {
-  return value.replace(/^memory_/, "").slice(0, 10);
+  return value.replace(/^memory[_-]/, "").slice(0, 10);
 }
 
 function formatTime(value: string): string {

@@ -1,8 +1,8 @@
 <!--
-  展示 health-only Python Backend 状态并承载 Memory 调试快照。
+  展示 Python Backend 状态并承载 active Memory 与公开 job 管理面。
 
-  页面只读取精简后的 ok/service 探测结果，使用桌面进程约定的固定 health 地址，
-  不再呈现已删除的服务注册表、Task runtime 或独立前端端点。
+  页面经 Store 调用 browse/forget/retry IPC；Backend 错误保持可见，不再呈现旧图谱、
+  已删除的服务注册表、Task runtime 或内部提取数据。
 -->
 <template>
   <section class="settings-page-section" :aria-label="t(store.displayLanguage, 'memoryDebug')">
@@ -34,7 +34,14 @@
       <p v-if="store.backendStatus?.error" class="backend-status-error">{{ store.backendStatus.error }}</p>
     </section>
     <div class="memory-debug-panel memory-debug-panel-page" :aria-label="t(store.displayLanguage, 'memoryDebugPanel')">
-      <MemoryDebugContent :snapshot="store.memoryDebugSnapshot" :display-language="store.displayLanguage" />
+      <MemoryDebugContent
+        :snapshot="store.memoryDebugSnapshot"
+        :display-language="store.displayLanguage"
+        :loading="store.memoryDebugLoading"
+        :error="store.memoryDebugError"
+        @forget="forgetMemory"
+        @retry="retryMemoryJob"
+      />
     </div>
   </section>
 </template>
@@ -73,10 +80,18 @@ const lastCheckedLabel = computed(() => {
 });
 
 async function refreshDebugState() {
-  await Promise.all([
+  await Promise.allSettled([
     store.loadBackendStatus(),
     store.loadMemoryDebugSnapshot()
   ]);
+}
+
+function forgetMemory(memoryId: string) {
+  void store.forgetMemory(memoryId).catch(() => undefined);
+}
+
+function retryMemoryJob(jobId: string) {
+  void store.retryMemoryJob(jobId).catch(() => undefined);
 }
 
 onMounted(() => {

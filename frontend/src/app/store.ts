@@ -1,5 +1,5 @@
 /**
- * 管理 Renderer 的聊天、模型、Memory debug、Live2D、桌宠与通知状态。
+ * 管理 Renderer 的聊天、模型、Python Memory 管理、Live2D、桌宠与通知状态。
  *
  * Store 通过 preload API 初始化和发送普通聊天，并协调 pet activity 队列；它不保存
  * Task 列表/详情/debug，也不订阅或调用任何 Task IPC。
@@ -11,9 +11,9 @@ import type {
   AppInitialState,
   SendChatMessageResult
 } from "@shared/contracts/chat";
-import type { BackendStatus } from "@shared/contracts/backend";
+import type { BackendMemorySnapshot, BackendStatus } from "@shared/contracts/backend";
 import type { Live2DModelState } from "@shared/contracts/live2dModel";
-import type { MemoryDebugSnapshot, PetCursorPosition } from "@shared/contracts/ipc";
+import type { PetCursorPosition } from "@shared/contracts/ipc";
 import type { NotificationSettings } from "@shared/contracts/notificationSettings";
 import type { PersonaSettings } from "@shared/contracts/personaSettings";
 import type { PetActivity } from "@shared/contracts/pet";
@@ -50,7 +50,9 @@ interface AuraBotState {
   petActivityQueue: PetActivity[];
   petCursorPosition?: PetCursorPosition;
   focusAt: { x: number; y: number };
-  memoryDebugSnapshot?: MemoryDebugSnapshot;
+  memoryDebugSnapshot?: BackendMemorySnapshot;
+  memoryDebugLoading: boolean;
+  memoryDebugError?: string;
   debugPetOverlay: boolean;
   isInitialized: boolean;
 }
@@ -62,6 +64,7 @@ export const useAuraBotStore = defineStore("auraBot", {
     petSettings: { ...DEFAULT_PET_SETTINGS },
     petActivityQueue: [],
     focusAt: { x: 0, y: 0 },
+    memoryDebugLoading: false,
     debugPetOverlay: false,
     isInitialized: false
   }),
@@ -90,7 +93,46 @@ export const useAuraBotStore = defineStore("auraBot", {
       await this.loadInitialState();
     },
     async loadMemoryDebugSnapshot() {
-      this.memoryDebugSnapshot = await window.aurabot.getMemoryDebugSnapshot();
+      this.memoryDebugLoading = true;
+      this.memoryDebugError = undefined;
+      try {
+        this.memoryDebugSnapshot = await window.aurabot.getMemoryDebugSnapshot();
+      } catch (error) {
+        this.memoryDebugError = error instanceof Error ? error.message : String(error);
+        throw error;
+      } finally {
+        this.memoryDebugLoading = false;
+      }
+    },
+    async forgetMemory(memoryId: string) {
+      this.memoryDebugLoading = true;
+      this.memoryDebugError = undefined;
+      try {
+        await window.aurabot.forgetMemories({
+          memoryIds: [memoryId],
+          episodeIds: [],
+          reason: "user request"
+        });
+        this.memoryDebugSnapshot = await window.aurabot.getMemoryDebugSnapshot();
+      } catch (error) {
+        this.memoryDebugError = error instanceof Error ? error.message : String(error);
+        throw error;
+      } finally {
+        this.memoryDebugLoading = false;
+      }
+    },
+    async retryMemoryJob(jobId: string) {
+      this.memoryDebugLoading = true;
+      this.memoryDebugError = undefined;
+      try {
+        await window.aurabot.retryMemoryJob(jobId);
+        this.memoryDebugSnapshot = await window.aurabot.getMemoryDebugSnapshot();
+      } catch (error) {
+        this.memoryDebugError = error instanceof Error ? error.message : String(error);
+        throw error;
+      } finally {
+        this.memoryDebugLoading = false;
+      }
     },
     async loadBackendStatus() {
       this.backendStatus = await window.aurabot.getBackendStatus();

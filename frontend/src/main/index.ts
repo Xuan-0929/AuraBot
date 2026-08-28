@@ -17,7 +17,12 @@ import { createChatModel } from "@core/llm/chatModel";
 import { createGateModel } from "@core/llm/gateModel";
 import { createModelHealthService, type ModelHealthService } from "@core/llm/modelHealth";
 import { createVoiceAdapter } from "@core/voice/voiceAdapter";
-import { getBackendStatus } from "./backendGatewayClient";
+import {
+  forgetBackendMemories,
+  getBackendMemorySnapshot,
+  getBackendStatus,
+  retryBackendMemoryJob
+} from "./backendGatewayClient";
 import { MainAgentChatProjection } from "./mainAgentChatProjection";
 import {
   MainAgentRealtimeClient,
@@ -152,6 +157,9 @@ async function bootstrap(): Promise<void> {
     testModelConnection: (role) => testModelConnection(role),
     updateProactiveSettings: (patch) => updateProactiveSettings(userDataPath, patch),
     getBackendStatus: () => getBackendStatus(),
+    getMemoryDebugSnapshot: () => getBackendMemorySnapshot(),
+    forgetMemories: (input) => forgetBackendMemories(input),
+    retryMemoryJob: (jobId) => retryBackendMemoryJob(jobId),
     updatePersonaSettings: (settings) => updatePersonaSettings(settings),
     getLive2DModelState: () => getLive2DModelState(),
     setCurrentLive2DModel: (modelId) => setCurrentLive2DModel(modelId),
