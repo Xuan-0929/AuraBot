@@ -85,8 +85,10 @@ class OpenAICompatibleMemoryExtractionModel:
                         {
                             "role": "system",
                             "content": (
-                                "Extract durable user memories and entities. Return one JSON object "
-                                "with arrays named memories and entities. Output JSON only, without markdown."
+                                "Extract durable user memories, entities, and a concise conversation summary. "
+                                "Return one JSON object with memories and entities arrays plus summary text. "
+                                "The summary preserves topics, temporary intent, decisions, and unresolved "
+                                "references. Output JSON only, without markdown."
                             ),
                         },
                         {"role": "user", "content": facts},
@@ -120,8 +122,10 @@ class OpenAICompatibleMemoryExtractionModel:
                         {
                             "role": "system",
                             "content": (
-                                "Extract durable user memories and entities. Return one JSON object "
-                                "with arrays named memories and entities. Output JSON only, without markdown."
+                                "Extract durable user memories, entities, and a concise conversation summary. "
+                                "Return one JSON object with memories and entities arrays plus summary text. "
+                                "The summary preserves topics, temporary intent, decisions, and unresolved "
+                                "references. Output JSON only, without markdown."
                             ),
                         },
                         {"role": "user", "content": _facts(content, metadata, memory_type, importance)},

@@ -76,6 +76,24 @@ class InMemoryVectorStore:
         return {"backend": "in-memory", "points": len(self.points)}
 
 
+class FailingSearchVectorStore(InMemoryVectorStore):
+    def search(self, vector, *, profile_id, limit, filters=None):
+        raise RuntimeError("vector index unavailable")
+
+
+class FailSecondUpsertVectorStore(InMemoryVectorStore):
+    def __init__(self):
+        super().__init__()
+        self.attempts: list[str] = []
+        self.fail_second = True
+
+    def upsert(self, memory_id, vector, payload):
+        self.attempts.append(memory_id)
+        if self.fail_second and len(self.attempts) == 2:
+            raise RuntimeError("second vector upsert failed")
+        super().upsert(memory_id, vector, payload)
+
+
 class FakeExtractionModel:
     def __init__(self, payload):
         self.payload = payload
@@ -98,6 +116,11 @@ class AsyncExtractionModel(FakeExtractionModel):
         self.started.set()
         await self.release.wait()
         return self.payload
+
+
+class LegacyEmptyExtractor:
+    def extract(self, **_kwargs):
+        return [], []
 
 
 class BlockingAsyncHttpClient:
@@ -140,6 +163,7 @@ class MemoryConversationTests(unittest.IsolatedAsyncioTestCase):
                 "entities": ["红茶"],
             }],
             "entities": [{"name": "红茶"}],
+            "summary": "用户喜欢红茶，并已得到确认。",
         })
         self.service = MemoryService(
             metadata_store=self.store,
@@ -167,12 +191,216 @@ class MemoryConversationTests(unittest.IsolatedAsyncioTestCase):
         )
 
         self.assertEqual(first, repeated)
+        self.assertEqual(first["summary"], "用户喜欢红茶，并已得到确认。")
         self.assertEqual(self.model.contents, ["user: 我喜欢红茶\nassistant: 我记住了。"])
         snapshot = self.store.debug_snapshot("profile-a")
         self.assertEqual(len(snapshot["episodes"]), 1)
         self.assertEqual(snapshot["episodes"][0]["source_type"], "main_agent_conversation")
         self.assertEqual(snapshot["episodes"][0]["source_id"], "context:1:2")
         self.assertEqual([item["content"] for item in snapshot["memories"]], ["用户喜欢红茶"])
+
+    async def test_structured_conversation_extraction_returns_summary_from_same_payload(self):
+        self.model.release.set()
+        extractor = StructuredMemoryExtractor(self.model)
+
+        result = await extractor.extract_conversation_async(
+            content="user: 我喜欢红茶",
+            metadata={"turn_count": 1},
+        )
+
+        self.assertEqual(result.summary, "用户喜欢红茶，并已得到确认。")
+        self.assertEqual([item.content for item in result.memories], ["用户喜欢红茶"])
+        self.assertEqual([item.name for item in result.entities], ["红茶"])
+        self.assertEqual(self.model.contents, ["user: 我喜欢红茶"])
+
+    async def test_zero_memory_conversation_persists_model_summary_without_reextracting(self):
+        self.model.payload = {
+            "memories": [],
+            "entities": [],
+            "summary": "用户正在比较方案 A 和方案 B，并倾向继续使用方案 B。",
+        }
+        self.model.release.set()
+        turns = ({"role": "user", "content": "那就按照第二个继续"},)
+
+        first = await self.service.remember_conversation(
+            profile_id="profile-a", turns=turns, source_id="context:1:1",
+        )
+        repeated = await self.service.remember_conversation(
+            profile_id="profile-a", turns=turns, source_id="context:1:1",
+        )
+
+        self.assertEqual(first, repeated)
+        self.assertEqual(
+            first["summary"],
+            "用户正在比较方案 A 和方案 B，并倾向继续使用方案 B。",
+        )
+        self.assertEqual(first["memory_ids"], [])
+        self.assertEqual(len(self.model.contents), 1)
+        snapshot = self.store.debug_snapshot("profile-a")
+        self.assertEqual(len(snapshot["episodes"]), 1)
+        self.assertEqual(snapshot["episodes"][0]["summary"], first["summary"])
+        self.assertEqual(snapshot["memories"], [])
+
+    async def test_legacy_extractor_gets_deterministic_nonempty_bounded_summary(self):
+        service = MemoryService(
+            metadata_store=self.store,
+            vector_store=self.vector_store,
+            embedding_provider=HashEmbeddingProvider(dimension=32),
+            extractor=LegacyEmptyExtractor(),
+        )
+        turns = (
+            {"role": "user", "content": "较早内容" + "x" * 1_100},
+            {"role": "assistant", "content": "最新决定是继续方案 B"},
+        )
+
+        first = await service.remember_conversation(
+            profile_id="profile-a", turns=turns, source_id="context:1:2",
+        )
+        repeated = await service.remember_conversation(
+            profile_id="profile-a", turns=turns, source_id="context:1:2",
+        )
+
+        self.assertEqual(first, repeated)
+        self.assertTrue(first["summary"])
+        self.assertLessEqual(len(first["summary"]), 1_000)
+        self.assertIn("最新决定是继续方案 B", first["summary"])
+        self.assertEqual(first["memory_ids"], [])
+
+    async def test_conversation_sqlite_failure_rolls_back_every_fact_before_vector_indexing(self):
+        self.model.payload = {
+            "memories": [
+                {
+                    "content": "用户喜欢红茶",
+                    "memory_type": "preference",
+                    "importance": 0.8,
+                    "confidence": 0.9,
+                    "entities": ["红茶"],
+                },
+                {
+                    "content": "用户常在下午喝红茶",
+                    "memory_type": "semantic",
+                    "importance": 0.7,
+                    "confidence": 0.8,
+                    "entities": ["红茶"],
+                },
+            ],
+            "entities": [{"name": "红茶"}],
+        }
+        self.model.release.set()
+        connection = sqlite3.connect(self.store.path)
+        connection.executescript(
+            """
+            create trigger fail_second_conversation_memory
+            before insert on memory_items
+            when (select count(*) from memory_items) >= 1
+            begin
+              select raise(abort, 'second memory insert failed');
+            end;
+            """
+        )
+        connection.close()
+        turns = ({"role": "user", "content": "我下午喜欢喝红茶"},)
+
+        with self.assertRaises(sqlite3.IntegrityError):
+            await self.service.remember_conversation(
+                profile_id="profile-a", turns=turns, source_id="context:1:1",
+            )
+
+        failed = self.store.debug_snapshot("profile-a")
+        self.assertEqual(failed["episodes"], [])
+        self.assertEqual(failed["memories"], [])
+        self.assertEqual(failed["entities"], [])
+        self.assertEqual(failed["relations"], [])
+        self.assertEqual(self.vector_store.points, {})
+
+        connection = sqlite3.connect(self.store.path)
+        connection.execute("drop trigger fail_second_conversation_memory")
+        connection.close()
+        result = await self.service.remember_conversation(
+            profile_id="profile-a", turns=turns, source_id="context:1:1",
+        )
+
+        completed = self.store.debug_snapshot("profile-a")
+        self.assertEqual(len(completed["episodes"]), 1)
+        self.assertEqual(len(completed["memories"]), 2)
+        self.assertEqual(len(result["memory_ids"]), 2)
+
+    async def test_conversation_retry_repairs_all_vectors_without_reextracting(self):
+        self.model.payload = {
+            "memories": [
+                {
+                    "content": "用户喜欢红茶",
+                    "memory_type": "preference",
+                    "importance": 0.8,
+                    "confidence": 0.9,
+                    "entities": ["红茶"],
+                },
+                {
+                    "content": "用户常在下午喝红茶",
+                    "memory_type": "semantic",
+                    "importance": 0.7,
+                    "confidence": 0.8,
+                    "entities": ["红茶"],
+                },
+            ],
+            "entities": [{"name": "红茶"}],
+        }
+        self.model.release.set()
+        vectors = FailSecondUpsertVectorStore()
+        service = MemoryService(
+            metadata_store=self.store,
+            vector_store=vectors,
+            embedding_provider=HashEmbeddingProvider(dimension=32),
+            extractor=StructuredMemoryExtractor(self.model),
+        )
+        turns = ({"role": "user", "content": "我下午喜欢喝红茶"},)
+
+        with self.assertRaisesRegex(RuntimeError, "second vector upsert failed"):
+            await service.remember_conversation(
+                profile_id="profile-a", turns=turns, source_id="context:1:1",
+            )
+
+        sqlite_truth = self.store.debug_snapshot("profile-a")
+        self.assertEqual(len(sqlite_truth["episodes"]), 1)
+        self.assertEqual(len(sqlite_truth["memories"]), 2)
+        self.assertEqual(len(vectors.points), 1)
+        vectors.fail_second = False
+        result = await service.remember_conversation(
+            profile_id="profile-a", turns=turns, source_id="context:1:1",
+        )
+
+        self.assertEqual(len(self.model.contents), 1)
+        self.assertEqual(len(result["memory_ids"]), 2)
+        self.assertEqual(set(vectors.points), set(result["memory_ids"]))
+        self.assertEqual(len(vectors.attempts), 4)
+        completed = self.store.debug_snapshot("profile-a")
+        self.assertEqual(len(completed["episodes"]), 1)
+        self.assertEqual(len(completed["memories"]), 2)
+
+    async def test_existing_incomplete_episode_is_rebuilt_instead_of_reported_success(self):
+        incomplete_episode = self.store.create_episode(
+            profile_id="profile-a",
+            source_type="main_agent_conversation",
+            source_id="context:1:1",
+            role=None,
+            content="user: 我喜欢红茶",
+            metadata={"turn_count": 1},
+        )
+        self.model.release.set()
+
+        result = await self.service.remember_conversation(
+            profile_id="profile-a",
+            turns=({"role": "user", "content": "我喜欢红茶"},),
+            source_id="context:1:1",
+        )
+
+        self.assertEqual(result["episode_id"], incomplete_episode)
+        self.assertEqual(result["summary"], "用户喜欢红茶，并已得到确认。")
+        self.assertEqual(len(result["memory_ids"]), 1)
+        self.assertEqual(len(self.model.contents), 1)
+        snapshot = self.store.debug_snapshot("profile-a")
+        self.assertEqual(len(snapshot["episodes"]), 1)
+        self.assertEqual(len(snapshot["memories"]), 1)
 
     async def test_cancelled_conversation_extraction_writes_nothing(self):
         task = asyncio.create_task(self.service.remember_conversation(
@@ -221,6 +449,31 @@ class MemoryConversationTests(unittest.IsolatedAsyncioTestCase):
 
         self.assertTrue(client.cancelled.is_set())
         self.assertTrue(client.closed.is_set())
+
+    async def test_recall_context_async_returns_only_bounded_public_memory_fields(self):
+        self.model.release.set()
+        remembered = self.service.remember(
+            profile_id="profile-a",
+            content="用户喜欢红茶",
+            source_type="chat",
+            source_id="red-tea",
+            memory_type="preference",
+            metadata={"private_blob": "secret-" + "x" * 5000},
+        )
+
+        result = await self.service.recall_context_async(
+            profile_id="profile-a",
+            query="红茶",
+            limit=6,
+            max_chars=80,
+        )
+
+        self.assertEqual(set(result), {"text", "memory_ids", "char_count", "max_chars"})
+        self.assertIn("用户喜欢红茶", result["text"])
+        self.assertIn(remembered["memory_id"], result["memory_ids"])
+        self.assertLessEqual(result["char_count"], 80)
+        self.assertNotIn("private_blob", result["text"])
+        self.assertNotIn("secret-", result["text"])
 
 
 class MemoryInvodeTests(unittest.TestCase):
@@ -284,6 +537,67 @@ class MemoryInvodeTests(unittest.TestCase):
         self.assertEqual([item["memory_id"] for item in result["memories"]], [first["memory_id"]])
         self.assertNotIn(second["memory_id"], [item["memory_id"] for item in result["memories"]])
         self.assertEqual(result["memories"][0]["content"], "用户喜欢热拿铁。")
+
+    def test_recall_falls_back_to_fts_when_vector_search_fails(self):
+        vector_store = FailingSearchVectorStore()
+        service = MemoryService(
+            metadata_store=self.store,
+            vector_store=vector_store,
+            embedding_provider=HashEmbeddingProvider(dimension=32),
+        )
+        remembered = service.remember(
+            profile_id="user-1",
+            content="用户喜欢红茶",
+            source_type="chat",
+            source_id="red-tea",
+            memory_type="preference",
+        )
+
+        result = service.recall(profile_id="user-1", query="红茶", limit=5)
+
+        self.assertEqual([item["memory_id"] for item in result["memories"]], [remembered["memory_id"]])
+        self.assertEqual(result["memories"][0]["content"], "用户喜欢红茶")
+        self.assertEqual(result["trace"]["failed_branches"], ["vector"])
+
+    def test_recall_uses_entity_seed_when_vector_is_empty(self):
+        remembered = self.service.remember(
+            profile_id="user-1",
+            content="用户喜欢红茶",
+            source_type="chat",
+            source_id="red-tea",
+            memory_type="preference",
+            metadata={"entities": ["红茶"]},
+        )
+        self.vector_store.points.clear()
+
+        result = self.service.recall(
+            profile_id="user-1",
+            query="饮品偏好",
+            limit=5,
+            context_hints={"entities": ["红茶"]},
+        )
+
+        self.assertEqual([item["memory_id"] for item in result["memories"]], [remembered["memory_id"]])
+        self.assertEqual(result["trace"]["entity_candidates"], [remembered["memory_id"]])
+
+    def test_recall_returns_legal_empty_result_when_all_seed_branches_fail(self):
+        service = MemoryService(
+            metadata_store=self.store,
+            vector_store=FailingSearchVectorStore(),
+            embedding_provider=HashEmbeddingProvider(dimension=32),
+        )
+
+        def fail_branch(**_kwargs):
+            raise sqlite3.OperationalError("seed unavailable")
+
+        self.store.search_fts = fail_branch
+        self.store.search_entities = fail_branch
+
+        result = service.recall(profile_id="user-1", query="anything", limit=5)
+
+        self.assertEqual(result["memories"], [])
+        self.assertEqual(result["packed_context"]["text"], "")
+        self.assertEqual(result["trace"]["failed_branches"], ["vector", "fts", "entity"])
 
     def test_forget_archives_sqlite_rows_and_removes_vectors(self):
         remembered = self.service.remember(

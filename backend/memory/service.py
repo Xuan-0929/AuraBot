@@ -10,6 +10,7 @@ from __future__ import annotations
 import asyncio
 from collections.abc import Mapping, Sequence
 from typing import Any
+from uuid import uuid4
 
 from .consolidator import AddFirstConsolidator
 from .extractor import MemoryExtractor, RuleBasedMemoryExtractor
@@ -120,43 +121,71 @@ class MemoryService:
             source_type=source_type,
             source_id=stable_source,
         )
-        if existing is not None:
+        if existing is not None and existing.get("summary"):
             memory_ids = self.metadata_store.memory_ids_for_episodes(
                 profile_id=identifier,
                 episode_ids=[existing["episode_id"]],
             )
-            return _result(existing["episode_id"], memory_ids)
+            self._sync_episode_vectors(
+                profile_id=identifier,
+                episode_id=existing["episode_id"],
+                source_type=source_type,
+                memory_ids=memory_ids,
+            )
+            return _result(existing["episode_id"], memory_ids, existing["summary"])
 
         metadata = {"turn_count": turn_count}
-        extract_async = getattr(self.extractor, "extract_async", None)
-        if callable(extract_async):
-            candidates, entities = await extract_async(content=content, metadata=metadata)
+        extract_conversation = getattr(self.extractor, "extract_conversation_async", None)
+        if callable(extract_conversation):
+            extraction = await extract_conversation(content=content, metadata=metadata)
+            candidates = list(extraction.memories)
+            entities = list(extraction.entities)
+            extracted_summary = extraction.summary
         else:
-            candidates, entities = await asyncio.to_thread(
-                self.extractor.extract, content=content, metadata=metadata
-            )
+            extract_async = getattr(self.extractor, "extract_async", None)
+            if callable(extract_async):
+                candidates, entities = await extract_async(content=content, metadata=metadata)
+            else:
+                candidates, entities = await asyncio.to_thread(
+                    self.extractor.extract, content=content, metadata=metadata
+                )
+            extracted_summary = ""
         candidates = [validate_memory_candidate(candidate) for candidate in candidates]
-        episode_id = self.metadata_store.create_episode(
+        episode_id = existing["episode_id"] if existing is not None else f"episode_{uuid4().hex}"
+        memories = [(f"memory_{uuid4().hex}", candidate) for candidate in candidates]
+        summary = extracted_summary.strip()[:1_000] or _fallback_conversation_summary(turns)
+        stored = self.metadata_store.persist_conversation(
             profile_id=identifier,
             source_type=source_type,
             source_id=stable_source,
-            role=None,
-            content=content,
-            metadata=metadata,
-        )
-        result = self._persist_candidates(
-            profile_id=identifier,
             episode_id=episode_id,
-            source_type=source_type,
-            candidates=candidates,
+            content=content,
+            summary=summary,
+            metadata=metadata,
+            memories=memories,
             entities=entities,
+            relations=self._conversation_relations(
+                profile_id=identifier,
+                episode_id=episode_id,
+                memories=memories,
+            ),
         )
-        self.metadata_store.write_audit_log(
+        self._sync_episode_vectors(
             profile_id=identifier,
-            action="remember_conversation",
-            input_summary=content,
-            result_json=result,
+            episode_id=stored["episode_id"],
+            source_type=source_type,
+            memory_ids=stored["memory_ids"],
         )
+        result = _result(stored["episode_id"], stored["memory_ids"], stored["summary"])
+        try:
+            self.metadata_store.write_audit_log(
+                profile_id=identifier,
+                action="remember_conversation",
+                input_summary=content,
+                result_json=result,
+            )
+        except Exception:
+            pass
         return result
 
     def recall(
@@ -185,16 +214,47 @@ class MemoryService:
                 )
             ),
         )
-        self.metadata_store.write_audit_log(
-            profile_id=profile_id,
-            action="recall",
-            input_summary=query,
-            result_json={
-                "memory_ids": [memory["memory_id"] for memory in result["memories"]],
-                "trace": result["trace"],
-            },
-        )
+        try:
+            self.metadata_store.write_audit_log(
+                profile_id=profile_id,
+                action="recall",
+                input_summary=query,
+                result_json={
+                    "memory_ids": [memory["memory_id"] for memory in result["memories"]],
+                    "trace": result["trace"],
+                },
+            )
+        except Exception:
+            pass
         return result
+
+    async def recall_context_async(
+        self,
+        *,
+        profile_id: str,
+        query: str,
+        limit: int = 6,
+        max_chars: int = 2_400,
+    ) -> dict[str, Any]:
+        """Offload synchronous recall and expose only Memory-owned bounded prompt context."""
+
+        budget = max(int(max_chars), 0)
+        result = await asyncio.to_thread(
+            self.recall,
+            profile_id=profile_id,
+            query=query,
+            limit=limit,
+            context_hints={"context_budget_chars": budget},
+        )
+        packed = result.get("packed_context", {})
+        text = str(packed.get("text", ""))[:budget]
+        memory_ids = [str(value) for value in packed.get("memory_ids", ()) if str(value)]
+        return {
+            "text": text,
+            "memory_ids": memory_ids,
+            "char_count": len(text),
+            "max_chars": budget,
+        }
 
     def forget(
         self,
@@ -314,6 +374,89 @@ class MemoryService:
             )
         return _result(episode_id, memory_ids)
 
+    def _conversation_relations(
+        self,
+        *,
+        profile_id: str,
+        episode_id: str,
+        memories: Sequence[tuple[str, MemoryCandidate]],
+    ) -> list[dict[str, Any]]:
+        previous = [
+            memory
+            for memory in self.metadata_store.list_active_memories(profile_id)
+            if memory["episode_id"] != episode_id
+        ]
+        relations: list[dict[str, Any]] = []
+        for memory_id, candidate in memories:
+            candidate_entities = set(candidate.entities)
+            for memory in previous:
+                if not (
+                    candidate_entities & set(memory["metadata"].get("entities", ()))
+                    or same_broad_topic(candidate.content, memory["content"])
+                ):
+                    continue
+                relations.append({
+                    "relation_id": f"relation_{uuid4().hex}",
+                    "source_id": memory_id,
+                    "target_id": memory["memory_id"],
+                    "relation_type": choose_relation_type(
+                        candidate.memory_type, memory["memory_type"]
+                    ),
+                    "weight": 0.78,
+                    "confidence": 0.72,
+                    "episode_id": episode_id,
+                    "valid_from": candidate.valid_from,
+                    "valid_to": candidate.valid_to,
+                })
+            previous.append({
+                "memory_id": memory_id,
+                "memory_type": candidate.memory_type,
+                "content": candidate.content,
+                "metadata": {**candidate.metadata, "entities": candidate.entities},
+            })
+        return relations
+
+    def _sync_episode_vectors(
+        self,
+        *,
+        profile_id: str,
+        episode_id: str,
+        source_type: str,
+        memory_ids: Sequence[str],
+    ) -> None:
+        memories = self.metadata_store.get_active_memories(list(memory_ids), profile_id)
+        entity_names = [
+            str(name)
+            for memory in memories
+            for name in memory["metadata"].get("entities", ())
+            if str(name)
+        ]
+        entity_ids = self.metadata_store.entity_ids_by_names(
+            profile_id=profile_id,
+            names=entity_names,
+        )
+        for memory in memories:
+            metadata = dict(memory["metadata"])
+            entities = [str(name) for name in metadata.pop("entities", ()) if str(name)]
+            candidate = MemoryCandidate(
+                content=memory["content"],
+                memory_type=memory["memory_type"],
+                importance=memory["importance"],
+                confidence=memory["confidence"],
+                valid_from=memory["valid_from"],
+                valid_to=memory["valid_to"],
+                entities=entities,
+                metadata=metadata,
+            )
+            self._index_memory(
+                profile_id=profile_id,
+                memory_id=memory["memory_id"],
+                episode_id=episode_id,
+                source_type=source_type,
+                candidate=candidate,
+                entity_ids=[entity_ids[name] for name in entities if name in entity_ids],
+            )
+
     def _index_memory(
         self,
         *,
@@ -424,11 +567,24 @@ def _conversation_content(turns: Sequence[Mapping[str, str]]) -> tuple[str, int]
     return "\n".join(normalized), len(normalized)
 
 
-def _result(episode_id: str, memory_ids: Sequence[str]) -> dict[str, Any]:
+def _fallback_conversation_summary(turns: Sequence[Mapping[str, str]]) -> str:
+    parts = [f"{turn['role']}: {turn['content'].strip()}" for turn in turns]
+    summary = " | ".join(parts)
+    return summary[-1_000:] or "对话已归档"
+
+
+def _result(
+    episode_id: str,
+    memory_ids: Sequence[str],
+    summary: str | None = None,
+) -> dict[str, Any]:
     identifiers = list(memory_ids)
-    return {
+    result = {
         "episode_id": episode_id,
         "memory_ids": identifiers,
         "memory_id": identifiers[0] if identifiers else None,
         "state": "active",
     }
+    if summary is not None:
+        result["summary"] = summary
+    return result

@@ -1,18 +1,25 @@
 """Verify single-active-Profile resource isolation and token-generation switching.
 
-The tests use resource-level fakes at the composition seam while exercising real directory validation,
-serialized replacement, Soul updates, and teardown order. They do not recreate deleted Backend Profile,
-personality, or Main-Agent-specific Memory management surfaces.
+Focused lifecycle tests use resource fakes for ordering; the A→B→A regression composes real ContextStore,
+SQLiteMemoryStore, MemoryService, and MainAgentRuntime around an in-memory derived vector index. No test
+recreates deleted Backend Profile, personality, or Main-Agent-specific Memory management surfaces.
 """
 
 from __future__ import annotations
 
+import sqlite3
 import tempfile
 import unittest
 from pathlib import Path
 
 from backend.main_agent.context import ContextStore
 from backend.main_agent.lifecycle import ActiveProfileManager, ProfileResources
+from backend.main_agent.runtime import MainAgentRuntime
+from backend.main_agent.snapshot import SnapshotProjector
+from backend.main_agent.tool_runtime import ToolSurfacePolicy
+from backend.memory.embedding import HashEmbeddingProvider
+from backend.memory.service import MemoryService
+from backend.memory.stores.sqlite import SQLiteMemoryStore
 
 
 class Hub:
@@ -58,6 +65,30 @@ class Owner:
 
 class Memory(Owner):
     """Profile-owned closeable matching the existing MemoryService lifecycle only."""
+
+
+class ResourceVectorStore:
+    """Lightweight derived index whose close state makes Profile teardown observable."""
+
+    def __init__(self) -> None:
+        self.points = {}
+        self.closed = False
+
+    def upsert(self, memory_id, vector, payload):
+        self.points[memory_id] = {"vector": vector, "payload": payload}
+
+    def search(self, vector, *, profile_id, limit, filters=None):
+        return []
+
+    def delete(self, memory_ids):
+        for memory_id in memory_ids:
+            self.points.pop(memory_id, None)
+
+    def health(self):
+        return {"backend": "test", "points": len(self.points)}
+
+    def close(self):
+        self.closed = True
 
 
 class ActiveProfileManagerTests(unittest.IsolatedAsyncioTestCase):
@@ -164,4 +195,117 @@ class ActiveProfileManagerTests(unittest.IsolatedAsyncioTestCase):
                 ["only A"],
             )
             self.assertEqual(manager.runtime.profile_id, "profile_a")
+            await manager.shutdown()
+
+    async def test_real_profile_resources_keep_context_memory_vector_and_soul_isolated(self) -> None:
+        calls: list[str] = []
+        hub = Hub(calls)
+        builds: dict[str, list[ProfileResources]] = {}
+        contexts: dict[str, list[ContextStore]] = {}
+        vectors: dict[str, list[ResourceVectorStore]] = {}
+
+        async def provider(_request):
+            if False:
+                yield {}
+
+        async def renderer(_clause):
+            return None
+
+        async def build(profile_id, path, soul):
+            context = ContextStore(path / "context.sqlite3")
+            vector = ResourceVectorStore()
+            memory = MemoryService(
+                metadata_store=SQLiteMemoryStore(path / "memory.sqlite3"),
+                vector_store=vector,
+                embedding_provider=HashEmbeddingProvider(dimension=16),
+            )
+            runtime = MainAgentRuntime(
+                context_store=context,
+                snapshot_projector=SnapshotProjector(),
+                tool_policy=ToolSurfacePolicy(),
+                provider=provider,
+                renderer=renderer,
+                executors={},
+                soul=soul,
+                memory_service=memory,
+                owner_profile_id=profile_id,
+                memory_idle_seconds=3_600,
+            )
+            await runtime.startup()
+            resources = ProfileResources(
+                profile_id,
+                runtime,
+                Owner("speech", profile_id, calls),
+                memory,
+                closeables=(context,),
+            )
+            builds.setdefault(profile_id, []).append(resources)
+            contexts.setdefault(profile_id, []).append(context)
+            vectors.setdefault(profile_id, []).append(vector)
+            return resources
+
+        with tempfile.TemporaryDirectory() as directory:
+            manager = ActiveProfileManager(Path(directory), hub, build)
+            await manager.activate("profile_a", "Soul A")
+            first_a = builds["profile_a"][0]
+            first_a_context = contexts["profile_a"][0]
+            first_a_context.append_event("user_segment", {
+                "segment_id": "a-1", "input_id": "a", "text": "only A",
+            })
+            first_a.memory.remember(
+                profile_id="profile_a",
+                content="用户喜欢红茶",
+                source_type="test",
+                source_id="a-memory",
+                memory_type="preference",
+            )
+            await manager.activate("profile_a", "Soul A refreshed")
+            self.assertIs(manager.runtime, first_a.runtime)
+            self.assertEqual(len(builds["profile_a"]), 1)
+            self.assertEqual(manager.runtime.soul, "Soul A refreshed")
+
+            await manager.activate("profile_b", "Soul B")
+            self.assertTrue(vectors["profile_a"][0].closed)
+            with self.assertRaises(sqlite3.ProgrammingError):
+                first_a_context.fold()
+            with self.assertRaises(sqlite3.ProgrammingError):
+                first_a.memory.health()
+            current_b = builds["profile_b"][0]
+            current_b_context = contexts["profile_b"][0]
+            self.assertEqual(current_b.runtime.soul, "Soul B")
+            self.assertEqual(current_b_context.fold().conversation_turns, ())
+            self.assertEqual(
+                current_b.memory.recall(profile_id="profile_b", query="红茶")["memories"],
+                [],
+            )
+            current_b_context.append_event("user_segment", {
+                "segment_id": "b-1", "input_id": "b", "text": "only B",
+            })
+            current_b.memory.remember(
+                profile_id="profile_b",
+                content="用户喜欢咖啡",
+                source_type="test",
+                source_id="b-memory",
+                memory_type="preference",
+            )
+
+            await manager.activate("profile_a", "Soul A restored")
+            reopened_a = builds["profile_a"][1]
+            reopened_a_context = contexts["profile_a"][1]
+            self.assertEqual(manager.active_profile_id, "profile_a")
+            self.assertEqual(reopened_a.runtime.soul, "Soul A restored")
+            self.assertEqual(
+                [turn["content"] for turn in reopened_a_context.fold().conversation_turns],
+                ["only A"],
+            )
+            self.assertEqual(
+                [item["content"] for item in reopened_a.memory.recall(
+                    profile_id="profile_a", query="红茶"
+                )["memories"]],
+                ["用户喜欢红茶"],
+            )
+            self.assertEqual(
+                reopened_a.memory.recall(profile_id="profile_a", query="咖啡")["memories"],
+                [],
+            )
             await manager.shutdown()

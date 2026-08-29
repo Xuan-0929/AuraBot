@@ -10,6 +10,7 @@ from __future__ import annotations
 import json
 import sqlite3
 import threading
+from collections.abc import Mapping, Sequence
 from datetime import UTC, datetime
 from pathlib import Path
 from typing import Any
@@ -18,7 +19,7 @@ from uuid import uuid4
 from ..types import EntityCandidate, MemoryCandidate
 
 
-SCHEMA_VERSION = 2
+SCHEMA_VERSION = 3
 ACTIVE_MEMORY_STATES = {"active", "archived", "stale", "superseded"}
 
 
@@ -247,6 +248,192 @@ class SQLiteMemoryStore:
             )
 
         return relation_id
+
+    def persist_conversation(
+        self,
+        *,
+        profile_id: str,
+        source_type: str,
+        source_id: str,
+        episode_id: str,
+        content: str,
+        summary: str,
+        metadata: dict[str, Any],
+        memories: Sequence[tuple[str, MemoryCandidate]],
+        entities: Sequence[EntityCandidate],
+        relations: Sequence[Mapping[str, Any]],
+    ) -> dict[str, Any]:
+        """Atomically persist one stable conversation and every SQLite-owned derived fact."""
+
+        now = now_iso()
+        with self._lock:
+            self._connection.execute("begin immediate")
+            try:
+                existing = self._connection.execute(
+                    """
+                    select * from memory_episodes
+                    where profile_id = ? and source_type = ? and source_id = ?
+                    limit 1
+                    """,
+                    (profile_id, source_type, source_id),
+                ).fetchone()
+                if existing is not None and existing["summary"]:
+                    rows = self._connection.execute(
+                        """
+                        select id from memory_items
+                        where profile_id = ? and episode_id = ? and state = 'active'
+                        order by rowid
+                        """,
+                        (profile_id, existing["id"]),
+                    ).fetchall()
+                    result = {
+                        "episode_id": existing["id"],
+                        "memory_ids": [row["id"] for row in rows],
+                        "summary": existing["summary"],
+                    }
+                else:
+                    if existing is None:
+                        self._connection.execute(
+                            """
+                            insert into memory_episodes (
+                              id, profile_id, source_type, source_id, role, content,
+                              summary, metadata_json, created_at
+                            ) values (?, ?, ?, ?, null, ?, ?, ?, ?)
+                            """,
+                            (
+                                episode_id, profile_id, source_type, source_id, content,
+                                summary, dumps(metadata), now,
+                            ),
+                        )
+                    else:
+                        episode_id = existing["id"]
+                        partial_rows = self._connection.execute(
+                            "select id from memory_items where episode_id = ?",
+                            (episode_id,),
+                        ).fetchall()
+                        partial_ids = [row["id"] for row in partial_rows]
+                        if partial_ids:
+                            placeholders = ",".join("?" for _ in partial_ids)
+                            self._connection.execute(
+                                f"delete from memory_relations where episode_id = ? "
+                                f"or source_id in ({placeholders}) or target_id in ({placeholders})",
+                                (episode_id, *partial_ids, *partial_ids),
+                            )
+                            self._connection.executemany(
+                                "delete from memory_items_fts where memory_id = ?",
+                                [(memory_id,) for memory_id in partial_ids],
+                            )
+                            self._connection.execute(
+                                f"delete from memory_items where id in ({placeholders})",
+                                tuple(partial_ids),
+                            )
+                        self._connection.execute(
+                            """
+                            update memory_episodes
+                            set content = ?, summary = ?, metadata_json = ?
+                            where id = ?
+                            """,
+                            (content, summary, dumps(metadata), episode_id),
+                        )
+                    for entity in entities:
+                        row = self._connection.execute(
+                            """
+                            select id, aliases_json from memory_entities
+                            where profile_id = ? and name = ? and state = 'active'
+                            limit 1
+                            """,
+                            (profile_id, entity.name),
+                        ).fetchone()
+                        if row is not None:
+                            aliases = sorted(set(loads(row["aliases_json"], []) + entity.aliases))
+                            self._connection.execute(
+                                """
+                                update memory_entities
+                                set aliases_json = ?, summary = coalesce(nullif(?, ''), summary),
+                                    updated_at = ?
+                                where id = ?
+                                """,
+                                (dumps(aliases), entity.summary, now, row["id"]),
+                            )
+                        else:
+                            self._connection.execute(
+                                """
+                                insert into memory_entities (
+                                  id, profile_id, name, entity_type, aliases_json, summary,
+                                  state, created_at, updated_at
+                                ) values (?, ?, ?, ?, ?, ?, 'active', ?, ?)
+                                """,
+                                (
+                                    f"entity_{uuid4().hex}", profile_id, entity.name,
+                                    entity.entity_type, dumps(entity.aliases), entity.summary, now, now,
+                                ),
+                            )
+                    for memory_id, candidate in memories:
+                        self._connection.execute(
+                            """
+                            insert into memory_items (
+                              id, profile_id, episode_id, memory_type, state, content,
+                              importance, confidence, valid_from, valid_to, metadata_json,
+                              forget_reason, created_at, updated_at
+                            ) values (?, ?, ?, ?, 'active', ?, ?, ?, ?, ?, ?, null, ?, ?)
+                            """,
+                            (
+                                memory_id, profile_id, episode_id, candidate.memory_type,
+                                candidate.content, candidate.importance, candidate.confidence,
+                                candidate.valid_from, candidate.valid_to,
+                                dumps({**candidate.metadata, "entities": candidate.entities}),
+                                now, now,
+                            ),
+                        )
+                        self._connection.execute(
+                            "insert into memory_items_fts(memory_id, content) values (?, ?)",
+                            (memory_id, candidate.content),
+                        )
+                    for relation in relations:
+                        self._connection.execute(
+                            """
+                            insert or ignore into memory_relations (
+                              id, profile_id, source_id, target_id, relation_type, state,
+                              weight, confidence, valid_from, valid_to, episode_id,
+                              created_at, updated_at
+                            ) values (?, ?, ?, ?, ?, 'active', ?, ?, ?, ?, ?, ?, ?)
+                            """,
+                            (
+                                relation["relation_id"], profile_id, relation["source_id"],
+                                relation["target_id"], relation["relation_type"],
+                                relation["weight"], relation["confidence"],
+                                relation.get("valid_from"), relation.get("valid_to"),
+                                episode_id, now, now,
+                            ),
+                        )
+                    result = {
+                        "episode_id": episode_id,
+                        "memory_ids": [memory_id for memory_id, _candidate in memories],
+                        "summary": summary,
+                    }
+            except BaseException:
+                self._connection.rollback()
+                raise
+            else:
+                self._connection.commit()
+                return result
+
+    def entity_ids_by_names(self, *, profile_id: str, names: Sequence[str]) -> dict[str, str]:
+        """Resolve active entity identifiers for vector payload reconstruction."""
+
+        unique_names = list(dict.fromkeys(name for name in names if name))
+        if not unique_names:
+            return {}
+        placeholders = ",".join("?" for _ in unique_names)
+        with self._lock:
+            rows = self._connection.execute(
+                f"""
+                select id, name from memory_entities
+                where profile_id = ? and state = 'active' and name in ({placeholders})
+                """,
+                (profile_id, *unique_names),
+            ).fetchall()
+        return {row["name"]: row["id"] for row in rows}
 
     def get_memory(self, memory_id: str) -> dict[str, Any]:
         with self._lock:
@@ -481,6 +668,7 @@ class SQLiteMemoryStore:
                 where profile_id = ?
                   and state = 'active'
                   and episode_id in ({placeholders})
+                order by rowid
                 """,
                 (profile_id, *episode_ids),
             ).fetchall()
@@ -637,12 +825,18 @@ class SQLiteMemoryStore:
                   source_id text,
                   role text,
                   content text not null,
+                  summary text not null default '',
                   metadata_json text not null default '{}',
                   created_at text not null
                 );
 
                 create index if not exists idx_memory_episodes_profile_created
                   on memory_episodes(profile_id, created_at);
+
+                create unique index if not exists idx_memory_episodes_stable_source
+                  on memory_episodes(profile_id, source_type, source_id)
+                  where source_id is not null
+                    and source_type = 'main_agent_conversation';
 
                 create table if not exists memory_items (
                   id text primary key,
@@ -730,6 +924,10 @@ class SQLiteMemoryStore:
 
         if "role" not in self.table_columns("memory_episodes"):
             self._connection.execute("alter table memory_episodes add column role text")
+        if "summary" not in self.table_columns("memory_episodes"):
+            self._connection.execute(
+                "alter table memory_episodes add column summary text not null default ''"
+            )
 
     def _ensure_memory_items_shape(self) -> None:
         if not self._table_exists("memory_items"):
@@ -851,6 +1049,7 @@ def episode_row_to_dict(row: sqlite3.Row) -> dict[str, Any]:
         "source_id": row["source_id"],
         "role": row["role"],
         "content": row["content"],
+        "summary": row["summary"],
         "metadata": loads(row["metadata_json"], {}),
         "created_at": row["created_at"],
     }

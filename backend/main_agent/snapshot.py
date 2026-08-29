@@ -22,6 +22,7 @@ class SnapshotBudget:
     max_prompt_chars: int = 12_000
     soul_chars: int = 2_000
     conversation_chars: int = 6_000
+    summary_chars: int = 2_000
     observation_chars: int = 3_000
     memory_chars: int = 2_400
 
@@ -30,6 +31,7 @@ class SnapshotBudget:
             self.max_prompt_chars,
             self.soul_chars,
             self.conversation_chars,
+            self.summary_chars,
             self.observation_chars,
             self.memory_chars,
         ) < 0 or self.max_prompt_chars < 2:
@@ -41,6 +43,7 @@ class Snapshot:
     """Independent JSON-native facts frozen for exactly one invoke."""
 
     conversation_turns: tuple[dict[str, Any], ...]
+    conversation_summaries: tuple[dict[str, Any], ...]
     soul: str
     observations: tuple[dict[str, Any], ...]
     think_note: str | None
@@ -71,6 +74,7 @@ class SnapshotProjector:
         if not isinstance(soul, str):
             raise TypeError("soul must be text")
         conversation = _recent(context.conversation_turns, self.budget.conversation_chars)
+        summaries = _recent(context.conversation_summaries, self.budget.summary_chars)
         observations = _observations(context.observations, self.budget.observation_chars)
         memory = _records(memory_facts, self.budget.memory_chars)
         task_facts = _copy(context.task_facts)
@@ -78,6 +82,7 @@ class SnapshotProjector:
         tools = _copy(allowed_tools)
         sections: dict[str, Any] = {
             "conversation": conversation,
+            "conversation_summaries": summaries,
             "observations": observations,
             "think_note": context.think_note,
             "task_facts": task_facts,
@@ -89,6 +94,7 @@ class SnapshotProjector:
         prompt = _encode(sections)
         return Snapshot(
             conversation_turns=tuple(_copy(sections["conversation"])),
+            conversation_summaries=tuple(_copy(sections["conversation_summaries"])),
             soul=soul[: self.budget.soul_chars],
             observations=tuple(_copy(sections["observations"])),
             think_note=sections["think_note"],
@@ -125,7 +131,7 @@ def _records(values: Sequence[Mapping[str, Any]], limit: int) -> list[dict[str, 
         copied = _object(value)
         size = len(_encode(copied))
         if used + size > limit:
-            break
+            continue
         result.append(copied)
         used += size
     return result
@@ -269,7 +275,9 @@ def _recent(values: Sequence[Mapping[str, Any]], limit: int) -> list[dict[str, A
 def _fit(sections: dict[str, Any], limit: int) -> None:
     """Drop oldest complete facts while never trimming runtime state or the tool authority."""
 
-    variable_lists = ("conversation", "memory_facts", "observations", "task_facts")
+    variable_lists = (
+        "conversation", "memory_facts", "observations", "task_facts", "conversation_summaries",
+    )
     while len(_encode(sections)) > limit:
         changed = False
         for key in variable_lists:

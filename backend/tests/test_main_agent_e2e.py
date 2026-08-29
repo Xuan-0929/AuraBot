@@ -38,12 +38,17 @@ class ExtractionModel:
             "entities": ["低酸咖啡豆"],
         }],
         "entities": [{"name": "低酸咖啡豆"}],
+        "summary": "用户在讨论咖啡豆，并偏好低酸选择。",
     }
+
+    def __init__(self):
+        self.async_calls = 0
 
     def extract_memory_payload(self, **_kwargs):
         return self.payload
 
     async def extract_memory_payload_async(self, **_kwargs):
+        self.async_calls += 1
         return self.payload
 
 
@@ -59,7 +64,7 @@ class SilentMainAgentE2ETests(unittest.IsolatedAsyncioTestCase):
                 embedding_provider=embedding,
                 extractor=StructuredMemoryExtractor(ExtractionModel()),
             )
-            memory.remember(
+            prior = memory.remember(
                 profile_id="profile_a", content="以前聊过咖啡", source_type="chat",
                 source_id="prior",
             )
@@ -96,7 +101,13 @@ class SilentMainAgentE2ETests(unittest.IsolatedAsyncioTestCase):
                     while context.conversation_batch() is not None:
                         await asyncio.sleep(0.001)
 
-                self.assertEqual(requests[0].snapshot.memory_facts[0]["content"], "用户喜欢低酸咖啡豆")
+                self.assertEqual(
+                    requests[0].snapshot.memory_facts[0],
+                    {
+                        "text": "用户喜欢低酸咖啡豆",
+                        "memory_ids": prior["memory_ids"],
+                    },
+                )
                 self.assertEqual(context.fold().conversation_turns, ())
                 self.assertTrue(any(
                     episode["source_type"] == "main_agent_conversation"
@@ -106,3 +117,78 @@ class SilentMainAgentE2ETests(unittest.IsolatedAsyncioTestCase):
                 await runtime.shutdown()
                 memory.close()
                 context.close()
+
+    async def test_restart_finishes_context_archive_from_persisted_episode_without_reextracting(self) -> None:
+        with tempfile.TemporaryDirectory() as directory:
+            root = Path(directory)
+            context_path = root / "context.sqlite3"
+            memory_path = root / "memory.sqlite3"
+            qdrant_path = root / "qdrant"
+            model = ExtractionModel()
+            context = ContextStore(context_path)
+            context.append_event("user_segment", {
+                "segment_id": "persisted", "input_id": "old", "text": "我想选低酸咖啡豆",
+            })
+            context.set_last_user_activity(10.0)
+            batch = context.conversation_batch()
+            memory = MemoryService(
+                metadata_store=SQLiteMemoryStore(memory_path),
+                vector_store=QdrantLocalVectorStore(path=qdrant_path, vector_size=32),
+                embedding_provider=HashEmbeddingProvider(dimension=32),
+                extractor=StructuredMemoryExtractor(model),
+            )
+            first = await memory.remember_conversation(
+                profile_id="profile_a",
+                turns=batch.turns,
+                source_id=batch.source_id,
+            )
+            memory.close()
+            context.close()
+
+            reopened_context = ContextStore(context_path)
+            reopened_memory = MemoryService(
+                metadata_store=SQLiteMemoryStore(memory_path),
+                vector_store=QdrantLocalVectorStore(path=qdrant_path, vector_size=32),
+                embedding_provider=HashEmbeddingProvider(dimension=32),
+                extractor=StructuredMemoryExtractor(model),
+            )
+
+            async def provider(_request):
+                if False:
+                    yield {}
+
+            async def renderer(_clause):
+                return None
+
+            runtime = MainAgentRuntime(
+                context_store=reopened_context,
+                snapshot_projector=SnapshotProjector(),
+                tool_policy=ToolSurfacePolicy(),
+                provider=provider,
+                renderer=renderer,
+                executors={},
+                soul="test",
+                memory_service=reopened_memory,
+                owner_profile_id="profile_a",
+                memory_idle_seconds=300,
+                wall_clock=lambda: 400.0,
+            )
+            try:
+                await runtime.startup()
+                async with asyncio.timeout(1):
+                    while reopened_context.conversation_batch() is not None:
+                        await asyncio.sleep(0.001)
+
+                self.assertEqual(model.async_calls, 1)
+                self.assertEqual(
+                    reopened_context.fold().conversation_summaries,
+                    ({
+                        "kind": "conversation_summary",
+                        "source_id": batch.source_id,
+                        "content": first["summary"],
+                    },),
+                )
+            finally:
+                await runtime.shutdown()
+                reopened_memory.close()
+                reopened_context.close()

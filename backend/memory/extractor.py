@@ -11,7 +11,11 @@ import re
 from typing import Any, Protocol
 
 from .extraction.providers import MemoryExtractionModel
-from .extraction.schemas import parse_structured_extraction_payload
+from .extraction.schemas import (
+    ConversationExtractionResult,
+    parse_conversation_extraction_payload,
+    parse_structured_extraction_payload,
+)
 from .types import EntityCandidate, MemoryCandidate
 
 
@@ -77,6 +81,38 @@ class StructuredMemoryExtractor:
             importance=importance,
         )
         return parse_structured_extraction_payload(
+            payload,
+            base_metadata=metadata,
+            default_importance=importance,
+        )
+
+    async def extract_conversation_async(
+        self,
+        *,
+        content: str,
+        metadata: dict[str, Any],
+        memory_type: str | None = None,
+        importance: float = 0.5,
+    ) -> ConversationExtractionResult:
+        """Parse memories, entities, and summary from one cancellation-aware model response."""
+
+        extract = getattr(self.model, "extract_memory_payload_async", None)
+        if callable(extract):
+            payload = await extract(
+                content=content,
+                metadata=metadata,
+                memory_type=memory_type,
+                importance=importance,
+            )
+        else:
+            payload = await asyncio.to_thread(
+                self.model.extract_memory_payload,
+                content=content,
+                metadata=metadata,
+                memory_type=memory_type,
+                importance=importance,
+            )
+        return parse_conversation_extraction_payload(
             payload,
             base_metadata=metadata,
             default_importance=importance,

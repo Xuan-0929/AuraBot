@@ -9,7 +9,8 @@ proposals, cancellation-immune Manager commits/controls, and supervised durable 
 current-input proposal identities have a hard admission bound, and canonical Task versions fence stale
 retries. Runtime recalls through the existing ``MemoryService`` and, after five idle minutes, submits one
 immutable ContextStore conversation batch to its cancellable extractor; user activity cancels that task and
-only a successful write clears the batch. TaskBridge fresh-reads Manager state for owner-safe inspection.
+only successful Memory/vector and Context-summary commits clear the batch and retire its causal input.
+TaskBridge fresh-reads Manager state for owner-safe inspection.
 """
 
 from __future__ import annotations
@@ -184,6 +185,7 @@ class MainAgentRuntime:
         soul: str,
         memory_service: Any | None = None,
         memory_idle_seconds: float = 300.0,
+        memory_recall_timeout_seconds: float = 0.4,
         wall_clock: Callable[[], float] | None = None,
         clock: Callable[[], float] | None = None,
         prepare_admission: PrepareAdmissionPolicy | None = None,
@@ -207,10 +209,13 @@ class MainAgentRuntime:
         self.soul = soul
         if memory_idle_seconds <= 0:
             raise ValueError("memory_idle_seconds must be positive")
+        if memory_recall_timeout_seconds <= 0:
+            raise ValueError("memory_recall_timeout_seconds must be positive")
         if memory_service is not None and owner_profile_id is None:
             raise ValueError("MemoryService requires owner_profile_id")
         self.memory_service = memory_service
         self.memory_idle_seconds = float(memory_idle_seconds)
+        self.memory_recall_timeout_seconds = float(memory_recall_timeout_seconds)
         self.wall_clock = wall_clock or time.time
         self.owner_profile_id = owner_profile_id
         self.metrics = metrics
@@ -309,6 +314,8 @@ class MainAgentRuntime:
         """Start Task events and resume any persisted Profile conversation idle deadline."""
 
         async with self._lock:
+            self.context_store.recover_interrupted_clauses()
+            self._refresh_speech_settled_locked()
             self._ensure_task_event_listener_locked()
             self._resume_memory_idle_locked()
         self._increment_metric("main.runtime.startup")
@@ -896,13 +903,24 @@ class MainAgentRuntime:
                     memory_facts: Sequence[Mapping[str, Any]] = ()
                 else:
                     try:
-                        recalled = self.memory_service.recall(
-                            profile_id=self.owner_profile_id,
-                            query=recall_query,
-                            limit=6,
-                            context_hints={"context_budget_chars": 2_400},
+                        recalled = await asyncio.wait_for(
+                            self.memory_service.recall_context_async(
+                                profile_id=self.owner_profile_id,
+                                query=recall_query,
+                                limit=6,
+                                max_chars=2_400,
+                            ),
+                            timeout=self.memory_recall_timeout_seconds,
                         )
-                        memory_facts = tuple(recalled.get("memories", ()))
+                        text = str(recalled.get("text", "")).strip()
+                        memory_facts = ({
+                            "text": text,
+                            "memory_ids": [
+                                str(value)
+                                for value in recalled.get("memory_ids", ())
+                                if str(value)
+                            ],
+                        },) if text else ()
                     except Exception:
                         memory_facts = ()
                 async with self._lock:
@@ -1712,14 +1730,21 @@ class MainAgentRuntime:
                     await asyncio.sleep(next_delay)
                 await self.wait_until_idle()
                 await self._wait_for_speech_settlement()
-                if self._shutdown or self._user_speaking or self._confirmed_speech:
-                    return
-                batch = self.context_store.conversation_batch()
+                async with self._lock:
+                    if self._shutdown or self._user_speaking or self._confirmed_speech:
+                        return
+                    batch = self.context_store.conversation_batch()
+                    active = self._active_input
+                    archive_identity = None if active is None else (
+                        active.input_id,
+                        active.revision,
+                        self._latest_context_version,
+                    )
                 if batch is None:
                     self.context_store.clear_last_user_activity()
                     return
                 try:
-                    await self.memory_service.remember_conversation(
+                    remembered = await self.memory_service.remember_conversation(
                         profile_id=self.owner_profile_id,
                         turns=batch.turns,
                         source_id=batch.source_id,
@@ -1729,9 +1754,29 @@ class MainAgentRuntime:
                 except Exception:
                     next_delay = self.memory_idle_seconds
                     continue
-                if self._shutdown:
-                    return
-                self.context_store.clear_conversation_through(batch.through_sequence)
+                try:
+                    async with self._lock:
+                        if self._shutdown or self._user_speaking or self._confirmed_speech:
+                            return
+                        active = self._active_input
+                        current_identity = None if active is None else (
+                            active.input_id,
+                            active.revision,
+                            self._latest_context_version,
+                        )
+                        if current_identity != archive_identity:
+                            next_delay = self.memory_idle_seconds
+                            continue
+                        self.context_store.commit_conversation_archive(
+                            batch,
+                            remembered["summary"],
+                        )
+                        self._retire_archived_input_locked(archive_identity)
+                except asyncio.CancelledError:
+                    raise
+                except Exception:
+                    next_delay = self.memory_idle_seconds
+                    continue
                 if self.context_store.conversation_batch() is None:
                     self.context_store.clear_last_user_activity()
                     return
@@ -1778,6 +1823,30 @@ class MainAgentRuntime:
         self._last_prepare_at = None
         self._last_prepare_units = 0
         self._prepare_wait_started_at = None
+
+    def _retire_archived_input_locked(
+        self,
+        archive_identity: tuple[str, int, int] | None,
+    ) -> None:
+        """Retire only the causal input whose Context archive just committed."""
+
+        active = self._active_input
+        if active is not None and archive_identity is not None:
+            current_identity = (
+                active.input_id,
+                active.revision,
+                self._latest_context_version,
+            )
+            if current_identity != archive_identity:
+                return
+            self._retire_proposals_for_input_locked(active.input_id)
+            self._active_input = None
+        self._has_external_commit = False
+        self._response_grant = None
+        self._pending_trigger = None
+        self._control_generation += 1
+        self._reset_prepare_admission_locked()
+        self._context_changed_locked(refresh_grant=False)
 
     @staticmethod
     def _new_id(prefix: str) -> str:

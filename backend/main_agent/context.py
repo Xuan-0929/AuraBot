@@ -2,7 +2,8 @@
 
 The runtime records stable utterance identities, observations, think notes and Task facts as append-only
 events. Conversation batches expose only final user segments and physically delivered assistant clauses to
-Memory; a successful Memory write clears exactly that batch boundary while preserving unrelated facts.
+Memory; archive commit atomically retains a stable summary and clears exactly that batch boundary while
+preserving unrelated and later facts.
 """
 
 from __future__ import annotations
@@ -56,6 +57,7 @@ class FoldedContext:
     observations: tuple[dict[str, Any], ...]
     think_note: str | None
     task_facts: tuple[dict[str, Any], ...]
+    conversation_summaries: tuple[dict[str, Any], ...] = ()
 
 
 @dataclass(frozen=True, slots=True)
@@ -98,6 +100,9 @@ class ContextStore:
                   key TEXT PRIMARY KEY,
                   value TEXT NOT NULL
                 );
+                CREATE UNIQUE INDEX IF NOT EXISTS idx_context_summary_source
+                  ON context_events(json_extract(payload_json, '$.source_id'))
+                  WHERE event_type = 'conversation_summary';
                 """
             )
 
@@ -199,6 +204,7 @@ class ContextStore:
         segment_positions: dict[str, int] = {}
         observations: dict[str, tuple[int, dict[str, Any]]] = {}
         task_facts: dict[str, dict[str, Any]] = {}
+        summaries: dict[str, tuple[int, dict[str, Any]]] = {}
         think_note: str | None = None
         for row in rows:
             payload = json.loads(row["payload_json"])
@@ -220,6 +226,15 @@ class ContextStore:
                     "content": payload["text"],
                     "clause_id": payload.get("clause_id", ""),
                 })
+            elif event_type == "conversation_summary":
+                source_id = payload.get("source_id")
+                content = payload.get("content")
+                if isinstance(source_id, str) and isinstance(content, str):
+                    summaries[source_id] = (int(row["sequence"]), {
+                        "kind": "conversation_summary",
+                        "source_id": source_id,
+                        "content": content,
+                    })
             elif event_type == "observation" and isinstance(payload.get("id"), str):
                 previous = observations.get(payload["id"])
                 merged = {**previous[1], **payload} if previous is not None else payload
@@ -235,6 +250,9 @@ class ContextStore:
             ),
             think_note=think_note,
             task_facts=tuple(task_facts[key] for key in sorted(task_facts)),
+            conversation_summaries=tuple(
+                payload for _sequence, payload in sorted(summaries.values(), key=lambda item: item[0])
+            ),
         )
 
     def conversation_batch(self) -> ConversationBatch | None:
@@ -306,6 +324,54 @@ class ContextStore:
                     "AND state IN ('delivered','interrupted','failed')",
                     tuple(clause_ids),
                 )
+
+    def commit_conversation_archive(self, batch: ConversationBatch, summary: str) -> None:
+        """Atomically retain one stable summary and remove only its submitted raw conversation."""
+
+        if not isinstance(batch, ConversationBatch):
+            raise TypeError("batch must be a ConversationBatch")
+        if not isinstance(summary, str) or not summary.strip():
+            raise ValueError("conversation summary must be non-empty text")
+        content = summary.strip()[:1_000]
+        payload = _json_object({
+            "kind": "conversation_summary",
+            "source_id": batch.source_id,
+            "content": content,
+        })
+        with self._transaction() as db:
+            db.execute(
+                "INSERT OR IGNORE INTO context_events(event_type, payload_json) "
+                "VALUES ('conversation_summary', ?)",
+                (payload,),
+            )
+            rows = db.execute(
+                "SELECT payload_json FROM context_events "
+                "WHERE sequence <= ? AND event_type = 'assistant_clause'",
+                (batch.through_sequence,),
+            ).fetchall()
+            clause_ids = [
+                item["clause_id"]
+                for item in (json.loads(row["payload_json"]) for row in rows)
+                if isinstance(item.get("clause_id"), str) and item["clause_id"]
+            ]
+            db.execute(
+                "DELETE FROM context_events WHERE sequence <= ? "
+                "AND event_type IN ('user_segment','assistant_clause')",
+                (batch.through_sequence,),
+            )
+            if clause_ids:
+                placeholders = ",".join("?" for _ in clause_ids)
+                db.execute(
+                    f"DELETE FROM speech_clauses WHERE clause_id IN ({placeholders}) "
+                    "AND state IN ('delivered','interrupted','failed')",
+                    tuple(clause_ids),
+                )
+            remaining = db.execute(
+                "SELECT 1 FROM context_events "
+                "WHERE event_type IN ('user_segment','assistant_clause') LIMIT 1"
+            ).fetchone()
+            if remaining is None:
+                db.execute("DELETE FROM context_metadata WHERE key='last_user_activity'")
 
     def set_last_user_activity(self, timestamp: float) -> None:
         """Persist the wall-clock anchor used to resume the Profile's Memory idle deadline."""

@@ -7,6 +7,7 @@ language, Memory batch boundaries and cleanup, last-event Observation order, and
 from __future__ import annotations
 
 import json
+import sqlite3
 import tempfile
 import unittest
 from pathlib import Path
@@ -63,6 +64,68 @@ class ContextStoreTests(unittest.TestCase):
             self.assertIsNone(reopened.get_last_user_activity())
             self.assertIsNone(reopened.conversation_batch())
             reopened.close()
+
+    def test_archive_commit_keeps_one_summary_and_preserves_later_conversation(self) -> None:
+        with tempfile.TemporaryDirectory() as directory:
+            store = ContextStore(Path(directory) / "context.sqlite3")
+            store.append_event(
+                "user_segment", {"segment_id": "old", "input_id": "i1", "text": "比较 A 和 B"}
+            )
+            batch = store.conversation_batch()
+            store.append_event(
+                "user_segment", {"segment_id": "new", "input_id": "i2", "text": "继续第二个"}
+            )
+            summary = "用户正在比较方案 A 和方案 B，并倾向继续使用方案 B。"
+
+            store.commit_conversation_archive(batch, summary)
+            store.commit_conversation_archive(batch, summary)
+
+            folded = store.fold()
+            self.assertEqual(folded.conversation_summaries, ({
+                "kind": "conversation_summary",
+                "source_id": batch.source_id,
+                "content": summary,
+            },))
+            self.assertEqual(
+                folded.conversation_turns,
+                ({"role": "user", "content": "继续第二个", "segment_id": "new"},),
+            )
+            self.assertEqual(
+                store.conversation_batch().turns,
+                ({"role": "user", "content": "继续第二个"},),
+            )
+            store.close()
+
+    def test_archive_commit_rolls_back_summary_when_raw_delete_fails(self) -> None:
+        with tempfile.TemporaryDirectory() as directory:
+            path = Path(directory) / "context.sqlite3"
+            store = ContextStore(path)
+            store.append_event(
+                "user_segment", {"segment_id": "old", "input_id": "i1", "text": "保留原文"}
+            )
+            batch = store.conversation_batch()
+            connection = sqlite3.connect(path)
+            connection.executescript(
+                """
+                create trigger fail_archive_raw_delete
+                before delete on context_events
+                when old.event_type = 'user_segment'
+                begin
+                  select raise(abort, 'raw delete failed');
+                end;
+                """
+            )
+            connection.close()
+
+            with self.assertRaises(sqlite3.IntegrityError):
+                store.commit_conversation_archive(batch, "这条摘要必须回滚")
+
+            self.assertEqual(
+                store.conversation_batch().turns,
+                ({"role": "user", "content": "保留原文"},),
+            )
+            self.assertEqual(store.fold().conversation_summaries, ())
+            store.close()
 
     def test_segments_update_in_place_and_complete_ack_preserves_conversation_order(self) -> None:
         with tempfile.TemporaryDirectory() as directory:
@@ -182,4 +245,36 @@ class SnapshotProjectorTests(unittest.TestCase):
         snapshot = SnapshotProjector().project(context, soul="Aura")
 
         self.assertEqual([item["id"] for item in snapshot.observations], ["latest"])
+        self.assertLessEqual(len(snapshot.prompt), 12_000)
+
+    def test_summary_has_separate_bounded_section_and_oversized_memory_does_not_hide_later_fact(self):
+        summaries = tuple({
+            "kind": "conversation_summary",
+            "source_id": f"source-{index}",
+            "content": f"summary-{index}-" + "s" * 900,
+        } for index in range(3))
+        context = FoldedContext(
+            conversation_turns=({"role": "user", "content": "继续第二个", "segment_id": "new"},),
+            observations=(),
+            think_note=None,
+            task_facts=(),
+            conversation_summaries=summaries,
+        )
+
+        snapshot = SnapshotProjector().project(
+            context,
+            soul="Aura",
+            memory_facts=(
+                {"text": "x" * 3_000, "memory_ids": ["oversized"]},
+                {"text": "用户喜欢红茶", "memory_ids": ["m1"]},
+            ),
+        )
+
+        prompt = json.loads(snapshot.prompt)
+        self.assertEqual(prompt["conversation_summaries"][-1]["source_id"], "source-2")
+        self.assertLessEqual(
+            sum(len(json.dumps(item, ensure_ascii=False)) for item in prompt["conversation_summaries"]),
+            2_000,
+        )
+        self.assertEqual(snapshot.memory_facts, ({"text": "用户喜欢红茶", "memory_ids": ["m1"]},))
         self.assertLessEqual(len(snapshot.prompt), 12_000)

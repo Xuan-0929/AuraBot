@@ -1,8 +1,41 @@
+"""Validate structured Memory extraction payloads shared by sync and conversation paths.
+
+The module converts provider JSON into Memory-owned candidate types. Conversation extraction adds one
+recent-context summary to the same response while leaving legacy memories/entities parsing unchanged.
+"""
+
 from __future__ import annotations
 
+from dataclasses import dataclass
 from typing import Any
 
 from ..types import EntityCandidate, MemoryCandidate
+
+
+@dataclass(frozen=True, slots=True)
+class ConversationExtractionResult:
+    """One model response split into durable candidates and a bounded recent-context summary."""
+
+    memories: tuple[MemoryCandidate, ...]
+    entities: tuple[EntityCandidate, ...]
+    summary: str
+
+
+def parse_conversation_extraction_payload(
+    payload: dict[str, Any],
+    *,
+    base_metadata: dict[str, Any],
+    default_importance: float,
+) -> ConversationExtractionResult:
+    candidates, entities = parse_structured_extraction_payload(
+        payload,
+        base_metadata=base_metadata,
+        default_importance=default_importance,
+    )
+    summary = payload.get("summary", "")
+    if not isinstance(summary, str):
+        raise ValueError("structured conversation summary must be text")
+    return ConversationExtractionResult(tuple(candidates), tuple(entities), summary.strip())
 
 
 def parse_structured_extraction_payload(
