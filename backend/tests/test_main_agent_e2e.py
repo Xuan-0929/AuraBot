@@ -130,7 +130,7 @@ class SilentMainAgentE2ETests(unittest.IsolatedAsyncioTestCase):
                 "segment_id": "persisted", "input_id": "old", "text": "我想选低酸咖啡豆",
             })
             context.set_last_user_activity(10.0)
-            batch = context.conversation_batch()
+            batch = context.freeze_conversation_archive("old", 1)
             memory = MemoryService(
                 metadata_store=SQLiteMemoryStore(memory_path),
                 vector_store=QdrantLocalVectorStore(path=qdrant_path, vector_size=32),
@@ -146,6 +146,7 @@ class SilentMainAgentE2ETests(unittest.IsolatedAsyncioTestCase):
             context.close()
 
             reopened_context = ContextStore(context_path)
+            self.assertEqual(reopened_context.pending_conversation_archive(), batch)
             reopened_memory = MemoryService(
                 metadata_store=SQLiteMemoryStore(memory_path),
                 vector_store=QdrantLocalVectorStore(path=qdrant_path, vector_size=32),

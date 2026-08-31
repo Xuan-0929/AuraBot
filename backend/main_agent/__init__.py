@@ -6,7 +6,14 @@ SpeechService 和既有 backend.memory 服务协作，且只有 Pet 物理 ACK �
 提供人格文件 Store、多 Renderer 协议、诊断 transport 或独立 Memory owner。
 """
 
-from .context import ClauseState, ContextStore, ConversationBatch, FoldedContext, SpeechClause
+from .context import (
+    ClauseState,
+    ContextStore,
+    ConversationBatch,
+    FoldedContext,
+    PendingConversationArchive,
+    SpeechClause,
+)
 from .observations import (
     ObservationExecutorError,
     ObservationLedger,
@@ -42,7 +49,8 @@ from .tasks import TaskBridge
 
 __all__ = [
     "ActiveInput", "CapabilityTokens", "ClauseState", "ContextStore", "ConversationBatch", "FoldedContext", "InputSegment", "InvokeRequest",
-    "MainAgentRuntime", "MainAgentSettings", "PendingTaskProposal", "PendingTrigger", "PrepareAdmissionPolicy",
+    "MainAgentRuntime", "MainAgentSettings", "PendingConversationArchive", "PendingTaskProposal",
+    "PendingTrigger", "PrepareAdmissionPolicy",
     "ObservationExecutorError", "ObservationLedger", "ObservationSecurityError", "TavilyTools",
     "WorkspaceListExecutor", "WorkspaceReadExecutor",
     "WorkspaceReader",

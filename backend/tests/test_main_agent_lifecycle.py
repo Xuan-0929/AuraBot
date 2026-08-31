@@ -7,8 +7,10 @@ recreates deleted Backend Profile, personality, or Main-Agent-specific Memory ma
 
 from __future__ import annotations
 
+import asyncio
 import sqlite3
 import tempfile
+import threading
 import unittest
 from pathlib import Path
 
@@ -92,6 +94,60 @@ class ResourceVectorStore:
 
 
 class ActiveProfileManagerTests(unittest.IsolatedAsyncioTestCase):
+    async def test_profile_switch_waits_for_inflight_memory_recall_before_closing_resources(self) -> None:
+        calls: list[str] = []
+        hub = Hub(calls)
+        memories: dict[str, MemoryService] = {}
+        vectors: dict[str, ResourceVectorStore] = {}
+        started = threading.Event()
+        release = threading.Event()
+
+        async def build(profile_id, path, soul):
+            vector = ResourceVectorStore()
+            memory = MemoryService(
+                metadata_store=SQLiteMemoryStore(path / "memory.sqlite3"),
+                vector_store=vector,
+                embedding_provider=HashEmbeddingProvider(dimension=16),
+            )
+            memories[profile_id] = memory
+            vectors[profile_id] = vector
+            return ProfileResources(
+                profile_id,
+                Runtime(profile_id, soul, calls),
+                Owner("speech", profile_id, calls),
+                memory,
+            )
+
+        with tempfile.TemporaryDirectory() as directory:
+            manager = ActiveProfileManager(Path(directory), hub, build)
+            await manager.activate("profile_a", "Soul A")
+            memory_a = memories["profile_a"]
+            original_recall = memory_a.recall
+
+            def blocking_recall(**kwargs):
+                started.set()
+                release.wait(2)
+                return original_recall(**kwargs)
+
+            memory_a.recall = blocking_recall
+            recall = asyncio.create_task(memory_a.recall_context_async(
+                profile_id="profile_a", query="红茶", max_chars=200,
+            ))
+            self.assertTrue(await asyncio.to_thread(started.wait, 0.5))
+
+            switching = asyncio.create_task(manager.activate("profile_b", "Soul B"))
+            await asyncio.sleep(0)
+            self.assertFalse(switching.done())
+            self.assertFalse(vectors["profile_a"].closed)
+            release.set()
+            await asyncio.wait_for(switching, 1)
+            await asyncio.wait_for(recall, 1)
+
+            self.assertTrue(vectors["profile_a"].closed)
+            self.assertEqual(manager.active_profile_id, "profile_b")
+            self.assertFalse(vectors["profile_b"].closed)
+            await manager.shutdown()
+
     async def test_same_profile_updates_soul_and_generation_without_rebuilding_runtime(self) -> None:
         calls: list[str] = []
         built: list[str] = []

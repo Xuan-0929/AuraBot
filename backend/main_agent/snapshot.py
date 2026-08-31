@@ -1,8 +1,9 @@
 """Project canonical profile facts into the bounded JSON payload consumed by control invokes.
 
-ContextStore supplies ordered heard conversation; Runtime supplies current state, Memory, and the frozen tool
-surface. The projector prioritizes the latest Observation with a deterministic compact fallback, keeps
-runtime/tool authority, and evicts older variable facts until the payload fits. Soul is a separate system message.
+ContextStore supplies ordered heard conversation; Runtime identifies every segment in the current ActiveInput
+and supplies Memory plus the frozen tool surface. The projector preserves current input ahead of older variable
+facts, deterministically truncates it only when required, and always keeps runtime/tool authority. Soul is a
+separate system message.
 """
 
 from __future__ import annotations
@@ -68,12 +69,18 @@ class SnapshotProjector:
         memory_facts: Sequence[Mapping[str, Any]] = (),
         runtime_state: Mapping[str, Any] | None = None,
         allowed_tools: Sequence[Mapping[str, Any]] = (),
+        protected_segment_ids: Sequence[str] = (),
     ) -> Snapshot:
         """Copy JSON values, apply section limits, then evict oldest facts until within total budget."""
 
         if not isinstance(soul, str):
             raise TypeError("soul must be text")
-        conversation = _recent(context.conversation_turns, self.budget.conversation_chars)
+        protected = frozenset(str(value) for value in protected_segment_ids)
+        conversation = _conversation_records(
+            context.conversation_turns,
+            self.budget.conversation_chars,
+            protected,
+        )
         summaries = _recent(context.conversation_summaries, self.budget.summary_chars)
         observations = _observations(context.observations, self.budget.observation_chars)
         memory = _records(memory_facts, self.budget.memory_chars)
@@ -90,7 +97,7 @@ class SnapshotProjector:
             "runtime_state": runtime,
             "allowed_tool_surface": tools,
         }
-        _fit(sections, self.budget.max_prompt_chars)
+        _fit(sections, self.budget.max_prompt_chars, protected)
         prompt = _encode(sections)
         return Snapshot(
             conversation_turns=tuple(_copy(sections["conversation"])),
@@ -272,11 +279,78 @@ def _recent(values: Sequence[Mapping[str, Any]], limit: int) -> list[dict[str, A
     return result
 
 
-def _fit(sections: dict[str, Any], limit: int) -> None:
-    """Drop oldest complete facts while never trimming runtime state or the tool authority."""
+def _conversation_records(
+    values: Sequence[Mapping[str, Any]],
+    limit: int,
+    protected_segment_ids: frozenset[str],
+) -> list[dict[str, Any]]:
+    """Fit recent history around all current-input segments, truncating protected text last."""
+
+    copied = [_object(value) for value in values]
+    protected_indexes = {
+        index for index, value in enumerate(copied)
+        if value.get("segment_id") in protected_segment_ids
+    }
+    protected = [copied[index] for index in sorted(protected_indexes)]
+    if sum(len(_encode(value)) for value in protected) > limit:
+        protected = _truncate_protected_records(protected, limit)
+    used = sum(len(_encode(value)) for value in protected)
+    selected = {index for index in protected_indexes}
+    for index in range(len(copied) - 1, -1, -1):
+        if index in protected_indexes:
+            continue
+        size = len(_encode(copied[index]))
+        if used + size <= limit:
+            selected.add(index)
+            used += size
+    protected_by_id = {
+        value.get("segment_id"): value for value in protected
+    }
+    return [
+        protected_by_id.get(copied[index].get("segment_id"), copied[index])
+        for index in sorted(selected)
+        if index not in protected_indexes or copied[index].get("segment_id") in protected_by_id
+    ]
+
+
+def _truncate_protected_records(
+    values: list[dict[str, Any]], limit: int,
+) -> list[dict[str, Any]]:
+    """Keep at least the newest non-empty segment and grow text newest-first within a section bound."""
+
+    originals = [str(value.get("content", "")) for value in values]
+    result = [dict(value, content=text[:1]) for value, text in zip(values, originals, strict=True)]
+    if not result:
+        return []
+    if sum(len(_encode(value)) for value in result) > limit:
+        return result
+    for index in range(len(result) - 1, -1, -1):
+        text = originals[index]
+        low, high = len(result[index]["content"]), len(text)
+        while low < high:
+            middle = (low + high + 1) // 2
+            candidate = dict(result[index], content=text[:middle])
+            total = sum(
+                len(_encode(candidate if offset == index else value))
+                for offset, value in enumerate(result)
+            )
+            if total <= limit:
+                low = middle
+            else:
+                high = middle - 1
+        result[index]["content"] = text[:low]
+    return result
+
+
+def _fit(
+    sections: dict[str, Any],
+    limit: int,
+    protected_segment_ids: frozenset[str],
+) -> None:
+    """Evict old variable facts before deterministically trimming the current ActiveInput."""
 
     variable_lists = (
-        "conversation", "memory_facts", "observations", "task_facts", "conversation_summaries",
+        "conversation_summaries", "memory_facts", "observations", "task_facts",
     )
     while len(_encode(sections)) > limit:
         changed = False
@@ -286,11 +360,51 @@ def _fit(sections: dict[str, Any], limit: int) -> None:
                 values.pop(0)
                 changed = True
                 break
+        if not changed:
+            conversation = sections["conversation"]
+            for index, value in enumerate(conversation):
+                if value.get("segment_id") not in protected_segment_ids:
+                    conversation.pop(index)
+                    changed = True
+                    break
         if not changed and sections["think_note"]:
             sections["think_note"] = None
             changed = True
+        if not changed and sections["conversation"]:
+            current = [
+                value for value in sections["conversation"]
+                if value.get("segment_id") in protected_segment_ids
+            ]
+            sections["conversation"] = _truncate_protected_for_payload(sections, current, limit)
+            changed = len(_encode(sections)) <= limit
         if not changed:
             raise ValueError("max_prompt_chars cannot fit required runtime and tool surface")
+
+
+def _truncate_protected_for_payload(
+    sections: dict[str, Any],
+    values: list[dict[str, Any]],
+    limit: int,
+) -> list[dict[str, Any]]:
+    """Fit protected records against the exact final JSON envelope, retaining newest content first."""
+
+    originals = [str(value.get("content", "")) for value in values]
+    result = [dict(value, content=text[:1]) for value, text in zip(values, originals, strict=True)]
+    sections["conversation"] = result
+    if not result or len(_encode(sections)) > limit:
+        return result
+    for index in range(len(result) - 1, -1, -1):
+        text = originals[index]
+        low, high = len(result[index]["content"]), len(text)
+        while low < high:
+            middle = (low + high + 1) // 2
+            result[index]["content"] = text[:middle]
+            if len(_encode(sections)) <= limit:
+                low = middle
+            else:
+                high = middle - 1
+        result[index]["content"] = text[:low]
+    return result
 
 
 __all__ = ["Snapshot", "SnapshotBudget", "SnapshotProjector"]

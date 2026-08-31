@@ -17,6 +17,103 @@ from backend.main_agent.snapshot import SnapshotBudget, SnapshotProjector
 
 
 class ContextStoreTests(unittest.TestCase):
+    def test_idle_activity_is_cleared_only_when_transaction_sees_no_pending_or_conversation(self) -> None:
+        with tempfile.TemporaryDirectory() as directory:
+            store = ContextStore(Path(directory) / "context.sqlite3")
+            store.set_last_user_activity(10.0)
+            self.assertTrue(store.clear_last_user_activity_if_idle())
+            self.assertIsNone(store.get_last_user_activity())
+
+            store.append_event("user_segment", {
+                "segment_id": "new", "input_id": "new-input", "text": "新输入",
+            })
+            store.set_last_user_activity(20.0)
+            self.assertFalse(store.clear_last_user_activity_if_idle())
+            self.assertEqual(store.get_last_user_activity(), 20.0)
+            store.close()
+
+    def test_frozen_archive_keeps_source_turns_and_boundary_after_later_input(self) -> None:
+        with tempfile.TemporaryDirectory() as directory:
+            store = ContextStore(Path(directory) / "context.sqlite3")
+            store.append_event(
+                "user_segment", {"segment_id": "old", "input_id": "input-old", "text": "旧问题"}
+            )
+
+            pending = store.freeze_conversation_archive("input-old", 1)
+            store.append_event(
+                "user_segment", {"segment_id": "new", "input_id": "input-new", "text": "新问题"}
+            )
+
+            self.assertEqual(pending.source_id, "main-agent-context:1:1")
+            self.assertEqual(pending.through_sequence, 1)
+            self.assertEqual(pending.turns, ({"role": "user", "content": "旧问题"},))
+            self.assertEqual(store.pending_conversation_archive(), pending)
+            self.assertEqual(store.conversation_batch().source_id, "main-agent-context:1:2")
+            store.close()
+
+    def test_pending_archive_survives_context_store_reopen(self) -> None:
+        with tempfile.TemporaryDirectory() as directory:
+            path = Path(directory) / "context.sqlite3"
+            store = ContextStore(path)
+            store.append_event(
+                "user_segment", {"segment_id": "old", "input_id": "input-old", "text": "冻结内容"}
+            )
+            frozen = store.freeze_conversation_archive("input-old", 3)
+            store.close()
+
+            reopened = ContextStore(path)
+            self.assertEqual(reopened.pending_conversation_archive(), frozen)
+            self.assertEqual(frozen.origin_input_id, "input-old")
+            self.assertEqual(frozen.origin_revision, 3)
+            reopened.close()
+
+    def test_archive_commit_atomically_deletes_pending_marker_with_raw_turns(self) -> None:
+        with tempfile.TemporaryDirectory() as directory:
+            store = ContextStore(Path(directory) / "context.sqlite3")
+            store.append_event(
+                "user_segment", {"segment_id": "old", "input_id": "input-old", "text": "归档我"}
+            )
+            pending = store.freeze_conversation_archive("input-old", 1)
+
+            store.commit_conversation_archive(pending, "旧对话摘要")
+
+            self.assertIsNone(store.pending_conversation_archive())
+            self.assertIsNone(store.conversation_batch())
+            self.assertEqual(store.fold().conversation_summaries[0]["source_id"], pending.source_id)
+            store.close()
+
+    def test_archive_failure_preserves_pending_marker_raw_turns_and_no_summary(self) -> None:
+        with tempfile.TemporaryDirectory() as directory:
+            path = Path(directory) / "context.sqlite3"
+            store = ContextStore(path)
+            store.append_event(
+                "user_segment", {"segment_id": "old", "input_id": "input-old", "text": "不要半提交"}
+            )
+            pending = store.freeze_conversation_archive("input-old", 1)
+            connection = sqlite3.connect(path)
+            connection.executescript(
+                """
+                create trigger fail_pending_archive_delete
+                before delete on context_events
+                when old.event_type = 'user_segment'
+                begin
+                  select raise(abort, 'pending archive delete failed');
+                end;
+                """
+            )
+            connection.close()
+
+            with self.assertRaises(sqlite3.IntegrityError):
+                store.commit_conversation_archive(pending, "不能留下的摘要")
+
+            self.assertEqual(store.pending_conversation_archive(), pending)
+            self.assertEqual(
+                store.conversation_batch().turns,
+                ({"role": "user", "content": "不要半提交"},),
+            )
+            self.assertEqual(store.fold().conversation_summaries, ())
+            store.close()
+
     def test_conversation_batch_is_stable_and_clears_only_its_boundary(self) -> None:
         with tempfile.TemporaryDirectory() as directory:
             store = ContextStore(Path(directory) / "context.sqlite3")
@@ -71,7 +168,7 @@ class ContextStoreTests(unittest.TestCase):
             store.append_event(
                 "user_segment", {"segment_id": "old", "input_id": "i1", "text": "比较 A 和 B"}
             )
-            batch = store.conversation_batch()
+            batch = store.freeze_conversation_archive("i1", 1)
             store.append_event(
                 "user_segment", {"segment_id": "new", "input_id": "i2", "text": "继续第二个"}
             )
@@ -103,7 +200,7 @@ class ContextStoreTests(unittest.TestCase):
             store.append_event(
                 "user_segment", {"segment_id": "old", "input_id": "i1", "text": "保留原文"}
             )
-            batch = store.conversation_batch()
+            batch = store.freeze_conversation_archive("i1", 1)
             connection = sqlite3.connect(path)
             connection.executescript(
                 """
@@ -185,6 +282,141 @@ class ContextStoreTests(unittest.TestCase):
 
 
 class SnapshotProjectorTests(unittest.TestCase):
+    def test_section_budget_truncates_text_without_removing_any_protected_segment(self) -> None:
+        turns = tuple({
+            "role": "user",
+            "content": f"segment-{index}-" + "x" * 120,
+            "segment_id": f"active-{index}",
+        } for index in range(6))
+        context = FoldedContext(turns, (), None, ())
+
+        snapshot = SnapshotProjector(SnapshotBudget(conversation_chars=100)).project(
+            context,
+            soul="Aura",
+            runtime_state={"mode": "respond"},
+            protected_segment_ids=tuple(f"active-{index}" for index in range(6)),
+        )
+
+        self.assertEqual(
+            [turn["segment_id"] for turn in snapshot.conversation_turns],
+            [f"active-{index}" for index in range(6)],
+        )
+        self.assertTrue(snapshot.conversation_turns[-1]["content"])
+        self.assertLessEqual(len(snapshot.prompt), 12_000)
+
+    def test_total_budget_truncates_text_without_removing_any_protected_segment(self) -> None:
+        turns = tuple({
+            "role": "user",
+            "content": f"segment-{index}-" + "x" * 180,
+            "segment_id": f"active-{index}",
+        } for index in range(6))
+        context = FoldedContext(turns, (), None, ())
+
+        snapshot = SnapshotProjector(SnapshotBudget(
+            max_prompt_chars=520,
+            conversation_chars=6_000,
+        )).project(
+            context,
+            soul="Aura",
+            runtime_state={"mode": "respond"},
+            protected_segment_ids=tuple(f"active-{index}" for index in range(6)),
+        )
+
+        self.assertEqual(
+            [turn["segment_id"] for turn in snapshot.conversation_turns],
+            [f"active-{index}" for index in range(6)],
+        )
+        self.assertTrue(snapshot.conversation_turns[-1]["content"])
+        self.assertLessEqual(len(snapshot.prompt), 520)
+
+    def test_total_budget_evicts_old_context_before_all_active_input_segments(self) -> None:
+        context = FoldedContext(
+            conversation_turns=(
+                {"role": "user", "content": "很早以前的问题" + "o" * 200, "segment_id": "old"},
+                {"role": "user", "content": "帮我看看明天上海的天气", "segment_id": "active-1"},
+                {"role": "user", "content": "顺便看看要不要带伞", "segment_id": "active-2"},
+            ),
+            observations=({"id": "o1", "status": "completed", "result": "x" * 300},),
+            think_note="旧思考" * 80,
+            task_facts=({"task_id": "t1", "description": "旧任务" * 80},),
+            conversation_summaries=({
+                "kind": "conversation_summary", "source_id": "summary-old", "content": "旧摘要" * 120,
+            },),
+        )
+        projector = SnapshotProjector(SnapshotBudget(max_prompt_chars=700))
+
+        snapshot = projector.project(
+            context,
+            soul="Aura",
+            memory_facts=({"text": "旧记忆" * 100, "memory_ids": ["m1"]},),
+            runtime_state={"mode": "respond"},
+            allowed_tools=({"type": "function", "function": {"name": "say_to_user"}},),
+            protected_segment_ids=("active-1", "active-2"),
+        )
+
+        contents = [turn["content"] for turn in snapshot.conversation_turns]
+        self.assertIn("帮我看看明天上海的天气", contents)
+        self.assertIn("顺便看看要不要带伞", contents)
+        self.assertNotIn(context.conversation_turns[0]["content"], contents)
+        self.assertLessEqual(len(snapshot.prompt), 700)
+
+    def test_oversized_active_input_is_deterministically_truncated_but_not_removed(self) -> None:
+        context = FoldedContext(
+            conversation_turns=({
+                "role": "user", "content": "开头-" + "很长的问题" * 500 + "-结尾", "segment_id": "active",
+            },),
+            observations=(),
+            think_note=None,
+            task_facts=(),
+        )
+        projector = SnapshotProjector(SnapshotBudget(
+            max_prompt_chars=500,
+            conversation_chars=20,
+        ))
+
+        first = projector.project(
+            context,
+            soul="Aura",
+            runtime_state={"mode": "respond"},
+            protected_segment_ids=("active",),
+        )
+        second = projector.project(
+            context,
+            soul="Aura",
+            runtime_state={"mode": "respond"},
+            protected_segment_ids=("active",),
+        )
+
+        self.assertEqual(first.conversation_turns, second.conversation_turns)
+        self.assertEqual(len(first.conversation_turns), 1)
+        self.assertTrue(first.conversation_turns[0]["content"])
+        self.assertLess(len(first.conversation_turns[0]["content"]), len(context.conversation_turns[0]["content"]))
+        self.assertLessEqual(len(first.prompt), 500)
+
+    def test_old_conversation_can_be_removed_while_short_active_input_stays_complete(self) -> None:
+        context = FoldedContext(
+            conversation_turns=(
+                {"role": "assistant", "content": "旧回答" * 150, "clause_id": "old"},
+                {"role": "user", "content": "当前短问题", "segment_id": "active"},
+            ),
+            observations=(),
+            think_note=None,
+            task_facts=(),
+        )
+
+        snapshot = SnapshotProjector(SnapshotBudget(max_prompt_chars=350)).project(
+            context,
+            soul="Aura",
+            runtime_state={"mode": "respond"},
+            protected_segment_ids=("active",),
+        )
+
+        self.assertEqual(
+            snapshot.conversation_turns,
+            ({"role": "user", "content": "当前短问题", "segment_id": "active"},),
+        )
+        self.assertLessEqual(len(snapshot.prompt), 350)
+
     def test_snapshot_has_one_conversation_representation_and_independent_json_payload(self) -> None:
         context = FoldedContext(
             conversation_turns=({"role": "user", "content": "hello", "segment_id": "s1"},),

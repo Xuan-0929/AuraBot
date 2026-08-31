@@ -8,8 +8,9 @@ ContextStore only after complete acknowledgement. Runtime also owns cancellable 
 proposals, cancellation-immune Manager commits/controls, and supervised durable Task-event replay;
 current-input proposal identities have a hard admission bound, and canonical Task versions fence stale
 retries. Runtime recalls through the existing ``MemoryService`` and, after five idle minutes, submits one
-immutable ContextStore conversation batch to its cancellable extractor; user activity cancels that task and
-only successful Memory/vector and Context-summary commits clear the batch and retire its causal input.
+persistently freezes one ContextStore conversation batch before its cancellable extractor; later user input
+starts a new causal scope, while only successful Memory/vector and Context-summary commits remove the frozen
+boundary and retire its matching input.
 TaskBridge fresh-reads Manager state for owner-safe inspection.
 """
 
@@ -29,7 +30,7 @@ from typing import Any
 
 from backend.task.models import CreateTaskCommand
 
-from .context import ClauseState, ContextStore
+from .context import ClauseState, ContextStore, PendingConversationArchive
 from .observations import ObservationLedger
 from .snapshot import Snapshot, SnapshotProjector
 from .tasks import TaskBridge, task_fact
@@ -259,6 +260,7 @@ class MainAgentRuntime:
         self._task_fact_versions: OrderedDict[str, int] = OrderedDict()
         self._task_event_task: asyncio.Task[None] | None = None
         self._memory_task: asyncio.Task[None] | None = None
+        self._archive_commit_task: asyncio.Task[dict[str, Any]] | None = None
         self._speech_settled = asyncio.Event()
         self._speech_settled.set()
 
@@ -645,11 +647,13 @@ class MainAgentRuntime:
             if self._shutdown:
                 task = self._drain_task
                 memory_task = self._memory_task
+                archive_commit = self._archive_commit_task
             else:
                 first_shutdown = True
                 self._shutdown = True
                 self._pending_trigger = None
                 memory_task = self._memory_task
+                archive_commit = self._archive_commit_task
                 self._cancel_memory_task_locked()
                 self._cancel_pending_proposals_locked("runtime_shutdown")
                 if self._active_invoke is not None:
@@ -665,6 +669,8 @@ class MainAgentRuntime:
             await asyncio.gather(task, return_exceptions=True)
         if memory_task is not None and memory_task is not asyncio.current_task():
             await asyncio.gather(memory_task, return_exceptions=True)
+        if archive_commit is not None and archive_commit is not asyncio.current_task():
+            await asyncio.gather(asyncio.shield(archive_commit), return_exceptions=True)
         durable_tasks = (*proposal_tasks, *commit_tasks, *control_tasks)
         if durable_tasks:
             await asyncio.gather(
@@ -908,7 +914,7 @@ class MainAgentRuntime:
                                 profile_id=self.owner_profile_id,
                                 query=recall_query,
                                 limit=6,
-                                max_chars=2_400,
+                                max_chars=self.snapshot_projector.budget.memory_chars,
                             ),
                             timeout=self.memory_recall_timeout_seconds,
                         )
@@ -929,12 +935,14 @@ class MainAgentRuntime:
                         self._shutdown
                         or current is None
                         or trigger_generation != self._control_generation
-                        or (
-                            current.input_id,
-                            current.revision,
-                            self._latest_context_version,
-                        ) != recall_identity
+                        or (current.input_id, current.revision) != recall_identity[:2]
                     ):
+                        self._settle_preinvoke_locked(preinvoke_settled)
+                        continue
+                    if self._latest_context_version != recall_identity[2]:
+                        if trigger.mode is InvokeMode.PREPARE:
+                            self._prepare_count = max(0, self._prepare_count - 1)
+                        self._merge_trigger_locked(trigger.mode, trigger.reason)
                         self._settle_preinvoke_locked(preinvoke_settled)
                         continue
                     surface = self.harness.freeze_surface(
@@ -953,6 +961,9 @@ class MainAgentRuntime:
                         memory_facts=memory_facts,
                         runtime_state=self._runtime_state(trigger.mode, trigger.reason, grant),
                         allowed_tools=surface.provider_schemas(),
+                        protected_segment_ids=tuple(
+                            segment.segment_id for segment in active_input.segments
+                        ),
                     )
                     request = InvokeRequest(
                         invoke_id=self._new_id("invoke"),
@@ -1696,7 +1707,10 @@ class MainAgentRuntime:
             or self._shutdown
             or self._user_speaking
             or self._confirmed_speech
-            or self.context_store.conversation_batch() is None
+            or (
+                self.context_store.pending_conversation_archive() is None
+                and self.context_store.conversation_batch() is None
+            )
         ):
             return
         last_activity = self.context_store.get_last_user_activity()
@@ -1733,21 +1747,21 @@ class MainAgentRuntime:
                 async with self._lock:
                     if self._shutdown or self._user_speaking or self._confirmed_speech:
                         return
-                    batch = self.context_store.conversation_batch()
                     active = self._active_input
-                    archive_identity = None if active is None else (
-                        active.input_id,
-                        active.revision,
-                        self._latest_context_version,
+                    pending = self.context_store.freeze_conversation_archive(
+                        None if active is None else active.input_id,
+                        None if active is None else active.revision,
                     )
-                if batch is None:
-                    self.context_store.clear_last_user_activity()
+                    if pending is not None:
+                        self._seal_pending_archive_locked(pending)
+                if pending is None:
+                    self.context_store.clear_last_user_activity_if_idle()
                     return
                 try:
-                    remembered = await self.memory_service.remember_conversation(
+                    prepared = await self.memory_service.prepare_conversation(
                         profile_id=self.owner_profile_id,
-                        turns=batch.turns,
-                        source_id=batch.source_id,
+                        turns=pending.turns,
+                        source_id=pending.source_id,
                     )
                 except asyncio.CancelledError:
                     raise
@@ -1755,36 +1769,73 @@ class MainAgentRuntime:
                     next_delay = self.memory_idle_seconds
                     continue
                 try:
-                    async with self._lock:
-                        if self._shutdown or self._user_speaking or self._confirmed_speech:
-                            return
-                        active = self._active_input
-                        current_identity = None if active is None else (
-                            active.input_id,
-                            active.revision,
-                            self._latest_context_version,
-                        )
-                        if current_identity != archive_identity:
-                            next_delay = self.memory_idle_seconds
-                            continue
-                        self.context_store.commit_conversation_archive(
-                            batch,
-                            remembered["summary"],
-                        )
-                        self._retire_archived_input_locked(archive_identity)
+                    commit = self._start_archive_commit(pending, prepared)
+                    await asyncio.shield(commit)
                 except asyncio.CancelledError:
                     raise
                 except Exception:
                     next_delay = self.memory_idle_seconds
                     continue
                 if self.context_store.conversation_batch() is None:
-                    self.context_store.clear_last_user_activity()
                     return
-                self.context_store.set_last_user_activity(self.wall_clock())
-                next_delay = self.memory_idle_seconds
+                last_activity = self.context_store.get_last_user_activity()
+                if last_activity is None:
+                    last_activity = self.wall_clock()
+                    self.context_store.set_last_user_activity(last_activity)
+                next_delay = max(
+                    0.0,
+                    last_activity + self.memory_idle_seconds - self.wall_clock(),
+                )
         finally:
             if self._memory_task is current:
                 self._memory_task = None
+
+    def _start_archive_commit(
+        self,
+        pending: PendingConversationArchive,
+        prepared: Any,
+    ) -> asyncio.Task[dict[str, Any]]:
+        """Create or reuse the sole owned durable archive operation."""
+
+        task = self._archive_commit_task
+        if task is not None and not task.done():
+            return task
+        commit = self._commit_pending_archive(pending, prepared)
+        task = asyncio.create_task(
+            commit,
+            name=f"main-memory-commit-{self.owner_profile_id}",
+        )
+        self._archive_commit_task = task
+        task.add_done_callback(self._consume_archive_commit)
+        return task
+
+    async def _commit_pending_archive(
+        self,
+        pending: PendingConversationArchive,
+        prepared: Any,
+    ) -> dict[str, Any]:
+        """Finish Memory, vector, Context summary, and pending deletion without cancellation gaps."""
+
+        remembered = await self.memory_service.commit_conversation_async(prepared)
+        await asyncio.to_thread(
+            self.context_store.commit_conversation_archive,
+            pending,
+            remembered["summary"],
+        )
+        async with self._lock:
+            self._retire_archived_input_locked(
+                pending.origin_input_id,
+                pending.origin_revision,
+            )
+        return remembered
+
+    def _consume_archive_commit(self, task: asyncio.Task[dict[str, Any]]) -> None:
+        """Observe durable archive completion and release Runtime ownership."""
+
+        if self._archive_commit_task is task:
+            self._archive_commit_task = None
+        if task.done() and not task.cancelled():
+            task.exception()
 
     async def _wait_for_speech_settlement(self) -> None:
         while True:
@@ -1824,20 +1875,35 @@ class MainAgentRuntime:
         self._last_prepare_units = 0
         self._prepare_wait_started_at = None
 
+    def _seal_pending_archive_locked(self, pending: PendingConversationArchive) -> None:
+        """Make the frozen origin a causal boundary without retiring it before durable success."""
+
+        active = self._active_input
+        if (
+            active is None
+            or pending.origin_input_id is None
+            or pending.origin_revision is None
+            or (active.input_id, active.revision)
+            != (pending.origin_input_id, pending.origin_revision)
+        ):
+            return
+        self._has_external_commit = True
+        self._response_grant = None
+        self._pending_trigger = None
+        self._control_generation += 1
+        self._reset_prepare_admission_locked()
+
     def _retire_archived_input_locked(
         self,
-        archive_identity: tuple[str, int, int] | None,
+        origin_input_id: str | None,
+        origin_revision: int | None,
     ) -> None:
         """Retire only the causal input whose Context archive just committed."""
 
         active = self._active_input
-        if active is not None and archive_identity is not None:
-            current_identity = (
-                active.input_id,
-                active.revision,
-                self._latest_context_version,
-            )
-            if current_identity != archive_identity:
+        if active is not None and origin_input_id is not None and origin_revision is not None:
+            if (active.input_id, active.revision) != (origin_input_id, origin_revision):
+                self._context_changed_locked()
                 return
             self._retire_proposals_for_input_locked(active.input_id)
             self._active_input = None

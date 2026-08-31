@@ -6,10 +6,22 @@ recent-context summary to the same response while leaving legacy memories/entiti
 
 from __future__ import annotations
 
+import json
 from dataclasses import dataclass
 from typing import Any
 
 from ..types import EntityCandidate, MemoryCandidate
+
+
+MAX_EXTRACTED_MEMORIES = 16
+MAX_EXTRACTED_ENTITIES = 32
+MAX_MEMORY_CONTENT_CHARS = 2_000
+MAX_MEMORY_TYPE_CHARS = 64
+MAX_ENTITY_REFS = 16
+MAX_ENTITY_NAME_CHARS = 256
+MAX_ENTITY_ALIASES = 16
+MAX_ENTITY_SUMMARY_CHARS = 1_000
+MAX_EXTRACTION_METADATA_CHARS = 16_384
 
 
 @dataclass(frozen=True, slots=True)
@@ -35,7 +47,7 @@ def parse_conversation_extraction_payload(
     summary = payload.get("summary", "")
     if not isinstance(summary, str):
         raise ValueError("structured conversation summary must be text")
-    return ConversationExtractionResult(tuple(candidates), tuple(entities), summary.strip())
+    return ConversationExtractionResult(tuple(candidates), tuple(entities), summary.strip()[:1_000])
 
 
 def parse_structured_extraction_payload(
@@ -55,6 +67,10 @@ def parse_structured_extraction_payload(
 
     if not isinstance(raw_entities, list):
         raise ValueError("structured memory extraction payload entities must be a list")
+    if len(raw_memories) > MAX_EXTRACTED_MEMORIES:
+        raise ValueError("structured extraction accepts at most 16 memories")
+    if len(raw_entities) > MAX_EXTRACTED_ENTITIES:
+        raise ValueError("structured extraction accepts at most 32 entities")
 
     candidates = [
         parse_memory_candidate(
@@ -65,6 +81,12 @@ def parse_structured_extraction_payload(
         for raw_memory in raw_memories
     ]
     entities = [parse_entity_candidate(raw_entity) for raw_entity in raw_entities]
+    metadata_size = sum(
+        len(json.dumps(candidate.metadata, ensure_ascii=False, sort_keys=True, separators=(",", ":")))
+        for candidate in candidates
+    )
+    if metadata_size > MAX_EXTRACTION_METADATA_CHARS:
+        raise ValueError("structured extraction metadata exceeds 16384 characters")
     entity_names = {entity.name for entity in entities}
 
     for candidate in candidates:
@@ -72,6 +94,8 @@ def parse_structured_extraction_payload(
             if entity and entity not in entity_names:
                 entities.append(EntityCandidate(name=entity))
                 entity_names.add(entity)
+                if len(entities) > MAX_EXTRACTED_ENTITIES:
+                    raise ValueError("structured extraction accepts at most 32 entities")
 
     return candidates, entities
 
@@ -89,15 +113,26 @@ def parse_memory_candidate(
     memory_type = str(raw_memory.get("memory_type", "semantic")).strip()
     importance = float(raw_memory.get("importance", default_importance))
     confidence = float(raw_memory.get("confidence", 0.7))
+    raw_entity_refs = raw_memory.get("entities", [])
+    if not isinstance(raw_entity_refs, list):
+        raise ValueError("structured memory candidate entities must be a list")
+    if len(raw_entity_refs) > MAX_ENTITY_REFS:
+        raise ValueError("structured memory candidate accepts at most 16 entities")
     entities = [
         str(entity).strip()
-        for entity in raw_memory.get("entities", [])
+        for entity in raw_entity_refs
         if str(entity).strip()
     ]
     metadata = raw_memory.get("metadata", {})
 
     if not isinstance(metadata, dict):
         raise ValueError("structured memory candidate metadata must be an object")
+    if len(content) > MAX_MEMORY_CONTENT_CHARS:
+        raise ValueError("structured memory candidate content exceeds 2000 characters")
+    if len(memory_type) > MAX_MEMORY_TYPE_CHARS:
+        raise ValueError("structured memory candidate type exceeds 64 characters")
+    if any(len(entity) > MAX_ENTITY_NAME_CHARS for entity in entities):
+        raise ValueError("structured memory entity reference exceeds 256 characters")
 
     return MemoryCandidate(
         content=content,
@@ -123,17 +158,32 @@ def parse_entity_candidate(raw_entity: Any) -> EntityCandidate:
     if not name:
         raise ValueError("structured entity candidate name cannot be empty")
 
+    raw_aliases = raw_entity.get("aliases", [])
+    if not isinstance(raw_aliases, list):
+        raise ValueError("structured entity aliases must be a list")
+    if len(raw_aliases) > MAX_ENTITY_ALIASES:
+        raise ValueError("structured entity accepts at most 16 aliases")
     aliases = [
         str(alias).strip()
-        for alias in raw_entity.get("aliases", [])
+        for alias in raw_aliases
         if str(alias).strip()
     ]
+    entity_type = str(raw_entity.get("entity_type", "concept")).strip() or "concept"
+    summary = str(raw_entity.get("summary", "")).strip()
+    if len(name) > MAX_ENTITY_NAME_CHARS or any(
+        len(alias) > MAX_ENTITY_NAME_CHARS for alias in aliases
+    ):
+        raise ValueError("structured entity name or alias exceeds 256 characters")
+    if len(entity_type) > MAX_MEMORY_TYPE_CHARS:
+        raise ValueError("structured entity type exceeds 64 characters")
+    if len(summary) > MAX_ENTITY_SUMMARY_CHARS:
+        raise ValueError("structured entity summary exceeds 1000 characters")
 
     return EntityCandidate(
         name=name,
-        entity_type=str(raw_entity.get("entity_type", "concept")).strip() or "concept",
+        entity_type=entity_type,
         aliases=dedupe(aliases),
-        summary=str(raw_entity.get("summary", "")).strip(),
+        summary=summary,
     )
 
 

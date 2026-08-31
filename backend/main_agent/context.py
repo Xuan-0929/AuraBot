@@ -2,8 +2,8 @@
 
 The runtime records stable utterance identities, observations, think notes and Task facts as append-only
 events. Conversation batches expose only final user segments and physically delivered assistant clauses to
-Memory; archive commit atomically retains a stable summary and clears exactly that batch boundary while
-preserving unrelated and later facts.
+Memory. A singleton pending row freezes one batch across retry/restart; archive commit atomically retains its
+summary, clears only its raw boundary, and removes that marker while preserving unrelated and later facts.
 """
 
 from __future__ import annotations
@@ -70,6 +70,18 @@ class ConversationBatch:
     turns: tuple[dict[str, str], ...]
 
 
+@dataclass(frozen=True, slots=True)
+class PendingConversationArchive:
+    """One persisted immutable conversation boundary being submitted to long-term Memory."""
+
+    source_id: str
+    first_sequence: int
+    through_sequence: int
+    turns: tuple[dict[str, str], ...]
+    origin_input_id: str | None
+    origin_revision: int | None
+
+
 class ContextStore:
     """Small synchronous SQLite owner for one profile's canonical context and delivery ledger."""
 
@@ -99,6 +111,15 @@ class ContextStore:
                 CREATE TABLE IF NOT EXISTS context_metadata (
                   key TEXT PRIMARY KEY,
                   value TEXT NOT NULL
+                );
+                CREATE TABLE IF NOT EXISTS pending_conversation_archive (
+                  singleton INTEGER PRIMARY KEY CHECK(singleton = 1),
+                  source_id TEXT NOT NULL,
+                  first_sequence INTEGER NOT NULL,
+                  through_sequence INTEGER NOT NULL,
+                  turns_json TEXT NOT NULL,
+                  origin_input_id TEXT,
+                  origin_revision INTEGER
                 );
                 CREATE UNIQUE INDEX IF NOT EXISTS idx_context_summary_source
                   ON context_events(json_extract(payload_json, '$.source_id'))
@@ -263,38 +284,76 @@ class ContextStore:
                 "SELECT sequence, event_type, payload_json FROM context_events "
                 "WHERE event_type IN ('user_segment','assistant_clause') ORDER BY sequence"
             ).fetchall()
-        if not rows:
-            return None
-        turns: list[dict[str, str]] = []
-        segment_positions: dict[str, int] = {}
-        for row in rows:
-            payload = json.loads(row["payload_json"])
-            if row["event_type"] == "user_segment":
-                segment_id = payload.get("segment_id")
-                text = payload.get("text")
-                if not isinstance(segment_id, str) or not isinstance(text, str):
-                    continue
-                turn = {"role": "user", "content": text}
-                position = segment_positions.get(segment_id)
-                if position is None:
-                    segment_positions[segment_id] = len(turns)
-                    turns.append(turn)
-                else:
-                    turns[position] = turn
-            else:
-                text = payload.get("text")
-                if isinstance(text, str):
-                    turns.append({"role": "assistant", "content": text})
-        if not turns:
-            return None
-        first_sequence = int(rows[0]["sequence"])
-        through_sequence = int(rows[-1]["sequence"])
-        return ConversationBatch(
-            source_id=f"main-agent-context:{first_sequence}:{through_sequence}",
-            first_sequence=first_sequence,
-            through_sequence=through_sequence,
-            turns=tuple(turns),
-        )
+        return _conversation_batch_from_rows(rows)
+
+    def freeze_conversation_archive(
+        self,
+        origin_input_id: str | None,
+        origin_revision: int | None,
+    ) -> PendingConversationArchive | None:
+        """Persist the current raw boundary once, returning an existing pending archive unchanged."""
+
+        if (origin_input_id is None) != (origin_revision is None):
+            raise ValueError("archive origin input and revision must both be present or absent")
+        if origin_input_id is not None and (
+            not isinstance(origin_input_id, str) or not origin_input_id
+        ):
+            raise ValueError("archive origin input must be non-empty text")
+        if origin_revision is not None and (
+            isinstance(origin_revision, bool)
+            or not isinstance(origin_revision, int)
+            or origin_revision < 1
+        ):
+            raise ValueError("archive origin revision must be a positive integer")
+        with self._transaction() as db:
+            row = db.execute(
+                "SELECT * FROM pending_conversation_archive WHERE singleton = 1"
+            ).fetchone()
+            if row is not None:
+                return _pending_archive_from_row(row)
+            rows = db.execute(
+                "SELECT sequence, event_type, payload_json FROM context_events "
+                "WHERE event_type IN ('user_segment','assistant_clause') ORDER BY sequence"
+            ).fetchall()
+            batch = _conversation_batch_from_rows(rows)
+            if batch is None:
+                return None
+            turns_json = json.dumps(
+                batch.turns, ensure_ascii=False, separators=(",", ":"), allow_nan=False,
+            )
+            db.execute(
+                """
+                INSERT INTO pending_conversation_archive (
+                  singleton, source_id, first_sequence, through_sequence, turns_json,
+                  origin_input_id, origin_revision
+                ) VALUES (1, ?, ?, ?, ?, ?, ?)
+                """,
+                (
+                    batch.source_id,
+                    batch.first_sequence,
+                    batch.through_sequence,
+                    turns_json,
+                    origin_input_id,
+                    origin_revision,
+                ),
+            )
+            return PendingConversationArchive(
+                batch.source_id,
+                batch.first_sequence,
+                batch.through_sequence,
+                batch.turns,
+                origin_input_id,
+                origin_revision,
+            )
+
+    def pending_conversation_archive(self) -> PendingConversationArchive | None:
+        """Load the frozen archive boundary without consulting later conversation events."""
+
+        with self._lock:
+            row = self._connection.execute(
+                "SELECT * FROM pending_conversation_archive WHERE singleton = 1"
+            ).fetchone()
+        return None if row is None else _pending_archive_from_row(row)
 
     def clear_conversation_through(self, through_sequence: int) -> None:
         """Atomically discard one successful Memory batch and its terminal speech-ledger rows."""
@@ -325,11 +384,15 @@ class ContextStore:
                     tuple(clause_ids),
                 )
 
-    def commit_conversation_archive(self, batch: ConversationBatch, summary: str) -> None:
-        """Atomically retain one stable summary and remove only its submitted raw conversation."""
+    def commit_conversation_archive(
+        self,
+        batch: PendingConversationArchive,
+        summary: str,
+    ) -> None:
+        """Atomically retain one pending summary, remove its raw boundary, and clear its marker."""
 
-        if not isinstance(batch, ConversationBatch):
-            raise TypeError("batch must be a ConversationBatch")
+        if not isinstance(batch, PendingConversationArchive):
+            raise TypeError("batch must be a PendingConversationArchive")
         if not isinstance(summary, str) or not summary.strip():
             raise ValueError("conversation summary must be non-empty text")
         content = summary.strip()[:1_000]
@@ -339,6 +402,21 @@ class ContextStore:
             "content": content,
         })
         with self._transaction() as db:
+            pending = db.execute(
+                "SELECT * FROM pending_conversation_archive WHERE singleton = 1"
+            ).fetchone()
+            if pending is None:
+                existing_summary = db.execute(
+                    "SELECT 1 FROM context_events WHERE event_type = 'conversation_summary' "
+                    "AND json_extract(payload_json, '$.source_id') = ? LIMIT 1",
+                    (batch.source_id,),
+                ).fetchone()
+                if existing_summary is not None:
+                    return
+                raise RuntimeError("conversation archive is not pending")
+            persisted = _pending_archive_from_row(pending)
+            if persisted != batch:
+                raise RuntimeError("conversation archive boundary does not match pending state")
             db.execute(
                 "INSERT OR IGNORE INTO context_events(event_type, payload_json) "
                 "VALUES ('conversation_summary', ?)",
@@ -372,6 +450,7 @@ class ContextStore:
             ).fetchone()
             if remaining is None:
                 db.execute("DELETE FROM context_metadata WHERE key='last_user_activity'")
+            db.execute("DELETE FROM pending_conversation_archive WHERE singleton = 1")
 
     def set_last_user_activity(self, timestamp: float) -> None:
         """Persist the wall-clock anchor used to resume the Profile's Memory idle deadline."""
@@ -401,6 +480,21 @@ class ContextStore:
         with self._transaction() as db:
             db.execute("DELETE FROM context_metadata WHERE key='last_user_activity'")
 
+    def clear_last_user_activity_if_idle(self) -> bool:
+        """Atomically clear activity only when no raw or pending conversation exists."""
+
+        with self._transaction() as db:
+            active = db.execute(
+                "SELECT 1 FROM pending_conversation_archive WHERE singleton = 1 "
+                "UNION ALL "
+                "SELECT 1 FROM context_events "
+                "WHERE event_type IN ('user_segment','assistant_clause') LIMIT 1"
+            ).fetchone()
+            if active is not None:
+                return False
+            db.execute("DELETE FROM context_metadata WHERE key='last_user_activity'")
+            return True
+
     def has_unsettled_clauses(self) -> bool:
         """Report whether physically audible assistant text can still change the conversation batch."""
 
@@ -422,6 +516,57 @@ class ContextStore:
                 raise
             else:
                 self._connection.commit()
+
+
+def _conversation_batch_from_rows(rows: list[sqlite3.Row]) -> ConversationBatch | None:
+    if not rows:
+        return None
+    turns: list[dict[str, str]] = []
+    segment_positions: dict[str, int] = {}
+    for row in rows:
+        payload = json.loads(row["payload_json"])
+        if row["event_type"] == "user_segment":
+            segment_id = payload.get("segment_id")
+            text = payload.get("text")
+            if not isinstance(segment_id, str) or not isinstance(text, str):
+                continue
+            turn = {"role": "user", "content": text}
+            position = segment_positions.get(segment_id)
+            if position is None:
+                segment_positions[segment_id] = len(turns)
+                turns.append(turn)
+            else:
+                turns[position] = turn
+        else:
+            text = payload.get("text")
+            if isinstance(text, str):
+                turns.append({"role": "assistant", "content": text})
+    if not turns:
+        return None
+    first_sequence = int(rows[0]["sequence"])
+    through_sequence = int(rows[-1]["sequence"])
+    return ConversationBatch(
+        source_id=f"main-agent-context:{first_sequence}:{through_sequence}",
+        first_sequence=first_sequence,
+        through_sequence=through_sequence,
+        turns=tuple(turns),
+    )
+
+
+def _pending_archive_from_row(row: sqlite3.Row) -> PendingConversationArchive:
+    raw_turns = json.loads(row["turns_json"])
+    turns = tuple(
+        {"role": str(turn["role"]), "content": str(turn["content"])}
+        for turn in raw_turns
+    )
+    return PendingConversationArchive(
+        source_id=str(row["source_id"]),
+        first_sequence=int(row["first_sequence"]),
+        through_sequence=int(row["through_sequence"]),
+        turns=turns,
+        origin_input_id=row["origin_input_id"],
+        origin_revision=row["origin_revision"],
+    )
 
 
 def _json_object(payload: Mapping[str, Any]) -> str:
@@ -466,4 +611,7 @@ def _clause_from_row(row: sqlite3.Row) -> SpeechClause:
     return SpeechClause(str(row["clause_id"]), str(row["text"]), ClauseState(row["state"]), int(row["sequence"]))
 
 
-__all__ = ["ClauseState", "ContextStore", "ConversationBatch", "FoldedContext", "SpeechClause"]
+__all__ = [
+    "ClauseState", "ContextStore", "ConversationBatch", "FoldedContext",
+    "PendingConversationArchive", "SpeechClause",
+]

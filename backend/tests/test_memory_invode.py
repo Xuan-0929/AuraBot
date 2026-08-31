@@ -9,6 +9,7 @@ import asyncio
 import json
 import sqlite3
 import tempfile
+import threading
 import unittest
 from pathlib import Path
 
@@ -25,7 +26,10 @@ from backend.memory.invode import (
     create_default_memory_service,
     create_memory_router,
 )
-from backend.memory.extraction.schemas import parse_structured_extraction_payload
+from backend.memory.extraction.schemas import (
+    parse_conversation_extraction_payload,
+    parse_structured_extraction_payload,
+)
 from backend.memory.extraction.providers import OpenAICompatibleMemoryExtractionModel
 from backend.memory.consolidation.strategies import (
     ConflictingPreferenceStrategy,
@@ -41,6 +45,8 @@ from backend.memory.retrieval.seeds import EntitySeedRetriever, FtsSeedRetriever
 from backend.memory.retrieval.trace import build_recall_trace
 from backend.memory.validators import validate_memory_candidate
 from backend.memory.types import MemoryCandidate
+from backend.main_agent.context import FoldedContext
+from backend.main_agent.snapshot import SnapshotProjector
 
 
 class InMemoryVectorStore:
@@ -475,8 +481,110 @@ class MemoryConversationTests(unittest.IsolatedAsyncioTestCase):
         self.assertNotIn("private_blob", result["text"])
         self.assertNotIn("secret-", result["text"])
 
+    async def test_consecutive_recall_timeouts_own_only_one_sync_operation_until_shutdown(self):
+        started = threading.Event()
+        release = threading.Event()
+        calls = 0
+
+        def blocking_recall(**_kwargs):
+            nonlocal calls
+            calls += 1
+            started.set()
+            release.wait(2)
+            return {"memories": []}
+
+        self.service.recall = blocking_recall
+        first = asyncio.create_task(self.service.recall_context_async(
+            profile_id="profile-a", query="first", max_chars=200,
+        ))
+        self.assertTrue(await asyncio.to_thread(started.wait, 0.5))
+        with self.assertRaises(TimeoutError):
+            await asyncio.wait_for(first, 0.01)
+
+        second = await asyncio.wait_for(self.service.recall_context_async(
+            profile_id="profile-a", query="second", max_chars=200,
+        ), 0.05)
+        third = await asyncio.wait_for(self.service.recall_context_async(
+            profile_id="profile-a", query="third", max_chars=200,
+        ), 0.05)
+        self.assertEqual(second["text"], "")
+        self.assertEqual(third["text"], "")
+        self.assertEqual(calls, 1)
+
+        shutdown = asyncio.create_task(self.service.shutdown())
+        await asyncio.sleep(0)
+        self.assertFalse(shutdown.done())
+        release.set()
+        await asyncio.wait_for(shutdown, 1)
+        self.assertEqual(calls, 1)
+
 
 class MemoryInvodeTests(unittest.TestCase):
+    def test_context_packer_rejects_budget_smaller_than_fixed_json_envelope(self):
+        with self.assertRaisesRegex(ValueError, "fixed JSON envelope"):
+            pack_context([], max_chars=20)
+
+    def test_context_packer_skips_unfit_id_and_uses_later_memory_that_fits(self):
+        packed = pack_context(
+            [
+                {"memory_id": "too-long-" + "x" * 100, "content": "first"},
+                {"memory_id": "m2", "content": "ok"},
+            ],
+            max_chars=40,
+        )
+        serialized = json.dumps(
+            {"text": packed["text"], "memory_ids": packed["memory_ids"]},
+            ensure_ascii=False, sort_keys=True, separators=(",", ":"),
+        )
+
+        self.assertEqual(packed["text"], "ok")
+        self.assertEqual(packed["memory_ids"], ["m2"])
+        self.assertEqual(packed["char_count"], len(serialized))
+        self.assertLessEqual(packed["char_count"], 40)
+
+    def test_empty_usable_context_reports_actual_json_envelope_size(self):
+        packed = pack_context([], max_chars=30)
+        self.assertEqual(packed["char_count"], 27)
+
+    def test_conversation_extraction_rejects_oversized_model_batches_before_persistence(self):
+        cases = (
+            ({
+                "memories": [
+                    {"content": f"memory-{index}", "memory_type": "semantic"}
+                    for index in range(17)
+                ],
+                "entities": [],
+                "summary": "有限摘要",
+            }, "at most 16 memories"),
+            ({
+                "memories": [],
+                "entities": [{"name": f"entity-{index}"} for index in range(33)],
+                "summary": "有限摘要",
+            }, "at most 32 entities"),
+            ({
+                "memories": [{"content": "x" * 2_001, "memory_type": "semantic"}],
+                "entities": [],
+                "summary": "有限摘要",
+            }, "content exceeds 2000"),
+            ({
+                "memories": [{
+                    "content": "有限内容", "memory_type": "semantic",
+                    "metadata": {"blob": "x" * 16_385},
+                }],
+                "entities": [],
+                "summary": "有限摘要",
+            }, "metadata exceeds 16384"),
+        )
+
+        for oversized, message in cases:
+            with self.subTest(message=message):
+                with self.assertRaisesRegex(ValueError, message):
+                    parse_conversation_extraction_payload(
+                        oversized,
+                        base_metadata={"turn_count": 1},
+                        default_importance=0.5,
+                    )
+
     def setUp(self):
         self.tmpdir = tempfile.TemporaryDirectory()
         sqlite_path = Path(self.tmpdir.name) / "memory.sqlite3"
@@ -1119,13 +1227,39 @@ class MemoryInvodeTests(unittest.TestCase):
                 {"memory_id": "m1", "content": "用户今天要和阿杰讨论项目。"},
                 {"memory_id": "m2", "content": "用户喜欢热拿铁。"},
             ],
-            max_chars=18,
+            max_chars=50,
         )
 
         self.assertEqual(analysis["time"]["valid_at"], "2026-06-11T00:00:00+00:00")
         self.assertEqual(set(analysis["entities"]), {"咖啡店", "阿杰", "项目"})
         self.assertEqual(packed["memory_ids"], ["m1"])
-        self.assertLessEqual(packed["char_count"], 18)
+        self.assertLessEqual(packed["char_count"], 50)
+
+    def test_packed_context_budget_covers_final_json_record_and_survives_snapshot(self):
+        packed = pack_context(
+            [
+                {"memory_id": "memory-one-" + "1" * 30, "content": "最高排名记忆。" + "甲" * 1_180},
+                {"memory_id": "memory-two-" + "2" * 30, "content": "第二条记忆。" + "乙" * 1_180},
+                {"memory_id": "memory-three-" + "3" * 30, "content": "第三条记忆。"},
+            ],
+            max_chars=2_400,
+        )
+        public_record = {"text": packed["text"], "memory_ids": packed["memory_ids"]}
+        serialized = json.dumps(
+            public_record, ensure_ascii=False, sort_keys=True, separators=(",", ":"),
+        )
+
+        self.assertTrue(public_record["text"])
+        self.assertTrue(public_record["memory_ids"])
+        self.assertEqual(packed["char_count"], len(serialized))
+        self.assertLessEqual(len(serialized), 2_400)
+        snapshot = SnapshotProjector().project(
+            FoldedContext((), (), None, ()),
+            soul="Aura",
+            memory_facts=(public_record,),
+        )
+        self.assertEqual(snapshot.memory_facts, (public_record,))
+        self.assertLessEqual(len(snapshot.prompt), 12_000)
 
     def test_recall_returns_query_analysis_and_packed_context(self):
         self.service.remember(
@@ -1147,14 +1281,14 @@ class MemoryInvodeTests(unittest.TestCase):
             limit=5,
             context_hints={
                 "now_iso": "2026-06-11T00:00:00+00:00",
-                "context_budget_chars": 64,
+                "context_budget_chars": 120,
             },
         )
 
         self.assertEqual(result["analysis"]["time"]["valid_at"], "2026-06-11T00:00:00+00:00")
         self.assertIn("阿杰", result["analysis"]["entities"])
         self.assertIn(result["memories"][0]["memory_id"], result["packed_context"]["memory_ids"])
-        self.assertLessEqual(result["packed_context"]["char_count"], 64)
+        self.assertLessEqual(result["packed_context"]["char_count"], 120)
 
     def test_rule_based_reranker_boosts_entity_and_time_matches(self):
         reranked = RuleBasedMemoryReranker().rerank(
