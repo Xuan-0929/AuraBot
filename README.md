@@ -9,8 +9,8 @@ AuraBot 是一个 desktop-first 的陪伴型 AI 项目。默认界面是常驻�
 | --- | --- |
 | Desktop | Electron + Vue + TypeScript + Vite，可运行桌宠、控制台和设置窗口。 |
 | Live2D | 内置 Hiyori 示例模型，支持拖动、点击穿透、光标跟随与状态动作。 |
-| Chat | 普通文字聊天、pet quick chat、模型调用和消息持久化。 |
-| Memory | Active Profile 使用既有 MemoryService 召回；Main Agent 在用户空闲五分钟后提交完整对话 buffer，提炼可被新输入取消，成功后才清理已提交内容。 |
+| Chat | 普通文字聊天、pet quick chat、模型调用和消息持久化；production STT 的所有非空 partial 都请求进入既有 PREPARE admission。 |
+| Memory | Active Profile 使用既有 MemoryService 召回；Main Agent 的 idle timer 在 seal 前可被用户活动重置，seal 后独立 worker 不再被新输入取消，成功后只清理已 seal 边界。 |
 | Backend | FastAPI 启动只持有 Task、Realtime 与 active-profile owner；首个 Pet token 才惰性组合 Main/Memory/Speech，health/readiness 不作付费 probe。 |
 | Task | 两表同步 SQLite、固定五槽 FIFO、Pi RPC、控制/业务事件与 Main Agent proposal/事实回流已实现；桌面 Task UI 仍未开放。 |
 

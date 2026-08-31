@@ -1,9 +1,9 @@
-"""Persist one Profile's conversation buffer, observations, tasks, and renderer-delivery truth.
+"""Persist one Profile's canonical Context, speech-delivery truth, and archive boundary.
 
-The runtime records stable utterance identities, observations, think notes and Task facts as append-only
-events. Conversation batches expose only final user segments and physically delivered assistant clauses to
-Memory. A singleton pending row freezes one batch across retry/restart; archive commit atomically retains its
-summary, clears only its raw boundary, and removes that marker while preserving unrelated and later facts.
+The Runtime appends user, observation, think-note, Task, and acknowledged assistant facts here. Conversation
+turns are always reconstructed from canonical events; a singleton pending row stores only a stable sequence
+boundary across retry/restart. A successful Memory result is committed atomically with its summary, boundary
+cleanup, terminal Speech Ledger cleanup, pending deletion, and conditional idle-metadata removal.
 """
 
 from __future__ import annotations
@@ -72,14 +72,11 @@ class ConversationBatch:
 
 @dataclass(frozen=True, slots=True)
 class PendingConversationArchive:
-    """One persisted immutable conversation boundary being submitted to long-term Memory."""
+    """One persisted immutable canonical-event boundary being submitted to long-term Memory."""
 
     source_id: str
     first_sequence: int
     through_sequence: int
-    turns: tuple[dict[str, str], ...]
-    origin_input_id: str | None
-    origin_revision: int | None
 
 
 class ContextStore:
@@ -116,16 +113,49 @@ class ContextStore:
                   singleton INTEGER PRIMARY KEY CHECK(singleton = 1),
                   source_id TEXT NOT NULL,
                   first_sequence INTEGER NOT NULL,
-                  through_sequence INTEGER NOT NULL,
-                  turns_json TEXT NOT NULL,
-                  origin_input_id TEXT,
-                  origin_revision INTEGER
+                  through_sequence INTEGER NOT NULL
                 );
                 CREATE UNIQUE INDEX IF NOT EXISTS idx_context_summary_source
                   ON context_events(json_extract(payload_json, '$.source_id'))
                   WHERE event_type = 'conversation_summary';
                 """
             )
+            self._migrate_pending_archive_schema()
+
+    def _migrate_pending_archive_schema(self) -> None:
+        """Replace the unpublished expanded pending table with its minimal stable boundary."""
+
+        expected = ("singleton", "source_id", "first_sequence", "through_sequence")
+        columns = tuple(
+            str(row["name"])
+            for row in self._connection.execute(
+                "PRAGMA table_info(pending_conversation_archive)"
+            ).fetchall()
+        )
+        if columns == expected:
+            return
+        if not set(expected).issubset(columns):
+            raise RuntimeError("pending conversation archive schema is invalid")
+        self._connection.executescript(
+            """
+            BEGIN IMMEDIATE;
+            ALTER TABLE pending_conversation_archive
+              RENAME TO pending_conversation_archive_legacy;
+            CREATE TABLE pending_conversation_archive (
+              singleton INTEGER PRIMARY KEY CHECK(singleton = 1),
+              source_id TEXT NOT NULL,
+              first_sequence INTEGER NOT NULL,
+              through_sequence INTEGER NOT NULL
+            );
+            INSERT INTO pending_conversation_archive (
+              singleton, source_id, first_sequence, through_sequence
+            )
+            SELECT singleton, source_id, first_sequence, through_sequence
+            FROM pending_conversation_archive_legacy;
+            DROP TABLE pending_conversation_archive_legacy;
+            COMMIT;
+            """
+        )
 
     def close(self) -> None:
         """Release the SQLite connection; later use is intentionally rejected by sqlite3."""
@@ -286,25 +316,9 @@ class ContextStore:
             ).fetchall()
         return _conversation_batch_from_rows(rows)
 
-    def freeze_conversation_archive(
-        self,
-        origin_input_id: str | None,
-        origin_revision: int | None,
-    ) -> PendingConversationArchive | None:
-        """Persist the current raw boundary once, returning an existing pending archive unchanged."""
+    def freeze_conversation_archive(self) -> PendingConversationArchive | None:
+        """Persist the current raw boundary once, returning an existing boundary unchanged."""
 
-        if (origin_input_id is None) != (origin_revision is None):
-            raise ValueError("archive origin input and revision must both be present or absent")
-        if origin_input_id is not None and (
-            not isinstance(origin_input_id, str) or not origin_input_id
-        ):
-            raise ValueError("archive origin input must be non-empty text")
-        if origin_revision is not None and (
-            isinstance(origin_revision, bool)
-            or not isinstance(origin_revision, int)
-            or origin_revision < 1
-        ):
-            raise ValueError("archive origin revision must be a positive integer")
         with self._transaction() as db:
             row = db.execute(
                 "SELECT * FROM pending_conversation_archive WHERE singleton = 1"
@@ -318,32 +332,16 @@ class ContextStore:
             batch = _conversation_batch_from_rows(rows)
             if batch is None:
                 return None
-            turns_json = json.dumps(
-                batch.turns, ensure_ascii=False, separators=(",", ":"), allow_nan=False,
-            )
             db.execute(
-                """
-                INSERT INTO pending_conversation_archive (
-                  singleton, source_id, first_sequence, through_sequence, turns_json,
-                  origin_input_id, origin_revision
-                ) VALUES (1, ?, ?, ?, ?, ?, ?)
-                """,
-                (
-                    batch.source_id,
-                    batch.first_sequence,
-                    batch.through_sequence,
-                    turns_json,
-                    origin_input_id,
-                    origin_revision,
-                ),
+                "INSERT INTO pending_conversation_archive ("
+                "singleton, source_id, first_sequence, through_sequence"
+                ") VALUES (1, ?, ?, ?)",
+                (batch.source_id, batch.first_sequence, batch.through_sequence),
             )
             return PendingConversationArchive(
                 batch.source_id,
                 batch.first_sequence,
                 batch.through_sequence,
-                batch.turns,
-                origin_input_id,
-                origin_revision,
             )
 
     def pending_conversation_archive(self) -> PendingConversationArchive | None:
@@ -355,34 +353,32 @@ class ContextStore:
             ).fetchone()
         return None if row is None else _pending_archive_from_row(row)
 
-    def clear_conversation_through(self, through_sequence: int) -> None:
-        """Atomically discard one successful Memory batch and its terminal speech-ledger rows."""
+    def conversation_archive_turns(
+        self, pending: PendingConversationArchive,
+    ) -> tuple[dict[str, str], ...]:
+        """Reconstruct and validate one pending boundary from canonical conversation events."""
 
-        if isinstance(through_sequence, bool) or not isinstance(through_sequence, int):
-            raise TypeError("through_sequence must be an integer")
-        with self._transaction() as db:
-            rows = db.execute(
-                "SELECT payload_json FROM context_events "
-                "WHERE sequence <= ? AND event_type = 'assistant_clause'",
-                (through_sequence,),
+        if not isinstance(pending, PendingConversationArchive):
+            raise TypeError("pending must be a PendingConversationArchive")
+        with self._lock:
+            rows = self._connection.execute(
+                "SELECT sequence, event_type, payload_json FROM context_events "
+                "WHERE sequence BETWEEN ? AND ? "
+                "AND event_type IN ('user_segment','assistant_clause') ORDER BY sequence",
+                (pending.first_sequence, pending.through_sequence),
             ).fetchall()
-            clause_ids = [
-                payload["clause_id"]
-                for payload in (json.loads(row["payload_json"]) for row in rows)
-                if isinstance(payload.get("clause_id"), str) and payload["clause_id"]
-            ]
-            db.execute(
-                "DELETE FROM context_events WHERE sequence <= ? "
-                "AND event_type IN ('user_segment','assistant_clause')",
-                (through_sequence,),
-            )
-            if clause_ids:
-                placeholders = ",".join("?" for _ in clause_ids)
-                db.execute(
-                    f"DELETE FROM speech_clauses WHERE clause_id IN ({placeholders}) "
-                    "AND state IN ('delivered','interrupted','failed')",
-                    tuple(clause_ids),
-                )
+        batch = _conversation_batch_from_rows(rows)
+        if batch is None or (
+            batch.source_id,
+            batch.first_sequence,
+            batch.through_sequence,
+        ) != (
+            pending.source_id,
+            pending.first_sequence,
+            pending.through_sequence,
+        ):
+            raise RuntimeError("pending conversation archive does not match canonical events")
+        return batch.turns
 
     def commit_conversation_archive(
         self,
@@ -444,13 +440,15 @@ class ContextStore:
                     "AND state IN ('delivered','interrupted','failed')",
                     tuple(clause_ids),
                 )
-            remaining = db.execute(
+            db.execute("DELETE FROM pending_conversation_archive WHERE singleton = 1")
+            active = db.execute(
+                "SELECT 1 FROM pending_conversation_archive WHERE singleton = 1 "
+                "UNION ALL "
                 "SELECT 1 FROM context_events "
                 "WHERE event_type IN ('user_segment','assistant_clause') LIMIT 1"
             ).fetchone()
-            if remaining is None:
+            if active is None:
                 db.execute("DELETE FROM context_metadata WHERE key='last_user_activity'")
-            db.execute("DELETE FROM pending_conversation_archive WHERE singleton = 1")
 
     def set_last_user_activity(self, timestamp: float) -> None:
         """Persist the wall-clock anchor used to resume the Profile's Memory idle deadline."""
@@ -473,12 +471,6 @@ class ContextStore:
                 "SELECT value FROM context_metadata WHERE key='last_user_activity'"
             ).fetchone()
         return None if row is None else float(row["value"])
-
-    def clear_last_user_activity(self) -> None:
-        """Remove the idle anchor after the corresponding conversation batch is archived."""
-
-        with self._transaction() as db:
-            db.execute("DELETE FROM context_metadata WHERE key='last_user_activity'")
 
     def clear_last_user_activity_if_idle(self) -> bool:
         """Atomically clear activity only when no raw or pending conversation exists."""
@@ -554,18 +546,10 @@ def _conversation_batch_from_rows(rows: list[sqlite3.Row]) -> ConversationBatch 
 
 
 def _pending_archive_from_row(row: sqlite3.Row) -> PendingConversationArchive:
-    raw_turns = json.loads(row["turns_json"])
-    turns = tuple(
-        {"role": str(turn["role"]), "content": str(turn["content"])}
-        for turn in raw_turns
-    )
     return PendingConversationArchive(
         source_id=str(row["source_id"]),
         first_sequence=int(row["first_sequence"]),
         through_sequence=int(row["through_sequence"]),
-        turns=turns,
-        origin_input_id=row["origin_input_id"],
-        origin_revision=row["origin_revision"],
     )
 
 

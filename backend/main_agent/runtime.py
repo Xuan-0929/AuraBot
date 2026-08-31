@@ -1,17 +1,12 @@
-"""Own one Profile's conversation control, cancellable Memory idle cycle, tools, and speech delivery.
+"""Own one Profile's causal input, control invokes, tools, speech delivery, and Memory scheduling.
 
-MainAgentRuntime folds normalized transcript/VAD/EOU facts into one ActiveInput, coalesces control
-triggers into an event-driven single-flight drain deferred outside commit stacks, freezes Snapshot and
-ToolSurface together, and runs provider chunks through ToolHarness with a live effect fence. Safe tool
-executors detach through an append-only ObservationLedger with same-input reuse; Renderer text reaches
-ContextStore only after complete acknowledgement. Runtime also owns cancellable three-second Task
-proposals, cancellation-immune Manager commits/controls, and supervised durable Task-event replay;
-current-input proposal identities have a hard admission bound, and canonical Task versions fence stale
-retries. Runtime recalls through the existing ``MemoryService`` and, after five idle minutes, submits one
-persistently freezes one ContextStore conversation batch before its cancellable extractor; later user input
-starts a new causal scope, while only successful Memory/vector and Context-summary commits remove the frozen
-boundary and retire its matching input.
-TaskBridge fresh-reads Manager state for owner-safe inspection.
+MainAgentRuntime folds transcript/VAD/EOU facts into one ActiveInput, coalesces control triggers into a
+single-flight drain, freezes Snapshot and ToolSurface together, and fences every effect. Renderer text enters
+Context only after complete acknowledgement; Observation and Task work retain their existing detached and
+durable ownership. Memory uses two owners only: a user-activity-resettable idle timer seals a canonical
+Context boundary and immediately retires its causal input, then an independent archive worker submits that
+sealed boundary without blocking or being cancelled by later input. Context cleanup occurs only after Memory
+success and never retires the newer causal scope.
 """
 
 from __future__ import annotations
@@ -259,8 +254,8 @@ class MainAgentRuntime:
         self._task_control_tasks: set[asyncio.Task[dict[str, Any]]] = set()
         self._task_fact_versions: OrderedDict[str, int] = OrderedDict()
         self._task_event_task: asyncio.Task[None] | None = None
-        self._memory_task: asyncio.Task[None] | None = None
-        self._archive_commit_task: asyncio.Task[dict[str, Any]] | None = None
+        self._memory_idle_task: asyncio.Task[None] | None = None
+        self._memory_archive_task: asyncio.Task[None] | None = None
         self._speech_settled = asyncio.Event()
         self._speech_settled.set()
 
@@ -360,7 +355,7 @@ class MainAgentRuntime:
 
         transcript = _required_text(text, "transcript")
         async with self._lock:
-            self._cancel_memory_task_locked()
+            self._cancel_memory_idle_task_locked()
             self._cancel_pending_proposals_locked("confirmed_speech")
             self._user_speaking = True
             self._speech_candidate = False
@@ -381,7 +376,7 @@ class MainAgentRuntime:
 
         transcript = _required_text(text, "text submission")
         async with self._lock:
-            self._cancel_memory_task_locked()
+            self._cancel_memory_idle_task_locked()
             barrier = self._prepare_barrier_locked()
             self._advance_input_locked(transcript, self._new_id("segment"))
             assert self._active_input is not None
@@ -400,7 +395,7 @@ class MainAgentRuntime:
         """Fence response effects immediately for an acoustic speech candidate without changing revision."""
 
         async with self._lock:
-            self._cancel_memory_task_locked()
+            self._cancel_memory_idle_task_locked()
             self._user_speaking = True
             self._speech_candidate = True
             self._confirmed_speech = False
@@ -410,7 +405,7 @@ class MainAgentRuntime:
         """Confirm barge-in, revoke response authority, and cancel current control/speech ownership."""
 
         async with self._lock:
-            self._cancel_memory_task_locked()
+            self._cancel_memory_idle_task_locked()
             self._user_speaking = True
             self._speech_candidate = False
             self._confirmed_speech = True
@@ -640,25 +635,22 @@ class MainAgentRuntime:
                         self._kick_locked()
 
     async def shutdown(self) -> None:
-        """Fence new work, cancel pending proposals, and await any irreversible commit already started."""
+        """Fence new work, cancel both Memory owners, and await all Profile-scoped operations."""
 
         first_shutdown = False
         async with self._lock:
-            if self._shutdown:
-                task = self._drain_task
-                memory_task = self._memory_task
-                archive_commit = self._archive_commit_task
-            else:
+            task = self._drain_task
+            memory_idle_task = self._memory_idle_task
+            memory_archive_task = self._memory_archive_task
+            if not self._shutdown:
                 first_shutdown = True
                 self._shutdown = True
                 self._pending_trigger = None
-                memory_task = self._memory_task
-                archive_commit = self._archive_commit_task
-                self._cancel_memory_task_locked()
+                self._cancel_memory_idle_task_locked()
+                self._cancel_memory_archive_task_locked()
                 self._cancel_pending_proposals_locked("runtime_shutdown")
                 if self._active_invoke is not None:
                     self.harness.cancel(self._active_invoke.request.invoke_id)
-                task = self._drain_task
             proposal_tasks = tuple(self._proposal_tasks.values())
             commit_tasks = tuple(self._proposal_commit_tasks.values())
             control_tasks = tuple(self._task_control_tasks)
@@ -667,10 +659,9 @@ class MainAgentRuntime:
                 event_task.cancel()
         if task is not None and task is not asyncio.current_task():
             await asyncio.gather(task, return_exceptions=True)
-        if memory_task is not None and memory_task is not asyncio.current_task():
-            await asyncio.gather(memory_task, return_exceptions=True)
-        if archive_commit is not None and archive_commit is not asyncio.current_task():
-            await asyncio.gather(asyncio.shield(archive_commit), return_exceptions=True)
+        for memory_task in (memory_idle_task, memory_archive_task):
+            if memory_task is not None and memory_task is not asyncio.current_task():
+                await asyncio.gather(memory_task, return_exceptions=True)
         durable_tasks = (*proposal_tasks, *commit_tasks, *control_tasks)
         if durable_tasks:
             await asyncio.gather(
@@ -1692,15 +1683,15 @@ class MainAgentRuntime:
         }
 
     def _start_memory_idle_locked(self) -> None:
-        """Persist a confirmed-user activity anchor and replace the Profile's idle timer."""
+        """Persist confirmed activity and replace only the Profile's idle timer."""
 
         if self.memory_service is None or self._shutdown:
             return
         self.context_store.set_last_user_activity(self.wall_clock())
-        self._schedule_memory_locked(self.memory_idle_seconds)
+        self._schedule_memory_idle_locked(self.memory_idle_seconds)
 
     def _resume_memory_idle_locked(self) -> None:
-        """Resume the remaining idle delay for an existing conversation without moving its deadline."""
+        """Resume one persisted boundary or raw conversation without moving its deadline."""
 
         if (
             self.memory_service is None
@@ -1717,125 +1708,100 @@ class MainAgentRuntime:
         if last_activity is None:
             last_activity = self.wall_clock()
             self.context_store.set_last_user_activity(last_activity)
-        self._schedule_memory_locked(
+        self._schedule_memory_idle_locked(
             max(0.0, last_activity + self.memory_idle_seconds - self.wall_clock())
         )
 
-    def _schedule_memory_locked(self, delay: float) -> None:
-        self._cancel_memory_task_locked()
-        self._memory_task = asyncio.create_task(
+    def _schedule_memory_idle_locked(self, delay: float) -> None:
+        self._cancel_memory_idle_task_locked()
+        self._memory_idle_task = asyncio.create_task(
             self._archive_conversation_after(delay),
             name=f"main-memory-idle-{self.owner_profile_id}",
         )
 
-    def _cancel_memory_task_locked(self) -> None:
-        task, self._memory_task = self._memory_task, None
+    def _cancel_memory_idle_task_locked(self) -> None:
+        task, self._memory_idle_task = self._memory_idle_task, None
+        if task is not None and task is not asyncio.current_task() and not task.done():
+            task.cancel()
+
+    def _cancel_memory_archive_task_locked(self) -> None:
+        task, self._memory_archive_task = self._memory_archive_task, None
         if task is not None and task is not asyncio.current_task() and not task.done():
             task.cancel()
 
     async def _archive_conversation_after(self, delay: float) -> None:
-        """Archive one stable conversation after idle, retaining it across cancellation or failure."""
+        """Wait for idle settlement, seal one boundary, and launch the independent worker."""
 
         current = asyncio.current_task()
         try:
-            next_delay = max(0.0, delay)
-            while True:
-                if next_delay:
-                    await asyncio.sleep(next_delay)
-                await self.wait_until_idle()
-                await self._wait_for_speech_settlement()
-                async with self._lock:
-                    if self._shutdown or self._user_speaking or self._confirmed_speech:
-                        return
-                    active = self._active_input
-                    pending = self.context_store.freeze_conversation_archive(
-                        None if active is None else active.input_id,
-                        None if active is None else active.revision,
-                    )
+            if delay > 0:
+                await asyncio.sleep(delay)
+            await self.wait_until_idle()
+            await self._wait_for_speech_settlement()
+            async with self._lock:
+                if self._shutdown or self._user_speaking or self._confirmed_speech:
+                    return
+                pending = self.context_store.pending_conversation_archive()
+                if pending is None:
+                    pending = self.context_store.freeze_conversation_archive()
                     if pending is not None:
-                        self._seal_pending_archive_locked(pending)
+                        self._retire_sealed_input_locked()
                 if pending is None:
                     self.context_store.clear_last_user_activity_if_idle()
                     return
-                try:
-                    prepared = await self.memory_service.prepare_conversation(
-                        profile_id=self.owner_profile_id,
-                        turns=pending.turns,
-                        source_id=pending.source_id,
-                    )
-                except asyncio.CancelledError:
-                    raise
-                except Exception:
-                    next_delay = self.memory_idle_seconds
-                    continue
-                try:
-                    commit = self._start_archive_commit(pending, prepared)
-                    await asyncio.shield(commit)
-                except asyncio.CancelledError:
-                    raise
-                except Exception:
-                    next_delay = self.memory_idle_seconds
-                    continue
-                if self.context_store.conversation_batch() is None:
-                    return
-                last_activity = self.context_store.get_last_user_activity()
-                if last_activity is None:
-                    last_activity = self.wall_clock()
-                    self.context_store.set_last_user_activity(last_activity)
-                next_delay = max(
-                    0.0,
-                    last_activity + self.memory_idle_seconds - self.wall_clock(),
-                )
+                if self._memory_idle_task is current:
+                    self._memory_idle_task = None
+                self._start_memory_archive_locked(pending)
         finally:
-            if self._memory_task is current:
-                self._memory_task = None
+            if self._memory_idle_task is current:
+                self._memory_idle_task = None
 
-    def _start_archive_commit(
-        self,
-        pending: PendingConversationArchive,
-        prepared: Any,
-    ) -> asyncio.Task[dict[str, Any]]:
-        """Create or reuse the sole owned durable archive operation."""
+    def _start_memory_archive_locked(self, pending: PendingConversationArchive) -> None:
+        """Start the sole sealed-boundary worker, leaving any existing worker untouched."""
 
-        task = self._archive_commit_task
+        task = self._memory_archive_task
         if task is not None and not task.done():
-            return task
-        commit = self._commit_pending_archive(pending, prepared)
-        task = asyncio.create_task(
-            commit,
-            name=f"main-memory-commit-{self.owner_profile_id}",
+            return
+        self._memory_archive_task = asyncio.create_task(
+            self._archive_pending_conversation(pending),
+            name=f"main-memory-archive-{self.owner_profile_id}",
         )
-        self._archive_commit_task = task
-        task.add_done_callback(self._consume_archive_commit)
-        return task
 
-    async def _commit_pending_archive(
-        self,
-        pending: PendingConversationArchive,
-        prepared: Any,
-    ) -> dict[str, Any]:
-        """Finish Memory, vector, Context summary, and pending deletion without cancellation gaps."""
+    async def _archive_pending_conversation(
+        self, pending: PendingConversationArchive,
+    ) -> None:
+        """Submit one canonical boundary and commit only its Context cleanup on success."""
 
-        remembered = await self.memory_service.commit_conversation_async(prepared)
-        await asyncio.to_thread(
-            self.context_store.commit_conversation_archive,
-            pending,
-            remembered["summary"],
-        )
-        async with self._lock:
-            self._retire_archived_input_locked(
-                pending.origin_input_id,
-                pending.origin_revision,
+        current = asyncio.current_task()
+        try:
+            turns = self.context_store.conversation_archive_turns(pending)
+            remembered = await self.memory_service.remember_conversation(
+                profile_id=self.owner_profile_id,
+                turns=turns,
+                source_id=pending.source_id,
             )
-        return remembered
-
-    def _consume_archive_commit(self, task: asyncio.Task[dict[str, Any]]) -> None:
-        """Observe durable archive completion and release Runtime ownership."""
-
-        if self._archive_commit_task is task:
-            self._archive_commit_task = None
-        if task.done() and not task.cancelled():
-            task.exception()
+            async with self._lock:
+                if self._shutdown:
+                    return
+                self.context_store.commit_conversation_archive(
+                    pending, remembered["summary"],
+                )
+                self._context_changed_locked()
+                if self._memory_archive_task is current:
+                    self._memory_archive_task = None
+                self._resume_memory_idle_locked()
+        except asyncio.CancelledError:
+            raise
+        except Exception:
+            async with self._lock:
+                if (
+                    not self._shutdown
+                    and (self._memory_idle_task is None or self._memory_idle_task.done())
+                ):
+                    self._schedule_memory_idle_locked(self.memory_idle_seconds)
+        finally:
+            if self._memory_archive_task is current:
+                self._memory_archive_task = None
 
     async def _wait_for_speech_settlement(self) -> None:
         while True:
@@ -1875,44 +1841,18 @@ class MainAgentRuntime:
         self._last_prepare_units = 0
         self._prepare_wait_started_at = None
 
-    def _seal_pending_archive_locked(self, pending: PendingConversationArchive) -> None:
-        """Make the frozen origin a causal boundary without retiring it before durable success."""
+    def _retire_sealed_input_locked(self) -> None:
+        """Retire the causal scope at seal time without changing canonical Context version."""
 
         active = self._active_input
-        if (
-            active is None
-            or pending.origin_input_id is None
-            or pending.origin_revision is None
-            or (active.input_id, active.revision)
-            != (pending.origin_input_id, pending.origin_revision)
-        ):
-            return
-        self._has_external_commit = True
-        self._response_grant = None
-        self._pending_trigger = None
-        self._control_generation += 1
-        self._reset_prepare_admission_locked()
-
-    def _retire_archived_input_locked(
-        self,
-        origin_input_id: str | None,
-        origin_revision: int | None,
-    ) -> None:
-        """Retire only the causal input whose Context archive just committed."""
-
-        active = self._active_input
-        if active is not None and origin_input_id is not None and origin_revision is not None:
-            if (active.input_id, active.revision) != (origin_input_id, origin_revision):
-                self._context_changed_locked()
-                return
+        if active is not None:
             self._retire_proposals_for_input_locked(active.input_id)
-            self._active_input = None
+        self._active_input = None
         self._has_external_commit = False
         self._response_grant = None
         self._pending_trigger = None
         self._control_generation += 1
         self._reset_prepare_admission_locked()
-        self._context_changed_locked(refresh_grant=False)
 
     @staticmethod
     def _new_id(prefix: str) -> str:

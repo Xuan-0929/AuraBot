@@ -1,14 +1,13 @@
-"""Verify MainAgentRuntime conversation, idle Memory, and Observation control at public boundaries.
+"""Verify MainAgentRuntime causal control, sealed Memory work, and Observation behavior.
 
-These tests cover ActiveInput causality, trigger priority, StrongPause, grants/effect fences, detached
-Observation continuation, cancellable conversation archiving, bounded real Snapshots, and physical Renderer
-ACK. They avoid private scheduler dictionaries, task names, and fake Renderer compatibility branches.
+The tests cover ActiveInput causality, trigger priority, StrongPause, grants/effect fences, detached
+Observation continuation, seal-time retirement, non-cancellable new-input archive ownership, same-boundary
+retry, bounded real Snapshots, and physical Renderer ACK through public Runtime behavior.
 """
 
 from __future__ import annotations
 
 import asyncio
-import sqlite3
 import tempfile
 import threading
 import time
@@ -17,7 +16,6 @@ from collections import deque
 from pathlib import Path
 
 from backend.main_agent import (
-    ClauseState,
     ContextStore,
     SnapshotProjector,
     WorkspaceReadExecutor,
@@ -120,37 +118,34 @@ class MemoryServiceDouble:
             "max_chars": max_chars,
         }
 
-    async def prepare_conversation(self, **kwargs):
+    async def remember_conversation(self, **kwargs):
         self.batches.append(kwargs)
-        return dict(kwargs)
-
-    async def commit_conversation_async(self, _prepared):
         outcome = self.outcomes.popleft() if self.outcomes else {"state": "active"}
         if isinstance(outcome, BaseException):
             raise outcome
-        outcome = dict(outcome)
-        outcome.setdefault("summary", "已归档的近期对话摘要")
+        result = dict(outcome)
+        result.setdefault("summary", "已归档的近期对话摘要")
         self.completed.set()
-        return outcome
-
-    async def remember_conversation(self, **kwargs):
-        return await self.commit_conversation_async(await self.prepare_conversation(**kwargs))
+        return result
 
 
-class BlockingMemoryService(MemoryServiceDouble):
+class BlockingSealedMemoryService(MemoryServiceDouble):
     def __init__(self) -> None:
         super().__init__()
         self.started = asyncio.Event()
+        self.release = asyncio.Event()
         self.cancelled = asyncio.Event()
 
-    async def prepare_conversation(self, **kwargs):
+    async def remember_conversation(self, **kwargs):
         self.batches.append(kwargs)
         self.started.set()
         try:
-            await asyncio.Future()
+            await self.release.wait()
         except asyncio.CancelledError:
             self.cancelled.set()
             raise
+        self.completed.set()
+        return {"state": "active", "summary": "旧对话已归档"}
 
 
 class FailThenReleaseMemoryService(MemoryServiceDouble):
@@ -159,17 +154,9 @@ class FailThenReleaseMemoryService(MemoryServiceDouble):
         self.failed = asyncio.Event()
         self.retry_started = asyncio.Event()
         self.release = asyncio.Event()
-        self.first_source: str | None = None
 
-    async def prepare_conversation(self, **kwargs):
+    async def remember_conversation(self, **kwargs):
         self.batches.append(kwargs)
-        if self.first_source is None:
-            self.first_source = kwargs["source_id"]
-        if kwargs["source_id"] != self.first_source:
-            await asyncio.Future()
-        return dict(kwargs)
-
-    async def commit_conversation_async(self, _prepared):
         if len(self.batches) == 1:
             self.failed.set()
             raise RuntimeError("temporary")
@@ -177,89 +164,6 @@ class FailThenReleaseMemoryService(MemoryServiceDouble):
         await self.release.wait()
         self.completed.set()
         return {"state": "active", "summary": "失败后成功归档"}
-
-
-class BlockLaterSourceMemoryService(MemoryServiceDouble):
-    """Complete one stable source repeatedly but hold any later conversation source open."""
-
-    def __init__(self) -> None:
-        super().__init__()
-        self.first_source: str | None = None
-        self.later_source_started = asyncio.Event()
-
-    async def prepare_conversation(self, **kwargs):
-        self.batches.append(kwargs)
-        if self.first_source is None:
-            self.first_source = kwargs["source_id"]
-        if kwargs["source_id"] == self.first_source:
-            return dict(kwargs)
-        self.later_source_started.set()
-        await asyncio.Future()
-
-    async def commit_conversation_async(self, _prepared):
-        return {"state": "active", "summary": "旧批次摘要"}
-
-
-class ThreadBlockingCommitMemoryService(MemoryServiceDouble):
-    """Expose the old inline commit path and the new async owned-commit boundary in one test double."""
-
-    def __init__(self) -> None:
-        super().__init__()
-        self.commit_started = threading.Event()
-        self.release = threading.Event()
-        self.completed = threading.Event()
-        self.on_commit = lambda: None
-
-    async def prepare_conversation(self, **kwargs):
-        self.batches.append(kwargs)
-        return dict(kwargs)
-
-    def commit_prepared_conversation(self, prepared):
-        self.commit_started.set()
-        self.on_commit()
-        timer = threading.Timer(0.2, self.release.set)
-        timer.start()
-        self.release.wait(1)
-        timer.cancel()
-        self.completed.set()
-        return {"state": "active", "summary": "旧批次在线程中完成"}
-
-    async def commit_conversation_async(self, prepared):
-        return await asyncio.to_thread(self.commit_prepared_conversation, prepared)
-
-    async def remember_conversation(self, **kwargs):
-        prepared = await self.prepare_conversation(**kwargs)
-        return self.commit_prepared_conversation(prepared)
-
-
-class ArchiveDuringNewRecallMemoryService(MemoryServiceDouble):
-    """Hold the old commit and the new-input recall at independently controlled sync barriers."""
-
-    def __init__(self) -> None:
-        super().__init__()
-        self.commit_started = threading.Event()
-        self.commit_release = threading.Event()
-        self.recall_started = threading.Event()
-        self.recall_release = threading.Event()
-        self.recall_queries: list[str] = []
-
-    async def recall_context_async(self, *, query, max_chars=2_400, **_kwargs):
-        self.recall_queries.append(query)
-        if query == "commit 中的新问题":
-            await asyncio.to_thread(self._block_recall)
-        return {"text": "", "memory_ids": [], "char_count": 27, "max_chars": max_chars}
-
-    def _block_recall(self) -> None:
-        self.recall_started.set()
-        self.recall_release.wait(1)
-
-    async def commit_conversation_async(self, _prepared):
-        await asyncio.to_thread(self._block_commit)
-        return {"state": "active", "summary": "旧对话已归档"}
-
-    def _block_commit(self) -> None:
-        self.commit_started.set()
-        self.commit_release.wait(1)
 
 
 class ThreadBlockingRecallMemoryService(MemoryServiceDouble):
@@ -296,8 +200,8 @@ class ThreadBlockingRecallMemoryService(MemoryServiceDouble):
 
 
 class ConversationMemoryLifecycleTests(RuntimeTestCase):
-    async def test_archive_context_refresh_retries_consumed_new_input_trigger(self) -> None:
-        memory = ArchiveDuringNewRecallMemoryService()
+    async def test_sealed_archive_does_not_block_or_cancel_new_causal_input(self) -> None:
+        memory = BlockingSealedMemoryService()
         provider = ScriptedProvider((), ())
         runtime = self.runtime(
             provider, memory_service=memory, owner_profile_id="profile-a",
@@ -306,209 +210,43 @@ class ConversationMemoryLifecycleTests(RuntimeTestCase):
 
         await runtime.submit_text("需要归档的旧输入")
         await self.wait_for_requests(runtime, provider, 1)
-        self.assertTrue(await asyncio.to_thread(memory.commit_started.wait, 1))
-        await runtime.submit_text("commit 中的新问题")
-        self.assertTrue(await asyncio.to_thread(memory.recall_started.wait, 1))
-
-        memory.commit_release.set()
-        async with asyncio.timeout(1):
-            while not self.store.fold().conversation_summaries:
-                await asyncio.sleep(0.001)
-        memory.recall_release.set()
-        await self.wait_for_requests(runtime, provider, 2)
-
-        request = provider.requests[-1]
-        self.assertEqual(request.input_id, runtime.active_input.input_id)
-        self.assertEqual(request.snapshot.conversation_summaries[0]["content"], "旧对话已归档")
-
-    async def test_durable_commit_does_not_block_new_input_or_retire_it(self) -> None:
-        memory = ThreadBlockingCommitMemoryService()
-        runtime = self.runtime(
-            ScriptedProvider(), memory_service=memory, owner_profile_id="profile-a",
-            memory_idle_seconds=0.01,
-        )
-        new_input_done = asyncio.Event()
-        finished_before_release: list[bool] = []
-
-        async def submit_during_commit() -> None:
-            self.store.append_event("observation", {"id": "during", "status": "completed"})
-            self.store.append_event("task_fact", {"id": "during", "status": "running"})
-            self.store.append_event("think_note", {"text": "commit 期间的思考"})
-            await runtime.submit_text("commit 期间的新输入")
-            finished_before_release.append(not memory.release.is_set())
-            new_input_done.set()
-
-        loop = asyncio.get_running_loop()
-        memory.on_commit = lambda: loop.call_soon_threadsafe(
-            lambda: asyncio.create_task(submit_during_commit())
-        )
-
-        await runtime.submit_text("需要归档的旧输入")
-        self.assertTrue(await asyncio.to_thread(memory.commit_started.wait, 1))
-        self.assertTrue(await asyncio.wait_for(new_input_done.wait(), 1))
-        self.assertTrue(await asyncio.to_thread(memory.completed.wait, 1))
-        async with asyncio.timeout(1):
-            while not self.store.fold().conversation_summaries:
-                await asyncio.sleep(0.001)
-
-        self.assertEqual(finished_before_release, [True])
-        self.assertEqual(runtime.active_input.latest_transcript, "commit 期间的新输入")
-        self.assertEqual(
-            [turn["content"] for turn in self.store.fold().conversation_turns],
-            ["commit 期间的新输入"],
-        )
-        folded = self.store.fold()
-        self.assertEqual(folded.observations[0]["id"], "during")
-        self.assertEqual(folded.task_facts[0]["id"], "during")
-        self.assertEqual(folded.think_note, "commit 期间的思考")
-
-    async def test_shutdown_waits_for_owned_archive_commit_before_context_can_close(self) -> None:
-        memory = ThreadBlockingCommitMemoryService()
-        runtime = self.runtime(
-            ScriptedProvider(), memory_service=memory, owner_profile_id="profile-a",
-            memory_idle_seconds=0.01,
-        )
-
-        await runtime.submit_text("shutdown 前开始归档")
-        self.assertTrue(await asyncio.to_thread(memory.commit_started.wait, 1))
-        shutdown = asyncio.create_task(runtime.shutdown())
-        await asyncio.sleep(0)
-        self.assertFalse(shutdown.done())
-        memory.release.set()
-        await asyncio.wait_for(shutdown, 1)
-
-        self.assertIsNone(self.store.pending_conversation_archive())
-        self.assertEqual(len(self.store.fold().conversation_summaries), 1)
-
-    async def test_startup_recovers_playing_clause_before_resuming_idle_archive(self) -> None:
-        self.store.append_event(
-            "user_segment",
-            {"segment_id": "persisted", "input_id": "input-old", "text": "跨重启保留"},
-        )
-        self.store.create_clause("ghost", "未播放完成")
-        self.store.transition_clause("ghost", ClauseState.TTS_QUEUED)
-        self.store.transition_clause("ghost", ClauseState.PLAYING)
-        self.store.set_last_user_activity(10.0)
-        path = self.store.path
-        self.store.close()
-        self.store = ContextStore(path)
-        memory = MemoryServiceDouble()
-        runtime = self.runtime(
-            ScriptedProvider(), memory_service=memory, owner_profile_id="profile-a",
-            memory_idle_seconds=300.0, wall_clock=lambda: 400.0,
-        )
-
-        await runtime.startup()
-        await asyncio.wait_for(memory.completed.wait(), 0.2)
-
-        self.assertEqual(self.store.get_clause("ghost").state, ClauseState.INTERRUPTED)
-        self.assertEqual(
-            memory.batches[0]["turns"],
-            ({"role": "user", "content": "跨重启保留"},),
-        )
-
-    async def test_startup_preserves_delivered_clause_and_canonical_turn(self) -> None:
-        self.store.create_clause("delivered", "已经听到")
-        self.store.transition_clause("delivered", ClauseState.TTS_QUEUED)
-        self.store.transition_clause("delivered", ClauseState.PLAYING)
-        self.assertTrue(self.store.ack_clause("delivered", complete=True))
-        path = self.store.path
-        self.store.close()
-        self.store = ContextStore(path)
-        runtime = self.runtime(ScriptedProvider())
-
-        await runtime.startup()
-
-        self.assertEqual(self.store.get_clause("delivered").state, ClauseState.DELIVERED)
-        self.assertEqual(
-            self.store.conversation_batch().turns,
-            ({"role": "assistant", "content": "已经听到"},),
-        )
-
-    async def test_startup_immediately_archives_an_expired_persisted_idle_deadline(self) -> None:
-        self.store.append_event(
-            "user_segment",
-            {"segment_id": "persisted", "input_id": "input-old", "text": "跨重启保留"},
-        )
-        self.store.set_last_user_activity(10.0)
-        memory = MemoryServiceDouble()
-        runtime = self.runtime(
-            ScriptedProvider(), memory_service=memory, owner_profile_id="profile-a",
-            memory_idle_seconds=300.0, wall_clock=lambda: 400.0,
-        )
-
-        await runtime.startup()
-        await asyncio.wait_for(memory.completed.wait(), 1)
-
-        self.assertEqual(
-            memory.batches[0]["turns"],
-            ({"role": "user", "content": "跨重启保留"},),
-        )
-        self.assertEqual(self.store.fold().conversation_turns, ())
-        self.assertIsNone(self.store.get_last_user_activity())
-
-    async def test_idle_archive_waits_for_assistant_delivery_to_settle(self) -> None:
-        memory = MemoryServiceDouble()
-        provider = ScriptedProvider((tool_delta("say", "say_to_user", '{"text":"我记住了。"}'),))
-        runtime = self.runtime(
-            provider, memory_service=memory, owner_profile_id="profile-a",
-            memory_idle_seconds=0.01,
-        )
-
-        await runtime.submit_text("我喜欢红茶")
-        await runtime.wait_until_idle()
-        await asyncio.sleep(0.03)
-        self.assertEqual(memory.batches, [])
-
-        clause = self.offers[0]
-        await runtime.renderer_tts_queued(clause.clause_id)
-        await runtime.renderer_playing(clause.clause_id)
-        await runtime.renderer_ack(clause.clause_id, complete=True)
-        await asyncio.wait_for(memory.completed.wait(), 1)
-
-        self.assertEqual(
-            memory.batches[0]["turns"],
-            (
-                {"role": "user", "content": "我喜欢红茶"},
-                {"role": "assistant", "content": "我记住了。"},
-            ),
-        )
-
-    async def test_confirmed_text_is_archived_after_idle_and_success_clears_only_conversation(self) -> None:
-        memory = MemoryServiceDouble()
-        runtime = self.runtime(
-            ScriptedProvider(), memory_service=memory, owner_profile_id="profile-a",
-            memory_idle_seconds=0.01,
-        )
-        self.store.append_event("observation", {"id": "o1", "status": "completed"})
-
-        await runtime.submit_text("我喜欢红茶")
-        await asyncio.wait_for(memory.completed.wait(), 1)
-
-        self.assertEqual(memory.batches[0]["profile_id"], "profile-a")
-        self.assertEqual(memory.batches[0]["turns"], ({"role": "user", "content": "我喜欢红茶"},))
-        self.assertEqual(self.store.fold().conversation_turns, ())
-        self.assertEqual(self.store.fold().observations, ({"id": "o1", "status": "completed"},))
-        self.assertIsNone(self.store.get_last_user_activity())
-
-    async def test_vad_start_cancels_inflight_extraction_without_clearing_buffer(self) -> None:
-        memory = BlockingMemoryService()
-        runtime = self.runtime(
-            ScriptedProvider(), memory_service=memory, owner_profile_id="profile-a",
-            memory_idle_seconds=0.01,
-        )
-        await runtime.submit_text("先保留这段")
+        old_input_id = provider.requests[0].input_id
         await asyncio.wait_for(memory.started.wait(), 1)
+        self.assertIsNone(runtime.active_input)
 
-        await runtime.vad_start()
-        await asyncio.wait_for(memory.cancelled.wait(), 1)
+        runtime.memory_idle_seconds = 60
+        grant = await asyncio.wait_for(runtime.submit_text("archive 中的新问题"), 0.2)
+        await self.wait_for_requests(runtime, provider, 2)
+        new_input = runtime.active_input
 
+        self.assertNotEqual(new_input.input_id, old_input_id)
+        self.assertEqual(new_input.revision, 1)
+        self.assertEqual(provider.requests[-1].mode, InvokeMode.RESPOND)
+        self.assertEqual(provider.requests[-1].input_id, new_input.input_id)
+        self.assertEqual(runtime.current_response_grant.grant_id, grant.grant_id)
+        self.assertFalse(memory.cancelled.is_set())
+        self.assertFalse(memory.release.is_set())
+
+        memory.release.set()
+        await asyncio.wait_for(memory.completed.wait(), 1)
+        async with asyncio.timeout(1):
+            while not self.store.fold().conversation_summaries:
+                await asyncio.sleep(0.001)
+
+        self.assertFalse(memory.cancelled.is_set())
+        self.assertEqual(runtime.active_input, new_input)
+        self.assertEqual(runtime.current_response_grant.grant_id, grant.grant_id)
+        self.assertEqual(provider.requests[-1].input_id, new_input.input_id)
         self.assertEqual(
             [turn["content"] for turn in self.store.fold().conversation_turns],
-            ["先保留这段"],
+            ["archive 中的新问题"],
+        )
+        self.assertEqual(
+            memory.batches[0]["turns"],
+            ({"role": "user", "content": "需要归档的旧输入"},),
         )
 
-    async def test_failed_write_retries_after_another_idle_interval(self) -> None:
+    async def test_failed_archive_retries_same_pending_boundary_after_idle(self) -> None:
         memory = FailThenReleaseMemoryService()
         runtime = self.runtime(
             ScriptedProvider(), memory_service=memory, owner_profile_id="profile-a",
@@ -516,125 +254,32 @@ class ConversationMemoryLifecycleTests(RuntimeTestCase):
         )
 
         await runtime.submit_text("失败后再试")
-        original_input = runtime.active_input
         await asyncio.wait_for(memory.failed.wait(), 1)
 
-        self.assertEqual(runtime.active_input, original_input)
+        self.assertIsNone(runtime.active_input)
         pending = self.store.pending_conversation_archive()
         self.assertIsNotNone(pending)
+        self.assertEqual(
+            self.store.conversation_archive_turns(pending),
+            ({"role": "user", "content": "失败后再试"},),
+        )
         self.assertEqual(
             self.store.conversation_batch().turns,
             ({"role": "user", "content": "失败后再试"},),
         )
-        await runtime.submit_text("这是失败后的新输入")
-        new_input = runtime.active_input
-        self.assertNotEqual(new_input.input_id, original_input.input_id)
-        self.assertEqual(new_input.revision, 1)
-        self.assertEqual(new_input.latest_transcript, "这是失败后的新输入")
+
         await asyncio.wait_for(memory.retry_started.wait(), 1)
+        self.assertEqual(len(memory.batches), 2)
+        self.assertEqual(memory.batches[0]["source_id"], memory.batches[1]["source_id"])
+        self.assertEqual(memory.batches[0]["turns"], memory.batches[1]["turns"])
+        self.assertEqual(self.store.pending_conversation_archive(), pending)
+
         memory.release.set()
         await asyncio.wait_for(memory.completed.wait(), 1)
         async with asyncio.timeout(1):
-            while not self.store.fold().conversation_summaries:
-                await asyncio.sleep(0)
-
-        self.assertGreaterEqual(len(memory.batches), 2)
-        self.assertEqual(memory.batches[0]["source_id"], memory.batches[1]["source_id"])
-        self.assertEqual(memory.batches[0]["turns"], memory.batches[1]["turns"])
-        self.assertEqual(
-            [turn["content"] for turn in self.store.fold().conversation_turns],
-            ["这是失败后的新输入"],
-        )
-        self.assertEqual(runtime.active_input, new_input)
-
-    async def test_silent_archive_retires_active_input_and_keeps_summary_for_next_snapshot(self) -> None:
-        summary = "用户正在比较方案 A 和方案 B，并倾向继续使用方案 B。"
-        memory = MemoryServiceDouble(({"state": "active", "summary": summary},))
-        provider = ScriptedProvider((), ())
-        runtime = self.runtime(
-            provider, memory_service=memory, owner_profile_id="profile-a",
-            memory_idle_seconds=0.01,
-        )
-
-        await runtime.submit_text("比较方案 A 和方案 B")
-        old_input_id = runtime.active_input.input_id
-        await asyncio.wait_for(memory.completed.wait(), 1)
-        async with asyncio.timeout(1):
-            while self.store.conversation_batch() is not None or runtime.active_input is not None:
-                await asyncio.sleep(0)
-
-        self.assertIsNone(runtime.active_input)
-        self.assertEqual(self.store.fold().conversation_summaries[0]["content"], summary)
-        runtime.memory_idle_seconds = 60
-        await runtime.submit_text("那就按照第二个继续")
-        await self.wait_for_requests(runtime, provider, 2)
-
-        current = runtime.active_input
-        self.assertNotEqual(current.input_id, old_input_id)
-        self.assertEqual(current.revision, 1)
-        self.assertEqual(current.latest_transcript, "那就按照第二个继续")
-        self.assertEqual(memory.recall_queries[-1], "那就按照第二个继续")
-        snapshot = provider.requests[-1].snapshot
-        self.assertEqual(snapshot.conversation_summaries[0]["content"], summary)
-        self.assertEqual(
-            [turn["content"] for turn in snapshot.conversation_turns],
-            ["那就按照第二个继续"],
-        )
-
-    async def test_context_archive_failure_keeps_input_and_retries_same_source(self) -> None:
-        failure = threading.Event()
-        self.store._connection.create_function(
-            "notify_archive_failure", 0, lambda: failure.set() or 0,
-        )
-        self.store._connection.executescript(
-            """
-            create trigger fail_runtime_archive_delete
-            before delete on context_events
-            when old.event_type = 'user_segment'
-            begin
-              select notify_archive_failure();
-              select raise(abort, 'archive delete failed');
-            end;
-            """
-        )
-        memory = BlockLaterSourceMemoryService()
-        runtime = self.runtime(
-            ScriptedProvider(), memory_service=memory, owner_profile_id="profile-a",
-            memory_idle_seconds=0.01,
-        )
-
-        await runtime.submit_text("归档失败时保留")
-        original_input = runtime.active_input
-        self.assertTrue(await asyncio.to_thread(failure.wait, 0.5))
-
-        self.assertEqual(runtime.active_input, original_input)
-        pending = self.store.pending_conversation_archive()
-        self.assertIsNotNone(pending)
-        self.assertEqual(
-            self.store.conversation_batch().turns,
-            ({"role": "user", "content": "归档失败时保留"},),
-        )
-        self.assertEqual(self.store.fold().conversation_summaries, ())
-        await runtime.submit_text("归档失败后的新问题")
-        new_input = runtime.active_input
-        self.assertNotEqual(new_input.input_id, original_input.input_id)
-        self.assertEqual(new_input.latest_transcript, "归档失败后的新问题")
-        connection = sqlite3.connect(self.store.path)
-        connection.execute("drop trigger fail_runtime_archive_delete")
-        connection.commit()
-        connection.close()
-        async with asyncio.timeout(0.5):
-            while len(memory.batches) < 2 or not self.store.fold().conversation_summaries:
+            while self.store.pending_conversation_archive() is not None:
                 await asyncio.sleep(0.001)
-
-        self.assertEqual(memory.batches[0]["source_id"], memory.batches[1]["source_id"])
-        self.assertEqual(memory.batches[0]["turns"], memory.batches[1]["turns"])
-        self.assertEqual(runtime.active_input, new_input)
-        self.assertEqual(
-            [turn["content"] for turn in self.store.fold().conversation_turns],
-            ["归档失败后的新问题"],
-        )
-        self.assertEqual(len(self.store.fold().conversation_summaries), 1)
+        self.assertIsNone(self.store.conversation_batch())
 
     async def test_recall_memories_are_projected_into_each_invoke_snapshot(self) -> None:
         memory = MemoryServiceDouble()

@@ -1,8 +1,8 @@
-"""Close Main Agent through real Context, existing MemoryService, tools, idle archive, and ACK.
+"""Close Main Agent through real Context, MemoryService, tools, idle archive, and restart.
 
-Only external model and speech delivery are controlled: prior Profile memory is recalled into a real
-Snapshot, ``say_to_user`` crosses the Harness, physical ACK enters Context, then idle conversation
-ingestion returns to MemoryService and clears the submitted Context buffer.
+Only external model and delivery are controlled. Tests cover recall and physical ACK end to end, then prove
+a persisted minimal pending boundary reuses Memory source-id idempotency after restart without re-extraction
+before Context atomically commits its summary and cleanup.
 """
 
 from __future__ import annotations
@@ -130,7 +130,7 @@ class SilentMainAgentE2ETests(unittest.IsolatedAsyncioTestCase):
                 "segment_id": "persisted", "input_id": "old", "text": "我想选低酸咖啡豆",
             })
             context.set_last_user_activity(10.0)
-            batch = context.freeze_conversation_archive("old", 1)
+            batch = context.freeze_conversation_archive()
             memory = MemoryService(
                 metadata_store=SQLiteMemoryStore(memory_path),
                 vector_store=QdrantLocalVectorStore(path=qdrant_path, vector_size=32),
@@ -139,7 +139,7 @@ class SilentMainAgentE2ETests(unittest.IsolatedAsyncioTestCase):
             )
             first = await memory.remember_conversation(
                 profile_id="profile_a",
-                turns=batch.turns,
+                turns=context.conversation_archive_turns(batch),
                 source_id=batch.source_id,
             )
             memory.close()

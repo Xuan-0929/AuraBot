@@ -1,7 +1,7 @@
-"""Protect the Profile conversation buffer, causal Observation folding, and prompt projection.
+"""Protect canonical Context folding, minimal archive boundaries, and prompt projection.
 
-The tests use public SQLite and Snapshot APIs. They verify stable user segments, Renderer-ACK-only assistant
-language, Memory batch boundaries and cleanup, last-event Observation order, and bounded JSON projection.
+The tests verify stable user segments, Renderer-ACK-only assistant language, pending-schema migration,
+canonical boundary reconstruction, atomic archive cleanup, Observation ordering, and bounded JSON snapshots.
 """
 
 from __future__ import annotations
@@ -39,14 +39,14 @@ class ContextStoreTests(unittest.TestCase):
                 "user_segment", {"segment_id": "old", "input_id": "input-old", "text": "旧问题"}
             )
 
-            pending = store.freeze_conversation_archive("input-old", 1)
+            pending = store.freeze_conversation_archive()
             store.append_event(
                 "user_segment", {"segment_id": "new", "input_id": "input-new", "text": "新问题"}
             )
 
             self.assertEqual(pending.source_id, "main-agent-context:1:1")
             self.assertEqual(pending.through_sequence, 1)
-            self.assertEqual(pending.turns, ({"role": "user", "content": "旧问题"},))
+            self.assertEqual(store.conversation_archive_turns(pending), ({"role": "user", "content": "旧问题"},))
             self.assertEqual(store.pending_conversation_archive(), pending)
             self.assertEqual(store.conversation_batch().source_id, "main-agent-context:1:2")
             store.close()
@@ -58,13 +58,15 @@ class ContextStoreTests(unittest.TestCase):
             store.append_event(
                 "user_segment", {"segment_id": "old", "input_id": "input-old", "text": "冻结内容"}
             )
-            frozen = store.freeze_conversation_archive("input-old", 3)
+            frozen = store.freeze_conversation_archive()
             store.close()
 
             reopened = ContextStore(path)
             self.assertEqual(reopened.pending_conversation_archive(), frozen)
-            self.assertEqual(frozen.origin_input_id, "input-old")
-            self.assertEqual(frozen.origin_revision, 3)
+            self.assertEqual(
+                reopened.conversation_archive_turns(frozen),
+                ({"role": "user", "content": "冻结内容"},),
+            )
             reopened.close()
 
     def test_archive_commit_atomically_deletes_pending_marker_with_raw_turns(self) -> None:
@@ -73,7 +75,7 @@ class ContextStoreTests(unittest.TestCase):
             store.append_event(
                 "user_segment", {"segment_id": "old", "input_id": "input-old", "text": "归档我"}
             )
-            pending = store.freeze_conversation_archive("input-old", 1)
+            pending = store.freeze_conversation_archive()
 
             store.commit_conversation_archive(pending, "旧对话摘要")
 
@@ -89,7 +91,7 @@ class ContextStoreTests(unittest.TestCase):
             store.append_event(
                 "user_segment", {"segment_id": "old", "input_id": "input-old", "text": "不要半提交"}
             )
-            pending = store.freeze_conversation_archive("input-old", 1)
+            pending = store.freeze_conversation_archive()
             connection = sqlite3.connect(path)
             connection.executescript(
                 """
@@ -114,41 +116,59 @@ class ContextStoreTests(unittest.TestCase):
             self.assertEqual(store.fold().conversation_summaries, ())
             store.close()
 
-    def test_conversation_batch_is_stable_and_clears_only_its_boundary(self) -> None:
+    def test_pending_schema_migrates_to_minimal_boundary_and_reconstructs_canonical_turns(self) -> None:
         with tempfile.TemporaryDirectory() as directory:
-            store = ContextStore(Path(directory) / "context.sqlite3")
-            store.append_event("observation", {"id": "o1", "status": "completed"})
-            store.append_event("user_segment", {"segment_id": "s1", "input_id": "i1", "text": "你"})
-            store.append_event("user_segment", {"segment_id": "s1", "input_id": "i1", "text": "你好"})
-            store.create_clause("c1", "我在。")
-            store.transition_clause("c1", ClauseState.TTS_QUEUED)
-            store.transition_clause("c1", ClauseState.PLAYING)
-            self.assertTrue(store.ack_clause("c1", complete=True))
-
-            batch = store.conversation_batch()
-
-            self.assertEqual(batch.source_id, "main-agent-context:2:4")
-            self.assertEqual((batch.first_sequence, batch.through_sequence), (2, 4))
-            self.assertEqual(
-                batch.turns,
-                (
-                    {"role": "user", "content": "你好"},
-                    {"role": "assistant", "content": "我在。"},
-                ),
+            path = Path(directory) / "context.sqlite3"
+            connection = sqlite3.connect(path)
+            connection.executescript(
+                r"""
+                CREATE TABLE context_events (
+                  sequence INTEGER PRIMARY KEY AUTOINCREMENT,
+                  event_type TEXT NOT NULL,
+                  payload_json TEXT NOT NULL
+                );
+                INSERT INTO context_events(event_type, payload_json) VALUES
+                  ('user_segment', '{"segment_id":"old","input_id":"i1","text":"旧问题"}');
+                CREATE TABLE pending_conversation_archive (
+                  singleton INTEGER PRIMARY KEY CHECK(singleton = 1),
+                  source_id TEXT NOT NULL,
+                  first_sequence INTEGER NOT NULL,
+                  through_sequence INTEGER NOT NULL,
+                  turns_json TEXT NOT NULL,
+                  origin_input_id TEXT,
+                  origin_revision INTEGER
+                );
+                INSERT INTO pending_conversation_archive VALUES
+                  (1, 'main-agent-context:1:1', 1, 1,
+                   '[{"role":"user","content":"过期副本"}]', 'input-old', 7);
+                """
             )
-            store.append_event("user_segment", {"segment_id": "s2", "input_id": "i2", "text": "新一轮"})
-            store.clear_conversation_through(batch.through_sequence)
+            connection.close()
 
+            store = ContextStore(path)
+            pending = store.pending_conversation_archive()
+            inspection = sqlite3.connect(path)
+            columns = [
+                row[1] for row in inspection.execute(
+                    "PRAGMA table_info(pending_conversation_archive)"
+                ).fetchall()
+            ]
+            inspection.close()
+
+            self.assertEqual(columns, [
+                "singleton", "source_id", "first_sequence", "through_sequence",
+            ])
             self.assertEqual(
-                store.fold().conversation_turns,
-                ({"role": "user", "content": "新一轮", "segment_id": "s2"},),
+                store.conversation_archive_turns(pending),
+                ({"role": "user", "content": "旧问题"},),
             )
-            self.assertEqual(store.fold().observations, ({"id": "o1", "status": "completed"},))
-            with self.assertRaises(KeyError):
-                store.get_clause("c1")
+            self.assertEqual(
+                set(pending.__dataclass_fields__),
+                {"source_id", "first_sequence", "through_sequence"},
+            )
             store.close()
 
-    def test_last_user_activity_survives_reopen_and_can_be_cleared(self) -> None:
+    def test_last_user_activity_survives_reopen_and_clears_only_when_idle(self) -> None:
         with tempfile.TemporaryDirectory() as directory:
             path = Path(directory) / "context.sqlite3"
             store = ContextStore(path)
@@ -157,9 +177,8 @@ class ContextStoreTests(unittest.TestCase):
 
             reopened = ContextStore(path)
             self.assertEqual(reopened.get_last_user_activity(), 123.5)
-            reopened.clear_last_user_activity()
+            self.assertTrue(reopened.clear_last_user_activity_if_idle())
             self.assertIsNone(reopened.get_last_user_activity())
-            self.assertIsNone(reopened.conversation_batch())
             reopened.close()
 
     def test_archive_commit_keeps_one_summary_and_preserves_later_conversation(self) -> None:
@@ -168,12 +187,16 @@ class ContextStoreTests(unittest.TestCase):
             store.append_event(
                 "user_segment", {"segment_id": "old", "input_id": "i1", "text": "比较 A 和 B"}
             )
-            batch = store.freeze_conversation_archive("i1", 1)
+            batch = store.freeze_conversation_archive()
             store.append_event(
                 "user_segment", {"segment_id": "new", "input_id": "i2", "text": "继续第二个"}
             )
             summary = "用户正在比较方案 A 和方案 B，并倾向继续使用方案 B。"
 
+            self.assertEqual(
+                store.conversation_archive_turns(batch),
+                ({"role": "user", "content": "比较 A 和 B"},),
+            )
             store.commit_conversation_archive(batch, summary)
             store.commit_conversation_archive(batch, summary)
 
@@ -200,7 +223,7 @@ class ContextStoreTests(unittest.TestCase):
             store.append_event(
                 "user_segment", {"segment_id": "old", "input_id": "i1", "text": "保留原文"}
             )
-            batch = store.freeze_conversation_archive("i1", 1)
+            batch = store.freeze_conversation_archive()
             connection = sqlite3.connect(path)
             connection.executescript(
                 """
@@ -221,6 +244,7 @@ class ContextStoreTests(unittest.TestCase):
                 store.conversation_batch().turns,
                 ({"role": "user", "content": "保留原文"},),
             )
+            self.assertEqual(store.pending_conversation_archive(), batch)
             self.assertEqual(store.fold().conversation_summaries, ())
             store.close()
 

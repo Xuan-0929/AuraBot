@@ -1,27 +1,31 @@
-"""Checks the production async speech path from callback TTS and VAD/STT through serial physical delivery.
+"""Check production callback speech normalization, PREPARE admission, and physical delivery.
 
-The tests protect first-chunk streaming, bounded callback failure, stable segment identity, authoritative
-playback events, queue/playing ledger phases, ACK serialization, cancellation, and SpeechService ownership.
-Removed disabled objects, sync transport fallbacks, AUR1 frames, fake renderer modes, and Runtime double-shutdown
-are not represented.
+The tests protect mutable-only DashScope partials through the real coordinator and Runtime admission limit,
+stable segment identity, authoritative playback events, first-chunk TTS streaming, Speech Ledger phases,
+ACK serialization, cancellation, and SpeechService ownership without real providers or microphones.
 """
 
 from __future__ import annotations
 
 import asyncio
+import tempfile
 import threading
 import unittest
-from unittest.mock import AsyncMock
+from pathlib import Path
 from typing import Any
+from unittest.mock import AsyncMock
 
-from backend.main_agent.runtime import RendererClause
+from backend.main_agent import ContextStore, SnapshotProjector
+from backend.main_agent.runtime import MainAgentRuntime, PrepareAdmissionPolicy, RendererClause
 from backend.main_agent.speech import (
     ClauseSpeechDelivery,
     DashScopeSpeechOutputProvider,
+    DashScopeStreamingSttProvider,
     SpeechInputCoordinator,
     SpeechService,
     TranscriptUpdate,
 )
+from backend.main_agent.tool_runtime import InvokeMode, ToolSurfacePolicy
 
 
 class CallbackTransport:
@@ -100,6 +104,25 @@ class FakeStt:
         return session
 
 
+class FakeDashScopeSttTransport:
+    def __init__(self, on_event: Any) -> None:
+        self.on_event = on_event
+        self.frames: list[bytes] = []
+        self.stopped = False
+
+    def start(self) -> None:
+        return None
+
+    def send_audio_frame(self, frame: bytes) -> None:
+        self.frames.append(frame)
+
+    def stop(self) -> None:
+        self.stopped = True
+
+    def emit_partial(self, text: str) -> None:
+        self.on_event({"sentence": {"text": text, "sentence_end": False}})
+
+
 class FakeInputRuntime:
     def __init__(self) -> None:
         self.updates: list[tuple[str, str | None, bool]] = []
@@ -121,6 +144,71 @@ class FakePlayback:
 
 
 class SpeechInputTests(unittest.IsolatedAsyncioTestCase):
+    async def test_dashscope_mutable_partials_request_bounded_prepare_before_endpoint(self) -> None:
+        with tempfile.TemporaryDirectory() as directory:
+            transports: list[FakeDashScopeSttTransport] = []
+
+            def transport_factory(**kwargs: Any) -> FakeDashScopeSttTransport:
+                transport = FakeDashScopeSttTransport(kwargs["on_event"])
+                transports.append(transport)
+                return transport
+
+            requests = []
+            offers = []
+
+            async def provider(request):
+                requests.append(request)
+                if False:
+                    yield {}
+
+            async def renderer(clause):
+                offers.append(clause)
+
+            context = ContextStore(Path(directory) / "context.sqlite3")
+            runtime = MainAgentRuntime(
+                context_store=context,
+                snapshot_projector=SnapshotProjector(),
+                tool_policy=ToolSurfacePolicy(),
+                provider=provider,
+                renderer=renderer,
+                executors={},
+                soul="test",
+                prepare_admission=PrepareAdmissionPolicy(
+                    min_interval_seconds=0,
+                    min_growth_units=1,
+                    max_wait_seconds=0,
+                    punctuation_growth_units=1,
+                    max_prepares_per_input=2,
+                ),
+            )
+            coordinator = SpeechInputCoordinator(
+                runtime,
+                stt_provider=DashScopeStreamingSttProvider(
+                    "paraformer-realtime",
+                    transport_factory=transport_factory,
+                ),
+                vad=FakeVad([1.0]),
+                speech_confirm_ms=160,
+            )
+            try:
+                await coordinator.accept_mic_frame(b"\0" * 640)
+                for partial in ("我", "我想", "我想查", "我想查天气"):
+                    transports[0].emit_partial(partial)
+                    await asyncio.sleep(0)
+                    await asyncio.sleep(0)
+                    await runtime.wait_until_idle()
+
+                self.assertEqual(len(requests), 2)
+                self.assertTrue(all(request.mode is InvokeMode.PREPARE for request in requests))
+                self.assertTrue(all(request.response_grant is None for request in requests))
+                self.assertIsNone(runtime.current_response_grant)
+                self.assertEqual(offers, [])
+                self.assertEqual(runtime.active_input.latest_transcript, "我想查天气")
+            finally:
+                await coordinator.close()
+                await runtime.shutdown()
+                context.close()
+
     async def test_stt_updates_in_one_turn_share_segment_and_drive_authoritative_playback(self) -> None:
         runtime = FakeInputRuntime()
         stt = FakeStt()

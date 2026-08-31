@@ -1,15 +1,15 @@
 """Own long-term Memory ingestion, retrieval, forgetting, and conversation extraction.
 
-Main Agent submits complete Profile conversation batches through the cancellable async entrypoint; this
-service alone decides which candidates become durable SQLite truth and Qdrant index entries. Existing
-synchronous APIs remain available to diagnostics and legacy callers without a second Memory owner.
+Main Agent submits each sealed Profile conversation through ``remember_conversation``. Remote extraction
+remains cancellable; source-id idempotency, atomic SQLite persistence, vector repair, and audit stay inside
+this service. Synchronous store/vector work runs in one private thread operation whose caller waits for local
+convergence before propagating cancellation, so Profile resources cannot close underneath that operation.
 """
 
 from __future__ import annotations
 
 import asyncio
 from collections.abc import Mapping, Sequence
-from dataclasses import dataclass
 from typing import Any
 from uuid import uuid4
 
@@ -20,21 +20,6 @@ from .retriever import HybridMemoryRetriever
 from .stores.sqlite import SQLiteMemoryStore
 from .types import EmbeddingProvider, EntityCandidate, MemoryCandidate, VectorStore
 from .validators import validate_memory_candidate
-
-
-@dataclass(frozen=True, slots=True)
-class PreparedConversation:
-    """Bounded extraction output with stable IDs, before any durable Memory truth is written."""
-
-    profile_id: str
-    source_id: str
-    source_type: str
-    content: str
-    metadata: dict[str, Any]
-    episode_id: str
-    memories: tuple[tuple[str, MemoryCandidate], ...]
-    entities: tuple[EntityCandidate, ...]
-    summary: str
 
 
 class MemoryService:
@@ -57,8 +42,6 @@ class MemoryService:
         )
         self.consolidator = AddFirstConsolidator(metadata_store)
         self._recall_operation: asyncio.Task[dict[str, Any]] | None = None
-        self._commit_operation: asyncio.Task[dict[str, Any]] | None = None
-        self._commit_source_id: str | None = None
         self._closed = False
 
     def close(self) -> None:
@@ -67,9 +50,6 @@ class MemoryService:
         operation = self._recall_operation
         if operation is not None and not operation.done():
             raise RuntimeError("cannot close MemoryService while recall is running; await shutdown()")
-        commit = self._commit_operation
-        if commit is not None and not commit.done():
-            raise RuntimeError("cannot close MemoryService while conversation commit is running; await shutdown()")
         if self._closed:
             return
         self._closed = True
@@ -80,17 +60,11 @@ class MemoryService:
             close_vector_store()
 
     async def shutdown(self) -> None:
-        """Wait for owned recall/commit operations before closing Profile-scoped stores."""
+        """Wait for the owned recall operation before closing Profile-scoped stores."""
 
-        operations = tuple(
-            operation for operation in (self._recall_operation, self._commit_operation)
-            if operation is not None
-        )
-        if operations:
-            await asyncio.gather(
-                *(asyncio.shield(operation) for operation in operations),
-                return_exceptions=True,
-            )
+        operation = self._recall_operation
+        if operation is not None:
+            await asyncio.gather(asyncio.shield(operation), return_exceptions=True)
         self.close()
 
     def remember(
@@ -154,23 +128,7 @@ class MemoryService:
         turns: Sequence[Mapping[str, str]],
         source_id: str,
     ) -> dict[str, Any]:
-        """Compatibility wrapper over the cancellable prepare and owned durable commit phases."""
-
-        prepared = await self.prepare_conversation(
-            profile_id=profile_id,
-            turns=turns,
-            source_id=source_id,
-        )
-        return await self.commit_conversation_async(prepared)
-
-    async def prepare_conversation(
-        self,
-        *,
-        profile_id: str,
-        turns: Sequence[Mapping[str, str]],
-        source_id: str,
-    ) -> PreparedConversation:
-        """Run the cancellable extraction phase without creating durable Memory truth."""
+        """Extract and durably ingest one stable conversation source exactly once."""
 
         identifier = str(profile_id).strip()
         stable_source = str(source_id).strip()
@@ -178,23 +136,14 @@ class MemoryService:
             raise ValueError("profile_id and source_id must be non-empty")
         content, turn_count = _conversation_content(turns)
         source_type = "main_agent_conversation"
-        existing = self.metadata_store.get_episode_by_source(
+        existing = await self._run_conversation_local(
+            self._existing_conversation_result,
             profile_id=identifier,
             source_type=source_type,
             source_id=stable_source,
         )
-        if existing is not None and existing.get("summary"):
-            return PreparedConversation(
-                identifier,
-                stable_source,
-                source_type,
-                content,
-                {"turn_count": turn_count},
-                existing["episode_id"],
-                (),
-                (),
-                str(existing["summary"]),
-            )
+        if existing is not None:
+            return existing
 
         metadata = {"turn_count": turn_count}
         extract_conversation = getattr(self.extractor, "extract_conversation_async", None)
@@ -213,109 +162,109 @@ class MemoryService:
                 )
             extracted_summary = ""
         candidates = [validate_memory_candidate(candidate) for candidate in candidates]
-        episode_id = existing["episode_id"] if existing is not None else f"episode_{uuid4().hex}"
         memories = tuple((f"memory_{uuid4().hex}", candidate) for candidate in candidates)
         summary = extracted_summary.strip()[:1_000] or _fallback_conversation_summary(turns)
-        return PreparedConversation(
-            identifier,
-            stable_source,
-            source_type,
-            content,
-            metadata,
-            episode_id,
-            memories,
-            tuple(entities),
-            summary,
+        return await self._run_conversation_local(
+            self._persist_conversation,
+            profile_id=identifier,
+            source_id=stable_source,
+            source_type=source_type,
+            content=content,
+            metadata=metadata,
+            episode_id=f"episode_{uuid4().hex}",
+            memories=memories,
+            entities=tuple(entities),
+            summary=summary,
         )
 
-    async def commit_conversation_async(
-        self, prepared: PreparedConversation,
-    ) -> dict[str, Any]:
-        """Own one cancellation-shielded sync commit so Profile shutdown can await it safely."""
+    async def _run_conversation_local(self, operation: Any, **kwargs: Any) -> Any:
+        """Wait for Profile-store thread convergence before propagating owner cancellation."""
 
-        if not isinstance(prepared, PreparedConversation):
-            raise TypeError("prepared must be a PreparedConversation")
-        operation = self._commit_operation
-        if operation is not None and not operation.done():
-            if self._commit_source_id != prepared.source_id:
-                raise RuntimeError("another conversation commit is already running")
-            return await asyncio.shield(operation)
-        if operation is not None:
-            self._consume_commit_operation(operation)
-        operation = asyncio.create_task(asyncio.to_thread(
-            self.commit_prepared_conversation,
-            prepared,
-        ))
-        self._commit_operation = operation
-        self._commit_source_id = prepared.source_id
-        operation.add_done_callback(self._consume_commit_operation)
-        return await asyncio.shield(operation)
+        task = asyncio.create_task(asyncio.to_thread(operation, **kwargs))
+        try:
+            return await asyncio.shield(task)
+        except asyncio.CancelledError:
+            try:
+                await asyncio.shield(task)
+            except Exception:
+                pass
+            raise
 
-    def commit_prepared_conversation(
-        self, prepared: PreparedConversation,
+    def _existing_conversation_result(
+        self, *, profile_id: str, source_type: str, source_id: str,
+    ) -> dict[str, Any] | None:
+        existing = self.metadata_store.get_episode_by_source(
+            profile_id=profile_id,
+            source_type=source_type,
+            source_id=source_id,
+        )
+        if existing is None or not existing.get("summary"):
+            return None
+        memory_ids = self.metadata_store.memory_ids_for_episodes(
+            profile_id=profile_id,
+            episode_ids=[existing["episode_id"]],
+        )
+        self._sync_episode_vectors(
+            profile_id=profile_id,
+            episode_id=existing["episode_id"],
+            source_type=source_type,
+            memory_ids=memory_ids,
+        )
+        return _result(existing["episode_id"], memory_ids, existing["summary"])
+
+    def _persist_conversation(
+        self,
+        *,
+        profile_id: str,
+        source_id: str,
+        source_type: str,
+        content: str,
+        metadata: dict[str, Any],
+        episode_id: str,
+        memories: tuple[tuple[str, MemoryCandidate], ...],
+        entities: tuple[EntityCandidate, ...],
+        summary: str,
     ) -> dict[str, Any]:
         """Atomically persist SQLite truth, repair all vectors, then best-effort audit."""
 
-        existing = self.metadata_store.get_episode_by_source(
-            profile_id=prepared.profile_id,
-            source_type=prepared.source_type,
-            source_id=prepared.source_id,
+        existing = self._existing_conversation_result(
+            profile_id=profile_id, source_type=source_type, source_id=source_id,
         )
-        if existing is not None and existing.get("summary"):
-            memory_ids = self.metadata_store.memory_ids_for_episodes(
-                profile_id=prepared.profile_id,
-                episode_ids=[existing["episode_id"]],
-            )
-            self._sync_episode_vectors(
-                profile_id=prepared.profile_id,
-                episode_id=existing["episode_id"],
-                source_type=prepared.source_type,
-                memory_ids=memory_ids,
-            )
-            return _result(existing["episode_id"], memory_ids, existing["summary"])
-
+        if existing is not None:
+            return existing
         stored = self.metadata_store.persist_conversation(
-            profile_id=prepared.profile_id,
-            source_type=prepared.source_type,
-            source_id=prepared.source_id,
-            episode_id=prepared.episode_id,
-            content=prepared.content,
-            summary=prepared.summary,
-            metadata=prepared.metadata,
-            memories=prepared.memories,
-            entities=prepared.entities,
+            profile_id=profile_id,
+            source_type=source_type,
+            source_id=source_id,
+            episode_id=episode_id,
+            content=content,
+            summary=summary,
+            metadata=metadata,
+            memories=memories,
+            entities=entities,
             relations=self._conversation_relations(
-                profile_id=prepared.profile_id,
-                episode_id=prepared.episode_id,
-                memories=prepared.memories,
+                profile_id=profile_id,
+                episode_id=episode_id,
+                memories=memories,
             ),
         )
         self._sync_episode_vectors(
-            profile_id=prepared.profile_id,
+            profile_id=profile_id,
             episode_id=stored["episode_id"],
-            source_type=prepared.source_type,
+            source_type=source_type,
             memory_ids=stored["memory_ids"],
         )
         result = _result(stored["episode_id"], stored["memory_ids"], stored["summary"])
         try:
             self.metadata_store.write_audit_log(
-                profile_id=prepared.profile_id,
+                profile_id=profile_id,
                 action="remember_conversation",
-                input_summary=prepared.content,
+                input_summary=content,
                 result_json=result,
             )
         except Exception:
             pass
         return result
-
-    def _consume_commit_operation(self, operation: asyncio.Task[dict[str, Any]]) -> None:
-        """Observe commit completion and release its stable-source ownership."""
-
-        if self._commit_operation is operation:
-            self._commit_operation = None
-            self._commit_source_id = None
-        if operation.done() and not operation.cancelled():
-            operation.exception()
 
     def recall(
         self,

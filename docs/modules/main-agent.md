@@ -94,7 +94,9 @@ ActiveInput。ActiveInput 保留：
 - 由 segments 合成的 `latest_transcript`，仅用于 PREPARE admission、EOU 与 recall query
 
 Context 写入 `user_segment {segment_id,input_id,text}`。Fold 后唯一对话表示是
-`conversation_turns`；没有 `transcript` 或 `delivered_clauses` 兼容副本。
+`conversation_turns`；没有 `transcript` 或 `delivered_clauses` 兼容副本。Production speech coordinator
+会让每个非空 normalized transcript update 请求 PREPARE admission；即使 DashScope partial 的
+`stable_prefix` 为空也一样，实际 admission、合并和每 input 次数上限仍完全由 Runtime 现有策略决定。
 
 ### 3.2 Invoke 调度
 
@@ -261,42 +263,48 @@ stateDiagram-v2
 
 ## 7. Profile Memory
 
-Main Agent 不判断一段对话是否值得记忆，也不拥有第二套 episode、job、worker 或重试状态机。
+Main Agent 不判断一段对话是否值得记忆，也不拥有第二套 episode、持久化 job 或重试队列。
 `ContextStore` 是唯一的未归档 conversation buffer；既有 `MemoryService` 独占提炼内容、长期保存和
-召回策略。
+召回策略。Runtime 只保留一个 idle timer 和一个 sealed archive worker 作为临时编排 owner。
 
 `ContextStore.conversation_batch()` 只提交两类 canonical turn：stable/final user segment，以及
-Renderer 完整 ACK 后落入 Context 的 assistant clause。partial transcript、未完整播放的回复、
-Observation、Task fact 和 think note 都不进入 Memory 提炼输入。同一 user segment 的多次稳定更新
-按现有 last-write-wins 规则折叠。
+Renderer 完整 ACK 后落入 Context 的 assistant clause。中间 partial 快照不会形成独立 turn；未完整
+播放的回复、Observation、Task fact 和 think note 都不进入 Memory 提炼输入。同一 user segment 的
+多次更新按现有 last-write-wins 规则折叠。
 
 ~~~mermaid
-stateDiagram-v2
-  [*] --> Collecting
-  Collecting --> Waiting: confirmed text / complete EOU
-  Waiting --> Writing: 300 秒无用户活动
-  Waiting --> Collecting: 新文本 / VAD / STT
-  Writing --> Collecting: 新输入取消 async LLM
-  Writing --> Waiting: 提炼失败，保留 buffer
-  Waiting --> Writing: 再等待 300 秒
-  Writing --> Empty: 成功并清理本批边界
-  Empty --> Collecting: 新输入
+flowchart LR
+  Collecting --> Timer["idle timer"]
+  Timer -->|新文本 / VAD / STT 重置| Timer
+  Timer -->|300 秒到期| Sealed["seal boundary + retire old input"]
+  Sealed --> Worker["single archive worker"]
+  Worker -->|失败，保留 pending/raw| Retry["idle retry timer"]
+  Retry -->|同一 source_id| Worker
+  Worker -->|成功| Commit["Memory idempotency + Context atomic commit"]
+  Sealed -.新输入创建新 causal scope.-> NewInput["new ActiveInput"]
+  Worker -.不阻塞、不取消.-> NewInput
 ~~~
 
 Runtime 在每次 PREPARE、RESPOND、CONTINUE snapshot 构建时直接调用当前 Profile 的
 `MemoryService.recall`，最多请求 6 条、2,400 字符；召回失败按空记忆 fail-soft，不影响回答。
 
 用户确认输入结束后，Runtime 持久化最后活动时间并启动 300 秒 idle timer。新文本、VAD start 或
-有效 STT 会取消 timer 和正在进行的异步 LLM 请求；噪声 VAD 被拒绝后按原 deadline 恢复。到期后，
-Runtime 先等待 control invoke 与 Speech Ledger 收敛，再把完整批次原样交给
-`MemoryService.remember_conversation`。失败或取消保留 Context，仍空闲时 300 秒后重试；提炼得到
-零条长期记忆也属于成功。只有 Memory 成功返回后才按 `through_sequence` 清理本批 conversation，
-边界后的新输入和非 conversation 事件不受影响。
+有效 STT 只取消或重置 timer；噪声 VAD 被拒绝后按原 deadline 恢复。到期后 Runtime 先等待 control
+invoke 与 Speech Ledger 收敛，再在锁内冻结 singleton pending boundary，并立即退休旧 ActiveInput、
+grant 和 trigger。seal 后的唯一 archive worker 从 canonical `context_events` 重构该边界 turns，再调用
+一次 `MemoryService.remember_conversation`；新输入不会等待或取消这个 worker，而是直接创建新的
+causal scope。
+
+失败会保留 pending 和全部 raw Context，下一个 idle deadline 只重试同一 `source_id`；零条长期记忆
+也属于成功。Memory 成功后，Runtime 在锁内用一个 Context SQLite transaction 写入稳定摘要、删除
+`through_sequence` 以内的 conversation 与 terminal Speech Ledger row，并删除 pending。边界后的新
+input、grant、trigger、conversation 和非 conversation 事件不受影响；如果仍有后续 raw conversation，
+会按其持久化活动时间恢复剩余 deadline。
 
 批次 `source_id` 由 Context 事件边界稳定生成。MemoryService 对同一
-`profile_id + main_agent_conversation + source_id` 幂等，因此崩溃后重试不会再次调用 LLM 或重复
-创建长期记忆。Profile 切换和 Backend shutdown 只取消 timer/LLM，不清理 Context；重新激活时从
-`context.sqlite3` 的最后活动时间恢复剩余 idle 时间。
+`profile_id + main_agent_conversation + source_id` 幂等，因此 Memory 已写入但 Context 尚未提交时，
+重启重试不会再次 extraction 或重复创建长期记忆。Profile 切换和 Backend shutdown 会取消 timer 与
+archive worker，但不提交或清理 pending/raw；重新激活时从 `context.sqlite3` 恢复并重试。
 
 Main Agent 不再暴露 Profile 专用 Memory browse/forget/retry HTTP 路由。每个 Profile 仍以独立目录
 隔离 `context.sqlite3`、`memory.sqlite3` 和 `qdrant/`，同时所有 Memory 调用都携带 `profile_id`，

@@ -1,8 +1,9 @@
 """Own the active Profile's async speech providers, local VAD/EOU, input coordinator, and delivery.
 
-DashScope-specific callback fields and credentials terminate inside the adapters and become
-``TranscriptUpdate`` facts
-before Main Agent Core can observe them.  TTS exposes only clause audio bytes.  Silero VAD and Smart Turn
+DashScope-specific callback fields and credentials terminate inside the adapters and become normalized
+``TranscriptUpdate`` facts before Main Agent Core can observe them; every non-empty production snapshot,
+including a mutable-only partial, requests existing PREPARE admission. TTS exposes only clause audio bytes.
+Silero VAD and Smart Turn
 v3.2 share process-wide ONNX sessions, verify both model and license assets before loading, and configure
 ONNX Runtime for sequential single-thread CPU inference; missing optional packages or assets are reported
 as unavailable capabilities rather than preventing a non-speech Backend from importing or starting.
@@ -703,7 +704,7 @@ class SpeechInputCoordinator:
         await self.runtime.update_transcript(
             update.full_text,
             segment_id=self._segment_id,
-            request_prepare=bool(update.stable_prefix),
+            request_prepare=True,
         )
 
     async def _resolve_endpoint(self, generation: int) -> None:
