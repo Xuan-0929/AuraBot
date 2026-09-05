@@ -705,10 +705,14 @@ class TaskStore:
     def list_tasks(
         self, *, after_row_id: int | None = None, limit: int = 50,
         statuses: Iterable[TaskStatus] | None = None,
+        owner_profile_id: str | None = None,
     ) -> TaskPage:
         if not 1 <= limit <= 200:
             raise ValueError("limit must be between 1 and 200")
         where, parameters = ["deleted_at IS NULL", "row_id > ?"], [after_row_id or 0]
+        if owner_profile_id is not None:
+            where.append("owner_profile_id = ?")
+            parameters.append(owner_profile_id)
         values = tuple(status.value for status in (statuses or ()))
         if values:
             where.append(f"status IN ({','.join('?' for _ in values)})")

@@ -1,8 +1,7 @@
 # Main Agent 语音资产与可选依赖
 
 Backend 的语音能力默认 `enabled: false`。默认启动不会导入 DashScope、ONNX Runtime、
-NumPy 或 Transformers，不会下载模型，也不会发出付费 Provider 请求。Task9 组合运行时与
-Provider 后，才应显式打开配置；若依赖、模型或许可证缺失，能力状态会给出原因并保持降级。
+NumPy 或 Transformers，不会下载模型，也不会发出付费 Provider 请求。通过设置页保存并应用语音配置后，仍须用户显式开启麦克风，`voice.start` 才准备语音资源。缺依赖、模型、许可证或密钥时拒绝该能力，文字会话与设置仍可用。
 
 ## 可选依赖
 
@@ -15,7 +14,7 @@ Transformers。普通 Backend 与单元测试不需要这些包。
 
 ## 支持的资产契约
 
-配置示例中的默认路径相对 `config.yaml`：
+Electron 根据仓库位置生成以下资源的绝对路径，保存在 `settings.json` 的 `backend.main_agent.speech` 段；设置页可修改模型与许可证路径。无需创建 YAML 配置：
 
 - `assets/models/silero-vad.onnx`：官方 16 kHz Silero VAD ONNX；每次推理 512 个新样本，
   加 64 个上下文样本，`state` 为 float32 `[2, 1, 128]`，许可证为 MIT。
@@ -37,5 +36,4 @@ shasum -a 256 assets/models/smart-turn-v3.2.onnx
 `inference_failed`，不会让 Backend 启动失败。哈希值必须来自所选上游 release，不能用
 未注明版本的通用值替代。
 
-真实 DashScope smoke 是显式 opt-in 的部署检查，并可能产生费用；普通测试只使用注入的
-transport/fixture，绝不联系 Provider。
+真实 DashScope、麦克风和音频输出设备 smoke 是独立验收，可能产生 Provider 费用；普通测试使用注入 transport/fixture，不证明真实设备或凭据可用。实际验证结果见 [本轮集成记录](frontend-integration-work.md)。

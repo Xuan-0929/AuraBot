@@ -1,7 +1,7 @@
 <!--
-  桌宠窗口：组合 Live2D 舞台、Main Agent 正式语音 Renderer、主动消息气泡、控制按钮与窗口缩放。
-  Main Agent clause 在真实播放期间覆盖主动活动并由 AudioWorklet 游标自动确认；页面仍不渲染或
-  控制 Task 数据，Live2D 运动与窗口交互分别委托给 motion store 和 preload IPC。
+  桌宠窗口：组合 Live2D 舞台、唯一的 Main Agent 文字／语音连接、已交付消息气泡与窗口控制。
+  语音 clause 经 AudioWorklet 确认播放完成后，由 Electron 持久化再显示并 ACK；文字无需麦克风。
+  Task 业务归 Backend；Live2D 运动与窗口交互分别委托给 motion store 和 preload IPC。
 -->
 <template>
   <main
@@ -18,6 +18,7 @@
       {{ mainAgentClauseText ?? petStore.petActivity?.message }}
     </aside>
 
+    <p v-if="voiceError" class="pet-voice-error" role="alert">{{ voiceError }}</p>
     <div class="desktop-pet-model-shell pet-vue-model-shell" data-testid="live2d-model-surface">
       <div class="pet-vue-live2d-frame">
         <Scene
@@ -64,7 +65,7 @@
 </template>
 
 <script setup lang="ts">
-import { computed, onBeforeUnmount, ref, watch } from "vue";
+import { computed, onBeforeUnmount, onMounted, ref, watch } from "vue";
 import type { PetResizeDirection } from "@shared/contracts/ipc";
 import {
   MainAgentRealtimeClient,
@@ -91,8 +92,10 @@ const motionQueueStore = useMotionQueueStore();
 const isControlsHovering = ref(false);
 const mainAgentRealtimeState = ref<MainAgentRealtimeState>("off");
 const mainAgentClauseText = ref<string | null>(null);
+const voiceEnabled=ref(false);
+const voiceError=ref("");
 const isVoiceInputActive = computed(
-  () => mainAgentRealtimeState.value === "connecting" || mainAgentRealtimeState.value === "active"
+  () => voiceEnabled.value
 );
 const isInteractiveAreaHovering = ref(false);
 const isResizeGripHovering = ref(false);
@@ -103,17 +106,40 @@ const live2dViewTransform = ref(readStoredLive2DViewTransform(window.localStorag
 const live2dZoomRequest = ref<{ id: number; deltaY: number; focalPoint: { x: number; y: number } } | undefined>(undefined);
 
 const mainAgentRealtime = new MainAgentRealtimeClient({
-  onState: (state) => {
+  onState: (state,detail) => {
     mainAgentRealtimeState.value = state;
+    if(state!=="active")voiceEnabled.value=false;
+    voiceError.value=detail??"";
+    void window.aurabot.reportRealtimeError(detail??"");
   },
+  onMessage: async(entry)=>{await window.aurabot.recordDelivery(entry);},
+  onAgentState:state=>{void window.aurabot.reportRealtimeState(state);},
   onClause: (text) => {
     mainAgentClauseText.value = text;
+    if(text)setTimeout(()=>{if(mainAgentClauseText.value===text)mainAgentClauseText.value=null;},7000);
   }
 });
 
-onBeforeUnmount(() => {
-  void mainAgentRealtime.stop();
+let unsubscribeCommand:(()=>void)|undefined;
+async function connect(){
+  await petStore.loadInitialState();
+  const profile=petStore.profile;if(!profile)throw new Error("Profile 尚未就绪");
+  await mainAgentRealtime.start({profileId:profile.id,soul:buildSoulPrompt(profile.soul)});
+}
+onMounted(async()=>{
+  unsubscribeCommand=window.aurabot.onPetCommand(async command=>{
+    try{
+      if(command.type==="disconnect")await mainAgentRealtime.stop();
+      else if(command.type==="reconnect"){await mainAgentRealtime.stop();await connect();}
+      else {await connect();await mainAgentRealtime.submitText(command.text??"",command.id);}
+      await window.aurabot.petCommandResult({id:command.id});
+    }catch(error){const detail=error instanceof Error?error.message:"连接失败";voiceError.value=detail;await window.aurabot.petCommandResult({id:command.id,error:detail});}
+  });
+  await window.aurabot.petReady();
+  const settings=await window.aurabot.getSettings();
+  if(settings.online)try{await connect();}catch(error){voiceError.value=String(error);}
 });
+onBeforeUnmount(()=>{unsubscribeCommand?.();void mainAgentRealtime.stop();});
 
 const clickThrough = useClickThrough({
   enabled: computed(() => petStore.petSettings.clickThroughPet),
@@ -171,16 +197,11 @@ watch(
   { immediate: true }
 );
 
-function handleVoiceToggle() {
-  const profile = petStore.profile;
-  if (!profile) {
-    mainAgentRealtimeState.value = "error";
-    return;
-  }
-  void mainAgentRealtime.toggle({
-    profileId: profile.id,
-    soul: buildSoulPrompt(profile.soul)
-  });
+async function handleVoiceToggle() {
+  const profile=petStore.profile;if(!profile)return;
+  voiceError.value="";
+  try {await mainAgentRealtime.toggle({profileId:profile.id,soul:buildSoulPrompt(profile.soul)});voiceEnabled.value=mainAgentRealtime.voiceEnabled;}
+  catch(error){voiceEnabled.value=false;voiceError.value=error instanceof Error?error.message:"语音不可用";}
 }
 
 function handleCanvasReady(canvas: HTMLCanvasElement) {

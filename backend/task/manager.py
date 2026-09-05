@@ -68,6 +68,8 @@ class TaskManager:
         self._event_revision = 0
         self._started = False
         self._closing = False
+        self.accepting = True
+        self.capability_available = True
         self._fatal_error: BaseException | None = None
         self._fail_stop_task: asyncio.Task[None] | None = None
 
@@ -146,7 +148,7 @@ class TaskManager:
         if isinstance(timeout, bool) or not isinstance(timeout, int) or not 1 <= timeout <= 86_400:
             raise TaskCommandError("timeout_seconds must be an integer from 1 to 86400.")
         async with self._state_lock:
-            self._require_available()
+            self._require_available(require_pi=True)
             task = await self._commit(lambda: self._store.create_task(
                 replace(command, timeout_seconds=timeout), working_directory
             ))
@@ -186,9 +188,10 @@ class TaskManager:
     async def list_tasks(
         self, *, after_row_id: int | None = None, limit: int = 50,
         statuses: Iterable[TaskStatus] | None = None,
+        owner_profile_id: str | None = None,
     ) -> TaskPage:
         return self._store.list_tasks(
-            after_row_id=after_row_id, limit=limit, statuses=statuses
+            after_row_id=after_row_id, limit=limit, statuses=statuses, owner_profile_id=owner_profile_id
         )
 
     async def get_task(
@@ -225,7 +228,7 @@ class TaskManager:
 
     async def resume_task(self, task_id: UUID, expected_version: int) -> TaskRecord:
         async with self._state_lock:
-            self._require_available()
+            self._require_available(require_pi=True)
             current = self._store.get_task(task_id)
             if current.status == TaskStatus.QUEUED:
                 return current
@@ -321,7 +324,7 @@ class TaskManager:
                 self._wake.clear()
                 while True:
                     async with self._state_lock:  # 整个TaskManager共用同一把大锁。
-                        if self._closing or self._fatal_error is not None:
+                        if self._closing or not self.accepting or not self.capability_available or self._fatal_error is not None:
                             return
                         free = MAX_ACTIVE_TASKS - len(self._runs)
                         if free <= 0:
@@ -536,8 +539,8 @@ class TaskManager:
             return_exceptions=True,
         )
 
-    def _require_available(self) -> None:
-        if not self._started or self._closing or self._fatal_error is not None:
+    def _require_available(self, *, require_pi: bool = False) -> None:
+        if not self._started or self._closing or not self.accepting or (require_pi and not self.capability_available) or self._fatal_error is not None:
             raise TaskRuntimeUnavailable("Task runtime is unavailable or shutting down.")
 
     @staticmethod

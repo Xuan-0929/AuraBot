@@ -1,3 +1,5 @@
+/** Verifies desktop window placement, drag/resize bounds and platform workspace behavior.
+ * The Electron double includes navigation guards while geometry remains controlled by fake screens. */
 import { beforeEach, describe, expect, test, vi } from "vitest";
 
 type Bounds = {
@@ -26,6 +28,8 @@ const electronMock = vi.hoisted(() => {
     public readonly webContents = {
       id: 42,
       send: vi.fn(),
+      setWindowOpenHandler:vi.fn(),
+      on:vi.fn(),
       session: {
         webRequest: {
           onBeforeSendHeaders: vi.fn()

@@ -82,6 +82,8 @@ async def start_pi(
         "--append-system-prompt",
         str(settings.system_prompt_path),
     ]
+    if settings.model_name:
+        command.extend(["--provider", "aurabot-task", "--model", settings.model_name])
     platform_options: dict[str, Any] = {}
     if os.name == "nt":
         platform_options["creationflags"] = subprocess.CREATE_NEW_PROCESS_GROUP

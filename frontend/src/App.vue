@@ -1,3 +1,5 @@
+<!-- Selects Pet, console or settings and initializes their paged visible state.
+     Window events come from Electron; no model Context or business lifecycle is built here. -->
 <template>
   <div :class="['app-shell', `app-shell-${surface}`]">
     <ConsoleWindow v-if="surface === 'console'" />
@@ -35,7 +37,7 @@ function handleHashChange() {
 
 onMounted(async () => {
   window.addEventListener("hashchange", handleHashChange);
-  await store.loadInitialState();
+  await store.initialize();
   unsubscribeIpc = store.subscribeToPetEvents();
 });
 

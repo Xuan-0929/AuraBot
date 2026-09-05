@@ -1,19 +1,17 @@
-"""Adapt stable TaskManager business methods to owner-scoped Main Agent tools and prompt facts.
+"""Adapt stable TaskManager methods into owner-scoped Main Agent tools and context facts.
 
-TaskBridge never owns Task state: every inspection, question answer, and pause/resume/cancel action
-fresh-reads TaskManager immediately before acting, enforces the active profile owner, and passes the
-record's current optimistic version back to TaskManager. A Runtime callback marks the exact point a
-control becomes cancellation-immune. The bridge emits bounded public projections only; working
-directories, prompts, Pi handles, sessions, RPC identifiers, and delete remain outside this boundary.
-"""
+Inspection, answers, pause/resume/cancel, terminal deletion and rerun all fresh-read owner truth. Rerun
+creates a new normal Task from the previous command; the bridge never changes the Task state machine.
+Only bounded product projections leave this boundary; prompts and working directories remain private."""
 
 from __future__ import annotations
 
 from collections.abc import Callable, Mapping
 from typing import Any
-from uuid import UUID
+from uuid import UUID, uuid4
 
 from backend.task.models import (
+    CreateTaskCommand,
     TaskNotFound,
     TaskRecord,
     TaskRuntimeUnavailable,
@@ -27,7 +25,7 @@ from .tool_runtime import ToolCall, ToolExecutorError
 
 _IMPORTANT_EVENTS = frozenset({
     "task.created", "task.status_changed", "task.question_raised",
-    "task.question_answered",
+    "task.question_answered", "task.deleted",
 })
 
 
@@ -107,6 +105,32 @@ class TaskBridge:
     ) -> dict[str, Any]:
         return await self._control("cancel_task", call, action_started)
 
+    async def delete_task(self, call: ToolCall, *, action_started: Callable[[], None] = lambda: None) -> dict[str, Any]:
+        task = await self._owned(call.arguments.get("task_id"))
+        try:
+            action_started()
+            await self.manager.delete_task(task.id)
+        except TaskStateConflict:
+            raise ToolExecutorError("task_state_conflict") from None
+        except TaskRuntimeUnavailable:
+            raise ToolExecutorError("task_runtime_unavailable") from None
+        return task_fact(await self.manager.get_task(task.id, include_deleted=True))
+
+    async def rerun_task(self, call: ToolCall, *, action_started: Callable[[], None] = lambda: None) -> dict[str, Any]:
+        task = await self._owned(call.arguments.get("task_id"))
+        if task.status not in {TaskStatus.COMPLETED, TaskStatus.FAILED, TaskStatus.CANCELLED}:
+            raise ToolExecutorError("task_state_conflict")
+        try:
+            action_started()
+            updated = await self.manager.create_task(CreateTaskCommand(
+                title=task.title, prompt=task.prompt, workspace_id=task.workspace_id,
+                owner_profile_id=self.owner_profile_id, idempotency_key=f"rerun:{uuid4().hex}",
+                timeout_seconds=task.timeout_seconds, rerun_of_task_id=task.id,
+            ))
+        except TaskRuntimeUnavailable:
+            raise ToolExecutorError("task_runtime_unavailable") from None
+        return task_fact(updated)
+
     async def execute_control(
         self, call: ToolCall, *, action_started: Callable[[], None],
     ) -> dict[str, Any]:
@@ -117,6 +141,8 @@ class TaskBridge:
             "pause_task": self.pause_task,
             "resume_task": self.resume_task,
             "cancel_task": self.cancel_task,
+            "delete_task": self.delete_task,
+            "rerun_task": self.rerun_task,
         }.get(call.name)
         if executor is None:
             raise ToolExecutorError("unknown_tool")
@@ -128,7 +154,7 @@ class TaskBridge:
         if getattr(event, "type", None) not in _IMPORTANT_EVENTS:
             return None
         try:
-            task = await self.manager.get_task(event.task_id)
+            task = await self.manager.get_task(event.task_id, include_deleted=event.type == "task.deleted")
         except (KeyError, TaskNotFound):
             return None
         if task.owner_profile_id != self.owner_profile_id:
@@ -175,6 +201,8 @@ def task_fact(task: TaskRecord, *, include_details: bool = True) -> dict[str, An
         "status": task.status.value,
         "version": task.version,
     }
+    if task.deleted_at is not None:
+        fact["deleted"] = True
     if task.question_id is not None and task.question_answer is None:
         fact["question"] = {
             "question_id": str(task.question_id),

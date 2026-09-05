@@ -162,7 +162,7 @@ class ToolCallAssembler:
                     raise ValueError
                 delta = choice.get("delta", {})
                 self.assistant_content_seen |= delta.get("content") not in (None, "")
-                items = delta.get("tool_calls", ())
+                items = delta.get("tool_calls", [])
                 if not isinstance(items, list):
                     raise ValueError
                 for item in items:

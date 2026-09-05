@@ -1,10 +1,9 @@
-"""Implements AuraBot's minimal profile-bound Pet voice WebSocket and renderer port.
+"""Own the single profile-bound text/voice WebSocket, capability tokens and renderer delivery.
 
-The unreleased ``aurabot.main-agent.v1`` protocol uses WebSocket ordering directly: client binary messages
-are exact 16 kHz/20 ms microphone PCM; server binary messages are the sole current clause's 24 kHz TTS PCM.
-JSON is limited to session readiness, playback gates, clause lifecycle, physical ACK, and stable errors. The
-hub owns one active Profile generation and one replaceable voice session on the ASGI event loop.
-"""
+Sessions begin in text mode; explicit commands activate speech or submit text. Only accepted user segments
+and say_to_user clauses cross into desktop history. Text ACKs commit draft delivery, while voice ACKs
+require completed audio; binary PCM and playback gates remain confined to voice mode. Typed input remains
+available during voice mode, replacing microphone input ownership while preserving spoken delivery."""
 
 from __future__ import annotations
 
@@ -120,6 +119,10 @@ class VoiceSession:
     send_lock: asyncio.Lock
     current_clause: str | None = None
     closed: bool = False
+    mode: str = "text"
+    clause_mode: str = "text"
+    clause_done: asyncio.Event | None = None
+    audio_finished: bool = False
 
     async def send(self, value: dict[str, Any] | bytes) -> None:
         async with self.send_lock:
@@ -176,6 +179,10 @@ class RealtimeHub:
         self.session: VoiceSession | None = None
         self.accepting = True
         self._lock = asyncio.Lock()
+        self.activation_lock = asyncio.Lock()
+        self._session_lock = asyncio.Lock()
+        self.speech_activator = None
+        self.speech_stopper = None
 
     def origin_allowed(self, origin: str | None) -> bool:
         if origin is None:
@@ -188,27 +195,36 @@ class RealtimeHub:
     async def activate(self, profile_id: str, soul: str) -> int:
         if self.profile_activator is None:
             raise RuntimeError("main_agent_unavailable")
-        generation = await self.profile_activator(profile_id, soul)
-        if self.active_profile_id != profile_id or self.active_generation != generation or self.speech is None:
-            raise RuntimeError("speech_unavailable")
-        return generation
+        async with self.activation_lock:
+            if not self.accepting:
+                raise RuntimeError("backend_restarting")
+            generation = await self.profile_activator(profile_id, soul)
+            if self.active_profile_id != profile_id or self.active_generation != generation:
+                raise RuntimeError("profile_unavailable")
+            return generation
 
     async def set_active(
         self, profile_id: str, generation: int, runtime: Any, speech: Any
     ) -> None:
-        async with self._lock:
+        async with self._session_lock:
             old = self.session if (
                 self.active_profile_id != profile_id or self.active_generation != generation
             ) else None
             if old is not None:
+                old_speech = self.speech
                 await self._close_locked(old, "profile_switched")
+                if speech is old_speech:
+                    speech = None
             self.active_profile_id = profile_id
             self.active_generation = generation
             self.runtime = runtime
             self.speech = speech
+            runtime.user_message_listener = self.user_message
+            runtime.state_listener = self.agent_state
+            runtime.error_listener = self.session_error
 
     async def clear_active(self, profile_id: str, generation: int) -> None:
-        async with self._lock:
+        async with self._session_lock:
             if self.active_profile_id != profile_id or self.active_generation != generation:
                 return
             if self.session is not None:
@@ -218,8 +234,8 @@ class RealtimeHub:
             self.speech = None
 
     async def attach(self, socket: Any) -> VoiceSession:
-        async with self._lock:
-            if self.runtime is None or self.speech is None or self.active_profile_id is None:
+        async with self._session_lock:
+            if not self.accepting or self.runtime is None or self.active_profile_id is None:
                 raise ProtocolError("profile_not_active")
             if self.session is not None:
                 await self._close_locked(self.session, "session_replaced")
@@ -232,7 +248,7 @@ class RealtimeHub:
         return session
 
     async def detach(self, session: VoiceSession) -> None:
-        async with self._lock:
+        async with self._session_lock:
             if self.session is session:
                 await self._close_locked(session, "session_closed", close_socket=False)
 
@@ -241,19 +257,45 @@ class RealtimeHub:
     ) -> None:
         if session.closed:
             return
-        if session.current_clause is not None:
-            await self._settle_locked(session, session.current_clause, complete=False)
-        session.closed = True
-        if self.session is session:
-            self.session = None
-        self.mic_queue.clear()
-        if self.speech is not None:
-            await self.speech.cancel_current(reason)
-        if close_socket:
+        async with self._lock:
+            if session.current_clause is not None:
+                await self._settle_locked(session, session.current_clause, complete=False)
+            session.closed = True
+            if self.session is session:
+                self.session = None
+            self.mic_queue.clear()
+        # Hold session lifetime ownership, never the ACK lock while provider cleanup drains callbacks.
+        async def cleanup() -> None:
             try:
-                await session.socket.close(code=4001, reason=reason)
-            except Exception:
-                pass
+                if self.speech_stopper is not None:
+                    await self.speech_stopper()
+                elif self.speech is not None:
+                    speech, self.speech = self.speech, None
+                    shutdown = getattr(speech, "shutdown", None)
+                    if shutdown is not None:
+                        await shutdown()
+                    else:
+                        await speech.cancel_current(reason)
+            finally:
+                disconnected = getattr(self.runtime, "renderer_disconnected", None)
+                if disconnected is not None:
+                    await disconnected()
+                if close_socket:
+                    try:
+                        await session.socket.close(code=4001, reason=reason)
+                    except Exception:
+                        pass
+
+        task = asyncio.create_task(cleanup(), name="realtime-session-cleanup")
+        cancelled = False
+        while not task.done():
+            try:
+                await asyncio.shield(task)
+            except asyncio.CancelledError:
+                cancelled = True
+        await task
+        if cancelled and close_socket:
+            raise asyncio.CancelledError
 
     async def acquire_renderer_port(self) -> RendererPort | None:
         session = self.session
@@ -269,8 +311,12 @@ class RealtimeHub:
         if session.current_clause is not None:
             return "clause_in_progress"
         session.current_clause = str(clause.clause_id)
+        session.clause_mode = session.mode
+        session.clause_done = asyncio.Event()
+        session.audio_finished = False
         try:
-            await session.send({"type": "clause.offer", "clause_id": session.current_clause, "text": str(clause.text)})
+            await session.send({"type": "clause.offer", "clause_id": session.current_clause, "text": str(clause.text), "mode": session.clause_mode})
+            await self.agent_state("speaking")
         except Exception:
             session.current_clause = None
             return "session_replaced"
@@ -293,6 +339,7 @@ class RealtimeHub:
             return "session_replaced"
         if session.current_clause != clause_id:
             return "unknown_clause"
+        session.audio_finished = True
         await session.send({"type": "clause.audio_end", "clause_id": clause_id})
         return None
 
@@ -313,11 +360,119 @@ class RealtimeHub:
             return await self._settle_locked(session, clause_id, complete=complete)
 
     async def _settle_locked(self, session: VoiceSession, clause_id: str, *, complete: bool) -> bool:
+        if complete and session.clause_mode == "voice" and not session.audio_finished:
+            raise ProtocolError("audio_incomplete")
+        kwargs = {"mode": "text"} if session.clause_mode == "text" else {}
+        accepted = bool(await self.runtime.renderer_ack(clause_id, complete=complete, **kwargs)) if self.runtime else False
         session.current_clause = None
-        accepted = bool(await self.runtime.renderer_ack(clause_id, complete=complete)) if self.runtime else False
-        if self.speech is not None:
+        if session.clause_done is not None:
+            session.clause_done.set()
+        if self.speech is not None and session.clause_mode == "voice":
             self.speech.acknowledge(clause_id, complete=bool(complete and accepted))
+        await self.agent_state("idle")
         return bool(complete and accepted)
+
+    async def agent_state(self, state: str) -> None:
+        if self.session is not None and not self.session.closed:
+            if state == "idle":
+                state = "speaking" if self.session.current_clause else ("listening" if self.session.mode == "voice" else "idle")
+            try:
+                await self.session.send({"type": "agent.state", "state": state})
+            except Exception:
+                pass
+
+    async def session_error(self, code: str) -> None:
+        if self.session is not None:
+            try:
+                await self.session.send({"type": "session.error", "code": code})
+            except Exception:
+                pass
+
+    async def user_message(self, message_id: str, text: str, source: str) -> None:
+        if self.session is not None:
+            await self.session.send({"type": "user.message", "message_id": message_id, "text": text, "source": source})
+            await self.agent_state("thinking")
+
+    async def render(self, clause: Any) -> None:
+        port = await self.acquire_renderer_port()
+        if port is None:
+            raise ProtocolError("renderer_unavailable")
+        if port.session.mode == "voice":
+            if self.speech is None:
+                raise ProtocolError("speech_unavailable")
+            await self.speech.delivery(clause)
+            return
+        error = await port.offer_clause(clause)
+        if error:
+            raise ProtocolError(error)
+        done = port.session.clause_done
+        if done is not None:
+            await done.wait()
+
+    async def command(self, session: VoiceSession, event: dict[str, Any]) -> None:
+        command_id = event.get("command_id")
+        kind = event.get("type")
+        code = None
+        if not isinstance(command_id, str) or not command_id or len(command_id) > 128:
+            raise ProtocolError("invalid_control")
+        try:
+            if not self.accepting or self.session is not session:
+                raise ProtocolError("backend_restarting")
+            if kind in {"text.submit", "voice.start"} and not getattr(self.runtime, "text_available", True):
+                raise ProtocolError("text_model_unavailable")
+            if kind == "text.submit":
+                async with self.activation_lock, self._session_lock:
+                    if self.session is not session or not self.accepting:
+                        raise ProtocolError("backend_restarting")
+                    if set(event) != {"type", "command_id", "text"} or not isinstance(event.get("text"), str) or not event["text"].strip() or len(event["text"]) > 8000:
+                        raise ProtocolError("invalid_text")
+                    if session.current_clause is not None:
+                        await self.cancel_clause(RendererPort(self, session), session.current_clause, "text_superseded")
+                    if session.mode == "voice" and self.speech_stopper is not None:
+                        try:
+                            await self.speech_stopper()
+                            self.mic_queue.clear()
+                            if self.speech_activator is None:
+                                raise ProtocolError("speech_unavailable")
+                            await self.speech_activator()
+                        except Exception:
+                            session.mode = "text"
+                            raise ProtocolError("speech_unavailable") from None
+                    await self.runtime.submit_text(event["text"], segment_id=command_id)
+            elif kind in {"voice.start", "voice.stop"}:
+                if set(event) != {"type", "command_id"}:
+                    raise ProtocolError("invalid_control")
+                async with self.activation_lock, self._session_lock:
+                    if not self.accepting or self.session is not session:
+                        raise ProtocolError("backend_restarting")
+                    if kind == "voice.start":
+                        if session.current_clause is not None:
+                            raise ProtocolError("delivery_busy")
+                        if self.speech is None:
+                            if self.speech_activator is None:
+                                raise ProtocolError("speech_unavailable")
+                            try:
+                                await self.speech_activator()
+                            except Exception:
+                                raise ProtocolError("speech_unavailable") from None
+                        session.mode = "voice"
+                        await self.agent_state("listening")
+                    else:
+                        if session.current_clause is not None:
+                            await self.cancel_clause(RendererPort(self, session), session.current_clause, "voice_stopped")
+                        if self.speech_stopper is not None:
+                            await self.speech_stopper()
+                        self.mic_queue.clear()
+                        session.mode = "text"
+                        await self.agent_state("idle")
+            else:
+                raise ProtocolError("invalid_control")
+        except ProtocolError as exc:
+            code = str(exc)
+        except Exception:
+            code = "command_unavailable"
+        await session.send({"type": "command.ack", "command_id": command_id,
+                            "status": "rejected" if code else "accepted", **({"code": code} if code else {})})
 
     async def speech_candidate_started(self) -> None:
         session = self.session
@@ -350,7 +505,7 @@ class RealtimeHub:
 
     async def stop_accepting(self) -> None:
         self.accepting = False
-        async with self._lock:
+        async with self._session_lock:
             if self.session is not None:
                 await self._close_locked(self.session, "backend_shutdown")
 
@@ -396,7 +551,7 @@ async def issue_realtime_token(
     try:
         generation = await hub.activate(body.profile_id, body.soul)
     except Exception as exc:
-        raise HTTPException(503, "speech is unavailable") from exc
+        raise HTTPException(503, "main_agent_unavailable") from exc
     response.headers["Cache-Control"] = "no-store"
     return RealtimeTokenResponse(
         token=hub.tokens.issue(_origin(origin), body.profile_id, generation),
@@ -438,6 +593,8 @@ async def main_agent_realtime(websocket: WebSocket) -> None:
                 break
             if message.get("bytes") is not None:
                 try:
+                    if not hub.accepting or session.mode != "voice":
+                        raise ValueError("voice is not active")
                     hub.mic_queue.put(message["bytes"])
                 except ValueError:
                     await session.send({"type": "session.error", "code": "invalid_mic_frame"})
@@ -445,7 +602,10 @@ async def main_agent_realtime(websocket: WebSocket) -> None:
             raw = message.get("text")
             event: Any = None
             try:
-                event = json.loads(raw) if isinstance(raw, str) and len(raw) <= 4096 else None
+                event = json.loads(raw) if isinstance(raw, str) and len(raw) <= 32768 else None
+                if isinstance(event, dict) and event.get("type") in {"text.submit", "voice.start", "voice.stop"}:
+                    await hub.command(session, event)
+                    continue
                 if (
                     not isinstance(event, dict)
                     or set(event) != {"type", "clause_id", "complete"}

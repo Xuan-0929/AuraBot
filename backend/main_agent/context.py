@@ -222,7 +222,7 @@ class ContextStore:
             db.execute("UPDATE speech_clauses SET state = ? WHERE clause_id = ?", (target.value, clause_id))
             return SpeechClause(clause_id, str(row["text"]), target, int(row["sequence"]))
 
-    def ack_clause(self, clause_id: str, *, complete: bool) -> bool:
+    def ack_clause(self, clause_id: str, *, complete: bool, mode: str = "voice") -> bool:
         """Apply a renderer ACK; complete ACK is the sole atomic assistant-context write path."""
 
         with self._transaction() as db:
@@ -233,8 +233,8 @@ class ContextStore:
             if state not in _NONTERMINAL:
                 return False
             if complete:
-                if state is not ClauseState.PLAYING:
-                    raise ValueError("only a playing clause can receive complete ACK")
+                if state is not (ClauseState.DRAFT if mode == "text" else ClauseState.PLAYING):
+                    raise ValueError("clause delivery state does not match ACK mode")
                 db.execute("UPDATE speech_clauses SET state = 'delivered' WHERE clause_id = ?", (clause_id,))
                 db.execute(
                     "INSERT INTO context_events(event_type, payload_json) VALUES ('assistant_clause', ?)",

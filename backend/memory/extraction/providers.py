@@ -2,13 +2,15 @@
 
 Legacy callers keep the synchronous request. Main Agent conversation ingestion uses the async request so
 new user activity can cancel the HTTP operation before Memory creates an episode; both paths validate the
-same Chat Completions envelope and leave candidate validation to ``StructuredMemoryExtractor``.
+same Chat Completions envelope and leave candidate validation to ``StructuredMemoryExtractor``. Local model
+endpoints bypass environment proxies; external extraction endpoints retain configured HTTP/SOCKS routing.
 """
 
 from __future__ import annotations
 
 import json
 from typing import Any, Protocol
+from urllib.parse import urlsplit
 
 
 class MemoryExtractionModel(Protocol):
@@ -61,8 +63,9 @@ class OpenAICompatibleMemoryExtractionModel:
         self.model_name = model_name
         self.api_key = api_key
         self.timeout_seconds = timeout_seconds
-        self._client_factory = client_factory or _http_client
-        self._async_client_factory = async_client_factory or _async_http_client
+        trust_env = urlsplit(self.base_url).hostname not in {"localhost", "127.0.0.1", "::1"}
+        self._client_factory = client_factory or (lambda **kwargs: _http_client(trust_env=trust_env, **kwargs))
+        self._async_client_factory = async_client_factory or (lambda **kwargs: _async_http_client(trust_env=trust_env, **kwargs))
 
     def extract_memory_payload(
         self,

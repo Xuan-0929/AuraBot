@@ -1,78 +1,23 @@
-/**
- * 定义 Electron Main、Preload 与 Renderer 的非 Task IPC 公共边界。
- *
- * API 覆盖聊天、Python Memory 管理、模型/桌宠/通知设置、窗口与 Backend health；
- * 所有 Task channels、详情、文件动作和事件订阅均已移除。
+/** Defines typed IPC for desktop settings, visible history and Pet-owned realtime.
+ * Electron validates callers and payloads; Task is read-only and Memory has no renderer surface.
  */
-
-import type { AppInitialState, SendChatMessageInput, SendChatMessageResult } from "./chat";
-import type {
-  BackendMemoryJob,
-  BackendMemorySnapshot,
-  BackendStatus,
-  ForgetBackendMemoriesInput,
-  ForgetBackendMemoriesResult
-} from "./backend";
-import type { Live2DModelState } from "./live2dModel";
-import type { NotificationSettings } from "./notificationSettings";
-import type { PersonaSettings } from "./personaSettings";
-import type { PetActivity } from "./pet";
-import type {
-  ModelConnectionTestInput,
-  ModelProviderSettingsPatch,
-  ProactiveSettingsPatch,
-  PublicAppConfig,
-  PublicModelHealth,
-  PublicModelHealthMap
-} from "./settings";
-import type { Message } from "../schemas/message";
-import type { PetSettings, PetSettingsPatch } from "../schemas/petSettings";
-import type { Profile } from "../schemas/profile";
-
+import type { AppInitialState, SendChatMessageInput, SendChatMessageResult, AgentStatus } from './chat';
+import type { Live2DModelState } from './live2dModel';
+import type { PetActivity } from './pet';
+import type { Message } from '../schemas/message';
+import type { PetSettings } from '../schemas/petSettings';
+import type { Profile } from '../schemas/profile';
+import type { DesktopConfig, SettingsState, ApplyResult, HistoryPage, HistoryEntry, TaskSummary, PetCommand } from './desktop';
 export const IPC_CHANNELS = {
-  getInitialState: "app:get-initial-state",
-  openConsoleWindow: "window:open-console",
-  openSettingsWindow: "window:open-settings",
-  openConfigFile: "config:open-file",
-  updateModelProviderSettings: "config:update-model-provider-settings",
-  getModelHealth: "config:get-model-health",
-  testModelConnection: "config:test-model-connection",
-  updateProactiveSettings: "config:update-proactive-settings",
-  getBackendStatus: "backend:get-status",
-  updatePersonaSettings: "config:update-persona-settings",
-  getLive2DModelState: "live2d:get-model-state",
-  setCurrentLive2DModel: "live2d:set-current-model",
-  getNotificationSettings: "notifications:get-settings",
-  updateNotificationSettings: "notifications:update-settings",
-  getPetSettings: "pet:get-settings",
-  updatePetSettings: "pet:update-settings",
-  setPetMousePassthrough: "pet:set-mouse-passthrough",
-  movePetWindowBy: "pet:move-window-by",
-  resizePetWindowCorner: "pet:resize-window-corner",
-  petSettingsChanged: "pet:settings-changed",
-  petActivity: "pet:activity",
-  live2dModelStateChanged: "live2d:model-state-changed",
-  notificationSettingsChanged: "notifications:settings-changed",
-  petCursorPosition: "pet:cursor-position",
-  agentStatusChanged: "agent:status-changed",
-  chatMessageCreated: "chat:message-created",
-  chatMessageUpdated: "chat:message-updated",
-  sendChatMessage: "chat:send-message",
-  getEventLogs: "debug:get-event-logs",
-  getMemoryDebugSnapshot: "debug:get-memory-snapshot",
-  forgetMemories: "memory:forget",
-  retryMemoryJob: "memory:retry-job"
+ getInitialState:'app:get-initial-state',openConsoleWindow:'window:open-console',openSettingsWindow:'window:open-settings',
+ getSettings:'settings:get',saveSettings:'settings:save',applySettings:'settings:apply',settingsChanged:'settings:changed',
+ getHistory:'history:list',recordDelivery:'history:delivered',sendChatMessage:'chat:send-message',
+ petCommand:'pet:command',petCommandResult:'pet:command-result',petReady:'pet:ready',realtimeStatus:'pet:realtime-status',realtimeError:'pet:realtime-error',
+ taskSubscribe:'tasks:subscribe',tasksChanged:'tasks:changed',getLive2DModelState:'live2d:get-model-state',
+ setPetMousePassthrough:'pet:set-mouse-passthrough',movePetWindowBy:'pet:move-window-by',resizePetWindowCorner:'pet:resize-window-corner',
+ petSettingsChanged:'pet:settings-changed',petActivity:'pet:activity',live2dModelStateChanged:'live2d:model-state-changed',
+ notificationSettingsChanged:'notifications:settings-changed',petCursorPosition:'pet:cursor-position',agentStatusChanged:'agent:status-changed',chatMessageCreated:'chat:message-created',chatMessageUpdated:'chat:message-updated'
 } as const;
-
-export interface EventLogRecord {
-  id: string;
-  eventType: string;
-  payload: Record<string, unknown>;
-  createdAt: string;
-}
-
-export type MemoryDebugSnapshot = BackendMemorySnapshot;
-
 export interface PetCursorPosition {
   screenX: number;
   screenY: number;
@@ -84,41 +29,29 @@ export type PetResizeDirection = "n" | "s" | "e" | "w" | "nw" | "ne" | "sw" | "s
 export type PetResizeCorner = Extract<PetResizeDirection, "nw" | "ne" | "sw" | "se">;
 
 export interface AuraBotApi {
-  getInitialState(): Promise<AppInitialState>;
-  openConsoleWindow(): Promise<void>;
-  openSettingsWindow(): Promise<void>;
-  openConfigFile(): Promise<void>;
-  updateModelProviderSettings(patch: ModelProviderSettingsPatch): Promise<PublicAppConfig>;
-  getModelHealth(): Promise<PublicModelHealthMap>;
-  testModelConnection(input: ModelConnectionTestInput): Promise<PublicModelHealth>;
-  updateProactiveSettings(patch: ProactiveSettingsPatch): Promise<PublicAppConfig>;
-  getBackendStatus(): Promise<BackendStatus>;
-  updatePersonaSettings(settings: PersonaSettings): Promise<Profile>;
-  getLive2DModelState(): Promise<Live2DModelState>;
-  setCurrentLive2DModel(modelId: string): Promise<Live2DModelState>;
-  getNotificationSettings(): Promise<NotificationSettings>;
-  updateNotificationSettings(
-    patch: Partial<Omit<NotificationSettings, "permissionState">>
-  ): Promise<NotificationSettings>;
-  getPetSettings(): Promise<PetSettings>;
-  updatePetSettings(patch: PetSettingsPatch): Promise<PetSettings>;
-  setPetMousePassthrough(enabled: boolean): Promise<void>;
-  movePetWindowBy(delta: { x: number; y: number }): Promise<void>;
-  resizePetWindowCorner(
-    direction: PetResizeDirection,
-    movement: { x: number; y: number }
-  ): Promise<void>;
-  onPetSettingsChanged(listener: (settings: PetSettings) => void): () => void;
-  onPetActivity(listener: (activity: PetActivity) => void): () => void;
-  onLive2DModelStateChanged(listener: (state: Live2DModelState) => void): () => void;
-  onNotificationSettingsChanged(listener: (settings: NotificationSettings) => void): () => void;
-  onPetCursorPosition(listener: (position: PetCursorPosition) => void): () => void;
-  onAgentStatusChanged(listener: (status: import("./chat").AgentStatus) => void): () => void;
-  onChatMessageCreated(listener: (message: Message) => void): () => void;
-  onChatMessageUpdated(listener: (message: Message) => void): () => void;
-  sendChatMessage(input: SendChatMessageInput): Promise<SendChatMessageResult>;
-  getEventLogs(): Promise<EventLogRecord[]>;
-  getMemoryDebugSnapshot(): Promise<MemoryDebugSnapshot>;
-  forgetMemories(input: ForgetBackendMemoriesInput): Promise<ForgetBackendMemoriesResult>;
-  retryMemoryJob(jobId: string): Promise<BackendMemoryJob>;
+ getInitialState():Promise<AppInitialState>;
+ openConsoleWindow():Promise<void>; openSettingsWindow():Promise<void>;
+ getSettings():Promise<SettingsState>; saveSettings(config:DesktopConfig,clearSecrets?:string[]):Promise<SettingsState>;
+ applySettings(force?:boolean):Promise<ApplyResult>; onSettingsChanged(listener:(value:SettingsState)=>void):()=>void;
+ getHistory(before?:number):Promise<HistoryPage>; recordDelivery(entry:HistoryEntry):Promise<Message>;
+ sendChatMessage(input:SendChatMessageInput):Promise<SendChatMessageResult>;
+ onPetCommand(listener:(command:PetCommand)=>void):()=>void;
+ petCommandResult(result:{id:string;error?:string}):Promise<void>; petReady():Promise<void>;
+ reportRealtimeState(state:AgentStatus):Promise<void>;
+ reportRealtimeError(error:string):Promise<void>; onRealtimeError(listener:(error:string)=>void):()=>void;
+ subscribeTasks(enabled:boolean):Promise<void>; onTasksChanged(listener:(value:{tasks:TaskSummary[];error?:string})=>void):()=>void;
+ getLive2DModelState():Promise<Live2DModelState>;
+ setPetMousePassthrough(enabled:boolean):Promise<void>;
+ movePetWindowBy(delta:{x:number;y:number}):Promise<void>;
+ resizePetWindowCorner(direction:PetResizeDirection,movement:{x:number;y:number}):Promise<void>;
+ onPetSettingsChanged(listener:(value:PetSettings)=>void):()=>void;
+ onPetActivity(listener:(value:PetActivity)=>void):()=>void;
+ onLive2DModelStateChanged(listener:(value:Live2DModelState)=>void):()=>void;
+ onNotificationSettingsChanged(listener:(value:import('./notificationSettings').NotificationSettings)=>void):()=>void;
+ onPetCursorPosition(listener:(value:PetCursorPosition)=>void):()=>void;
+ onAgentStatusChanged(listener:(value:AgentStatus)=>void):()=>void;
+ onChatMessageCreated(listener:(value:Message)=>void):()=>void;
+ onChatMessageUpdated(listener:(value:Message)=>void):()=>void;
 }
+
+export interface EventLogRecord {id:string;eventType:string;payload:Record<string,unknown>;createdAt:string;}

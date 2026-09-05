@@ -1,3 +1,4 @@
+/** Localizes the desktop shell and simplified Backend-projected agent states. No runtime state is derived here. */
 /**
  * 提供 Renderer 当前保留界面的英中日文案与 Agent 状态标签。
  *
@@ -541,19 +542,19 @@ const AGENT_STATUS_LABELS: Record<DisplayLanguage, Record<AgentStatus, string>> 
     idle: "idle",
     listening: "listening",
     thinking: "thinking",
-    typing: "typing"
+    typing: "typing", speaking:"speaking"
   },
   zh: {
     idle: "空闲中",
     listening: "倾听中",
     thinking: "判断中",
-    typing: "对方正在输入中"
+    typing: "对方正在输入中", speaking:"正在说话"
   },
   ja: {
     idle: "待機中",
     listening: "聞き取り中",
     thinking: "考え中",
-    typing: "入力中"
+    typing: "入力中", speaking:"話しています"
   }
 };
 

@@ -144,6 +144,100 @@ class FakePlayback:
 
 
 class SpeechInputTests(unittest.IsolatedAsyncioTestCase):
+    async def test_cancelled_dashscope_close_keeps_transport_cleanup_owned(self) -> None:
+        entered, cleaning, release = asyncio.Event(), asyncio.Event(), asyncio.Event()
+        transports = []
+        async def sink(_update):
+            entered.set()
+            try:
+                await asyncio.Event().wait()
+            finally:
+                cleaning.set()
+                await release.wait()
+        def factory(**kwargs):
+            transport = FakeDashScopeSttTransport(kwargs["on_event"])
+            transports.append(transport)
+            return transport
+        session = await DashScopeStreamingSttProvider("test", transport_factory=factory).start(sink)
+        transports[0].emit_partial("partial")
+        await entered.wait()
+        closing = asyncio.create_task(session.close())
+        await cleaning.wait()
+        closing.cancel()
+        await asyncio.gather(closing, return_exceptions=True)
+        self.assertFalse(transports[0].stopped)
+        release.set()
+        await session.close()
+        self.assertTrue(transports[0].stopped)
+
+    async def test_shutdown_during_candidate_close_cancels_mic_and_finishes_cleanup(self) -> None:
+        from types import SimpleNamespace
+        from backend.main_agent.realtime import RealtimeHub
+        entered = asyncio.Event()
+        class InterruptedSession(FakeSttSession):
+            calls = 0
+            stopped = False
+            async def close(self):
+                self.calls += 1
+                if self.calls == 1:
+                    entered.set()
+                    await asyncio.Event().wait()
+                self.stopped = True
+        class Stt:
+            session = None
+            async def start(self, sink):
+                self.session = InterruptedSession(sink)
+                return self.session
+        stt, hub = Stt(), RealtimeHub()
+        coordinator = SpeechInputCoordinator(FakeInputRuntime(), stt_provider=stt,
+            vad=FakeVad([1.0, 0.0]), vad_stop_ms=20)
+        delivery = SimpleNamespace(startup=AsyncMock(), shutdown=AsyncMock())
+        service = SpeechService(hub, coordinator, delivery)
+        await service.startup()
+        mic = service._mic_task
+        hub.mic_queue.put(b"\0" * 640)
+        hub.mic_queue.put(b"\0" * 640)
+        await entered.wait()
+        closing = asyncio.create_task(service.shutdown())
+        try:
+            await asyncio.wait_for(asyncio.shield(closing), .5)
+            self.assertTrue(mic.done())
+            self.assertTrue(stt.session.stopped)
+            self.assertEqual(stt.session.calls, 2)
+        finally:
+            if not mic.done():
+                mic.cancel()
+            await asyncio.gather(mic, return_exceptions=True)
+            await asyncio.gather(closing, return_exceptions=True)
+
+    async def test_dashscope_callbacks_keep_arrival_order_across_confirmation_await(self) -> None:
+        entered, release = asyncio.Event(), asyncio.Event()
+        class BlockedPlayback(FakePlayback):
+            async def speech_confirmed(self):
+                entered.set()
+                await release.wait()
+        transports = []
+        def factory(**kwargs):
+            transport = FakeDashScopeSttTransport(kwargs["on_event"])
+            transports.append(transport)
+            return transport
+        runtime = FakeInputRuntime()
+        coordinator = SpeechInputCoordinator(runtime,
+            stt_provider=DashScopeStreamingSttProvider("test", transport_factory=factory),
+            vad=FakeVad([1.0]), playback_lifecycle=BlockedPlayback())
+        try:
+            await coordinator.accept_mic_frame(b"\0" * 640)
+            transports[0].emit_partial("old partial")
+            await entered.wait()
+            transports[0].on_event({"sentence": {"text": "complete final words", "sentence_end": True}})
+            await asyncio.sleep(0)
+            release.set()
+            self.assertTrue(await coordinator._close_stt(finalize=True))
+            self.assertEqual([text for text, _, _ in runtime.updates], ["old partial", "complete final words"])
+        finally:
+            release.set()
+            await coordinator.close()
+
     async def test_dashscope_mutable_partials_request_bounded_prepare_before_endpoint(self) -> None:
         with tempfile.TemporaryDirectory() as directory:
             transports: list[FakeDashScopeSttTransport] = []

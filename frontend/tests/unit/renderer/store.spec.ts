@@ -9,7 +9,6 @@ import { createPinia, setActivePinia } from "pinia";
 import { beforeEach, describe, expect, it, vi } from "vitest";
 import { useAuraBotStore } from "../../../src/app/store";
 import type { SendChatMessageResult } from "@shared/contracts/chat";
-import type { BackendMemorySnapshot } from "@shared/contracts/backend";
 import type { Message } from "@shared/schemas/message";
 
 function message(id: string, role: Message["role"], content: string): Message {
@@ -27,6 +26,14 @@ describe("useAuraBotStore", () => {
   beforeEach(() => {
     setActivePinia(createPinia());
     vi.unstubAllGlobals();
+  });
+
+  it("exposes Profile and model registry loaded through a Pinia patch",async()=>{
+    const profile={id:"profile-test",displayName:"Aura",active:true,createdAt:"now",updatedAt:"now"};
+    const model={currentModelId:"hiyori",currentModelPath:"assets/model.json",models:[]};
+    vi.stubGlobal("window",{aurabot:{getInitialState:async()=>({profile,live2dModelState:model})}});
+    const store=useAuraBotStore();await store.loadInitialState();
+    expect(store.profile).toEqual(profile);expect(store.live2dModelState).toEqual(model);
   });
 
   it("reconciles an optimistic chat message without Task state", async () => {
@@ -62,6 +69,7 @@ describe("useAuraBotStore", () => {
     const unsubscribe = vi.fn();
     vi.stubGlobal("window", {
       aurabot: {
+        onRealtimeError:vi.fn(()=>unsubscribe),
         onPetSettingsChanged: vi.fn(() => unsubscribe),
         onPetActivity: vi.fn(() => unsubscribe),
         onLive2DModelStateChanged: vi.fn(() => unsubscribe),
@@ -82,76 +90,13 @@ describe("useAuraBotStore", () => {
 
     expect(store.focusAt).toEqual({ x: 3, y: 4 });
     stop();
-    expect(unsubscribe).toHaveBeenCalledTimes(8);
+    expect(unsubscribe).toHaveBeenCalledTimes(9);
   });
 
-  it("loads Python Memory and refreshes after forget and failed-job retry", async () => {
-    const initial: BackendMemorySnapshot = {
-      items: [{
-        memoryId: "memory-1",
-        episodeId: "episode-1",
-        type: "preference",
-        content: "用户喜欢乌龙茶",
-        createdAt: "2026-08-28T00:00:00.000Z",
-        updatedAt: "2026-08-28T00:00:00.000Z"
-      }],
-      jobs: [{
-        jobId: "job-1",
-        kind: "extraction",
-        state: "failed",
-        attemptCount: 4,
-        lastError: "provider unavailable",
-        updatedAt: "2026-08-28T00:00:01.000Z"
-      }]
-    };
-    const afterForget: BackendMemorySnapshot = { items: [], jobs: initial.jobs };
-    const afterRetry: BackendMemorySnapshot = {
-      items: [],
-      jobs: [{ ...initial.jobs[0]!, state: "pending", attemptCount: 0, lastError: null }]
-    };
-    const getMemoryDebugSnapshot = vi
-      .fn()
-      .mockResolvedValueOnce(initial)
-      .mockResolvedValueOnce(afterForget)
-      .mockResolvedValueOnce(afterRetry);
-    const forgetMemories = vi.fn(async () => ({
-      forgottenCount: 1,
-      memoryIds: ["memory-1"]
-    }));
-    const retryMemoryJob = vi.fn(async () => afterRetry.jobs[0]);
-    vi.stubGlobal("window", {
-      aurabot: { getMemoryDebugSnapshot, forgetMemories, retryMemoryJob }
-    });
-    const store = useAuraBotStore();
-
-    await store.loadMemoryDebugSnapshot();
-    expect(store.memoryDebugSnapshot).toEqual(initial);
-    await store.forgetMemory("memory-1");
-    expect(forgetMemories).toHaveBeenCalledWith({
-      memoryIds: ["memory-1"],
-      episodeIds: [],
-      reason: "user request"
-    });
-    expect(store.memoryDebugSnapshot).toEqual(afterForget);
-    await store.retryMemoryJob("job-1");
-    expect(retryMemoryJob).toHaveBeenCalledWith("job-1");
-    expect(store.memoryDebugSnapshot).toEqual(afterRetry);
-    expect(store.memoryDebugLoading).toBe(false);
-    expect(store.memoryDebugError).toBeUndefined();
-  });
-
-  it("keeps an explicit Memory error when the Python owner is unavailable", async () => {
-    vi.stubGlobal("window", {
-      aurabot: {
-        getMemoryDebugSnapshot: vi.fn(async () => {
-          throw new Error("Backend unavailable");
-        })
-      }
-    });
-    const store = useAuraBotStore();
-
-    await expect(store.loadMemoryDebugSnapshot()).rejects.toThrow("Backend unavailable");
-    expect(store.memoryDebugLoading).toBe(false);
-    expect(store.memoryDebugError).toBe("Backend unavailable");
+  it('loads older visible history without duplicating existing messages',async()=>{
+    const message={id:'old',sessionId:'main:p',profileId:'p',role:'user' as const,content:'hello',createdAt:'2026-09-05T00:00:00Z'};
+    vi.stubGlobal('window',{aurabot:{getHistory:vi.fn(async()=>({messages:[message]}))}});
+    const store=useAuraBotStore();store.historyCursor=10;await store.loadOlderHistory();
+    expect(store.messages).toEqual([message]);expect(store.historyCursor).toBeUndefined();
   });
 });

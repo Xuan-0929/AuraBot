@@ -9,12 +9,13 @@ from __future__ import annotations
 
 import os
 import unittest
+from types import SimpleNamespace
 from pathlib import Path
 
 from fastapi.testclient import TestClient
 
 os.environ.setdefault(
-    "AURABOT_CONFIG_PATH", str(Path(__file__).parent / "fixtures" / "runtime_config.yaml")
+    "AURABOT_CONFIG_PATH", str(Path(__file__).parent / "fixtures" / "runtime_config.json")
 )
 
 from backend.main import create_app
@@ -46,7 +47,7 @@ class Profiles:
     async def activate(self, profile_id: str, soul: str) -> int:
         self.calls.append(f"activate:{profile_id}:{soul}")
         self.active_profile_id = profile_id
-        await self.hub.set_active(profile_id, 1, object(), object())
+        await self.hub.set_active(profile_id, 1, SimpleNamespace(), object())
         return 1
 
     async def shutdown(self) -> None:

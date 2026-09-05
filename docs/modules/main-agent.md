@@ -1,4 +1,6 @@
-# Main Agent
+# Main Agent V1 历史设计
+
+> 历史参考：本文保留前端统一接入之前的 Runtime 内部设计，不再作为当前产品入口、配置或线协议事实源。2026-09-05 起，Console 文字和语音统一经过 Pet 的唯一 WebSocket；默认文字，语音延迟初始化；人格归 Electron settings.json 的保存/应用；桌面交付历史独立存储；Memory 外部 API/UI 移除。当前规范见 [产品需求](../PRD-v2.md)、[系统模块](../modules-v2.md)、[后端契约](../backend-runtime-contract.md) 和 [配置与生命周期](../configuration-and-backend-lifecycle.md)。下文“仅语音”“不支持文本 submit”“Profile SQLite 独占人格”等旧约束已失效。
 
 ## 1. 产品范围
 

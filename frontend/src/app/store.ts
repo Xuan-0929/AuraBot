@@ -1,5 +1,5 @@
 /**
- * 管理 Renderer 的聊天、模型、Python Memory 管理、Live2D、桌宠与通知状态。
+ * 管理 Renderer 可见聊天、Live2D、桌宠与通知状态，不包含 Memory 管理。
  *
  * Store 通过 preload API 初始化和发送普通聊天，并协调 pet activity 队列；它不保存
  * Task 列表/详情/debug，也不订阅或调用任何 Task IPC。
@@ -11,11 +11,10 @@ import type {
   AppInitialState,
   SendChatMessageResult
 } from "@shared/contracts/chat";
-import type { BackendMemorySnapshot, BackendStatus } from "@shared/contracts/backend";
+import type { BackendStatus } from "@shared/contracts/backend";
 import type { Live2DModelState } from "@shared/contracts/live2dModel";
 import type { PetCursorPosition } from "@shared/contracts/ipc";
 import type { NotificationSettings } from "@shared/contracts/notificationSettings";
-import type { PersonaSettings } from "@shared/contracts/personaSettings";
 import type { PetActivity } from "@shared/contracts/pet";
 import type {
   ModelProviderSettingsPatch,
@@ -39,6 +38,8 @@ interface AuraBotState {
   profile?: Profile;
   mainSessionId?: string;
   messages: Message[];
+  historyCursor?:number;
+  chatError?:string;
   agentStatus: AgentStatus;
   petSettings: PetSettings;
   appConfig?: PublicAppConfig;
@@ -50,21 +51,25 @@ interface AuraBotState {
   petActivityQueue: PetActivity[];
   petCursorPosition?: PetCursorPosition;
   focusAt: { x: number; y: number };
-  memoryDebugSnapshot?: BackendMemorySnapshot;
-  memoryDebugLoading: boolean;
-  memoryDebugError?: string;
   debugPetOverlay: boolean;
   isInitialized: boolean;
 }
 
 export const useAuraBotStore = defineStore("auraBot", {
   state: (): AuraBotState => ({
+    profile:undefined,
+    mainSessionId:undefined,
+    live2dModelState:undefined,
+    notificationSettings:undefined,
+    petActivity:undefined,
+    petCursorPosition:undefined,
     messages: [],
+    historyCursor: undefined as number|undefined,
+    chatError: undefined as string|undefined,
     agentStatus: "idle",
     petSettings: { ...DEFAULT_PET_SETTINGS },
     petActivityQueue: [],
     focusAt: { x: 0, y: 0 },
-    memoryDebugLoading: false,
     debugPetOverlay: false,
     isInitialized: false
   }),
@@ -91,54 +96,11 @@ export const useAuraBotStore = defineStore("auraBot", {
     },
     async initialize() {
       await this.loadInitialState();
-    },
-    async loadMemoryDebugSnapshot() {
-      this.memoryDebugLoading = true;
-      this.memoryDebugError = undefined;
-      try {
-        this.memoryDebugSnapshot = await window.aurabot.getMemoryDebugSnapshot();
-      } catch (error) {
-        this.memoryDebugError = error instanceof Error ? error.message : String(error);
-        throw error;
-      } finally {
-        this.memoryDebugLoading = false;
-      }
-    },
-    async forgetMemory(memoryId: string) {
-      this.memoryDebugLoading = true;
-      this.memoryDebugError = undefined;
-      try {
-        await window.aurabot.forgetMemories({
-          memoryIds: [memoryId],
-          episodeIds: [],
-          reason: "user request"
-        });
-        this.memoryDebugSnapshot = await window.aurabot.getMemoryDebugSnapshot();
-      } catch (error) {
-        this.memoryDebugError = error instanceof Error ? error.message : String(error);
-        throw error;
-      } finally {
-        this.memoryDebugLoading = false;
-      }
-    },
-    async retryMemoryJob(jobId: string) {
-      this.memoryDebugLoading = true;
-      this.memoryDebugError = undefined;
-      try {
-        await window.aurabot.retryMemoryJob(jobId);
-        this.memoryDebugSnapshot = await window.aurabot.getMemoryDebugSnapshot();
-      } catch (error) {
-        this.memoryDebugError = error instanceof Error ? error.message : String(error);
-        throw error;
-      } finally {
-        this.memoryDebugLoading = false;
-      }
-    },
-    async loadBackendStatus() {
-      this.backendStatus = await window.aurabot.getBackendStatus();
+      const page=await window.aurabot.getHistory();this.messages=page.messages;this.historyCursor=page.nextCursor;
     },
     subscribeToPetEvents(): Unsubscribe {
       const unsubscribers: Unsubscribe[] = [
+        window.aurabot.onRealtimeError(error=>{this.chatError=error||undefined;}),
         window.aurabot.onPetSettingsChanged((value) => {
           this.petSettings = value;
         }),
@@ -167,48 +129,17 @@ export const useAuraBotStore = defineStore("auraBot", {
       ];
       return () => unsubscribers.forEach((unsubscribe) => unsubscribe());
     },
+    async loadOlderHistory(){
+      if(!this.historyCursor)return;const page=await window.aurabot.getHistory(this.historyCursor);
+      this.messages=[...page.messages.filter(m=>!this.messages.some(old=>old.id===m.id)),...this.messages];this.historyCursor=page.nextCursor;
+    },
     async openConsoleWindow() {
       await window.aurabot.openConsoleWindow();
     },
     async openSettingsWindow() {
       await window.aurabot.openSettingsWindow();
     },
-    async openConfigFile() {
-      await window.aurabot.openConfigFile();
-    },
-    async updateModelProviderSettings(patch: ModelProviderSettingsPatch) {
-      this.appConfig = await window.aurabot.updateModelProviderSettings(patch);
-      this.modelHealth = await window.aurabot.getModelHealth();
-    },
-    async testModelConnection(role: ModelRoleKey) {
-      if (this.modelHealth) {
-        this.modelHealth = {
-          ...this.modelHealth,
-          [role]: { ...this.modelHealth[role], state: "testing" }
-        };
-      }
-      const health = await window.aurabot.testModelConnection({ role });
-      if (this.modelHealth) {
-        this.modelHealth = { ...this.modelHealth, [role]: health };
-      }
-    },
-    async updateProactiveSettings(patch: ProactiveSettingsPatch) {
-      this.appConfig = await window.aurabot.updateProactiveSettings(patch);
-    },
-    async updatePersonaSettings(settings: PersonaSettings) {
-      this.profile = await window.aurabot.updatePersonaSettings(settings);
-    },
-    async setCurrentLive2DModel(modelId: string) {
-      this.live2dModelState = await window.aurabot.setCurrentLive2DModel(modelId);
-    },
-    async updateNotificationSettings(
-      patch: Partial<Omit<NotificationSettings, "permissionState">>
-    ) {
-      this.notificationSettings = await window.aurabot.updateNotificationSettings(patch);
-    },
-    async updatePetSettings(patch: PetSettingsPatch) {
-      this.petSettings = await window.aurabot.updatePetSettings(patch);
-    },
+
     async setPetMousePassthrough(enabled: boolean) {
       await window.aurabot.setPetMousePassthrough(enabled);
     },
@@ -231,6 +162,7 @@ export const useAuraBotStore = defineStore("auraBot", {
         content: trimmed,
         createdAt: new Date().toISOString()
       };
+      this.chatError=undefined;
       this.agentStatus = "thinking";
       this.messages = [...this.messages, pending];
       try {
@@ -243,6 +175,7 @@ export const useAuraBotStore = defineStore("auraBot", {
       } catch (error) {
         this.messages = this.messages.filter((message) => message.id !== pending.id);
         this.agentStatus = "idle";
+        this.chatError=error instanceof Error?error.message:"发送失败";
         throw error;
       }
     },
@@ -310,5 +243,5 @@ function reconcileMessages(
   ) {
     next.push(result.assistantMessage);
   }
-  return next;
+  return next.filter((message,index)=>next.findIndex(item=>item.id===message.id)===index);
 }

@@ -1,9 +1,8 @@
-"""解析并验证 Backend Task runtime 的不可变配置。
+"""Resolve immutable Task settings from the Backend section of Electron JSON configuration.
 
-本模块从 YAML 派生 SQLite、Pi session、Pi Home、共享 WorkspaceRegistry 与项目内 pinned
-runtime 路径，并在 Manager 启动前验证 Node、Pi CLI、Extension 和 prompt。并发上限属于
-Manager 的固定资源边界，不再接受配置，避免配置项存在但运行时忽略的假象。
-"""
+Settings derive durable SQLite/session/Pi-home paths and trusted workspaces, validate pinned Pi installation
+on demand, and forward configured model identity to the subprocess adapter. Missing Pi does not prevent
+Backend startup; TaskManager exposes a disabled capability until the next configured restart."""
 
 from __future__ import annotations
 
@@ -59,6 +58,7 @@ class TaskSettings:
     protocol_queue_size: int = 512
     output_chunk_bytes: int = 16 * 1024
     workspace_registry: WorkspaceRegistry = field(default_factory=WorkspaceRegistry.empty)
+    model_name: str = ""
 
     @classmethod
     def from_mapping(
@@ -69,7 +69,7 @@ class TaskSettings:
     ) -> "TaskSettings":
         """解析 task 配置；安装文件验证留给 ``validate_runtime()``。"""
 
-        raw = config.get("task")
+        raw = config.get("task", {})
         if not isinstance(raw, Mapping):
             raise TaskSettingsError("Configuration must contain a task mapping.")
         if "concurrency_limit" in raw:
@@ -89,7 +89,7 @@ class TaskSettings:
             )
 
         user_data = _resolve_path(
-            str(raw.get("user_data_dir", "./.aurabot-data")), config_root
+            str(raw.get("user_data_dir", config.get("app", {}).get("data_dir", "./.aurabot-data"))), config_root
         )
         runtime = _resolve_path(
             str(raw.get("pi_runtime_dir", "./pi-runtime")), config_root
@@ -105,6 +105,7 @@ class TaskSettings:
         task_root = user_data / "task"
 
         return cls(
+            model_name=str(raw.get("model", {}).get("model_name", "")),
             database_path=task_root / "task-runtime.sqlite3",
             session_root=task_root / "sessions",
             pi_home=user_data / "pi-agent",

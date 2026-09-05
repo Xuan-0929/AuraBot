@@ -1,416 +1,108 @@
-/**
- * 启动 Electron 桌面进程并组合窗口、IPC、Python Main Agent 实时会话与主动能力。
- *
- * bootstrap 使用 userData 初始化展示仓库与设置，由 Electron Main 持有带 Origin 的
- * Backend WebSocket；聊天 clause 只投影到消息表，不再走旧 Chat/Memory 编排链路。
+/** Composes the desktop shell, single Backend child, settings and delivered-history database.
+ * Pet alone owns realtime media; Main forwards console input and accepts receipts only from Pet.
+ * Backend owns business logic. This entry never instantiates legacy Chat, Memory or proactive services.
  */
+import { app, BrowserWindow, ipcMain, Notification, dialog } from 'electron';
+import { join, resolve } from 'node:path';
+import { randomUUID } from 'node:crypto';
+import { createAppDatabase } from '@core/storage/db';
+import { ProfileRepository } from '@core/storage/repositories/profileRepository';
+import { ProfileService } from '@core/profiles/profileService';
+import { PersonaSettingsService } from '@core/profiles/personaSettingsService';
+import { createLive2DModelRegistry } from '@core/live2d/modelRegistry';
+import { IPC_CHANNELS as C } from '@shared/contracts/ipc';
+import type { AgentStatus } from '@shared/contracts/chat';
+import type { HistoryEntry, PetCommand } from '@shared/contracts/desktop';
+import { DesktopConfigStore } from './desktopConfigStore';
+import { ConversationHistory } from './conversationHistory';
+import { BackendProcess } from './backendProcess';
+import { TaskStatusFeed } from './taskStatusFeed';
+import { PetWindowStateStore } from './petWindowStateStore';
+import { createPetWindow, openConsoleWindow, openSettingsWindow, applyPetSettings, broadcastLive2DModelState, broadcastChatMessageUpdated, broadcastPetActivity, broadcastAgentStatus, setPetMousePassthrough, movePetWindowBy, resizePetWindowCorner } from './createWindow';
 
-import { existsSync, mkdirSync, writeFileSync } from "node:fs";
-import { join } from "node:path";
-import { app, BrowserWindow, Notification, shell } from "electron";
-import WebSocket from "ws";
-import { createServices, type AppServices } from "@core/bootstrap/createServices";
-import { createLive2DModelRegistry, type Live2DModelRegistry } from "@core/live2d/modelRegistry";
-import { MemoryService } from "@core/memory/memoryService";
-import { ProactiveTriggerEngine } from "@core/proactive/proactiveTriggerEngine";
-import { createChatModel } from "@core/llm/chatModel";
-import { createGateModel } from "@core/llm/gateModel";
-import { createModelHealthService, type ModelHealthService } from "@core/llm/modelHealth";
-import { createVoiceAdapter } from "@core/voice/voiceAdapter";
-import {
-  forgetBackendMemories,
-  getBackendMemorySnapshot,
-  getBackendStatus,
-  retryBackendMemoryJob
-} from "./backendGatewayClient";
-import { MainAgentChatProjection } from "./mainAgentChatProjection";
-import {
-  MainAgentRealtimeClient,
-  type RealtimeSocket
-} from "./mainAgentRealtimeClient";
-import {
-  createMemoryExtractor,
-  createMemoryMergePlanner,
-  createMemoryRecallPlanner,
-  createMemoryRelationPlanner
-} from "@core/memory/modelBackedMemoryModel";
-import {
-  applyPetSettings,
-  broadcastAgentStatus,
-  broadcastChatMessage,
-  broadcastChatMessageUpdated,
-  broadcastLive2DModelState,
-  broadcastNotificationSettings,
-  broadcastPetActivity,
-  createPetWindow,
-  movePetWindowBy,
-  resizePetWindowCorner,
-  openConsoleWindow,
-  openSettingsWindow,
-  setPetMousePassthrough
-} from "./createWindow";
-import { PetSettingsStore } from "./petSettingsStore";
-import { Live2DModelStore } from "./live2dModelStore";
-import { NotificationSettingsStore } from "./notificationSettingsStore";
-import { PetWindowStateStore } from "./petWindowStateStore";
-import { SystemNotificationService } from "./systemNotificationService";
-import { buildAssistantMessagePetActivities, registerIpc } from "./registerIpc";
-import {
-  updateUserModelProviderSettings,
-  updateUserProactiveSettings
-} from "./appConfigStore";
-import {
-  createPublicAppConfig,
-  type ModelRoleKey,
-  type ModelProviderSettingsPatch,
-  type ProactiveSettingsPatch,
-  type PublicModelHealthMap
-} from "@shared/contracts/settings";
-import type { PersonaSettings } from "@shared/contracts/personaSettings";
-import type { Live2DModelState } from "@shared/contracts/live2dModel";
-import type { NotificationSettings } from "@shared/contracts/notificationSettings";
-import type { Profile } from "@shared/schemas/profile";
+if(process.env.AURABOT_USER_DATA_DIR)app.setPath('userData',process.env.AURABOT_USER_DATA_DIR);
+const projectRoot=resolve(__dirname,'../../..');
+let backend:BackendProcess|undefined;
+let history:ConversationHistory|undefined;
+let profileDb:ReturnType<typeof createAppDatabase>|undefined;
+let quitting=false;
+let tasks:TaskStatusFeed|undefined;
+const broadcast=(channel:string,value:unknown)=>BrowserWindow.getAllWindows().forEach(window=>window.webContents.send(channel,value));
 
-let services: AppServices | undefined;
-let petSettingsStore: PetSettingsStore | undefined;
-let live2dModelStore: Live2DModelStore | undefined;
-let notificationSettingsStore: NotificationSettingsStore | undefined;
-let petWindowStateStore: PetWindowStateStore | undefined;
-let proactiveTriggerEngine: ProactiveTriggerEngine | undefined;
-let modelHealthService: ModelHealthService | undefined;
-let modelHealthSnapshot: PublicModelHealthMap | undefined;
-let live2dModelRegistry: Live2DModelRegistry | undefined;
-let systemNotificationService: SystemNotificationService | undefined;
-let mainAgentRealtimeClient: MainAgentRealtimeClient | undefined;
-let mainAgentChatProjection: MainAgentChatProjection | undefined;
-
-const MAIN_AGENT_GATEWAY_URL = "http://127.0.0.1:6401";
-
-if (process.env.AURABOT_USER_DATA_DIR) {
-  app.setPath("userData", process.env.AURABOT_USER_DATA_DIR);
+async function bootstrap(){
+ const root=process.env.AURABOT_USER_DATA_DIR??join(app.getPath('userData'),'desktop-v2');
+ const config=new DesktopConfigStore(root,projectRoot);
+ history=new ConversationHistory(root);
+ profileDb=createAppDatabase({filePath:join(root,'profile.sqlite3'),userDataPath:root});
+ const repository=new ProfileRepository(profileDb);
+ const profiles=new ProfileService(repository);
+ const persona=new PersonaSettingsService(profiles,repository);
+ persona.updateActivePersonaSettings(config.current().persona);
+ const registry=createLive2DModelRegistry({modelRootPath:app.isPackaged?join(__dirname,'../renderer/assets/live2d'):join(projectRoot,'frontend/public/assets/live2d')});
+ const modelState=()=>{const model=registry.resolveCurrentModel(config.current().desktop.currentModelId);return {currentModelId:model?.id??'',currentModelPath:model?.manifestPath??'',models:registry.listAvailableModels()};};
+ const bounds=new PetWindowStateStore(root);
+ let pet:BrowserWindow;
+ let petReady=false;
+ let agentState:AgentStatus='idle';
+ let realtimeError='';
+ const pending=new Map<string,{resolve:()=>void;reject:(error:Error)=>void;timer:ReturnType<typeof setTimeout>}>();
+ const changed=()=>{if(config.online&&!quitting)tasks?.start();else tasks?.stop();broadcast(C.settingsChanged,config.status());};
+ backend=new BackendProcess(config,projectRoot,changed,()=>tasks?.stop());
+ const sendPet=(command:PetCommand)=>{if(!petReady||pet.isDestroyed())throw new Error('桌宠尚未就绪');pet.webContents.send(C.petCommand,command);};
+ const assertPet=(event:Electron.IpcMainInvokeEvent)=>{if(event.sender.id!==pet.webContents.id)throw new Error('此操作仅允许桌宠窗口执行');};
+ // IPC is limited to renderer windows created by this application.
+ const handle=(channel:string,listener:(event:Electron.IpcMainInvokeEvent,...args:any[])=>any)=>ipcMain.handle(channel,(event,...args)=>{
+   if(!BrowserWindow.fromWebContents(event.sender)||event.senderFrame!==event.sender.mainFrame)throw new Error('未知窗口');
+   return listener(event,...args);
+ });
+ handle(C.getInitialState,()=>{const profile=profiles.getOrSeedActiveProfile();return {profile,mainSessionId:`main:${profile.id}`,messages:history!.list(profile.id).messages,agentStatus:agentState,chatError:realtimeError,petSettings:config.current().desktop.pet,live2dModelState:modelState(),notificationSettings:{systemNotificationsEnabled:config.current().desktop.systemNotificationsEnabled,followUpNotificationsEnabled:false,idleNudgeNotificationsEnabled:false,permissionState:Notification.isSupported()?'system_managed':'unsupported'},debugPetOverlay:false};});
+ handle(C.openConsoleWindow,()=>{openConsoleWindow();});
+ handle(C.openSettingsWindow,()=>{openSettingsWindow();});
+ handle(C.getSettings,()=>config.status());
+ handle(C.saveSettings,(_event,value,clear=[])=>{if(backend!.busy)throw new Error('正在启动或应用配置，请完成后再保存。');if(!Array.isArray(clear)||!clear.every(k=>typeof k==='string'))throw new Error('无效密钥操作');const result=config.save(value,clear);changed();return result;});
+ handle(C.applySettings,async(_event,force=false)=>{
+   if(typeof force!=='boolean')throw new Error('无效应用请求');
+   const previous=config.status();
+   const result=await backend!.apply(force);
+   if(!result.busy){persona.updateActivePersonaSettings(config.current().persona);applyPetSettings(config.current().desktop.pet);broadcastLive2DModelState(modelState());if(previous.backendPending||!previous.online)sendPet({id:randomUUID(),type:'reconnect'});}
+   return result;
+ });
+ handle(C.getHistory,(_event,before)=>history!.list(profiles.getOrSeedActiveProfile().id,before));
+ handle(C.recordDelivery,(event,entry:HistoryEntry)=>{
+   assertPet(event);const saved=history!.record(profiles.getOrSeedActiveProfile().id,entry);broadcastChatMessageUpdated(saved);
+   if(entry.role==='assistant')broadcastPetActivity({id:entry.id,kind:'chat_reply',message:entry.content,createdAt:saved.createdAt});
+   return saved;
+ });
+ handle(C.petReady,event=>{assertPet(event);petReady=true;});
+ handle(C.petCommandResult,(event,result)=>{assertPet(event);const waiting=pending.get(result.id);if(!waiting)return;clearTimeout(waiting.timer);pending.delete(result.id);result.error?waiting.reject(new Error(result.error)):waiting.resolve();});
+ handle(C.realtimeError,(event,error)=>{assertPet(event);if(typeof error!=='string'||error.length>1024)throw new Error('无效错误状态');realtimeError=error;broadcast(C.realtimeError,error);});
+ handle(C.realtimeStatus,(event,state)=>{assertPet(event);if(!['idle','listening','thinking','typing','speaking'].includes(state))throw new Error('无效状态');agentState=state;broadcastAgentStatus(state);});
+ handle(C.sendChatMessage,async(_event,input)=>{
+   if(!config.online)throw new Error('Backend 未就绪，请先在设置中应用配置。');
+   if(typeof input?.content!=='string'||!input.content.trim()||input.content.length>8000)throw new Error('请输入有效消息（最多 8000 字符）');
+   const id=randomUUID();
+   await new Promise<void>((resolve,reject)=>{const timer=setTimeout(()=>{pending.delete(id);reject(new Error('消息确认超时；未自动重发，请确认对话状态。'));},15000);pending.set(id,{resolve,reject,timer});try{sendPet({id,type:'text',text:input.content.trim()});}catch(error){clearTimeout(timer);pending.delete(id);reject(error);}});
+   const message=history!.list(profiles.getOrSeedActiveProfile().id).messages.find(m=>m.id===id);
+   if(!message)throw new Error('消息已提交，但历史尚未确认。');
+   return {userMessage:message,agentStatus:agentState};
+ });
+ handle(C.taskSubscribe,(event,enabled)=>{
+   if(event.sender.id===pet.webContents.id)throw new Error('Task 只在控制台展示');
+   tasks?.stop();tasks=undefined;
+   if(enabled){const sender=event.sender;tasks=new TaskStatusFeed(()=>profiles.getOrSeedActiveProfile().id,value=>{if(!sender.isDestroyed())sender.send(C.tasksChanged,value);});tasks.start();sender.once('destroyed',()=>{tasks?.stop();tasks=undefined;});}
+ });
+ handle(C.getLive2DModelState,()=>modelState());
+ handle(C.setPetMousePassthrough,(event,enabled)=>{assertPet(event);if(typeof enabled==='boolean')setPetMousePassthrough(enabled);});
+ const movement=(value:any)=>{if(!value||![value.x,value.y].every(v=>typeof v==='number'&&Number.isFinite(v)&&Math.abs(v)<=10000))throw new Error('无效窗口位移');return value;};
+ handle(C.movePetWindowBy,(event,delta)=>{assertPet(event);movePetWindowBy(movement(delta));});
+ handle(C.resizePetWindowCorner,(event,value)=>{assertPet(event);if(!['n','s','e','w','nw','ne','sw','se'].includes(value.direction))throw new Error('无效方向');resizePetWindowCorner(value.direction,movement(value.movement));});
+ pet=createPetWindow({settings:config.current().desktop.pet,live2dModelState:modelState(),savedBounds:bounds.getBounds(),onBoundsChanged:value=>bounds.saveBounds(value)});
+ pet.webContents.on('render-process-gone',()=>{petReady=false;for(const item of pending.values()){clearTimeout(item.timer);item.reject(new Error('桌宠窗口已断开'));}pending.clear();});
+ try{await backend.start();if(petReady)sendPet({id:randomUUID(),type:'reconnect'});}catch(error){config.error=error instanceof Error?error.message:'Backend 启动失败';changed();openSettingsWindow();}
 }
-
-async function bootstrap(): Promise<void> {
-  const userDataPath = app.getPath("userData");
-
-  services = createServices(userDataPath);
-  modelHealthService = createModelHealthService();
-  modelHealthSnapshot = modelHealthService.inspectAll(services.config);
-  petSettingsStore = new PetSettingsStore(userDataPath);
-  live2dModelStore = new Live2DModelStore(userDataPath);
-  notificationSettingsStore = new NotificationSettingsStore(userDataPath);
-  systemNotificationService = new SystemNotificationService({
-    isSupported: () => Notification.isSupported(),
-    createNotification: (payload) => new Notification(payload),
-    openConsoleWindow: () => {
-      openConsoleWindow();
-    },
-    getDisplayLanguage: () => petSettingsStore?.get().displayLanguage ?? "en"
-  });
-  live2dModelRegistry = createLive2DModelRegistry({
-    modelRootPath: resolveLive2DModelRootPath()
-  });
-  petWindowStateStore = new PetWindowStateStore(userDataPath);
-  const petActivityCursors = new Map<string, number>();
-  const broadcastProjectedMessage = (message: import("@shared/schemas/message").Message) => {
-    const result = buildAssistantMessagePetActivities(message, {
-      startIndex: petActivityCursors.get(message.id) ?? 0,
-      flushRemainder: true
-    });
-    petActivityCursors.set(message.id, result.nextIndex);
-    result.activities.forEach((activity) => broadcastPetActivity(activity));
-  };
-  mainAgentRealtimeClient = new MainAgentRealtimeClient({
-    baseUrl: MAIN_AGENT_GATEWAY_URL,
-    createWebSocket: (url, protocols, options) => new WebSocket(
-      url,
-      [...protocols],
-      { origin: options.origin }
-    ) as unknown as RealtimeSocket,
-    onClauseOffer: (offer) => mainAgentChatProjection!.deliverClause(offer)
-  });
-  mainAgentChatProjection = new MainAgentChatProjection({
-    profileService: services.profileService,
-    sessionRepository: services.sessionRepository,
-    messageRepository: services.messageRepository,
-    eventLogService: services.eventLogService,
-    realtimeClient: mainAgentRealtimeClient,
-    onAssistantMessageCreated: (message) => {
-      broadcastAgentStatus("typing");
-      broadcastChatMessage(message);
-      broadcastProjectedMessage(message);
-      broadcastAgentStatus("idle");
-    },
-    onAssistantMessageUpdated: (message) => {
-      broadcastAgentStatus("typing");
-      broadcastChatMessageUpdated(message);
-      broadcastProjectedMessage(message);
-      broadcastAgentStatus("idle");
-    }
-  });
-  registerIpc(services, {
-    openConsoleWindow,
-    openSettingsWindow,
-    openConfigFile: () => openUserConfigFile(userDataPath),
-    updateModelProviderSettings: (patch) => updateModelProviderSettings(userDataPath, patch),
-    getModelHealth: () => getModelHealth(),
-    testModelConnection: (role) => testModelConnection(role),
-    updateProactiveSettings: (patch) => updateProactiveSettings(userDataPath, patch),
-    getBackendStatus: () => getBackendStatus(),
-    getMemoryDebugSnapshot: () => getBackendMemorySnapshot(),
-    forgetMemories: (input) => forgetBackendMemories(input),
-    retryMemoryJob: (jobId) => retryBackendMemoryJob(jobId),
-    updatePersonaSettings: (settings) => updatePersonaSettings(settings),
-    getLive2DModelState: () => getLive2DModelState(),
-    setCurrentLive2DModel: (modelId) => setCurrentLive2DModel(modelId),
-    getNotificationSettings: () => getNotificationSettings(),
-    updateNotificationSettings: (patch) => updateNotificationSettings(patch),
-    recordUserActivity: () => proactiveTriggerEngine?.recordUserActivity(),
-    sendChatMessage: (input) => mainAgentChatProjection!.sendMessage(input),
-    getPetSettings: () => petSettingsStore?.get() ?? {
-      clickThroughPet: false,
-      displayLanguage: "en"
-    },
-    updatePetSettings: (patch) => {
-      const settings = petSettingsStore?.update(patch) ?? {
-        clickThroughPet: false,
-        displayLanguage: "en"
-      };
-
-      applyPetSettings(settings);
-
-      return settings;
-    },
-    setPetMousePassthrough,
-    movePetWindowBy,
-    resizePetWindowCorner,
-    broadcastPetActivity,
-    broadcastAgentStatus,
-    broadcastChatMessage,
-    broadcastChatMessageUpdated
-  });
-  createPetWindow({
-    settings: petSettingsStore.get(),
-    live2dModelState: getLive2DModelState(),
-    savedBounds: petWindowStateStore.getBounds(),
-    onBoundsChanged: (bounds) => petWindowStateStore?.saveBounds(bounds)
-  });
-  proactiveTriggerEngine = new ProactiveTriggerEngine({
-    get profileService() {
-      return services!.profileService;
-    },
-    get memoryService() {
-      return services!.memoryService;
-    },
-    get eventLogService() {
-      return services!.eventLogService;
-    },
-    get voiceAdapter() {
-      return services!.voiceAdapter;
-    },
-    broadcastPetActivity,
-    deliverSystemNotification: ({ kind, message }) => {
-      const settings = getNotificationSettings();
-
-      if (
-        kind === "memory_follow_up" ||
-        kind === "proactive_idle"
-      ) {
-        systemNotificationService?.deliver({
-          kind,
-          message,
-          settings
-        });
-      }
-    }
-  }, {
-    ...services.config.proactive,
-    memoryFollowUpsEnabled: false
-  });
-  proactiveTriggerEngine.start();
-}
-
-async function openUserConfigFile(userDataPath: string): Promise<void> {
-  const configPath = join(userDataPath, "config.json");
-
-  if (!existsSync(configPath)) {
-    mkdirSync(userDataPath, { recursive: true });
-    writeFileSync(configPath, "{}\n", "utf8");
-  }
-
-  const error = await shell.openPath(configPath);
-
-  if (error) {
-    shell.showItemInFolder(configPath);
-  }
-}
-
-async function updateModelProviderSettings(userDataPath: string, patch: ModelProviderSettingsPatch) {
-  if (!services) {
-    throw new Error("AuraBot services are not ready.");
-  }
-
-  const nextConfig = updateUserModelProviderSettings(userDataPath, services.config, patch);
-  services.config[patch.role] = nextConfig[patch.role];
-
-  if (patch.role === "gateModel") {
-    services.gateModel = createGateModel(nextConfig.gateModel);
-    services.chatOrchestrator.updateModelDependencies({ gateModel: services.gateModel });
-  }
-
-  if (patch.role === "chatModel") {
-    services.chatModel = createChatModel(nextConfig.chatModel);
-    services.voiceAdapter = createVoiceAdapter(nextConfig.chatModel);
-    services.chatOrchestrator.updateModelDependencies({
-      chatModel: services.chatModel,
-      voiceAdapter: services.voiceAdapter
-    });
-  }
-
-  if (patch.role === "memoryModel") {
-    services.memoryExtractor = createMemoryExtractor(nextConfig.memoryModel);
-    services.memoryService = new MemoryService(services.memoryService.getRepository(), {
-      mergePlanner: createMemoryMergePlanner(nextConfig.memoryModel),
-      relationPlanner: createMemoryRelationPlanner(nextConfig.memoryModel),
-      recallPlanner: createMemoryRecallPlanner(nextConfig.memoryModel)
-    });
-    services.chatOrchestrator.updateModelDependencies({
-      memoryExtractor: services.memoryExtractor,
-      memoryService: services.memoryService
-    });
-  }
-
-  modelHealthSnapshot = {
-    ...getModelHealth(),
-    [patch.role]: modelHealthService!.inspectRole(patch.role, nextConfig[patch.role])
-  };
-
-  return createPublicAppConfig(services.config);
-}
-
-async function updateProactiveSettings(userDataPath: string, patch: ProactiveSettingsPatch) {
-  if (!services) {
-    throw new Error("AuraBot services are not ready.");
-  }
-
-  const nextConfig = updateUserProactiveSettings(userDataPath, services.config, patch);
-  services.config.proactive = nextConfig.proactive;
-  proactiveTriggerEngine?.updateOptions(nextConfig.proactive);
-
-  return createPublicAppConfig(services.config);
-}
-
-function updatePersonaSettings(settings: PersonaSettings): Profile {
-  if (!services) {
-    throw new Error("AuraBot services are not ready.");
-  }
-
-  return services.personaSettingsService.updateActivePersonaSettings(settings);
-}
-
-function getLive2DModelState(): Live2DModelState {
-  if (!live2dModelRegistry || !live2dModelStore) {
-    throw new Error("AuraBot Live2D model services are not ready.");
-  }
-
-  const currentModel = live2dModelRegistry.resolveCurrentModel(live2dModelStore.get().currentModelId);
-  const models = live2dModelRegistry.listAvailableModels();
-
-  return {
-    currentModelId: currentModel?.id ?? "",
-    currentModelPath: currentModel?.manifestPath ?? "",
-    models
-  };
-}
-
-function setCurrentLive2DModel(modelId: string): Live2DModelState {
-  if (!live2dModelStore) {
-    throw new Error("AuraBot Live2D model services are not ready.");
-  }
-
-  live2dModelStore.update({ currentModelId: modelId });
-  const state = getLive2DModelState();
-  broadcastLive2DModelState(state);
-
-  return state;
-}
-
-function getNotificationSettings(): NotificationSettings {
-  if (!notificationSettingsStore) {
-    throw new Error("AuraBot notification settings are not ready.");
-  }
-
-  return notificationSettingsStore.get(resolveNotificationPermissionState());
-}
-
-function updateNotificationSettings(
-  patch: Partial<Omit<NotificationSettings, "permissionState">>
-): NotificationSettings {
-  if (!notificationSettingsStore) {
-    throw new Error("AuraBot notification settings are not ready.");
-  }
-
-  const settings = notificationSettingsStore.update(patch, resolveNotificationPermissionState());
-  broadcastNotificationSettings(settings);
-
-  return settings;
-}
-
-function resolveNotificationPermissionState(): NotificationSettings["permissionState"] {
-  return Notification.isSupported() ? "system_managed" : "unsupported";
-}
-
-function resolveLive2DModelRootPath(): string {
-  return app.isPackaged
-    ? join(__dirname, "../renderer/assets/live2d")
-    : join(process.cwd(), "../frontend/public/assets/live2d");
-}
-
-app.whenReady().then(bootstrap);
-
-app.on("activate", () => {
-  if (services && BrowserWindow.getAllWindows().length === 0) {
-    createPetWindow({
-      settings: petSettingsStore?.get(),
-      live2dModelState: getLive2DModelState(),
-      savedBounds: petWindowStateStore?.getBounds(),
-      onBoundsChanged: (bounds) => petWindowStateStore?.saveBounds(bounds)
-    });
-  }
+app.whenReady().then(bootstrap).catch(error=>{dialog.showErrorBox('AuraBot 启动失败',error instanceof Error?error.message:'无法初始化应用数据。');app.quit();});
+app.on('window-all-closed',()=>app.quit());
+app.on('before-quit',event=>{
+ if(quitting)return;event.preventDefault();quitting=true;tasks?.stop();
+ void (async()=>{try{await backend?.stop();history?.close();profileDb?.close();app.quit();}catch(error){quitting=false;dialog.showErrorBox('AuraBot 尚未退出',error instanceof Error?error.message:'Backend 清理尚未完成，请稍后重试。');}})();
 });
-
-app.on("window-all-closed", () => {
-  if (process.platform !== "darwin") {
-    app.quit();
-  }
-});
-
-app.on("before-quit", () => {
-  proactiveTriggerEngine?.stop();
-  mainAgentRealtimeClient?.close();
-  services?.database.close();
-});
-
-function getModelHealth(): PublicModelHealthMap {
-  if (!services || !modelHealthService) {
-    throw new Error("AuraBot services are not ready.");
-  }
-
-  modelHealthSnapshot ??= modelHealthService.inspectAll(services.config);
-
-  return modelHealthSnapshot;
-}
-
-async function testModelConnection(role: ModelRoleKey) {
-  if (!services || !modelHealthService) {
-    throw new Error("AuraBot services are not ready.");
-  }
-
-  const health = await modelHealthService.testRoleConnection(role, services.config[role]);
-  modelHealthSnapshot = {
-    ...getModelHealth(),
-    [role]: health
-  };
-
-  return health;
-}

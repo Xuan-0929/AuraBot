@@ -1,3 +1,5 @@
+<!-- Edits the shared settings draft's persona fields. Save and Apply belong to SettingsWindow;
+     no profile writes, reconnects or runtime changes occur while this form is edited. -->
 <template>
   <section class="settings-page-section" :aria-label="t(store.displayLanguage, 'persona')">
     <div class="settings-page-section-header">
@@ -56,17 +58,12 @@
       </label>
     </div>
 
-    <div class="settings-page-actions">
-      <button type="button" class="settings-config-button" :aria-label="t(store.displayLanguage, 'savePersonaSettings')" @click="void store.updatePersonaSettings(draft)">
-        {{ t(store.displayLanguage, "savePersonaSettings") }}
-      </button>
-    </div>
   </section>
 </template>
 
 <script setup lang="ts">
-import { reactive, ref, watch } from "vue";
-import { createPersonaSettingsFromProfile, type PersonaSettings } from "@shared/contracts/personaSettings";
+import { ref } from "vue";
+import { type PersonaSettings } from "@shared/contracts/personaSettings";
 import { useAuraBotStore } from "../../../app/store";
 import { t } from "../../../i18n";
 import { splitLines } from "../settingsHelpers";
@@ -74,11 +71,5 @@ import SettingsPageLead from "../SettingsPageLead.vue";
 
 const store = useAuraBotStore();
 const showAdvanced = ref(false);
-const draft = reactive<PersonaSettings>(createPersonaSettingsFromProfile(store.profile));
-
-watch(
-  () => store.profile,
-  (profile) => Object.assign(draft, createPersonaSettingsFromProfile(profile)),
-  { deep: true }
-);
+const draft = defineModel<PersonaSettings>({required:true});
 </script>

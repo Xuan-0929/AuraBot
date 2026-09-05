@@ -12,6 +12,7 @@
         :placeholder="t(displayLanguage, 'saySomething')"
         :aria-label="t(displayLanguage, 'saySomething')"
         rows="1"
+        maxlength="8000"
         @input="resizeTextarea"
         @keydown="handleKeyDown"
       />
@@ -81,7 +82,7 @@ async function sendContent(nextContent: string) {
 }
 
 function handleSubmit() {
-  void sendContent(content.value);
+  void sendContent(content.value).catch(() => undefined);
 }
 
 function handleKeyDown(event: KeyboardEvent) {
@@ -98,7 +99,7 @@ function handleKeyDown(event: KeyboardEvent) {
   }
 
   event.preventDefault();
-  void sendContent(textarea.value);
+  void sendContent(textarea.value).catch(() => undefined);
 }
 
 function resizeTextarea() {

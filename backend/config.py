@@ -1,30 +1,24 @@
-"""加载 Backend 进程级 YAML 配置并隔离已经删除的旧执行字段。
+"""Read one immutable Electron-owned JSON configuration snapshot for Backend composition.
 
-Backend 导入时只初始化一次本模块；app、main_agent、memory、task、dev、端口和保留模型
-角色通过此边界进入组合入口及各领域设置。旧 Task/MCP 段在环境变量展开前即被丢弃，
-因此历史配置不会让当前进程重新依赖已删除的 runtime secret。
-"""
+Only the backend section enters domain settings; version/revision stay process metadata. Missing files
+produce safe blank defaults. JSON strings stay literal, and saves never hot reload a running process."""
 
 from __future__ import annotations
 
 import os
-import re
 from collections.abc import Iterator, Mapping
 from copy import deepcopy
 from pathlib import Path
 from threading import RLock
 from typing import Any
 
-import yaml
+import json
 
 PROJECT_ROOT = Path(__file__).resolve().parent.parent
-DEFAULT_CONFIG_PATH = PROJECT_ROOT / "config.yaml"
+DEFAULT_CONFIG_PATH = Path.home() / "Library/Application Support/AuraBot/desktop-v2/settings.json"
 CONFIG_PATH_ENV = "AURABOT_CONFIG_PATH"
 RETAINED_TOP_LEVEL_KEYS = frozenset(
     {"app", "dev", "memory", "ports", "chat_model", "gateway_model", "main_agent", "task"}
-)
-ENV_REFERENCE_PATTERN = re.compile(
-    r"\$\{([A-Za-z_][A-Za-z0-9_]*)(?::-(.*?))?\}"
 )
 
 
@@ -37,7 +31,7 @@ class ConfigNotInitializedError(ConfigError):
 
 
 class Config(Mapping[str, Any]):
-    """An in-memory view of one YAML configuration file.
+    """An in-memory view of one JSON configuration file.
 
     The module-level ``config`` instance is initialized once by ``backend.main``.
     Mapping access and top-level attribute access are both supported::
@@ -50,6 +44,7 @@ class Config(Mapping[str, Any]):
         self._data: dict[str, Any] | None = None
         self._path: Path | None = None
         self._lock = RLock()
+        self.revision = 0
 
     @property
     def initialized(self) -> bool:
@@ -62,7 +57,7 @@ class Config(Mapping[str, Any]):
         return self._path
 
     def initialize(self, config_path: str | Path | None = None) -> Config:
-        """Load the YAML file once and return this shared configuration object."""
+        """Load the JSON file once and return this shared configuration object."""
 
         resolved_path = resolve_config_path(config_path)
 
@@ -75,32 +70,18 @@ class Config(Mapping[str, Any]):
                     )
                 return self
 
-            if not resolved_path.is_file():
-                raise ConfigError(
-                    f"AuraBot config file not found: {resolved_path}. "
-                    "Create config.yaml from config.example.yaml before starting the backend."
-                )
-
             try:
-                loaded = yaml.safe_load(resolved_path.read_text(encoding="utf-8"))
-            except (OSError, UnicodeError, yaml.YAMLError) as exc:
-                raise ConfigError(
-                    f"Failed to load AuraBot configuration from {resolved_path}: {exc}"
-                ) from exc
-
-            if loaded is None:
-                loaded = {}
-            if not isinstance(loaded, dict):
-                raise ConfigError(
-                    f"AuraBot configuration root must be a mapping, got {type(loaded).__name__}."
-                )
-            if not all(isinstance(key, str) for key in loaded):
-                raise ConfigError("AuraBot configuration top-level keys must all be strings.")
-
-            retained = {
-                key: value for key, value in loaded.items() if key in RETAINED_TOP_LEVEL_KEYS
-            }
-            self._data = _expand_environment_references(retained)
+                loaded = json.loads(resolved_path.read_text(encoding="utf-8")) if resolved_path.is_file() else {"version": 1, "revision": 0, "backend": {}}
+            except (OSError, UnicodeError, json.JSONDecodeError) as exc:
+                raise ConfigError("Invalid AuraBot JSON configuration") from exc
+            if not isinstance(loaded, dict) or loaded.get("version") != 1:
+                raise ConfigError("AuraBot configuration must be a version 1 object")
+            revision = loaded.get("revision", 0)
+            backend = loaded.get("backend", {})
+            if type(revision) is not int or revision < 0 or not isinstance(backend, dict):
+                raise ConfigError("Invalid configuration revision or backend section")
+            self.revision = revision
+            self._data = {key: value for key, value in backend.items() if key in RETAINED_TOP_LEVEL_KEYS}
             self._path = resolved_path
             return self
 
@@ -143,39 +124,6 @@ def resolve_config_path(config_path: str | Path | None = None) -> Path:
     if not path.is_absolute():
         path = PROJECT_ROOT / path
     return path.resolve()
-
-
-def _expand_environment_references(value: Any, location: str = "config") -> Any:
-    """Recursively expand ${VAR} and ${VAR:-fallback} string references."""
-
-    if isinstance(value, dict):
-        return {
-            key: _expand_environment_references(item, f"{location}.{key}")
-            for key, item in value.items()
-        }
-    if isinstance(value, list):
-        return [
-            _expand_environment_references(item, f"{location}[{index}]")
-            for index, item in enumerate(value)
-        ]
-    if not isinstance(value, str):
-        return value
-
-    def replace_reference(match: re.Match[str]) -> str:
-        variable_name = match.group(1)
-        fallback = match.group(2)
-
-        if variable_name in os.environ:
-            return os.environ[variable_name]
-        if fallback is not None:
-            return fallback
-
-        raise ConfigError(
-            f"Required environment variable {variable_name} referenced by "
-            f"{location} is not set."
-        )
-
-    return ENV_REFERENCE_PATTERN.sub(replace_reference, value)
 
 
 config = Config()

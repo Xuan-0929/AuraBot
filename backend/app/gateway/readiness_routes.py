@@ -8,9 +8,12 @@ creates product Tasks.  Metrics are an optional bounded in-memory diagnostic sna
 from __future__ import annotations
 
 import inspect
+import os
+from contextlib import AsyncExitStack
 from typing import Any
 
-from fastapi import APIRouter, Request
+from fastapi import APIRouter, Request, HTTPException
+from pydantic import BaseModel, ConfigDict
 
 
 router = APIRouter(prefix="/api/v1", tags=["backend-readiness"])
@@ -34,8 +37,54 @@ async def readiness(request: Request) -> dict[str, Any]:
     components["activeProfileId"] = getattr(profiles, "active_profile_id", None)
     return {
         "ready": bool(getattr(application.state, "backend_ready", False)),
+        "configRevision": getattr(application.state, "config_revision", 0),
+        "processId": os.getpid(),
+        "instanceId": os.environ.get("AURABOT_BACKEND_INSTANCE", ""),
+        "capabilities": getattr(application.state, "capabilities", {}),
         "components": components,
     }
+
+
+class RestartPrepareRequest(BaseModel):
+    model_config = ConfigDict(extra="forbid")
+    force: bool = False
+
+
+@router.post("/restart/prepare")
+async def prepare_restart(body: RestartPrepareRequest, request: Request) -> dict[str, Any]:
+    """Atomically inspect and fence every work admission owner before Electron stops this process."""
+    hub = request.app.state.main_agent_realtime
+    if not hub.origin_allowed(request.headers.get("origin")):
+        raise HTTPException(403, "origin_not_allowed")
+    manager = request.app.state.task_manager
+    async with AsyncExitStack() as locks:
+        await locks.enter_async_context(hub.activation_lock)
+        state_lock = getattr(manager, "_state_lock", None)
+        if state_lock is not None:
+            await locks.enter_async_context(state_lock)
+        runtime = hub.runtime
+        if runtime is not None:
+            await locks.enter_async_context(runtime._lock)
+        task_count = len(getattr(manager, "_runs", {}))
+        store = getattr(manager, "_store", None)
+        if store is not None:
+            task_count = int(store._db().execute(
+                "SELECT COUNT(*) FROM tasks WHERE deleted_at IS NULL AND status IN ('queued','running','waiting')"
+            ).fetchone()[0])
+        archive = getattr(runtime, "_memory_archive_task", None)
+        busy = {
+            "tasks": task_count,
+            "memoryWriting": archive is not None and not archive.done(),
+            "mainAgent": bool(runtime and runtime.restart_busy()),
+        }
+        if any(busy.values()) and not body.force:
+            return {"ready": False, "busy": busy}
+        hub.accepting = False
+        manager.accepting = False
+        if runtime is not None:
+            runtime.fence_admission()
+        request.app.state.backend_ready = False
+        return {"ready": True, "busy": busy}
 
 
 @router.get("/metrics")

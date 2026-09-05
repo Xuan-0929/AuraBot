@@ -2,7 +2,9 @@
 
 DashScope-specific callback fields and credentials terminate inside the adapters and become normalized
 ``TranscriptUpdate`` facts before Main Agent Core can observe them; every non-empty production snapshot,
-including a mutable-only partial, requests existing PREPARE admission. TTS exposes only clause audio bytes.
+including a mutable-only partial, requests existing PREPARE admission. Session callbacks enter Core in arrival
+order; graceful finish drains provider-final text, while cancellation retains bounded transport cleanup
+ownership. TTS exposes only clause audio bytes.
 Silero VAD and Smart Turn
 v3.2 share process-wide ONNX sessions, verify both model and license assets before loading, and configure
 ONNX Runtime for sequential single-thread CPU inference; missing optional packages or assets are reported
@@ -90,7 +92,9 @@ class _DashScopeSttSession:
         self._sink = sink
         self._closed = False
         self._sink_tasks: set[asyncio.Task[Any]] = set()
+        self._sink_lock = asyncio.Lock()
         self._failure_task: asyncio.Task[None] | None = None
+        self._close_task: asyncio.Task[None] | None = None
 
     def provider_event(self, event: Any) -> None:
         """Accept an SDK-thread event only for this still-open session generation."""
@@ -114,14 +118,14 @@ class _DashScopeSttSession:
     def _deliver(self, update: TranscriptUpdate) -> None:
         if self._closed:
             return
-        try:
-            result = self._sink(update)
-        except BaseException:
-            self._fail_sink()
-            return
-        task = self._owner_loop.create_task(result)
+        task = self._owner_loop.create_task(self._deliver_in_order(update))
         self._sink_tasks.add(task)
         task.add_done_callback(self._sink_done)
+
+    async def _deliver_in_order(self, update: TranscriptUpdate) -> None:
+        # Callback arrival order survives awaits inside confirmation and Runtime admission.
+        async with self._sink_lock:
+            await self._sink(update)
 
     def _sink_done(self, task: asyncio.Task[Any]) -> None:
         self._sink_tasks.discard(task)
@@ -162,21 +166,51 @@ class _DashScopeSttSession:
             raise ValueError("STT audio must be non-empty bytes")
         await asyncio.to_thread(self._transport.send_audio_frame, pcm16le)
 
+    async def finish(self) -> None:
+        """Flush provider-final transcription, then drain its callbacks before sealing this turn."""
+        if self._closed:
+            await self.close()
+            return
+        try:
+            await asyncio.wait_for(asyncio.to_thread(self._transport.stop), _CLEANUP_TIMEOUT_SECONDS)
+            # SDK-thread callbacks are scheduled before stop returns; let their sink tasks enter the set.
+            await asyncio.sleep(0)
+            self._closed = True
+            if self._sink_tasks:
+                await asyncio.gather(*tuple(self._sink_tasks))
+        finally:
+            self._closed = True
+            tasks = tuple(self._sink_tasks)
+            for task in tasks:
+                if not task.done():
+                    task.cancel()
+            if tasks:
+                await asyncio.gather(*tasks, return_exceptions=True)
+
     async def close(self) -> None:
+        """Keep abort cleanup owned even if the microphone caller itself is cancelled."""
+        if self._close_task is not None:
+            await asyncio.shield(self._close_task)
+            return
         if self._closed:
             if self._failure_task is not None:
-                await asyncio.gather(self._failure_task, return_exceptions=True)
+                await asyncio.shield(self._failure_task)
             return
         self._closed = True
-        for task in tuple(self._sink_tasks):
+        self._close_task = self._owner_loop.create_task(self._close_transport())
+        await asyncio.shield(self._close_task)
+
+    async def _close_transport(self) -> None:
+        tasks = tuple(self._sink_tasks)
+        for task in tasks:
             if not task.done():
                 task.cancel()
-        if self._sink_tasks:
-            await asyncio.gather(*tuple(self._sink_tasks), return_exceptions=True)
-        await asyncio.wait_for(
-            asyncio.to_thread(self._transport.stop),
-            _CLEANUP_TIMEOUT_SECONDS,
-        )
+        if tasks:
+            await asyncio.gather(*tasks, return_exceptions=True)
+        try:
+            await asyncio.wait_for(asyncio.to_thread(self._transport.stop), _CLEANUP_TIMEOUT_SECONDS)
+        except Exception:
+            pass
 
 
 class DashScopeStreamingSttProvider:
@@ -652,10 +686,6 @@ class SpeechInputCoordinator:
             await self._reject_candidate()
             await self._finish_turn()
             return
-        if not self._has_transcript:
-            await self._reject_candidate()
-            await self._finish_turn()
-            return
         self._endpoint_generation += 1
         generation = self._endpoint_generation
         self._endpoint_task = asyncio.create_task(
@@ -694,13 +724,17 @@ class SpeechInputCoordinator:
             await self._close_stt()
 
     async def _on_transcript(self, update: TranscriptUpdate) -> None:
-        if not isinstance(update, TranscriptUpdate) or not update.full_text:
+        if self._closed or not self._active or not isinstance(update, TranscriptUpdate) or not update.full_text:
             return
         self._has_transcript = True
         if not self._confirmed:
             self._confirmed = True
             await self._playback("speech_confirmed")
+            if self._closed:
+                return
             await self.runtime.confirm_speech()
+        if self._closed:
+            return
         await self.runtime.update_transcript(
             update.full_text,
             segment_id=self._segment_id,
@@ -720,12 +754,18 @@ class SpeechInputCoordinator:
                     await self.sleep(delay)
                 if self._endpoint_current(generation):
                     await self._playback("speech_endpoint", complete=True)
+                    if not await self._finalize_endpoint():
+                        finish = True
+                        return
                     await self.runtime.endpoint_fallback()
                     finish = True
                 return
             if probability >= self.eou_threshold:
                 if self._endpoint_current(generation):
                     await self._playback("speech_endpoint", complete=True)
+                    if not await self._finalize_endpoint():
+                        finish = True
+                        return
                     await self.runtime.eou_complete()
                     finish = True
                 return
@@ -736,6 +776,9 @@ class SpeechInputCoordinator:
                 remaining = deadline - self.clock()
                 if remaining <= 0:
                     await self._playback("speech_endpoint", complete=True)
+                    if not await self._finalize_endpoint():
+                        finish = True
+                        return
                     await self.runtime.endpoint_fallback()
                     finish = True
                     return
@@ -744,6 +787,9 @@ class SpeechInputCoordinator:
                     return
                 if self.clock() >= deadline:
                     await self._playback("speech_endpoint", complete=True)
+                    if not await self._finalize_endpoint():
+                        finish = True
+                        return
                     await self.runtime.endpoint_fallback()
                     finish = True
                     return
@@ -756,6 +802,9 @@ class SpeechInputCoordinator:
                     probability = None
                 if probability is not None and probability >= self.eou_threshold:
                     await self._playback("speech_endpoint", complete=True)
+                    if not await self._finalize_endpoint():
+                        finish = True
+                        return
                     await self.runtime.eou_complete()
                     finish = True
                     return
@@ -765,6 +814,9 @@ class SpeechInputCoordinator:
                 await self.sleep(delay)
             if self._endpoint_current(generation):
                 await self._playback("speech_endpoint", complete=True)
+                if not await self._finalize_endpoint():
+                    finish = True
+                    return
                 await self.runtime.endpoint_fallback()
                 finish = True
         except asyncio.CancelledError:
@@ -772,11 +824,23 @@ class SpeechInputCoordinator:
         except Exception:
             if self._endpoint_current(generation):
                 await self._playback("speech_endpoint", complete=True)
+                if not await self._finalize_endpoint():
+                    finish = True
+                    return
                 await self.runtime.endpoint_fallback()
             finish = True
         finally:
             if finish and self._endpoint_current(generation):
                 await self._finish_turn()
+
+    async def _finalize_endpoint(self) -> bool:
+        """Allow a confirmed utterance to receive its first transcript from provider stop."""
+        if not await self._close_stt(finalize=True):
+            return False
+        if not self._has_transcript:
+            await self._reject_candidate()
+            return False
+        return True
 
     def _endpoint_current(self, generation: int) -> bool:
         return self._stop_issued and generation == self._endpoint_generation and not self._closed
@@ -809,14 +873,23 @@ class SpeechInputCoordinator:
             task.cancel()
             await asyncio.gather(task, return_exceptions=True)
 
-    async def _close_stt(self) -> None:
+    async def _close_stt(self, *, finalize: bool = False) -> bool:
         session = self._session
-        self._session = None
-        if session is not None:
-            try:
-                await asyncio.wait_for(session.close(), _CLEANUP_TIMEOUT_SECONDS)
-            except BaseException:
-                pass
+        if session is None:
+            return True
+        try:
+            close = getattr(session, "finish", session.close) if finalize else session.close
+            await asyncio.wait_for(close(), _CLEANUP_TIMEOUT_SECONDS)
+        except asyncio.CancelledError:
+            # Service shutdown retries this still-owned session after the mic task has stopped.
+            raise
+        except Exception:
+            if self._session is session:
+                self._session = None
+            return False
+        if self._session is session:
+            self._session = None
+        return True
 
     async def _playback(self, method_name: str, **fields: Any) -> None:
         lifecycle = self.playback_lifecycle

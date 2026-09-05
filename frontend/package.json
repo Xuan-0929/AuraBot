@@ -8,7 +8,6 @@
   "scripts": {
     "dev": "npm run rebuild:native && node scripts/dev.mjs",
     "dev:frontend": "vite --host 127.0.0.1 --port 6400 --strictPort",
-    "dev:backend": "uv run --project ../backend uvicorn backend.main:app --host 127.0.0.1 --port 6401 --app-dir ..",
     "dev:desktop": "electron-rebuild -f -w better-sqlite3 && electron-vite dev",
     "dev:clean": "node scripts/run-clean.mjs dev",
     "start:clean": "npm run build && node scripts/run-clean.mjs start",

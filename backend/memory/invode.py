@@ -1,17 +1,12 @@
-"""Compatibility façade for the backend memory API.
+"""Compatibility façade for the internal backend Memory service.
 
 The filename is kept for existing imports. New implementation lives in focused
 modules under backend.memory.
 """
 
-from .api import (
-    ForgetRequest,
-    ImproveRequest,
-    RecallRequest,
-    RememberRequest,
-    create_default_memory_service,
-    create_memory_router,
-)
+from pathlib import Path
+from typing import Any
+
 from .consolidation.strategies import ConflictingPreferenceStrategy, DuplicateMemoryStrategy
 from .embedding import HashEmbeddingProvider, create_embedding_provider
 from .extraction.providers import StaticExtractionModel
@@ -45,16 +40,12 @@ __all__ = [
     "DuplicateMemoryStrategy",
     "EmbeddingProvider",
     "EntitySeedRetriever",
-    "ForgetRequest",
     "FtsSeedRetriever",
     "HashEmbeddingProvider",
-    "ImproveRequest",
     "MemoryReranker",
     "MemoryService",
     "QdrantLocalVectorStore",
     "QueryAnalyzer",
-    "RecallRequest",
-    "RememberRequest",
     "RuleBasedMemoryReranker",
     "SegmentState",
     "SQLiteMemoryStore",
@@ -70,7 +61,6 @@ __all__ = [
     "build_recall_trace",
     "create_default_memory_service",
     "create_embedding_provider",
-    "create_memory_router",
     "expand_relation_candidates",
     "filter_relations_for_ranked_memories",
     "fuse_candidates",
@@ -78,3 +68,20 @@ __all__ = [
     "pack_context",
     "validate_memory_candidate",
 ]
+
+
+def create_default_memory_service(
+    base_path: str | Path = "data/memory",
+    embedding_config: dict[str, Any] | None = None,
+) -> MemoryService:
+    base_path = Path(base_path)
+    embedding_provider = create_embedding_provider(embedding_config)
+
+    return MemoryService(
+        metadata_store=SQLiteMemoryStore(base_path / "memory.sqlite3"),
+        vector_store=QdrantLocalVectorStore(
+            path=base_path / "qdrant",
+            vector_size=embedding_provider.dimension,
+        ),
+        embedding_provider=embedding_provider,
+    )

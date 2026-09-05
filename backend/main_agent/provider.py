@@ -2,7 +2,8 @@
 
 Every request sends stable behavioral control, the active Soul, and immutable context facts as separate
 messages. The adapter then decodes SSE tool deltas for ToolCallAssembler and owns lazy transport,
-cancellation and shutdown; unavailable credentials remain an offline-safe silent provider.
+cancellation and shutdown; unavailable credentials remain an offline-safe silent provider. Loopback model
+endpoints connect directly, while external providers honor the user's HTTP/SOCKS proxy environment.
 """
 
 from __future__ import annotations
@@ -11,6 +12,7 @@ import asyncio
 import json
 from collections.abc import AsyncIterator, Callable, Mapping
 from typing import Any
+from urllib.parse import urlsplit
 
 from .metrics import LifecycleMetrics
 from .settings import ChatModelSettings
@@ -60,7 +62,7 @@ class OpenAICompatibleProvider:
     ) -> None:
         self.settings = settings
         self.metrics = metrics
-        self._client_factory = client_factory or _http_client
+        self._client_factory = client_factory or (lambda: _http_client(settings.base_url))
         self._client: Any | None = None
         self._client_lock = asyncio.Lock()
 
@@ -73,7 +75,6 @@ class OpenAICompatibleProvider:
     async def __call__(self, request: Any) -> AsyncIterator[Mapping[str, Any]]:
         """Open exactly one bounded SSE request for an immutable runtime invoke."""
 
-        client = await self._client_owner()
         body = {
             "model": self.settings.model_name,
             "stream": True,
@@ -87,6 +88,7 @@ class OpenAICompatibleProvider:
         }
         try:
             async with asyncio.timeout(self.settings.timeout_seconds):
+                client = await self._client_owner()
                 async with client.stream(
                     "POST",
                     f"{self.settings.base_url}/chat/completions",
@@ -145,12 +147,12 @@ def build_chat_provider(
     )
 
 
-def _http_client() -> Any:
+def _http_client(base_url: str) -> Any:
     """Import the installed lightweight HTTP dependency only on first real invoke."""
 
     import httpx
 
-    return httpx.AsyncClient()
+    return httpx.AsyncClient(trust_env=urlsplit(base_url).hostname not in {"localhost", "127.0.0.1", "::1"})
 
 
 __all__ = [

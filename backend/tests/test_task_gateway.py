@@ -23,7 +23,7 @@ from fastapi.testclient import TestClient
 
 os.environ.setdefault(
     "AURABOT_CONFIG_PATH",
-    str(Path(__file__).parent / "fixtures" / "runtime_config.yaml"),
+    str(Path(__file__).parent / "fixtures" / "runtime_config.json"),
 )
 
 from backend.main import create_app

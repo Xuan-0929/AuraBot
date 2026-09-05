@@ -18,6 +18,7 @@ from fastapi.testclient import TestClient
 from backend.main_agent.realtime import (
     CapabilityTokens,
     MicFrameQueue,
+    ProtocolError,
     RealtimeHub,
     SUBPROTOCOL,
     router,
@@ -32,7 +33,7 @@ class FakeRuntime:
     def __init__(self) -> None:
         self.acks: list[tuple[str, bool]] = []
 
-    async def renderer_ack(self, clause_id: str, *, complete: bool) -> bool:
+    async def renderer_ack(self, clause_id: str, *, complete: bool, mode: str = "voice") -> bool:
         self.acks.append((clause_id, complete))
         return complete
 
@@ -94,6 +95,7 @@ class HubTests(unittest.IsolatedAsyncioTestCase):
     async def test_port_sends_one_clause_raw_audio_end_and_physical_ack(self) -> None:
         socket = FakeSocket()
         session = await self.hub.attach(socket)
+        session.mode = "voice"
         port = await self.hub.acquire_renderer_port()
         assert port is not None
         clause = RendererClause("c1", "hello", "invoke", "input", 1)
@@ -103,11 +105,23 @@ class HubTests(unittest.IsolatedAsyncioTestCase):
         await self.hub.renderer_ack(session, "c1", complete=True)
 
         self.assertEqual(socket.sent[0], {"type": "session.ready", "profile_id": "profile_default"})
-        self.assertEqual(socket.sent[1], {"type": "clause.offer", "clause_id": "c1", "text": "hello"})
-        self.assertEqual(socket.sent[2], b"\0\0" * 480)
-        self.assertEqual(socket.sent[3], {"type": "clause.audio_end", "clause_id": "c1"})
+        self.assertEqual(socket.sent[1], {"type": "clause.offer", "clause_id": "c1", "text": "hello", "mode": "voice"})
+        self.assertEqual(socket.sent[3], b"\0\0" * 480)
+        self.assertEqual(socket.sent[4], {"type": "clause.audio_end", "clause_id": "c1"})
         self.assertEqual(self.runtime.acks, [("c1", True)])
         self.assertEqual(self.speech.acks, [("c1", True)])
+
+    async def test_voice_complete_ack_is_rejected_until_audio_end(self) -> None:
+        session = await self.hub.attach(FakeSocket())
+        session.mode = "voice"
+        port = await self.hub.acquire_renderer_port()
+        await port.offer_clause(RendererClause("voice", "Hello", "invoke", "input", 1))
+        with self.assertRaisesRegex(ProtocolError, "audio_incomplete"):
+            await self.hub.renderer_ack(session, "voice", complete=True)
+        self.assertEqual(session.current_clause, "voice")
+        self.assertEqual(self.runtime.acks, [])
+        await port.finish_audio("voice")
+        self.assertTrue(await self.hub.renderer_ack(session, "voice", complete=True))
 
     async def test_playback_gate_and_confirmed_barge_in_cancel_current_clause(self) -> None:
         socket = FakeSocket()
@@ -121,7 +135,7 @@ class HubTests(unittest.IsolatedAsyncioTestCase):
         await self.hub.speech_confirmed()
 
         self.assertEqual([event["type"] for event in socket.sent if isinstance(event, dict)], [
-            "session.ready", "clause.offer", "playback.pause", "playback.resume", "playback.pause", "clause.cancel",
+            "session.ready", "clause.offer", "agent.state", "playback.pause", "playback.resume", "playback.pause", "clause.cancel", "agent.state",
         ])
         self.assertEqual(self.speech.cancelled, ["confirmed_barge_in"])
 
@@ -173,6 +187,9 @@ class GatewayTests(unittest.TestCase):
             subprotocols=protocols,
         ) as websocket:
             self.assertEqual(websocket.receive_json(), {"type": "session.ready", "profile_id": "profile_default"})
+            websocket.send_json({"type": "voice.start", "command_id": "voice-1"})
+            self.assertEqual(websocket.receive_json(), {"type": "agent.state", "state": "listening"})
+            self.assertEqual(websocket.receive_json()["status"], "accepted")
             websocket.send_bytes(b"\0" * 640)
             websocket.send_json({"type": "renderer.ack", "clause_id": "unknown", "complete": False})
             self.assertEqual(websocket.receive_json(), {"type": "session.error", "code": "unknown_clause"})

@@ -2,7 +2,7 @@
  * Registers the Pet's microphone capture and TTS playback processors in one AudioWorklet module. Capture
  * continuously resamples browser audio to raw 16 kHz/20 ms PCM and emits local RMS speech hints; playback
  * keeps one clause's 24 kHz PCM queued across pauses and reports completion only after audio_end and the
- * physical output cursor consume the final source sample. Pure helpers are exported for deterministic tests.
+ * render cursor consumes the final source sample. The renderer additionally waits for the device output clock. Pure helpers are exported for deterministic tests.
  */
 
 export class ContinuousPcm16Resampler {
@@ -88,7 +88,8 @@ export class ClausePlaybackQueue {
   get queuedSamples() { return this.samples.length - this.offset; }
 
   offer(clauseId) {
-    if (this.clauseId) throw new Error("a clause is already active");
+    if (this.clauseId && !this.completed) throw new Error("a clause is already active");
+    this.flush();
     this.clauseId = clauseId;
     this.finished = false;
     this.completed = false;
@@ -125,10 +126,12 @@ export class ClausePlaybackQueue {
     const events = [];
     channel.fill(0);
     if (this.paused || this.completed) return events;
+    let rendered=0;
     for (let index = 0; index < channel.length && this.offset < this.samples.length; index += 1) {
+      rendered=index+1;
       const left = Math.min(this.samples.length - 1, this.offset + Math.floor(this.position));
       const right = Math.min(this.samples.length - 1, left + 1);
-      const fraction = this.position - left;
+      const fraction = this.position - Math.floor(this.position);
       channel[index] = (this.samples[left] * (1 - fraction) + this.samples[right] * fraction) / 32768;
       this.position += this.step;
       const consumed = Math.floor(this.position);
@@ -138,11 +141,10 @@ export class ClausePlaybackQueue {
         this.samples = this.samples.slice(this.offset);
         this.offset = 0;
       }
-      if (this.finished && this.offset === this.samples.length && this.clauseId) {
-        this.completed = true;
-        events.push({ type: "clause-complete", clauseId: this.clauseId });
-        break;
-      }
+    }
+    if (this.finished && this.offset === this.samples.length && this.clauseId) {
+      this.completed = true;
+      events.push({ type: "clause-complete", clauseId: this.clauseId, frameOffset:rendered });
     }
     return events;
   }
@@ -193,7 +195,10 @@ if (Processor && typeof globalThis.registerProcessor === "function") {
     process(_inputs, outputs) {
       const channel = outputs[0]?.[0];
       if (!channel) return true;
-      for (const event of this.playback.render(channel)) this.port.postMessage(event);
+      for (const event of this.playback.render(channel)) {
+        const {frameOffset,...message}=event;
+        this.port.postMessage({...message,endContextTime:(globalThis.currentFrame+frameOffset)/globalThis.sampleRate});
+      }
       return true;
     }
   }

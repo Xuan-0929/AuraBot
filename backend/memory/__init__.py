@@ -1,3 +1,8 @@
+"""Export internal Memory storage and service capabilities consumed by Main Agent.
+
+This package exposes no HTTP management router; profile composition owns its lifetime.
+"""
+
 from .invode import (
     HashEmbeddingProvider,
     MemoryService,
@@ -10,7 +15,6 @@ from .invode import (
     SQLiteShortTermStore,
     SummaryRequest,
     create_default_memory_service,
-    create_memory_router,
 )
 
 __all__ = [
@@ -25,5 +29,4 @@ __all__ = [
     "SQLiteShortTermStore",
     "SummaryRequest",
     "create_default_memory_service",
-    "create_memory_router",
 ]

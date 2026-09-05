@@ -1,120 +1,149 @@
-/**
- * Electron 端到端烟测：验证桌宠、正式语音失败清理、主聊天、设置与 Backend 缺席错误投影。
- * 测试使用隔离 userData 且不启动 Python Backend，确认桌面不会回落到旧 Chat/Memory；语音用
- * 本地请求拦截验证真实 UI 生命周期，不访问麦克风、
- * runner、Task IPC、Task UI 或外部服务。
+/** Runs the real Electron windows, Python child and SQLite delivery path with isolated application data.
+ * A local deterministic Chat Completions server checks transport integration without claiming real model,
+ * Pi or microphone acceptance. Also verifies saved/applied revisions, no-op desktop application, busy
+ * restart cancellation and port ownership; real provider/hardware smoke remains a separate manual check.
  */
-import { mkdtempSync, rmSync } from "node:fs";
-import { tmpdir } from "node:os";
-import { dirname, join, resolve } from "node:path";
-import { fileURLToPath } from "node:url";
-import { _electron as electron, expect, type ElectronApplication, type Page, test } from "@playwright/test";
+import { mkdtempSync, rmSync, readdirSync } from 'node:fs';
+import { tmpdir } from 'node:os';
+import { dirname, join, resolve } from 'node:path';
+import { fileURLToPath } from 'node:url';
+import { createServer } from 'node:http';
+import { _electron as electron, expect, type ElectronApplication, type Page, test } from '@playwright/test';
+const appRoot=resolve(dirname(fileURLToPath(import.meta.url)),'../..');
+test.setTimeout(90000);
+async function launch(userDataDir=mkdtempSync(join(tmpdir(),'aurabot-e2e-'))){
+ const electronApp=await electron.launch({args:[join(appRoot,'out/main/index.js')],cwd:appRoot,env:{...process.env,AURABOT_USER_DATA_DIR:userDataDir}});
+ const pet=await electronApp.firstWindow();await expect.poll(()=>pet.evaluate(()=>Boolean(window.aurabot))).toBe(true);
+ return {electronApp,pet,userDataDir};
+}
+async function ready(pet:Page){await expect.poll(()=>pet.evaluate(async()=>(await window.aurabot.getSettings()).online),{timeout:40000}).toBe(true);}
+async function status(){return (await fetch('http://127.0.0.1:6401/api/v1/readiness')).json();}
+async function close(app:ElectronApplication){await app.close();await expect.poll(async()=>{try{await status();return true;}catch{return false;}},{timeout:10000}).toBe(false);}
 
-const appRoot = resolve(dirname(fileURLToPath(import.meta.url)), "../..");
+test('fresh desktop renders Hiyori, exposes unavailable models and applies saved config exactly once',async()=>{
+ const {electronApp,pet,userDataDir}=await launch();
+ try{
+  await ready(pet);
+  await expect.poll(()=>pet.evaluate(()=>{
+    const canvas=document.querySelector('canvas');if(!canvas)return false;
+    const gl=canvas.getContext('webgl2')??canvas.getContext('webgl');if(!gl)return false;
+    const pixels=new Uint8Array(canvas.width*canvas.height*4);gl.readPixels(0,0,canvas.width,canvas.height,gl.RGBA,gl.UNSIGNED_BYTE,pixels);
+    return pixels.some((value,index)=>index%4===3&&value>0);
+  }),{timeout:20000}).toBe(true);
+  await pet.screenshot({path:'/private/tmp/aurabot-pet-verified.png'});
+  const initial=await status();expect(initial.capabilities).toEqual({text:false,voice:false,tasks:false});
+  const settingsPromise=electronApp.waitForEvent('window');await pet.evaluate(()=>window.aurabot.openSettingsWindow());const settings=await settingsPromise;
+  await expect(settings.getByRole('button',{name:'保存',exact:true})).toBeDisabled();
+  await settings.getByRole('button',{name:'桌宠',exact:true}).click();
+  await settings.getByLabel('系统通知').uncheck();
+  await expect(settings.getByRole('button',{name:'应用',exact:true})).toBeDisabled();
+  await settings.getByRole('button',{name:'保存',exact:true}).click();
+  await expect(settings.getByRole('status')).toHaveText('已保存，待应用');
+  expect((await status()).processId).toBe(initial.processId);
+  await settings.getByRole('button',{name:'应用',exact:true}).click();
+  await expect(settings.getByRole('status')).toHaveText('配置已应用');
+  expect((await status()).processId).toBe(initial.processId);
+  await settings.getByRole('button',{name:'模型',exact:true}).click();
+  await settings.getByLabel('模型名称',{exact:true}).first().fill('unconfigured-smoke');
+  await settings.getByRole('button',{name:'保存',exact:true}).click();
+  await expect(settings.getByRole('status')).toHaveText('已保存，待应用');
+  await settings.getByRole('button',{name:'应用',exact:true}).click();
+  await expect(settings.getByRole('status')).toHaveText('配置已应用',{timeout:40000});
+  expect((await status()).processId).not.toBe(initial.processId);
+  const consolePromise=electronApp.waitForEvent('window');await pet.evaluate(()=>window.aurabot.openConsoleWindow());const consolePage=await consolePromise;
+  await expect(consolePage.getByLabel('Task 状态')).toBeVisible();
+  await consolePage.locator('textarea').fill('未配置模型时不应记录成功');await consolePage.locator('textarea').press('Enter');
+  await expect(consolePage.getByRole('alert')).toContainText('模型尚未配置');
+  expect((await pet.evaluate(()=>window.aurabot.getHistory())).messages).toEqual([]);
+  await settings.getByRole('button',{name:'运行状态',exact:true}).click();
+  await settings.screenshot({path:'/private/tmp/aurabot-settings-verified.png'});
+ }finally{await close(electronApp);rmSync(userDataDir,{recursive:true,force:true});}
+});
 
-async function launchAuraBot(): Promise<{ electronApp: ElectronApplication; petWindow: Page; userDataDir: string }> {
-  const userDataDir = mkdtempSync(join(tmpdir(), "aurabot-e2e-"));
-  const electronApp = await electron.launch({
-    args: [join(appRoot, "out/main/index.js")],
-    cwd: appRoot,
-    env: {
-      ...process.env,
-      NODE_ENV: "test",
-      AURABOT_USER_DATA_DIR: userDataDir,
-      AURABOT_DISABLE_SYSTEM_CONFIG: "1",
-      AURABOT_DETERMINISTIC_MODEL_FALLBACK: "1"
-    }
+test('real Python text delivery persists only say_to_user and busy restart cancellation leaves work alive',async()=>{
+ let release:(()=>void)|undefined;let requestCount=0;
+ const model=createServer((request,response)=>{
+  request.resume();request.on('end',()=>{
+   requestCount++;response.writeHead(200,{'Content-Type':'text/event-stream'});
+   release=()=>{response.write('data: '+JSON.stringify({choices:[{delta:{content:'private model reasoning'}}]})+'\n\n');
+    response.end('data: '+JSON.stringify({choices:[{delta:{tool_calls:[{index:0,id:'smoke-call-'+requestCount,type:'function',function:{name:'say_to_user',arguments:JSON.stringify({text:'已完成文字交付。'})}}]},finish_reason:'tool_calls'}]})+'\n\ndata: [DONE]\n\n');};
   });
-  return { electronApp, petWindow: await electronApp.firstWindow(), userDataDir };
-}
-
-async function cleanup(electronApp: ElectronApplication, userDataDir: string): Promise<void> {
-  await electronApp.close();
-  rmSync(userDataDir, { force: true, recursive: true });
-}
-
-async function openConsole(electronApp: ElectronApplication, petWindow: Page): Promise<Page> {
-  const consolePromise = electronApp.waitForEvent("window");
-  await petWindow.getByTestId("live2d-model-surface").hover();
-  await petWindow.getByRole("button", { name: "Open AuraBot console" }).click();
-  const consoleWindow = await consolePromise;
-  await consoleWindow.getByRole("main", { name: "AuraBot Console" }).waitFor();
-  return consoleWindow;
-}
-
-test("launches the Live2D pet and opens the chat-only Console", async () => {
-  const { electronApp, petWindow, userDataDir } = await launchAuraBot();
-  try {
-    await expect(petWindow.getByLabel("Desktop Live2D pet")).toBeVisible();
-    const consoleWindow = await openConsole(electronApp, petWindow);
-    await expect(consoleWindow.getByPlaceholder("Say something")).toBeVisible();
-    await expect(consoleWindow.locator(".console-task-sidebar")).toHaveCount(0);
-  } finally {
-    await cleanup(electronApp, userDataDir);
+ });
+ await new Promise<void>(resolve=>model.listen(0,'127.0.0.1',resolve));const port=(model.address() as {port:number}).port;
+ let {electronApp,pet,userDataDir}=await launch();
+ try{
+  await ready(pet);
+  await pet.evaluate(async(port)=>{const s=await window.aurabot.getSettings();s.config.backend.chat_model={base_url:`http://127.0.0.1:${port}/v1`,model_name:'local-smoke',api_key:'local-fixture-key',timeout_seconds:60};await window.aurabot.saveSettings(s.config);await window.aurabot.applySettings();},port);
+  const before=await status();
+  let sendError='';
+  const sending=pet.evaluate(()=>window.aurabot.sendChatMessage({content:'你好'})).catch(error=>{sendError=String(error);throw error;});
+  void sending.catch(()=>undefined);
+  try{await expect.poll(()=>requestCount,{timeout:18000}).toBe(1);}catch(error){
+    console.log('TEXT_DIAGNOSTIC',JSON.stringify({sendError,pet:await pet.locator('body').innerText(),history:await pet.evaluate(()=>window.aurabot.getHistory()),readiness:await status(),metrics:await(await fetch('http://127.0.0.1:6401/api/v1/metrics')).json()}));throw error;
   }
+  await pet.evaluate(async()=>{const s=await window.aurabot.getSettings();s.config.backend.chat_model.timeout_seconds=61;await window.aurabot.saveSettings(s.config);});
+  const settingsPromise=electronApp.waitForEvent('window');await pet.evaluate(()=>window.aurabot.openSettingsWindow());const settings=await settingsPromise;
+  await settings.getByRole('button',{name:'应用',exact:true}).click();
+  await expect(settings.getByRole('alertdialog')).toContainText('正在处理对话');
+  await expect(settings.getByRole('button',{name:'取消',exact:true})).toBeFocused();
+  await settings.getByRole('button',{name:'取消',exact:true}).click();
+  expect((await status()).processId).toBe(before.processId);expect((await status()).ready).toBe(true);
+  release!();await sending;
+  await expect.poll(async()=>(await pet.evaluate(()=>window.aurabot.getHistory())).messages.map(m=>m.content),{timeout:15000}).toEqual(['你好','已完成文字交付。']);
+  const second=pet.evaluate(()=>window.aurabot.sendChatMessage({content:'这轮会在应用时中断'}));
+  void second.catch(()=>undefined);
+  await expect.poll(()=>requestCount,{timeout:10000}).toBe(2);await second;
+  await settings.getByRole('button',{name:'应用',exact:true}).click();
+  await expect(settings.getByRole('alertdialog')).toBeVisible();
+  await settings.getByRole('button',{name:'仍然应用',exact:true}).click();
+  await expect(settings.getByRole('status')).toHaveText('配置已应用',{timeout:40000});
+  expect((await status()).processId).not.toBe(before.processId);
+  expect((await pet.evaluate(()=>window.aurabot.getHistory())).messages.map(m=>m.content)).toEqual(['你好','已完成文字交付。','这轮会在应用时中断']);
+  const ids=(await pet.evaluate(()=>window.aurabot.getHistory())).messages.map(m=>m.id);
+  await close(electronApp);
+  ({electronApp,pet}=await launch(userDataDir));await ready(pet);
+  expect((await pet.evaluate(()=>window.aurabot.getHistory())).messages.map(m=>m.id)).toEqual(ids);
+ }finally{await close(electronApp);model.closeAllConnections();await new Promise<void>(resolve=>model.close(()=>resolve()));rmSync(userDataDir,{recursive:true,force:true});}
 });
 
-test("formal Pet voice toggle reports token failure and returns to a retryable inactive state", async () => {
-  const { electronApp, petWindow, userDataDir } = await launchAuraBot();
-  try {
-    await petWindow.route(
-      "http://127.0.0.1:6401/api/v1/main-agent/realtime-token",
-      (route) => route.abort("connectionrefused")
-    );
-    await petWindow.getByTestId("live2d-model-surface").hover();
-    const voice = petWindow.getByRole("button", { name: "Start voice input" });
-    await voice.click();
-    await expect(voice).toHaveAttribute("data-state", "error");
-    await expect(voice).toHaveAttribute("data-active", "false");
-  } finally {
-    await cleanup(electronApp, userDataDir);
-  }
+test('occupied backend port reports an error and never terminates the existing listener',async()=>{
+ const listener=createServer((_req,res)=>res.end('unrelated listener'));
+ await new Promise<void>(resolve=>listener.listen(6401,'127.0.0.1',resolve));
+ const {electronApp,pet,userDataDir}=await launch();
+ try{
+  await expect.poll(()=>pet.evaluate(async()=>(await window.aurabot.getSettings()).error),{timeout:10000}).toContain('6401 已被占用');
+  expect(await(await fetch('http://127.0.0.1:6401')).text()).toBe('unrelated listener');
+ }finally{await electronApp.close();listener.closeAllConnections();await new Promise<void>(resolve=>listener.close(()=>resolve()));rmSync(userDataDir,{recursive:true,force:true});}
 });
 
-test("returns the explicit Main Agent unavailable message when Backend is absent", async () => {
-  const { electronApp, petWindow, userDataDir } = await launchAuraBot();
-  try {
-    const consoleWindow = await openConsole(electronApp, petWindow);
-    await consoleWindow.getByPlaceholder("Say something").fill("帮我写一份周报");
-    await consoleWindow.getByPlaceholder("Say something").press("Enter");
-    await expect(consoleWindow.getByLabel("Conversation messages"))
-      .toContainText("主 Agent 暂时不可用，请确认本地 Backend 已启动后重试。");
-    await expect(petWindow.getByLabel("Pet message"))
-      .toContainText("主 Agent 暂时不可用，请确认本地 Backend 已启动后重试。");
-  } finally {
-    await cleanup(electronApp, userDataDir);
-  }
-});
-
-test("broadcasts the Main Agent unavailable message from Pet to Console", async () => {
-  const { electronApp, petWindow, userDataDir } = await launchAuraBot();
-  try {
-    const consoleWindow = await openConsole(electronApp, petWindow);
-    await petWindow.evaluate(async () => {
-      await window.aurabot.sendChatMessage({
-        content: "帮我整理桌面",
-        source: "pet_text"
-      });
-    });
-    await expect(consoleWindow.getByLabel("Conversation messages"))
-      .toContainText("主 Agent 暂时不可用，请确认本地 Backend 已启动后重试。");
-  } finally {
-    await cleanup(electronApp, userDataDir);
-  }
-});
-
-test("opens retained settings without Task CLI or scheduled reminder controls", async () => {
-  const { electronApp, petWindow, userDataDir } = await launchAuraBot();
-  try {
-    const consoleWindow = await openConsole(electronApp, petWindow);
-    const settingsPromise = electronApp.waitForEvent("window");
-    await consoleWindow.getByRole("button", { name: "Open AuraBot settings" }).click();
-    const settingsWindow = await settingsPromise;
-    await settingsWindow.getByRole("main", { name: "Settings" }).waitFor();
-    await expect(settingsWindow.getByText("Task CLI", { exact: true })).toHaveCount(0);
-    await expect(settingsWindow.getByText("Scheduled reminders", { exact: true })).toHaveCount(0);
-    await expect(settingsWindow.getByText("Models & Connections", { exact: true })).toBeVisible();
-  } finally {
-    await cleanup(electronApp, userDataDir);
-  }
+test('real Electron loads the packaged AudioWorklet and completes successive synthetic clauses',async()=>{
+ const {electronApp,pet,userDataDir}=await launch();
+ try{
+  await ready(pet);
+  await pet.locator('.pet-vue-live2d-frame').click({position:{x:150,y:200}});
+  const asset=readdirSync(join(appRoot,'out/renderer/assets')).find(name=>/^audio-worklet-.*\.js$/.test(name))!;
+  const result=await pet.evaluate(async(asset)=>{
+    const context=new AudioContext();const source=context.createOscillator();
+    try{
+      await context.audioWorklet.addModule(new URL('./assets/'+asset,location.href));
+      const mic=new AudioWorkletNode(context,'aurabot-mic-capture');
+      const playback=new AudioWorkletNode(context,'aurabot-tts-playback',{outputChannelCount:[1]});
+      const silent=context.createGain();silent.gain.value=0;silent.connect(context.destination);
+      source.connect(mic);mic.connect(silent);playback.connect(silent);
+      const frame=new Promise<number>((resolve,reject)=>{const timer=setTimeout(()=>reject(new Error('capture timeout')),5000);mic.port.onmessage=event=>{if(event.data.type==='frame'){clearTimeout(timer);resolve(event.data.samples.length);}};});
+      await context.resume();source.start();const samples=await frame;
+      const completed:string[]=[];
+      for(const clauseId of ['first','second']){
+        const done=new Promise<{clauseId:string;endContextTime:number}>((resolve,reject)=>{const timer=setTimeout(()=>reject(new Error('playback timeout')),5000);playback.port.onmessage=event=>{if(event.data.type==='clause-complete'){clearTimeout(timer);resolve(event.data);}};});
+        playback.port.postMessage({type:'offer',clauseId});playback.port.postMessage({type:'append',samples:new Int16Array(2400)});playback.port.postMessage({type:'finish',clauseId});
+        const event=await done;
+        const deadline=Date.now()+5000;
+        while((context.getOutputTimestamp().contextTime??0)<event.endContextTime){if(Date.now()>deadline)throw new Error('device output clock timeout');await new Promise(resolve=>setTimeout(resolve,20));}
+        completed.push(event.clauseId);
+      }
+      return {samples,completed};
+    }finally{source.disconnect();await context.close();}
+  },asset);
+  expect(result).toEqual({samples:320,completed:['first','second']});
+ }finally{await close(electronApp);rmSync(userDataDir,{recursive:true,force:true});}
 });

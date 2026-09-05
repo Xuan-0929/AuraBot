@@ -1,7 +1,6 @@
 # Pi Task Runtime
 
-> 本文是 AuraBot Task Runtime 的唯一架构事实源。Python Backend 垂直切片已实现；
-> Electron、Main Agent、Artifact 与生产发行打包仍未接入。
+> 本文是 Task 状态机与 Pi 执行边界的事实源。Python TaskManager、Main Agent 工具与 Electron 只读列表已接通；Artifact 与生产运行时打包仍在本轮范围之外。桌面配置及接入契约见 [系统模块](../modules-v2.md) 和 [后端契约](../backend-runtime-contract.md)。
 
 ## 1. 架构与范围
 
@@ -198,5 +197,13 @@ Unicode 安全切块、事件顺序、EOF pending 检查和未知合法 event �
 测试聚焦 models、sync Store、RPC、process、Manager、Gateway/SSE 和真实 pinned Pi offline
 smoke，不镜像已删除的内部包。默认测试不调用模型、不需要 provider key、不访问网络。
 
-最终交付口径：**Python Pi Task 后端垂直切片已实现；Electron、Main Agent、Artifact 与
-发行打包尚未接入。**
+当前交付口径：**TaskManager 与 Main Agent 工具已接通，Electron 只读展示当前 Profile 的 Task 标题/状态；Artifact 与生产发行打包尚未完成。**
+
+## 桌面接入补充（2026-09-05）
+
+- Electron 只订阅 Task 快照/SSE，不提供创建、暂停、取消、删除等控制按钮。
+- Main Agent 负责创建、查询、问题回答、暂停、恢复、取消、终态删除和重跑；重跑通过正常 create 路径生成新 Task，并保留来源关联。
+- 列表支持 `ownerProfileId`；Main Agent 工具对每次操作重新检查 Profile 所有权。内部 Task REST 保留，Memory 不提供外部管理接口。
+- 模型和工作目录由 Electron settings.json 配置，Python 仅启动时读取。Pi provider 配置写在 AuraBot 专属数据根的 `pi-agent`，不读取用户全局 Pi home。
+- 未配置 Pi 能力仍能启动桌面/Backend 并读取 Task；创建/恢复等需要执行的操作明确不可用。
+- Apply 的 restart prepare 在检查忙碌状态后阻止新 Task 变更与派发；退出旧 Backend 后才启动新进程。

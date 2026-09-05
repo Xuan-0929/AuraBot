@@ -256,13 +256,18 @@ class MainAgentRuntime:
         self._task_event_task: asyncio.Task[None] | None = None
         self._memory_idle_task: asyncio.Task[None] | None = None
         self._memory_archive_task: asyncio.Task[None] | None = None
+        self.accepting = True
+        self.user_message_listener = None
+        self.state_listener = None
+        self.error_listener = None
+        self._published_segments: set[str] = set()
         self._speech_settled = asyncio.Event()
         self._speech_settled.set()
 
         runtime_executors = dict(executors)
         for task_tool in (
             "task_assign", "inspect_tasks", "answer_task_question",
-            "pause_task", "resume_task", "cancel_task",
+            "pause_task", "resume_task", "cancel_task", "delete_task", "rerun_task",
         ):
             runtime_executors.pop(task_tool, None)
         runtime_executors["say_to_user"] = self._offer_say
@@ -275,6 +280,8 @@ class MainAgentRuntime:
                 "pause_task": self._run_task_control,
                 "resume_task": self._run_task_control,
                 "cancel_task": self._run_task_control,
+                "delete_task": self._run_task_control,
+                "rerun_task": self._run_task_control,
             })
         self.harness = ToolHarness(
             tool_policy,
@@ -306,6 +313,26 @@ class MainAgentRuntime:
         """Return immutable proposal views in acceptance order for diagnostics and UI projection."""
 
         return tuple(self._task_proposals.values())
+
+    def restart_busy(self) -> bool:
+        """Read active work while the restart route holds this runtime's admission lock."""
+        return bool(self._active_invoke or self._pending_trigger or self._barrier_intent or self._preinvoke_settled
+                    or self._user_speaking or self._speech_candidate or self._confirmed_speech
+                    or self.context_store.has_unsettled_clauses()
+                    or any(not task.done() for task in (*self._proposal_tasks.values(), *self._proposal_commit_tasks.values(), *self._task_control_tasks)))
+
+    def fence_admission(self) -> None:
+        self.accepting = False
+        self._cancel_memory_idle_task_locked()
+        self._cancel_pending_proposals_locked("backend_restart")
+
+    async def _publish_user_segments(self, source: str) -> None:
+        if self.user_message_listener is None or self._active_input is None:
+            return
+        for segment in self._active_input.segments:
+            if segment.segment_id not in self._published_segments:
+                await self.user_message_listener(segment.segment_id, segment.text, source)
+                self._published_segments.add(segment.segment_id)
 
     async def startup(self) -> None:
         """Start Task events and resume any persisted Profile conversation idle deadline."""
@@ -355,6 +382,8 @@ class MainAgentRuntime:
 
         transcript = _required_text(text, "transcript")
         async with self._lock:
+            if not self.accepting or self._shutdown:
+                raise RuntimeError("backend_restarting")
             self._cancel_memory_idle_task_locked()
             self._cancel_pending_proposals_locked("confirmed_speech")
             self._user_speaking = True
@@ -371,19 +400,22 @@ class MainAgentRuntime:
             self._kick_locked()
             return bool(admitted)
 
-    async def submit_text(self, text: str) -> ResponseGrant:
+    async def submit_text(self, text: str, *, segment_id: str | None = None) -> ResponseGrant:
         """Accept an explicit silent-text submission and grant exactly its current RESPOND coordinates."""
 
         transcript = _required_text(text, "text submission")
         async with self._lock:
+            if not self.accepting or self._shutdown:
+                raise RuntimeError("backend_restarting")
             self._cancel_memory_idle_task_locked()
             barrier = self._prepare_barrier_locked()
-            self._advance_input_locked(transcript, self._new_id("segment"))
+            self._advance_input_locked(transcript, segment_id or self._new_id("segment"))
             assert self._active_input is not None
             self._user_speaking = False
             self._speech_candidate = False
             self._confirmed_speech = False
             grant = self._create_grant_locked()
+            await self._publish_user_segments("text")
             self._merge_trigger_locked(InvokeMode.RESPOND, "explicit_text_submit")
             self._kick_locked()
             self._start_memory_idle_locked()
@@ -395,6 +427,8 @@ class MainAgentRuntime:
         """Fence response effects immediately for an acoustic speech candidate without changing revision."""
 
         async with self._lock:
+            if not self.accepting or self._shutdown:
+                raise RuntimeError("backend_restarting")
             self._cancel_memory_idle_task_locked()
             self._user_speaking = True
             self._speech_candidate = True
@@ -405,6 +439,8 @@ class MainAgentRuntime:
         """Confirm barge-in, revoke response authority, and cancel current control/speech ownership."""
 
         async with self._lock:
+            if not self.accepting or self._shutdown:
+                raise RuntimeError("backend_restarting")
             self._cancel_memory_idle_task_locked()
             self._user_speaking = True
             self._speech_candidate = False
@@ -427,6 +463,8 @@ class MainAgentRuntime:
         """Record acoustic silence only; this event never grants or schedules RESPOND."""
 
         async with self._lock:
+            if not self.accepting or self._shutdown:
+                raise RuntimeError("backend_restarting")
             self._user_speaking = False
             self._speech_candidate = True
 
@@ -434,6 +472,8 @@ class MainAgentRuntime:
         """Resume a still-valid prior response capability after a VAD candidate is classified as noise."""
 
         async with self._lock:
+            if not self.accepting or self._shutdown:
+                raise RuntimeError("backend_restarting")
             self._user_speaking = False
             self._speech_candidate = False
             self._confirmed_speech = False
@@ -446,6 +486,8 @@ class MainAgentRuntime:
         intent = object()
         committed = False
         async with self._lock:
+            if not self.accepting or self._shutdown:
+                raise RuntimeError("backend_restarting")
             self._barrier_intent = intent
             self._control_generation += 1
             self._user_speaking = False
@@ -499,6 +541,8 @@ class MainAgentRuntime:
         intent = object()
         committed = False
         async with self._lock:
+            if not self.accepting or self._shutdown:
+                raise RuntimeError("backend_restarting")
             if self._active_input is None:
                 raise RuntimeError("StrongPause requires an active input")
             if self._speech_candidate or self._confirmed_speech:
@@ -516,6 +560,9 @@ class MainAgentRuntime:
                     raise RuntimeError("StrongPause was superseded by a newer endpoint decision")
                 if self._active_input is None:
                     raise RuntimeError("StrongPause lost its active input")
+                if not self.accepting:
+                    raise RuntimeError("backend_restarting")
+                await self._publish_user_segments("voice")
                 self._user_speaking = False
                 self._speech_candidate = False
                 self._confirmed_speech = False
@@ -537,6 +584,8 @@ class MainAgentRuntime:
         """Request one admitted PREPARE snapshot, coalescing all intermediate checkpoints."""
 
         async with self._lock:
+            if not self.accepting or self._shutdown:
+                raise RuntimeError("backend_restarting")
             admitted = self._request_prepare_locked(
                 _required_text(reason, "reason"), high_priority
             )
@@ -547,6 +596,8 @@ class MainAgentRuntime:
         """Request CONTINUE for current facts without creating response permission."""
 
         async with self._lock:
+            if not self.accepting or self._shutdown:
+                raise RuntimeError("backend_restarting")
             if self._active_input is None or self._shutdown:
                 return False
             self._merge_trigger_locked(InvokeMode.CONTINUE, _required_text(reason, "reason"))
@@ -561,7 +612,7 @@ class MainAgentRuntime:
                 raise RuntimeError("external commit requires an active input")
             self._has_external_commit = True
 
-    async def renderer_ack(self, clause_id: str, *, complete: bool) -> bool:
+    async def renderer_ack(self, clause_id: str, *, complete: bool, mode: str = "voice") -> bool:
         """Commit only a complete, current Renderer ACK; stale/partial clauses remain unheard."""
 
         async with self._lock:
@@ -589,7 +640,7 @@ class MainAgentRuntime:
                 self._clause_origins.pop(clause_id, None)
                 self._refresh_speech_settled_locked()
                 return False
-            accepted = self.context_store.ack_clause(clause_id, complete=complete)
+            accepted = self.context_store.ack_clause(clause_id, complete=complete, mode=mode)
             self._clause_origins.pop(clause_id, None)
             self._refresh_speech_settled_locked()
             if accepted:
@@ -605,6 +656,14 @@ class MainAgentRuntime:
             self._speech_candidate = False
             self._confirmed_speech = False
             self._response_grant = None
+            self._pending_trigger = None
+            self._control_generation += 1
+            self._barrier_intent = None
+            self._cancel_pending_proposals_locked("renderer_disconnected")
+            if self._active_invoke is not None:
+                self.harness.cancel(self._active_invoke.request.invoke_id)
+            if self._active_input is not None:
+                self._published_segments.update(segment.segment_id for segment in self._active_input.segments)
 
     async def wait_until_idle(self) -> None:
         """Wait for pending/control work only; detached Observation jobs intentionally do not block."""
@@ -825,7 +884,7 @@ class MainAgentRuntime:
         return grant
 
     def _kick_locked(self) -> None:
-        if self._shutdown or self._barrier_intent is not None or self._pending_trigger is None:
+        if self._shutdown or not self.accepting or self._barrier_intent is not None or self._pending_trigger is None:
             return
         if self._drain_scheduled:
             return
@@ -845,6 +904,7 @@ class MainAgentRuntime:
         if (
             loop.is_closed()
             or self._shutdown
+            or not self.accepting
             or self._barrier_intent is not None
             or self._pending_trigger is None
         ):
@@ -863,7 +923,7 @@ class MainAgentRuntime:
             while True:
                 async with self._lock:
                     if (
-                        self._shutdown
+                        self._shutdown or not self.accepting
                         or self._barrier_intent is not None
                         or self._pending_trigger is None
                     ):
@@ -923,7 +983,7 @@ class MainAgentRuntime:
                 async with self._lock:
                     current = self._active_input
                     if (
-                        self._shutdown
+                        self._shutdown or not self.accepting
                         or current is None
                         or trigger_generation != self._control_generation
                         or (current.input_id, current.revision) != recall_identity[:2]
@@ -989,6 +1049,8 @@ class MainAgentRuntime:
                     self._drain_task = None
                 if self._pending_trigger is not None and not self._shutdown:
                     self._kick_locked()
+            if self.state_listener is not None and not self._shutdown:
+                await self.state_listener("idle")
 
     async def _provider_chunks(self, request: InvokeRequest):
         started_at = time.monotonic()
@@ -996,6 +1058,10 @@ class MainAgentRuntime:
         try:
             async for chunk in self.provider(request):
                 yield chunk
+        except Exception:
+            if self.error_listener is not None:
+                await self.error_listener("main_model_error")
+            raise
         finally:
             observe = getattr(self.metrics, "observe", None)
             if callable(observe):
@@ -1082,7 +1148,7 @@ class MainAgentRuntime:
 
         async with self._lock:
             active_input = self._active_input
-            if self._shutdown or active_input is None or self._task_bridge is None:
+            if self._shutdown or not self.accepting or active_input is None or self._task_bridge is None:
                 raise ToolExecutorError("task_runtime_unavailable")
             self._ensure_task_event_listener_locked()
             identity = (active_input.input_id, call.call_id)
@@ -1486,6 +1552,7 @@ class MainAgentRuntime:
         if (
             self._task_bridge is None
             or self._shutdown
+            or not self.accepting
             or (self._task_event_task is not None and not self._task_event_task.done())
             or not callable(getattr(self._task_bridge.manager, "iter_events", None))
         ):
@@ -1663,7 +1730,7 @@ class MainAgentRuntime:
             response_grant=fence_grant,
             speech_candidate=self._speech_candidate,
             confirmed_speech=self._confirmed_speech,
-            cancelled=self._shutdown,
+            cancelled=self._shutdown or not self.accepting,
         )
 
     def _runtime_state(
@@ -1685,7 +1752,7 @@ class MainAgentRuntime:
     def _start_memory_idle_locked(self) -> None:
         """Persist confirmed activity and replace only the Profile's idle timer."""
 
-        if self.memory_service is None or self._shutdown:
+        if self.memory_service is None or self._shutdown or not self.accepting:
             return
         self.context_store.set_last_user_activity(self.wall_clock())
         self._schedule_memory_idle_locked(self.memory_idle_seconds)
@@ -1696,6 +1763,7 @@ class MainAgentRuntime:
         if (
             self.memory_service is None
             or self._shutdown
+            or not self.accepting
             or self._user_speaking
             or self._confirmed_speech
             or (
@@ -1713,6 +1781,8 @@ class MainAgentRuntime:
         )
 
     def _schedule_memory_idle_locked(self, delay: float) -> None:
+        if not self.accepting or self._shutdown:
+            return
         self._cancel_memory_idle_task_locked()
         self._memory_idle_task = asyncio.create_task(
             self._archive_conversation_after(delay),
@@ -1739,7 +1809,7 @@ class MainAgentRuntime:
             await self.wait_until_idle()
             await self._wait_for_speech_settlement()
             async with self._lock:
-                if self._shutdown or self._user_speaking or self._confirmed_speech:
+                if self._shutdown or not self.accepting or self._user_speaking or self._confirmed_speech:
                     return
                 pending = self.context_store.pending_conversation_archive()
                 if pending is None:
@@ -1847,6 +1917,7 @@ class MainAgentRuntime:
         active = self._active_input
         if active is not None:
             self._retire_proposals_for_input_locked(active.input_id)
+        self._published_segments.clear()
         self._active_input = None
         self._has_external_commit = False
         self._response_grant = None

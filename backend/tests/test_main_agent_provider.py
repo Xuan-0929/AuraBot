@@ -8,6 +8,9 @@ Profile composition, Web tools, and realtime delivery are covered at their own p
 from __future__ import annotations
 
 import unittest
+import asyncio
+import os
+from unittest.mock import patch
 from types import SimpleNamespace
 
 from backend.main_agent.provider import OpenAICompatibleProvider, build_chat_provider
@@ -91,6 +94,50 @@ class OpenAICompatibleProviderTests(unittest.IsolatedAsyncioTestCase):
         self.assertNotIn("可靠、简短", messages[2]["content"])
         await provider.aclose()
         self.assertTrue(client.closed)
+
+    async def test_loopback_model_bypasses_broken_socks_proxy(self) -> None:
+        payload = b'data: {"choices":[{"delta":{"tool_calls":[]}}]}\n\ndata: [DONE]\n\n'
+        seen = []
+        async def respond(reader, writer):
+            header = await reader.readuntil(b"\r\n\r\n")
+            length = next((int(line.split(b":", 1)[1]) for line in header.split(b"\r\n") if line.lower().startswith(b"content-length:")), 0)
+            seen.append(await reader.readexactly(length))
+            writer.write(b"HTTP/1.1 200 OK\r\nContent-Type: text/event-stream\r\nContent-Length: " + str(len(payload)).encode() + b"\r\nConnection: close\r\n\r\n" + payload)
+            await writer.drain()
+            writer.close()
+            await writer.wait_closed()
+        server = await asyncio.start_server(respond, "127.0.0.1", 0)
+        port = server.sockets[0].getsockname()[1]
+        provider = OpenAICompatibleProvider(ChatModelSettings(f"http://127.0.0.1:{port}/v1", "local", "test", 2))
+        request = SimpleNamespace(snapshot=SimpleNamespace(soul="Soul", prompt="Hi"),
+            tool_surface=SimpleNamespace(provider_schemas=lambda: ()))
+        try:
+            with patch.dict(os.environ, {"ALL_PROXY": "socks5://127.0.0.1:1", "HTTP_PROXY": "socks5://127.0.0.1:1", "NO_PROXY": "", "no_proxy": ""}):
+                chunks = [chunk async for chunk in provider(request)]
+            self.assertEqual(len(chunks), 1)
+            self.assertEqual(len(seen), 1)
+        finally:
+            await provider.aclose()
+            server.close()
+            await server.wait_closed()
+
+    async def test_external_provider_honors_socks_and_client_setup_error_is_counted(self) -> None:
+        from backend.main_agent.provider import _http_client
+        from backend.main_agent.metrics import LifecycleMetrics
+        with patch.dict(os.environ, {"ALL_PROXY": "socks5://127.0.0.1:1", "NO_PROXY": "", "no_proxy": ""}):
+            client = _http_client("https://model.example/v1")
+            self.assertTrue(client.trust_env)
+            await client.aclose()
+        metrics = LifecycleMetrics()
+        def unavailable():
+            raise ImportError("private setup details")
+        provider = OpenAICompatibleProvider(ChatModelSettings("https://model.example/v1", "model", "test"),
+            metrics=metrics, client_factory=unavailable)
+        request = SimpleNamespace(snapshot=SimpleNamespace(soul="Soul", prompt="Hi"),
+            tool_surface=SimpleNamespace(provider_schemas=lambda: ()))
+        with self.assertRaises(ImportError):
+            _ = [chunk async for chunk in provider(request)]
+        self.assertEqual(metrics.snapshot()["counters"]["main.provider.error"], 1)
 
     async def test_missing_model_configuration_never_constructs_http(self) -> None:
         constructed = 0

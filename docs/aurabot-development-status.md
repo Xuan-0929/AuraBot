@@ -1,51 +1,34 @@
 # AuraBot 当前开发状态
 
-更新时间：2026-08-28
+更新：2026-09-05。本文描述代码集成范围；本轮执行的测试、桌面检查与剩余限制由 [集成记录](frontend-integration-work.md) 维护。
 
-## 当前事实
-
-| 范围 | 状态 |
+| 范围 | 当前集成 |
 | --- | --- |
-| Desktop | Electron + Vue + TypeScript + Vite；Live2D、控制台和设置保留。 |
-| Chat/Memory | 普通聊天、Memory follow-up、idle nudge 和持久化保留。 |
-| Chat attachments | 新附件输入已关闭；历史消息仅保留只读附件名称，不再暴露本地路径或打开动作。 |
-| Python Backend | lifespan 只启动 Task/Realtime/active-profile owner；Pet token 惰性激活单 Profile Main/Memory/Speech；health/readiness 零付费 probe。 |
-| Backend speech | 生命周期、实时 mic/STT/VAD/EOU/TTS/ACK 边界已接入；所有非空 production partial 都请求 PREPARE admission；默认禁用，只有显式配置且安装可选 SDK/模型资产后才可用。 |
-| Python Memory | 既有 MemoryService 负责提炼、存储与召回；五分钟 idle timer 在 seal 前可重置，seal 后独立 worker 不受新输入取消，成功后只清理 pending boundary。 |
-| Task | Python Control Plane 与 Main Agent proposal/Task fact bridge 已实现；桌面 Task UI 仍不可用。 |
-| 旧执行面 | Python Harness/MCP/Task runtime 与 TypeScript Task runners/UI 已删除。 |
-| Pi Runtime | Pi 0.84.2、Python Control Plane 与本地 Extension Package 已实现并通过 offline smoke。 |
+| Desktop | Electron + Vue；保留 Live2D 桌宠、控制台、设置和窗口交互。 |
+| 配置 | 单个 Electron JSON；模型、语音、人格、工作目录使用保存/应用；重启先做忙碌确认。 |
+| Backend | Electron 独占一个 Python 子进程；启动无热加载，无自动重启；健康确认后才标记应用版本。 |
+| 文字 | Console → IPC → Pet 唯一 WebSocket → Main Agent；不依赖语音资产。 |
+| 语音 | 显式开麦；STT partial 内部使用，确认后才进入可见历史；完整输出、持久化、展示后 ACK。 |
+| 可见历史 | Electron 独立 SQLite，稳定 ID 去重和游标分页；只含接受的用户消息与已交付 `say_to_user`。 |
+| Memory | Backend 内部召回/归档；已封存批次独立提炼；外部 API 与管理页移除。 |
+| Task | Python TaskManager + Pi；Main Agent 工具管理生命周期，Console 只显示标题和状态。 |
+| 数据 | 全新运行数据，不迁移旧配置/数据库；保留资产、缓存和共享数据。 |
 
-Electron SQLite 的全新安装与旧版本升级现在共享同一 Main Session schema：不存在
-`kind`、`parent_session_id`、`depth` 或 `session_links`。旧 Task 磁盘目录在数据库
-migration 提交后独立、幂等清理；部分删除不可回滚，失败会阻止启动并在下次重试。
+## 仍须区分的边界
 
-## 架构边界
+- 自动测试和模拟 transport 不代表真实麦克风、音频输出设备、STT/TTS 或模型服务已通过验收。未执行的真实检查必须明确标注。
+- Readiness 表示本地进程与配置状态，不代表 Provider 凭据或网络已通过真实调用。
+- Windows 实机与生产 Node/Python/Pi 打包仍需独立完成；保留构建入口不等于发行闭环。
+- 本轮没有 Artifact 管理、Task 手动控制 UI、外部消息渠道或旧 Electron Memory 主动提醒服务。
 
-Task 采用 Python Control Plane + 一 Task 一 Pi RPC 进程；唯一事实源是
-[Pi Task Runtime](modules/task-agent.md)。本轮只恢复可独立验证的 Backend surface，
-不会复活 Electron Task repository/runner/UI。
-
-## 本轮与后续
-
-本轮完成 Main Agent V1 减法闭环：Runtime 保留 input/revision/context fence；ContextStore 是唯一
-未归档对话 buffer，并只持久化 singleton pending boundary；既有 MemoryService 独占提炼、持久化和
-召回，Runtime 只编排 idle timer 与 sealed worker，不再维护 durable job/queue 或管理 API；Gateway 按
-token 串行激活 Profile。搜索 Observation 会触发 CONTINUE，
-Task proposal durable 后以 Task fact 回流 Context。后续仍是 Electron surface、Artifact 与生产打包。
-
-## 验证入口
+## 开发验证入口
 
 ~~~bash
 uv run --project backend python -m unittest discover -s backend/tests -t .
 cd frontend
 npm run typecheck
-npm run test:unit
 npm test
 npm run build
 ~~~
 
-验收测试覆盖 silent/voice E2E、Memory recall/source filtering、conversation boundary 跨重启幂等、
-seal 后新输入不取消 worker、失败后同 source 重试、成功后原子清理、mutable partial PREPARE admission、
-readiness/exact health/lifespan、search→CONTINUE 与 Task proposal→Task fact。真实 provider smoke 仍为显式 opt-in，默认
-TestClient/static route 不调用付费 provider。固定 Pi CLI 版本仍精确为 0.84.2。
+`npm test` 使用 Node 版本的 native SQLite；桌面启动需要 Electron ABI，`npm run dev` 会先重建对应 native 模块。文档变更按项目约定无需额外验证；具体测试结果仅记在集成记录。

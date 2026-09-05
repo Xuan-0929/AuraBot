@@ -1,31 +1,29 @@
-import { readFileSync } from "node:fs";
-import { dirname, join } from "node:path";
-import { fileURLToPath } from "node:url";
-import { describe, expect, test } from "vitest";
-
-const rendererRoot = join(dirname(fileURLToPath(import.meta.url)), "../../../src");
-const settingsWindow = readFileSync(join(rendererRoot, "features/settings/SettingsWindow.vue"), "utf8");
-const styles = readFileSync(join(rendererRoot, "styles.css"), "utf8");
-
-describe("settings V2 layout", () => {
-  test("uses a direct desktop sidebar and keeps the card navigation for compact layouts", () => {
-    expect(settingsWindow).toContain("settings-v2-layout");
-    expect(settingsWindow).toContain("settings-v2-sidebar");
-    expect(settingsWindow).toContain(":aria-current=");
-    expect(settingsWindow).toContain("isCompact");
-    expect(settingsWindow).toContain('ref<SettingsPageKey>("general")');
-    expect(settingsWindow).toContain("SettingsCenterShell");
-  });
-
-  test("animates only the desktop settings content when the selected page changes", () => {
-    expect(settingsWindow).toContain('<Transition name="settings-page" mode="out-in">');
-    expect(settingsWindow).toContain(':key="currentPage"');
-    expect(styles).toContain(`.app-shell-settings .settings-page-enter-active {
-  transition: opacity 160ms ease-out, transform 160ms ease-out;
-}`);
-    expect(styles).toContain(`.app-shell-settings .settings-page-enter-from {
-  opacity: 0;
-  transform: translateY(4px);
-}`);
-  });
+/** Exercises the real settings form: saving never applies; a busy restart needs a separate confirmation. */
+// @vitest-environment jsdom
+import { createApp, nextTick } from 'vue';
+import { createPinia } from 'pinia';
+import { afterEach, expect, it, vi } from 'vitest';
+import { mkdtempSync, rmSync } from 'node:fs';
+import { tmpdir } from 'node:os';
+import { join } from 'node:path';
+import SettingsWindow from '../../../src/features/settings/SettingsWindow.vue';
+import { DesktopConfigStore } from '../../../src/main/desktopConfigStore';
+let dispose:()=>void=()=>{};
+afterEach(()=>{dispose();vi.unstubAllGlobals();});
+it('requires save before apply and defaults the busy dialog to cancel',async()=>{
+ const root=mkdtempSync(join(tmpdir(),'aura-form-'));const config=new DesktopConfigStore(root,root);config.markApplied(config.snapshot());config.online=true;
+ const saveSettings=vi.fn(async(value,clear)=>config.save(structuredClone(value),structuredClone(clear)));
+ const applySettings=vi.fn(async()=>({state:config.status(),busy:{tasks:1,memoryWriting:false,mainAgent:false}}));
+ Object.assign(window,{aurabot:{getSettings:async()=>config.status(),saveSettings,applySettings,onSettingsChanged:()=>()=>{}}});
+ const host=document.createElement('div');document.body.append(host);const app=createApp(SettingsWindow);app.use(createPinia());app.mount(host);
+ dispose=()=>{app.unmount();host.remove();rmSync(root,{recursive:true,force:true});};
+ await vi.waitFor(()=>expect(host.querySelector('input')).not.toBeNull());
+ const button=(text:string)=>[...host.querySelectorAll('button')].find(b=>b.textContent===text)!;
+ const input=host.querySelector('input')!;input.value='https://example.invalid/v1';input.dispatchEvent(new Event('input',{bubbles:true}));await nextTick();
+ expect(button('应用').disabled).toBe(true);button('保存').click();
+ await vi.waitFor(()=>expect(saveSettings).toHaveBeenCalledOnce());await nextTick();
+ expect(applySettings).not.toHaveBeenCalled();expect(button('应用').disabled).toBe(false);
+ button('应用').click();await vi.waitFor(()=>expect(host.querySelector('[role="alertdialog"]')).not.toBeNull());
+ expect(document.activeElement).toBe(button('取消'));button('取消').click();await nextTick();
+ expect(host.querySelector('[role="alertdialog"]')).toBeNull();expect(applySettings).toHaveBeenCalledExactlyOnceWith(false);
 });

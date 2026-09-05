@@ -1,20 +1,18 @@
 # AuraBot 文档
 
-本目录只维护当前事实与目标设计。旧 Task Runtime 不另建 archive，Git 历史即档案。
+当前产品、启动与接口文档以 2026-09-05 桌面集成为基准。历史设计不得覆盖下列当前契约。
 
 | 文档 | 信息所有权 |
 | --- | --- |
-| [产品需求](PRD-v2.md) | 产品定位、目标能力和非目标。 |
-| [系统模块](modules-v2.md) | 进程与模块边界。 |
-| [Pi Task Runtime](modules/task-agent.md) | 已批准第二轮 Task 架构与实现状态的唯一事实源。 |
-| [Main Agent](modules/main-agent.md) | Main Agent 如何调用 Control Plane。 |
-| [后端契约](backend-runtime-contract.md) | 固定 health 与版本化 Task REST/SSE 边界。 |
-| [后端迁移](backend-runtime-migration.md) | 从空窗期到后端垂直切片的实施阶段。 |
-| [数据所有权](runtime-data-ownership.md) | 各类数据的唯一写入 owner。 |
-| [配置与生命周期](configuration-and-backend-lifecycle.md) | Python 配置、启动、健康与退出。 |
-| [当前状态](aurabot-development-status.md) | 可复核的实现事实和下一步。 |
-| [Windows 适配](windows-platform-adaptation.md) | 平台与打包边界。 |
-| [TTS](modules/tts.md) | TTS 选型与接入策略。 |
+| [产品需求](PRD-v2.md) | 用户体验、范围、非目标与验收边界。 |
+| [系统模块](modules-v2.md) | Electron、Pet、Backend 与存储的唯一 owner。 |
+| [配置与生命周期](configuration-and-backend-lifecycle.md) | settings.json、保存/应用、开发启动、忙碌重启与数据布局。 |
+| [后端契约](backend-runtime-contract.md) | text/voice realtime、交付回执、readiness 与重启协议。 |
+| [Pi Task Runtime](modules/task-agent.md) | Task 状态机、Pi 控制面与执行面。 |
+| [语音资产](main-agent-speech-assets.md) | 可选依赖、模型和许可证安装。 |
+| [当前状态](aurabot-development-status.md) | 集成范围与尚未验证的边界。 |
+| [本轮集成记录](frontend-integration-work.md) | 已批准要求、实际测试/桌面检查及剩余工作。 |
+| [Windows 适配](windows-platform-adaptation.md) | 平台与生产打包限制。 |
+| [Main Agent V1 历史设计](modules/main-agent.md) | 旧语音入口设计及 Runtime 内部设计参考；入口/配置契约已被当前文档取代。 |
 
-文档必须区分“已实现”“已删除”“已批准待实现”和“明确延期”。README 只描述用户
-当前能运行的能力；Pi 细节不得复制到其他文档。
+开发启动从仓库 [README](../README.md) 开始。文档明确区分代码实现、自动测试和真实 Provider/设备验收，不把保留的旧设计描述为当前可用功能。

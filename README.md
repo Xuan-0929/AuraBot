@@ -1,119 +1,71 @@
 # AuraBot
 
-AuraBot 是一个 desktop-first 的陪伴型 AI 项目。默认界面是常驻桌面的 Live2D
-角色，控制台提供普通聊天、Memory、模型与桌宠设置。
+AuraBot 是带 Live2D 桌宠的陪伴型桌面 AI。文字与语音通过同一个 Main Agent 处理；控制台显示主对话历史和只读 Task 状态，设置窗口管理模型、语音、人格、桌宠与工作目录。
 
-## 当前可用能力
-
-| 范围 | 当前状态 |
-| --- | --- |
-| Desktop | Electron + Vue + TypeScript + Vite，可运行桌宠、控制台和设置窗口。 |
-| Live2D | 内置 Hiyori 示例模型，支持拖动、点击穿透、光标跟随与状态动作。 |
-| Chat | 普通文字聊天、pet quick chat、模型调用和消息持久化；production STT 的所有非空 partial 都请求进入既有 PREPARE admission。 |
-| Memory | Active Profile 使用既有 MemoryService 召回；Main Agent 的 idle timer 在 seal 前可被用户活动重置，seal 后独立 worker 不再被新输入取消，成功后只清理已 seal 边界。 |
-| Backend | FastAPI 启动只持有 Task、Realtime 与 active-profile owner；首个 Pet token 才惰性组合 Main/Memory/Speech，health/readiness 不作付费 probe。 |
-| Task | 两表同步 SQLite、固定五槽 FIFO、Pi RPC、控制/业务事件与 Main Agent proposal/事实回流已实现；桌面 Task UI 仍未开放。 |
-
-桌面 Task UI 尚未开放；Python Main Agent 与 TaskManager 的后端 control path 已接通，
-但当前桌面不会暗示这个 surface 已经可用。
-
-## 架构状态
+## 当前集成边界
 
 ~~~mermaid
 flowchart LR
-  DESKTOP["Electron / Vue<br/>Chat · Live2D"] --> GATEWAY["Python FastAPI Gateway<br/>realtime · readiness · Task API"]
-  GATEWAY --> ACTIVE["单 ActiveProfileManager"]
-  ACTIVE --> MAIN["MainAgentRuntime<br/>Snapshot · Speech"]
-  MAIN --> MEMORY["Profile MemoryService<br/>memory.sqlite3 · Qdrant"]
-  MAIN --> TM["Python TaskManager<br/>Control Plane"]
-  TM --> PI["Pi RPC processes<br/>Execution Plane"]
+  C["Console<br/>文字输入 · 历史 · Task 状态"] -->|IPC| E["Electron Main<br/>配置 · 进程 · 可见历史"]
+  E -->|转发输入| P["Pet<br/>唯一文字/语音 WebSocket"]
+  P <--> B["Python Main Agent<br/>Context · Memory · Task 工具"]
+  E -->|启动与显式重启| B
+  B --> T["TaskManager → Pi RPC"]
+  P -->|交付回执| E
 ~~~
 
-未来 Task 架构、职责边界和第二轮范围以
-[Pi Task Runtime](docs/modules/task-agent.md) 为唯一事实源。
+- 默认文字模式；未配置模型时仍能打开桌宠和设置。文字聊天不要求麦克风、语音 SDK 或语音模型资产。
+- 用户显式开启麦克风才启用语音。语音整句经过输出设备播放完成后，Electron 写入历史、更新展示，Pet 再发送 ACK；中断句不进入历史。
+- Main Agent 独占 Context、Memory 和 Task 业务编排。只有确认接收的用户消息及 `say_to_user` 交付内容进入桌面历史。
+- Task 列表只显示标题和状态。创建、问答、暂停、恢复、取消、删除和重跑通过 Main Agent 完成；Memory 不提供外部管理 API 或 UI。
 
-## Quick Start
+## 开发启动
 
-要求：
+需要 Node.js 22.19+、npm 与 [uv](https://docs.astral.sh/uv/)。macOS 是主要开发平台；Windows 打包与实机验证的边界见 [Windows 适配](docs/windows-platform-adaptation.md)。
 
-1. Node.js 22.19+ 与 npm（Pi 0.84.2 要求 Node >=22.19.0）。
-2. [uv](https://docs.astral.sh/uv/)。
-3. macOS 是主要开发平台；Windows 10/11 x64 保留打包目标。
-
-安装：
+在仓库根目录安装依赖：
 
 ~~~bash
 uv sync --project backend --locked
 npm ci --prefix pi-aurabot-task
 npm ci --prefix pi-runtime
-cd frontend
-npm install
+npm ci --prefix frontend
 ~~~
 
-创建 Backend 配置：
-
-~~~bash
-cp config.example.yaml config.yaml
-~~~
-
-启动桌面开发环境：
+启动：
 
 ~~~bash
 cd frontend
 npm run dev
 ~~~
 
-npm run dev 会启动 Python Backend、Vite 和 Electron。也可在
-frontend 目录分别运行 npm run dev:backend、npm run dev:frontend 和
-npm run dev:desktop。
+Electron Main 是唯一 Backend 进程 owner；开发入口启动 Electron/Vite，再由 Electron 启动 Python。Vite 使用 `127.0.0.1:6400`，Backend 使用 `127.0.0.1:6401`。不要另外启动第二个 Backend；端口被其他进程占用时应用报告错误，不终止其他进程。
 
-Backend 组合入口仍是 backend/main.py。启动后固定健康检查：
+首次运行自动创建 `<Electron userData>/desktop-v2/settings.json`。打开设置，填写 Main Agent 模型与密钥，先“保存”，再“应用”。Task/Pi 和语音可分别配置；更改人格也需保存后应用。无需复制或维护仓库 YAML 配置。
+
+`AURABOT_USER_DATA_DIR` 可指定隔离的数据根，此时直接使用该目录，不再追加 `desktop-v2`。Electron 将 JSON 路径通过 `AURABOT_CONFIG_PATH` 传给 Python；Python 只在启动时读取。
+
+## 配置、数据与验证
+
+- “保存”只写 JSON。“应用”使已保存设置生效；Backend 或人格变更先检查忙碌状态，经用户明确确认后才中断工作并重启。新 Backend 健康且版本匹配后才标记已应用。
+- 桌面交付历史位于独立的 `conversation-history.sqlite3`，按游标分页。Profile、Context、Memory 和 Task 各自拥有存储；桌面历史不会回灌 Main Agent。
+- 本轮使用全新运行数据，不迁移旧配置或数据库。数据重置只针对枚举确认的 AuraBot 专属旧数据，保留源码、模型资产、缓存和共享第三方数据。
+
+本地检查入口：
 
 ~~~bash
 curl http://127.0.0.1:6401/health
+curl http://127.0.0.1:6401/api/v1/readiness
 ~~~
 
-响应：
-
-~~~json
-{"ok":true,"service":"backend"}
-~~~
-
-本地 readiness 使用 `GET /api/v1/readiness`；它只读取 lifespan、active Profile 与已打开
-Memory 的本地状态，不调用模型、embedding、Qdrant health 或 Pi subprocess。Main Agent 不再提供
-专用的 Memory browse/forget/retry HTTP 管理面；开发与诊断能力保留在 Memory 模块自身边界内。
-
-## Task Runtime 配置
-
-仓库根配置的新 `task` 段指定 AuraBot user data、私有 `pi-runtime` 路径、Node 和
-默认 timeout。并发固定为五且不可配置；旧 `task.concurrency_limit` 会导致启动失败。
-`pi-runtime` 精确锁定 Pi；`pi-aurabot-task` 提供标准
-`ask_main_agent` Extension。二者都不是 Electron runner 或 Node Worker。
-HTTP 创建请求省略 timeout 时使用 YAML 默认值；显式 null 或 `1..86400` 之外的值
-会被拒绝。
-
-## 其他配置
-
-Python Backend 读取仓库根目录 config.yaml；AURABOT_CONFIG_PATH 可覆盖路径。
-Electron 的模型与桌宠设置仍使用 userData 下的 aurabot.config.json 或
-config.json。旧 taskRunner/Codex/Claude/Hermes 字段不会被读取，也不会被主动
-重写。
-
-当前 Electron 模型角色：
-
-- gateModel：轻量分类与回复时机。
-- chatModel：生成用户可见回复。
-- memoryModel：记忆抽取与合并。
-
-## 验证
+`/health` 返回 `{"ok":true,"service":"backend"}`。Readiness 只检查本地生命周期与能力状态，不执行付费模型探测。
 
 ~~~bash
 uv run --project backend python -m unittest discover -s backend/tests -t .
 cd frontend
 npm run typecheck
-npm run test:unit
 npm test
 npm run build
 ~~~
 
-更多文档见 [docs/README.md](docs/README.md)。
+自动测试不等于真实麦克风、音频设备、STT/TTS 或模型 Provider 验收。实际验证结果与限制以 [本轮集成记录](docs/frontend-integration-work.md) 为准；语音安装见 [语音资产](docs/main-agent-speech-assets.md)，完整索引见 [文档](docs/README.md)。

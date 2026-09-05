@@ -31,7 +31,23 @@ describe("main-agent audio worklet", () => {
     expect(queue.queuedSamples).toBe(4);
     queue.resume();
     expect(queue.render(new Float32Array(3))).toEqual([]);
-    expect(queue.render(new Float32Array(1))).toEqual([{ type: "clause-complete", clauseId: "clause-1" }]);
+    expect(queue.render(new Float32Array(1))).toEqual([{ type: "clause-complete", clauseId: "clause-1", frameOffset:1 }]);
     expect(queue.render(new Float32Array(8))).toEqual([]);
   });
+  it("accepts a second clause and completes when audio_end arrives after PCM drained", () => {
+    const queue = new ClausePlaybackQueue({ outputSampleRate: 24_000 });
+    queue.offer("first");queue.append(new Int16Array([100]));queue.render(new Float32Array(8));
+    queue.finish("first");
+    expect(queue.render(new Float32Array(8))).toEqual([expect.objectContaining({type:"clause-complete",clauseId:"first"})]);
+    expect(()=>queue.offer("second")).not.toThrow();
+    queue.append(new Int16Array([200]));queue.finish("second");
+    expect(queue.render(new Float32Array(8))).toEqual([expect.objectContaining({type:"clause-complete",clauseId:"second"})]);
+  });
+  it("interpolates using fractional source position independently of the buffer offset", () => {
+    const queue = new ClausePlaybackQueue({ outputSampleRate: 48_000 });
+    queue.offer("ramp");queue.append(new Int16Array([0, 1000, 2000, 3000]));
+    const channel=new Float32Array(6);queue.render(channel);
+    expect(Array.from(channel).map(value=>Math.round(value*32768))).toEqual([0,500,1000,1500,2000,2500]);
+  });
+
 });

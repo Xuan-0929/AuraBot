@@ -1,5 +1,5 @@
 """
-验证 Memory 服务、整段对话提炼、HTTP 路由、检索组件与持久化适配器的可观察行为。
+验证 Memory 服务、整段对话提炼、内部检索组件与持久化适配器的可观察行为。
 
 测试使用临时 SQLite 和内存向量替身覆盖 remember/recall/forget、提取与排序流程；
 短期记忆缓冲区由独立测试模块负责，避免在本文件重复验证同一契约。
@@ -13,8 +13,6 @@ import threading
 import unittest
 from pathlib import Path
 
-from fastapi import FastAPI
-from fastapi.testclient import TestClient
 
 from backend.memory.invode import (
     HashEmbeddingProvider,
@@ -24,7 +22,6 @@ from backend.memory.invode import (
     StructuredMemoryExtractor,
     create_embedding_provider,
     create_default_memory_service,
-    create_memory_router,
 )
 from backend.memory.extraction.schemas import (
     parse_conversation_extraction_payload,
@@ -878,67 +875,6 @@ class MemoryInvodeTests(unittest.TestCase):
         result = self.service.due("user-1", now_iso="2026-06-11T09:00:00+00:00")
 
         self.assertEqual([item["memory_id"] for item in result["memories"]], due["memory_ids"])
-
-    def test_router_exposes_memory_workflow_health_and_validation(self):
-        app = FastAPI()
-        app.include_router(create_memory_router(self.service))
-        client = TestClient(app)
-
-        remember_response = client.post(
-            "/memory/remember",
-            json={
-                "profile_id": "user-1",
-                "content": "我喜欢黑咖啡，明天提醒我买咖啡豆。",
-                "source_type": "chat",
-                "source_id": "message-1",
-                "role": "user",
-            },
-        )
-        self.assertEqual(remember_response.status_code, 200)
-        episode_id = remember_response.json()["episode_id"]
-
-        recall_response = client.post(
-            "/memory/recall",
-            json={
-                "profile_id": "user-1",
-                "query": "咖啡豆提醒",
-                "limit": 5,
-                "context_hints": {"entities": ["咖啡豆"]},
-            },
-        )
-        self.assertEqual(recall_response.status_code, 200)
-        self.assertIn("trace", recall_response.json())
-        self.assertTrue(recall_response.json()["source_episodes"])
-
-        improve_response = client.post("/memory/improve", json={"profile_id": "user-1"})
-        self.assertEqual(improve_response.status_code, 200)
-        self.assertIn("stale_count", improve_response.json())
-
-        due_response = client.get("/memory/due", params={"profile_id": "user-1", "now_iso": "2100-01-01T00:00:00+00:00"})
-        self.assertEqual(due_response.status_code, 200)
-        self.assertTrue(due_response.json()["memories"])
-
-        debug_response = client.get("/memory/debug/user-1")
-        self.assertEqual(debug_response.status_code, 200)
-        self.assertTrue(debug_response.json()["audit_logs"])
-
-        health_response = client.get("/memory/health")
-        self.assertEqual(health_response.status_code, 200)
-        self.assertEqual(health_response.json()["sqlite"]["backend"], "sqlite")
-        self.assertGreaterEqual(
-            health_response.json()["sqlite"]["schema_version"],
-            2,
-        )
-
-        forget_response = client.post(
-            "/memory/forget",
-            json={"profile_id": "user-1", "episode_ids": [episode_id], "reason": "cleanup"},
-        )
-        self.assertEqual(forget_response.status_code, 200)
-        self.assertGreaterEqual(forget_response.json()["forgotten_count"], 1)
-
-        invalid_forget_response = client.post("/memory/forget", json={"profile_id": "user-1"})
-        self.assertEqual(invalid_forget_response.status_code, 400)
 
     def test_improve_marks_older_conflicting_preference_superseded(self):
         liked = self.service.remember(

@@ -231,7 +231,7 @@ def _text(*, minimum: int = 1, maximum: int = 8_000, enum: Sequence[str] = ()) -
     return value
 
 
-_TASK_CONTROLS = ("inspect_tasks", "answer_task_question", "pause_task", "resume_task", "cancel_task")
+_TASK_CONTROLS = ("inspect_tasks", "answer_task_question", "pause_task", "resume_task", "cancel_task", "delete_task", "rerun_task")
 
 
 def _catalog(
@@ -311,6 +311,8 @@ def _catalog(
         "cancel_task": ToolDefinition("cancel_task", "Cancel an owned Task.", EffectClass.DURABLE_ACTION,
                                        _object({"task_id": task_id}, ("task_id",))),
     }
+    for name, description in (("delete_task", "Delete an owned terminal Task."), ("rerun_task", "Rerun an owned terminal Task as a new Task.")):
+        task[name] = ToolDefinition(name, description, EffectClass.DURABLE_ACTION, _object({"task_id": task_id}, ("task_id",)))
     definitions.extend(task[name] for name in _TASK_CONTROLS if name in task_controls)
     return tuple(definitions)
 

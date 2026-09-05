@@ -56,9 +56,10 @@ async def list_tasks(
     cursor: int | None = Query(default=None, ge=0),
     limit: int = Query(default=50, ge=1, le=200),
     task_status: list[TaskStatus] | None = Query(default=None, alias="status"),
+    owner_profile_id: str | None = Query(default=None, alias="ownerProfileId", min_length=1, max_length=128),
 ) -> TaskPageResponse:
     page = await _manager(request).list_tasks(
-        after_row_id=cursor, limit=limit, statuses=task_status
+        after_row_id=cursor, limit=limit, statuses=task_status, **({"owner_profile_id": owner_profile_id} if owner_profile_id is not None else {})
     )
     return TaskPageResponse.model_validate(page)
 

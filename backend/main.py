@@ -1,11 +1,8 @@
-"""Compose AuraBot around one token-activated Profile and the shared Memory implementation.
+"""Compose Backend Task ownership and the single active Profile for Electron realtime sessions.
 
-Process startup owns only TaskManager, metrics, and the minimal RealtimeHub. The first valid Pet token
-request supplies Electron's Profile identity and effective Soul, causing ``ActiveProfileManager`` to
-open that Profile's Context, ``backend.memory.MemoryService``, model/tools, and SpeechService. A serialized
-Profile switch closes those resources before opening another directory; no inactive Memory worker, second
-schema, Backend Profile file, or Backend Soul file exists.
-"""
+Startup tolerates absent chat, Pi and speech capabilities. Token activation opens Profile Context/Memory
+and text runtime; voice.start alone prepares speech assets and providers. Shutdown fences realtime before
+closing Profile workers and the durable Task control plane."""
 
 from __future__ import annotations
 
@@ -57,7 +54,7 @@ from .memory.service import MemoryService
 from .memory.stores.qdrant import QdrantLocalVectorStore
 from .memory.stores.sqlite import SQLiteMemoryStore
 from .task.manager import TaskManager
-from .task.settings import TaskSettings
+from .task.settings import TaskSettings, TaskSettingsError
 
 
 logger = logging.getLogger(__name__)
@@ -67,8 +64,16 @@ def build_task_manager() -> TaskManager:
     """Construct the shared durable Task control plane from initialized configuration."""
 
     settings = TaskSettings.from_config(config, config.path)
-    settings.validate_runtime()
-    return TaskManager(settings)
+    manager = TaskManager(settings)
+    model = config.get("task", {}).get("model", {})
+    manager.capability_available = all(model.get(key) for key in ("base_url", "model_name", "api_key"))
+    if manager.capability_available:
+        try:
+            settings.validate_runtime()
+        except TaskSettingsError:
+            manager.capability_available = False
+            logger.info("task_capability_unavailable")
+    return manager
 
 
 def build_memory_extractor(settings: Any) -> StructuredMemoryExtractor:
@@ -119,6 +124,16 @@ def create_app(
 
             profiles = ActiveProfileManager(settings.profile_root, hub, factory)
         hub.profile_activator = profiles.activate
+        application.state.config_revision = config.revision
+        application.state.capabilities = {
+            "text": bool(settings.chat_model.base_url and settings.chat_model.model_name and settings.chat_model.api_key),
+            "voice": bool(settings.chat_model.base_url and settings.chat_model.model_name and settings.chat_model.api_key
+                and settings.speech.enabled and settings.speech.api_key
+                and SileroVadDetector(settings.speech.silero_model_path, settings.speech.silero_license_path).status().available
+                and SmartTurnDetector(settings.speech.smart_turn_model_path, settings.speech.smart_turn_license_path).status().available
+                and all(importlib.util.find_spec(name) is not None for name in ("dashscope", "onnxruntime", "numpy", "transformers"))),
+            "tasks": bool(getattr(manager, "capability_available", True)),
+        }
         application.state.task_manager = manager
         application.state.main_agent_profiles = profiles
         application.state.backend_ready = False
@@ -143,8 +158,8 @@ def create_app(
     application.add_middleware(
         CORSMiddleware,
         allow_origins=sorted(hub.allowed_origins),
-        allow_methods=["POST"],
-        allow_headers=[],
+        allow_methods=["GET", "POST"],
+        allow_headers=["Content-Type"],
     )
     application.include_router(health_router)
     application.include_router(task_router)
@@ -169,9 +184,6 @@ async def _build_profile(
 ) -> ProfileResources:
     """Compose and start the sole active Profile, cleaning partial owners on any failure."""
 
-    if not settings.speech.enabled:
-        raise RuntimeError("speech_disabled")
-    detectors = _prepare_speech(settings.speech) if speech_factory is None else None
     context = ContextStore(path / "context.sqlite3")
     embedding = create_embedding_provider(config.get("memory", {}).get("embedding", {}))
     vectors = QdrantLocalVectorStore(path=path / "qdrant", vector_size=embedding.dimension)
@@ -194,9 +206,6 @@ async def _build_profile(
         executors.update({"web_search": tavily.search, "web_read": tavily.read})
         observation_tools = ("web_search", "web_read")
 
-    async def speech_unavailable(_clause: Any) -> None:
-        raise RuntimeError("speech_unavailable")
-
     runtime = MainAgentRuntime(
         context_store=context,
         snapshot_projector=SnapshotProjector(),
@@ -204,11 +213,11 @@ async def _build_profile(
             workspace_ids=settings.workspaces.ids,
             observation_tools=observation_tools,
             task_controls=(
-                "inspect_tasks", "answer_task_question", "pause_task", "resume_task", "cancel_task",
+                "inspect_tasks", "answer_task_question", "pause_task", "resume_task", "cancel_task", "delete_task", "rerun_task",
             ),
         ),
         provider=provider,
-        renderer=speech_unavailable,
+        renderer=hub.render,
         executors=executors,
         soul=soul,
         memory_service=memory,
@@ -216,6 +225,7 @@ async def _build_profile(
         owner_profile_id=profile_id,
         metrics=metrics,
     )
+    runtime.text_available = bool(provider_factory or (settings.chat_model.api_key and settings.chat_model.base_url and settings.chat_model.model_name))
     closeables: list[Any] = [context, provider]
     if tavily is not None:
         closeables.append(tavily)
@@ -223,13 +233,37 @@ async def _build_profile(
         profile_id, runtime, None, memory, closeables=tuple(closeables)
     )
     try:
-        if speech_factory is not None:
-            resources.speech = speech_factory(settings.speech, hub, runtime)
-        else:
-            assert detectors is not None
-            resources.speech = _build_speech(settings.speech, hub, runtime, *detectors)
+        async def start_speech() -> None:
+            if not hub.accepting or hub.runtime is not runtime:
+                raise RuntimeError("backend_restarting")
+            if resources.speech is not None:
+                return
+            if not settings.speech.enabled:
+                raise RuntimeError("speech_disabled")
+            speech = (speech_factory(settings.speech, hub, runtime) if speech_factory else
+                      _build_speech(settings.speech, hub, runtime, *_prepare_speech(settings.speech)))
+            runtime.renderer = hub.render
+            try:
+                await speech.startup()
+            except BaseException:
+                await speech.shutdown()
+                raise
+            resources.speech = speech
+            hub.speech = speech
+
+        async def stop_speech() -> None:
+            speech, resources.speech = resources.speech, None
+            if hub.speech is speech:
+                hub.speech = None
+            try:
+                if speech is not None:
+                    await speech.shutdown()
+            finally:
+                await runtime.renderer_disconnected()
+
+        hub.speech_activator = start_speech
+        hub.speech_stopper = stop_speech
         await runtime.startup()
-        await resources.speech.startup()
         return resources
     except BaseException:
         await resources.shutdown()
@@ -280,9 +314,13 @@ async def _shutdown_immune(hub: Any, profiles: Any, manager: Any) -> None:
     """Complete the short ownership-ordered shutdown even if lifespan itself is cancelled."""
 
     async def close_all() -> None:
-        await hub.stop_accepting()
-        await profiles.shutdown()
-        await manager.shutdown()
+        try:
+            await hub.stop_accepting()
+        finally:
+            try:
+                await profiles.shutdown()
+            finally:
+                await manager.shutdown()
 
     task = asyncio.create_task(close_all(), name="backend-lifespan-shutdown")
     cancelled = False

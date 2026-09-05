@@ -61,7 +61,7 @@
           type="button"
           :data-active="voiceInputActive ? 'true' : 'false'"
           :data-state="voiceInputState"
-          :aria-label="t(displayLanguage, 'startVoiceInput')"
+          :aria-label="voiceInputActive ? '停止语音输入' : t(displayLanguage, 'startVoiceInput')"
           @click="emit('voiceToggle')"
         >
           <svg
