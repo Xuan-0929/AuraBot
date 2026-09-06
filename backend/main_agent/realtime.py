@@ -3,13 +3,13 @@
 Sessions begin in text mode; explicit commands activate speech or submit text. Only accepted user segments
 and say_to_user clauses cross into desktop history. Text ACKs commit draft delivery, while voice ACKs
 require completed audio; binary PCM and playback gates remain confined to voice mode. Typed input remains
-available during voice mode, replacing microphone input ownership while preserving spoken delivery."""
+available during voice mode, resetting microphone input while preserving spoken delivery. ProfileResources
+is the sole Speech owner; this transport reads it and retires Runtime session state exactly once."""
 
 from __future__ import annotations
 
 import asyncio
 import json
-import re
 import secrets
 import time
 from collections import OrderedDict
@@ -21,9 +21,10 @@ from fastapi import APIRouter, HTTPException, Request, Response, WebSocket, stat
 from pydantic import BaseModel, ConfigDict, Field, field_validator
 from starlette.websockets import WebSocketDisconnect
 
+from .lifecycle import ProfileResources
+
 
 SUBPROTOCOL = "aurabot.main-agent.v1"
-_PROFILE_ID = re.compile(r"^[A-Za-z0-9][A-Za-z0-9_-]{0,127}$")
 
 
 class ProtocolError(ValueError):
@@ -174,15 +175,20 @@ class RealtimeHub:
         self.mic_queue = MicFrameQueue()
         self.active_profile_id: str | None = None
         self.active_generation = 0
-        self.runtime: Any | None = None
-        self.speech: Any | None = None
+        self.profile: ProfileResources | None = None
         self.session: VoiceSession | None = None
         self.accepting = True
         self._lock = asyncio.Lock()
         self.activation_lock = asyncio.Lock()
         self._session_lock = asyncio.Lock()
-        self.speech_activator = None
-        self.speech_stopper = None
+
+    @property
+    def runtime(self) -> Any | None:
+        return self.profile.runtime if self.profile is not None else None
+
+    @property
+    def speech(self) -> Any | None:
+        return self.profile.speech if self.profile is not None else None
 
     def origin_allowed(self, origin: str | None) -> bool:
         if origin is None:
@@ -204,24 +210,20 @@ class RealtimeHub:
             return generation
 
     async def set_active(
-        self, profile_id: str, generation: int, runtime: Any, speech: Any
+        self, profile_id: str, generation: int, profile: ProfileResources
     ) -> None:
         async with self._session_lock:
             old = self.session if (
                 self.active_profile_id != profile_id or self.active_generation != generation
             ) else None
             if old is not None:
-                old_speech = self.speech
                 await self._close_locked(old, "profile_switched")
-                if speech is old_speech:
-                    speech = None
             self.active_profile_id = profile_id
             self.active_generation = generation
-            self.runtime = runtime
-            self.speech = speech
-            runtime.user_message_listener = self.user_message
-            runtime.state_listener = self.agent_state
-            runtime.error_listener = self.session_error
+            self.profile = profile
+            profile.runtime.user_message_listener = self.user_message
+            profile.runtime.state_listener = self.agent_state
+            profile.runtime.error_listener = self.session_error
 
     async def clear_active(self, profile_id: str, generation: int) -> None:
         async with self._session_lock:
@@ -230,8 +232,7 @@ class RealtimeHub:
             if self.session is not None:
                 await self._close_locked(self.session, "profile_switched")
             self.active_profile_id = None
-            self.runtime = None
-            self.speech = None
+            self.profile = None
 
     async def attach(self, socket: Any) -> VoiceSession:
         async with self._session_lock:
@@ -267,19 +268,11 @@ class RealtimeHub:
         # Hold session lifetime ownership, never the ACK lock while provider cleanup drains callbacks.
         async def cleanup() -> None:
             try:
-                if self.speech_stopper is not None:
-                    await self.speech_stopper()
-                elif self.speech is not None:
-                    speech, self.speech = self.speech, None
-                    shutdown = getattr(speech, "shutdown", None)
-                    if shutdown is not None:
-                        await shutdown()
-                    else:
-                        await speech.cancel_current(reason)
+                if self.profile is not None:
+                    await self.profile.stop_speech()
             finally:
-                disconnected = getattr(self.runtime, "renderer_disconnected", None)
-                if disconnected is not None:
-                    await disconnected()
+                if self.runtime is not None:
+                    await self.runtime.renderer_disconnected()
                 if close_socket:
                     try:
                         await session.socket.close(code=4001, reason=reason)
@@ -426,18 +419,12 @@ class RealtimeHub:
                         raise ProtocolError("backend_restarting")
                     if set(event) != {"type", "command_id", "text"} or not isinstance(event.get("text"), str) or not event["text"].strip() or len(event["text"]) > 8000:
                         raise ProtocolError("invalid_text")
-                    if session.current_clause is not None:
+                    if session.mode == "voice":
+                        await self.speech.cancel_current("text_superseded")
+                        await self.speech.reset_input()
+                        await self.runtime.renderer_disconnected()
+                    elif session.current_clause is not None:
                         await self.cancel_clause(RendererPort(self, session), session.current_clause, "text_superseded")
-                    if session.mode == "voice" and self.speech_stopper is not None:
-                        try:
-                            await self.speech_stopper()
-                            self.mic_queue.clear()
-                            if self.speech_activator is None:
-                                raise ProtocolError("speech_unavailable")
-                            await self.speech_activator()
-                        except Exception:
-                            session.mode = "text"
-                            raise ProtocolError("speech_unavailable") from None
                     await self.runtime.submit_text(event["text"], segment_id=command_id)
             elif kind in {"voice.start", "voice.stop"}:
                 if set(event) != {"type", "command_id"}:
@@ -449,10 +436,8 @@ class RealtimeHub:
                         if session.current_clause is not None:
                             raise ProtocolError("delivery_busy")
                         if self.speech is None:
-                            if self.speech_activator is None:
-                                raise ProtocolError("speech_unavailable")
                             try:
-                                await self.speech_activator()
+                                await self.profile.start_speech()
                             except Exception:
                                 raise ProtocolError("speech_unavailable") from None
                         session.mode = "voice"
@@ -460,8 +445,8 @@ class RealtimeHub:
                     else:
                         if session.current_clause is not None:
                             await self.cancel_clause(RendererPort(self, session), session.current_clause, "voice_stopped")
-                        if self.speech_stopper is not None:
-                            await self.speech_stopper()
+                        await self.profile.stop_speech()
+                        await self.runtime.renderer_disconnected()
                         self.mic_queue.clear()
                         session.mode = "text"
                         await self.agent_state("idle")

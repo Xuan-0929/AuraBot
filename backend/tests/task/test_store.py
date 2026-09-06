@@ -10,9 +10,8 @@ from __future__ import annotations
 import sqlite3
 import tempfile
 import unittest
-from datetime import UTC, datetime
+from dataclasses import replace
 from pathlib import Path
-from uuid import UUID
 
 from backend.task.models import (
     CreateTaskCommand,
@@ -67,7 +66,7 @@ class TaskStoreTests(unittest.TestCase):
             version = connection.execute("PRAGMA user_version").fetchone()[0]
 
         self.assertEqual(tables, {"tasks", "task_events"})
-        self.assertEqual(version, 2)
+        self.assertEqual(version, 3)
 
     def test_rejects_legacy_and_unknown_schema_without_mutating_it(self):
         self.store.close()
@@ -90,195 +89,66 @@ class TaskStoreTests(unittest.TestCase):
         with self.assertRaisesRegex(TaskStoreSchemaError, "user_version=99"):
             TaskStore(self.database_path).initialize()
 
-    def create_v1_fixture(
-        self,
-        *,
-        timeout_constraint: str = " CHECK(timeout_seconds > 0)",
-        queue_index_columns: str = "status, deleted_at, row_id",
-    ):
-        queued_id = UUID("00000000-0000-4000-8000-000000000001")
-        running_id = UUID("00000000-0000-4000-8000-000000000002")
-        waiting_id = UUID("00000000-0000-4000-8000-000000000003")
-        now = datetime(2026, 8, 20, 12, 0, tzinfo=UTC).isoformat().replace("+00:00", "Z")
-        self.store.close()
-        self.database_path.unlink()
-        with sqlite3.connect(self.database_path) as connection:
-            connection.executescript(
-                f"""
-                CREATE TABLE tasks (
-                    row_id INTEGER PRIMARY KEY AUTOINCREMENT, id TEXT NOT NULL UNIQUE,
-                    title TEXT NOT NULL, prompt TEXT NOT NULL, working_directory TEXT NOT NULL,
-                    timeout_seconds INTEGER NOT NULL{timeout_constraint},
-                    rerun_of_task_id TEXT REFERENCES tasks(id),
-                    status TEXT NOT NULL CHECK(status IN ('queued','running','waiting','paused','completed','failed','cancelled')),
-                    active_runtime_ms INTEGER NOT NULL DEFAULT 0 CHECK(active_runtime_ms >= 0),
-                    version INTEGER NOT NULL CHECK(version >= 1), question_id TEXT,
-                    question_text TEXT, question_options_json TEXT, question_answer TEXT,
-                    result_text TEXT, error_code TEXT, error_message TEXT, pause_reason TEXT,
-                    created_at TEXT NOT NULL, updated_at TEXT NOT NULL, started_at TEXT,
-                    finished_at TEXT, deleted_at TEXT
-                );
-                CREATE INDEX tasks_queue_idx ON tasks({queue_index_columns});
-                CREATE TABLE task_events (
-                    event_id INTEGER PRIMARY KEY AUTOINCREMENT,
-                    task_id TEXT NOT NULL REFERENCES tasks(id), task_sequence INTEGER NOT NULL,
-                    event_type TEXT NOT NULL, occurred_at TEXT NOT NULL, payload_json TEXT NOT NULL,
-                    UNIQUE(task_id, task_sequence)
-                );
-                CREATE INDEX task_events_replay_idx ON task_events(task_id, event_id);
-                """
-            )
-            task_rows = (
-                (queued_id, "queued", 1, None, None, None),
-                (running_id, "running", 2, None, None, now),
-                (waiting_id, "waiting", 3, "00000000-0000-4000-8000-000000000004", "Choose", now),
-            )
-            for task_id, status, version, question_id, question_text, started_at in task_rows:
-                connection.execute(
-                    """INSERT INTO tasks(
-                        id,title,prompt,working_directory,timeout_seconds,status,active_runtime_ms,
-                        version,question_id,question_text,question_options_json,created_at,updated_at,started_at)
-                        VALUES (?,?,?,?,?,?,?,?,?,?,?,?,?,?)""",
-                    (
-                        str(task_id), f"{status} task", "Prompt", "/tmp/project", 1800,
-                        status, 10, version, question_id, question_text,
-                        '["A","B"]' if question_id else None, now, now, started_at,
-                    ),
-                )
-                connection.execute(
-                    "INSERT INTO task_events(task_id,task_sequence,event_type,occurred_at,payload_json) VALUES (?,?,?,?,?)",
-                    (str(task_id), 1, "task.created", now, '{"status":"queued"}'),
-                )
-            connection.execute("PRAGMA user_version = 1")
-        return queued_id, running_id, waiting_id
-
-    def test_migrates_full_v1_schema_preserving_tasks_events_and_recovery_rows(self):
-        queued_id, running_id, waiting_id = self.create_v1_fixture()
-        migrated = TaskStore(self.database_path)
-        migrated.initialize()
-        self.addCleanup(migrated.close)
-
-        queued = migrated.get_task(queued_id)
-        running = migrated.get_task(running_id)
-        waiting = migrated.get_task(waiting_id)
-        recoverable = migrated.recoverable_tasks()
-        events = migrated.events_after(0, None, 10)
+    def test_old_schema_is_rejected_without_changing_rows(self):
+        task = self.create()
         self.store.close()
         with sqlite3.connect(self.database_path) as connection:
-            columns = {row[1] for row in connection.execute("PRAGMA table_info(tasks)")}
-            version = connection.execute("PRAGMA user_version").fetchone()[0]
+            connection.execute("PRAGMA user_version = 2")
+        with self.assertRaisesRegex(TaskStoreSchemaError, "user_version=2"):
+            TaskStore(self.database_path).initialize()
+        with sqlite3.connect(self.database_path) as connection:
+            self.assertEqual(connection.execute("SELECT id FROM tasks").fetchone()[0], str(task.id))
+            self.assertEqual(connection.execute("PRAGMA user_version").fetchone()[0], 2)
 
-        self.assertEqual(version, 2)
-        self.assertTrue({"workspace_id", "owner_profile_id", "idempotency_key"} <= columns)
-        self.assertEqual((queued.status, running.status, waiting.status), (
-            TaskStatus.QUEUED, TaskStatus.RUNNING, TaskStatus.WAITING,
-        ))
-        self.assertTrue(all(task.workspace_id == "legacy" for task in recoverable))
-        self.assertEqual({task.id for task in recoverable}, {queued_id, running_id, waiting_id})
-        self.assertEqual([event.task_id for event in events], [queued_id, running_id, waiting_id])
+    def test_recent_snapshot_is_bounded_owner_scoped_and_uses_index(self):
+        tasks = [self.create(index) for index in range(1, 105)]
+        other = replace(self.command(105), owner_profile_id="profile-2")
+        self.store.create_task(other, self.root)
+        self.store.transition_task(tasks[-1].id, TaskStatus.CANCELLED, expected_version=1)
+        self.store.tombstone_task(tasks[-1].id)
+        snapshot = self.store.status_snapshot("profile-1")
+        self.assertEqual(len(snapshot), 100)
+        self.assertEqual(snapshot[0], {"id": str(tasks[-2].id), "title": "Task 103", "status": "queued"})
+        self.assertEqual(snapshot[-1]["id"], str(tasks[3].id))
+        with sqlite3.connect(self.database_path) as connection:
+            plan = connection.execute(
+                "EXPLAIN QUERY PLAN SELECT id,title,status FROM tasks "
+                "WHERE owner_profile_id=? AND deleted_at IS NULL ORDER BY row_id DESC LIMIT 100",
+                ("profile-1",),
+            ).fetchall()
+        self.assertTrue(any("tasks_owner_recent_idx" in row[3] for row in plan), plan)
 
-    def test_rejects_incomplete_v1_schema_without_bumping_user_version(self):
+    def test_reconciliation_pages_include_tombstones_and_replay_after_watermark(self):
+        first, second = self.create(1), self.create(2)
+        watermark = self.store.current_event_id()
+        self.store.transition_task(first.id, TaskStatus.CANCELLED, expected_version=1)
+        self.store.tombstone_task(first.id)
+        page = self.store.list_tasks(limit=1, owner_profile_id="profile-1", include_deleted=True)
+        self.assertEqual(page.items[0].id, first.id)
+        self.assertIsNotNone(page.items[0].deleted_at)
+        next_page = self.store.list_tasks(after_row_id=page.next_cursor, include_deleted=True)
+        self.assertEqual([task.id for task in next_page.items], [second.id])
+        events = self.store.events_after(watermark, None, 200, event_types=("task.deleted",))
+        self.assertEqual([event.type for event in events], ["task.deleted"])
         self.store.close()
-        self.database_path.unlink()
+        self.store.initialize()
+        self.assertEqual(self.store.current_event_id(), events[-1].event_id)
+        self.assertEqual(self.store.get_task(second.id), second)
+
+    def test_sqlite_constraints_reject_invalid_status_foreign_key_and_duplicate_key(self):
+        task = self.create()
+        second = self.create(2)
         with sqlite3.connect(self.database_path) as connection:
-            connection.execute("CREATE TABLE tasks (id TEXT PRIMARY KEY)")
-            connection.execute("CREATE TABLE task_events (event_id INTEGER PRIMARY KEY)")
-            connection.execute("PRAGMA user_version = 1")
-
-        with self.assertRaisesRegex(TaskStoreSchemaError, "legacy Task database schema"):
-            TaskStore(self.database_path).initialize()
-        with sqlite3.connect(self.database_path) as connection:
-            self.assertEqual(connection.execute("PRAGMA user_version").fetchone()[0], 1)
-
-    def test_rejects_v1_schema_missing_required_queue_index(self):
-        self.create_v1_fixture()
-        with sqlite3.connect(self.database_path) as connection:
-            connection.execute("DROP INDEX tasks_queue_idx")
-
-        with self.assertRaisesRegex(TaskStoreSchemaError, "legacy Task database schema"):
-            TaskStore(self.database_path).initialize()
-
-    def test_rejects_v1_schema_with_same_named_index_on_wrong_columns(self):
-        self.create_v1_fixture(queue_index_columns="row_id, status, deleted_at")
-
-        with self.assertRaisesRegex(TaskStoreSchemaError, "legacy Task database schema"):
-            TaskStore(self.database_path).initialize()
-        with sqlite3.connect(self.database_path) as connection:
-            self.assertEqual(connection.execute("PRAGMA user_version").fetchone()[0], 1)
-
-    def test_rejects_v1_schema_with_same_columns_but_missing_check_constraint(self):
-        self.create_v1_fixture(timeout_constraint="")
-
-        with self.assertRaisesRegex(TaskStoreSchemaError, "legacy Task database schema"):
-            TaskStore(self.database_path).initialize()
-        with sqlite3.connect(self.database_path) as connection:
-            self.assertEqual(connection.execute("PRAGMA user_version").fetchone()[0], 1)
-
-    def test_rejects_v1_schema_with_block_commented_check_constraint(self):
-        self.create_v1_fixture(timeout_constraint=" /* CHECK(timeout_seconds > 0) */")
-
-        with self.assertRaisesRegex(TaskStoreSchemaError, "legacy Task database schema"):
-            TaskStore(self.database_path).initialize()
-        with sqlite3.connect(self.database_path) as connection:
-            self.assertEqual(connection.execute("PRAGMA user_version").fetchone()[0], 1)
-
-    def test_rejects_v1_schema_with_line_commented_check_constraint(self):
-        self.create_v1_fixture(
-            timeout_constraint=" -- CHECK(timeout_seconds > 0)\n                    "
-        )
-
-        with self.assertRaisesRegex(TaskStoreSchemaError, "legacy Task database schema"):
-            TaskStore(self.database_path).initialize()
-        with sqlite3.connect(self.database_path) as connection:
-            self.assertEqual(connection.execute("PRAGMA user_version").fetchone()[0], 1)
-
-    def test_rejects_v1_schema_with_quoted_check_text_forgery(self):
-        self.create_v1_fixture(
-            timeout_constraint=" CHECK('check(timeout_seconds>0)'='check(timeout_seconds>0)')"
-        )
-
-        with self.assertRaisesRegex(TaskStoreSchemaError, "legacy Task database schema"):
-            TaskStore(self.database_path).initialize()
-        with sqlite3.connect(self.database_path) as connection:
-            self.assertEqual(connection.execute("PRAGMA user_version").fetchone()[0], 1)
-
-    def test_sql_normalizer_preserves_quoted_comment_markers(self):
-        sql = (
-            "CREATE TABLE \"--tasks\" (note TEXT DEFAULT '/* Literal -- Text */', "
-            "[--Tag] TEXT) /* real comment */"
-        )
-
-        self.assertEqual(
-            TaskStore._comment_free_normalized_sql(sql),
-            "createtable\"--tasks\"(notetextdefault'/* Literal -- Text */',[--Tag]text)",
-        )
-
-    def test_structural_sql_tokens_keep_doubled_quoted_content_as_single_tokens(self):
-        sql = (
-            "CREATE TABLE `a``--name` (\"a\"\"--tag\" TEXT "
-            "DEFAULT 'it''s -- text')"
-        )
-
-        self.assertEqual(
-            TaskStore._structural_sql_tokens(sql),
-            (
-                ("word", "create"), ("word", "table"), ("identifier", "a`--name"),
-                ("symbol", "("), ("identifier", 'a"--tag'), ("word", "text"),
-                ("word", "default"), ("string", "it's -- text"), ("symbol", ")"),
-            ),
-        )
-
-    def test_rejects_v2_schema_with_partial_idempotency_index_missing_predicate(self):
-        self.store.close()
-        with sqlite3.connect(self.database_path) as connection:
-            connection.execute("DROP INDEX tasks_owner_idempotency_idx")
-            connection.execute(
-                "CREATE UNIQUE INDEX tasks_owner_idempotency_idx "
-                "ON tasks(owner_profile_id, idempotency_key)"
-            )
-
-        with self.assertRaisesRegex(TaskStoreSchemaError, "current Task database schema"):
-            TaskStore(self.database_path).initialize()
+            connection.execute("PRAGMA foreign_keys=ON")
+            for statement in (
+                "UPDATE tasks SET status='unknown'",
+                "UPDATE tasks SET timeout_seconds=0",
+                "UPDATE tasks SET rerun_of_task_id='missing'",
+            ):
+                with self.subTest(statement=statement), self.assertRaises(sqlite3.IntegrityError):
+                    connection.execute(statement)
+            with self.assertRaises(sqlite3.IntegrityError):
+                connection.execute("UPDATE tasks SET idempotency_key=? WHERE id=?", (task.idempotency_key, str(second.id)))
 
     def test_create_list_and_claim_use_sqlite_fifo(self):
         tasks = [self.create(index) for index in range(1, 7)]

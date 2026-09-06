@@ -1,3 +1,4 @@
+/** Defines the initial desktop Profile and Soul used once by ProfileStorage when identity is absent. */
 import type { Profile, Soul } from "@shared/schemas/profile";
 
 export const DEFAULT_PROFILE_ID = "profile_default";

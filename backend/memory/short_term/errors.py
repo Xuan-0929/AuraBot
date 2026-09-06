@@ -1,2 +1,0 @@
-class ShortTermStateError(RuntimeError):
-    pass

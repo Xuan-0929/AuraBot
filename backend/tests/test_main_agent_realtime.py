@@ -24,6 +24,7 @@ from backend.main_agent.realtime import (
     router,
 )
 from backend.main_agent.runtime import RendererClause
+from backend.main_agent.lifecycle import ProfileResources
 
 
 ORIGIN = "http://127.0.0.1:6400"
@@ -32,6 +33,10 @@ ORIGIN = "http://127.0.0.1:6400"
 class FakeRuntime:
     def __init__(self) -> None:
         self.acks: list[tuple[str, bool]] = []
+        self.disconnects = 0
+
+    async def renderer_disconnected(self) -> None:
+        self.disconnects += 1
 
     async def renderer_ack(self, clause_id: str, *, complete: bool, mode: str = "voice") -> bool:
         self.acks.append((clause_id, complete))
@@ -42,6 +47,12 @@ class FakeSpeech:
     def __init__(self) -> None:
         self.acks: list[tuple[str, bool]] = []
         self.cancelled: list[str] = []
+
+    async def shutdown(self) -> None:
+        await self.cancel_current("speech_shutdown")
+
+    async def startup(self) -> None:
+        pass
 
     def acknowledge(self, clause_id: str, *, complete: bool) -> None:
         self.acks.append((clause_id, complete))
@@ -90,7 +101,7 @@ class HubTests(unittest.IsolatedAsyncioTestCase):
         self.runtime = FakeRuntime()
         self.speech = FakeSpeech()
         self.hub = RealtimeHub(allowed_origins={ORIGIN})
-        await self.hub.set_active("profile_default", 1, self.runtime, self.speech)
+        await self.hub.set_active("profile_default", 1, ProfileResources("profile_default", self.runtime, self.speech, None))
 
     async def test_port_sends_one_clause_raw_audio_end_and_physical_ack(self) -> None:
         socket = FakeSocket()
@@ -146,6 +157,7 @@ class HubTests(unittest.IsolatedAsyncioTestCase):
         new_socket = FakeSocket()
         await self.hub.attach(new_socket)
         self.assertTrue(old_socket.closed)
+        self.assertEqual(self.runtime.disconnects, 1)
         assert old_port is not None
         self.assertEqual(
             await old_port.offer_clause(RendererClause("old", "stale", "invoke", "input", 1)),
@@ -162,7 +174,7 @@ class GatewayTests(unittest.TestCase):
 
         async def activate(profile_id: str, soul: str) -> int:
             self.assertEqual(soul, "Aura soul")
-            await self.hub.set_active(profile_id, 3, self.runtime, self.speech)
+            await self.hub.set_active(profile_id, 3, ProfileResources(profile_id, self.runtime, self.speech, None))
             return 3
 
         self.hub.profile_activator = activate

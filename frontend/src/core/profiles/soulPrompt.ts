@@ -1,6 +1,6 @@
 /**
- * Formats Electron's structured active-profile Soul into the single system prompt shared by legacy
- * Console chat and the Main Agent token contract. Electron remains the only Soul authority; Backend
+ * Formats Electron's structured active-profile Soul into the system prompt sent by Pet
+ * to the Main Agent token contract. Electron remains the only Soul authority; Backend
  * receives this already-effective text and never reconstructs or persists a competing persona document.
  */
 

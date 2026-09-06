@@ -2,8 +2,8 @@
 
 MainAgentRuntime folds transcript/VAD/EOU facts into one ActiveInput, coalesces control triggers into a
 single-flight drain, freezes Snapshot and ToolSurface together, and fences every effect. Renderer text enters
-Context only after complete acknowledgement; Observation and Task work retain their existing detached and
-durable ownership. Memory uses two owners only: a user-activity-resettable idle timer seals a canonical
+Context only after complete acknowledgement; Observation work remains detached, while TaskOperations
+owns proposal timers, accepted controls and Task fact synchronization. Memory uses two owners only: a user-activity-resettable idle timer seals a canonical
 Context boundary and immediately retires its causal input, then an independent archive worker submits that
 sealed boundary without blocking or being cancelled by later input. Context cleanup occurs only after Memory
 success and never retires the newer causal scope.
@@ -17,18 +17,16 @@ import json
 import re
 import time
 import uuid
-from collections import OrderedDict
 from collections.abc import AsyncIterable, Awaitable, Callable, Mapping, Sequence
 from dataclasses import dataclass, replace
 from enum import StrEnum
 from typing import Any
 
-from backend.task.models import CreateTaskCommand
-
 from .context import ClauseState, ContextStore, PendingConversationArchive
 from .observations import ObservationLedger
 from .snapshot import Snapshot, SnapshotProjector
-from .tasks import TaskBridge, task_fact
+from .tasks import TaskBridge
+from .task_operations import TaskOperations, PendingTaskProposal, TaskProposalStatus
 from .tool_runtime import (
     EffectFence,
     InvokeMode,
@@ -73,7 +71,6 @@ class PendingTrigger:
     input_id: str
     mode: InvokeMode
     reason: str
-    min_context_version: int
 
 
 @dataclass(frozen=True, slots=True)
@@ -128,33 +125,6 @@ class _ActiveInvoke:
     settled: asyncio.Event
 
 
-class TaskProposalStatus(StrEnum):
-    """Runtime-only lifecycle before and after one TaskManager admission attempt."""
-
-    PENDING = "pending"
-    COMMITTING = "committing"
-    COMMITTED = "committed"
-    CANCELLED = "cancelled"
-    FAILED = "failed"
-
-
-@dataclass(frozen=True, slots=True)
-class PendingTaskProposal:
-    """One immutable view of Runtime-owned proposal timing and terminal admission truth."""
-
-    proposal_id: str
-    origin_input_id: str
-    title: str
-    prompt: str
-    workspace_id: str
-    owner_profile_id: str
-    status: TaskProposalStatus
-    remaining_seconds: float
-    deadline: float | None
-    task_id: str | None = None
-    failure_code: str | None = None
-
-
 _TRIGGER_PRIORITY = {
     InvokeMode.PREPARE: 0,
     InvokeMode.CONTINUE: 1,
@@ -162,8 +132,6 @@ _TRIGGER_PRIORITY = {
 }
 _PUNCTUATED = re.compile(r"[。！？!?；;.]\s*$")
 _ENGLISH_WORD = re.compile(r"[A-Za-z0-9]+(?:['’-][A-Za-z0-9]+)*")
-_PROPOSAL_LIMIT_PER_INPUT = 256
-_TASK_VERSION_LIMIT = 512
 
 
 class MainAgentRuntime:
@@ -188,7 +156,6 @@ class MainAgentRuntime:
         observation_ledger: ObservationLedger | None = None,
         observation_semaphore: asyncio.Semaphore | None = None,
         proposal_sleep: Callable[[float], Awaitable[None]] | None = None,
-        task_event_retry_sleep: Callable[[float], Awaitable[None]] | None = None,
         task_manager: Any | None = None,
         owner_profile_id: str | None = None,
         metrics: Any | None = None,
@@ -220,8 +187,6 @@ class MainAgentRuntime:
         self.observation_ledger = observation_ledger or ObservationLedger()
         if task_manager is not None and owner_profile_id is None:
             raise ValueError("task_manager requires owner_profile_id")
-        self._proposal_sleep = proposal_sleep or asyncio.sleep
-        self._task_event_retry_sleep = task_event_retry_sleep or asyncio.sleep
         self._task_bridge = TaskBridge(task_manager, owner_profile_id) if task_manager is not None else None
 
         self._lock = asyncio.Lock()
@@ -247,13 +212,10 @@ class MainAgentRuntime:
         self._prepare_wait_started_at: float | None = None
         self._clause_origins: dict[str, tuple[str, int]] = {}
         self._observation_origins: dict[str, tuple[str, int]] = {}
-        self._task_proposals: OrderedDict[str, PendingTaskProposal] = OrderedDict()
-        self._proposal_calls: OrderedDict[tuple[str, str], str] = OrderedDict()
-        self._proposal_tasks: dict[str, asyncio.Task[None]] = {}
-        self._proposal_commit_tasks: dict[str, asyncio.Task[None]] = {}
-        self._task_control_tasks: set[asyncio.Task[dict[str, Any]]] = set()
-        self._task_fact_versions: OrderedDict[str, int] = OrderedDict()
-        self._task_event_task: asyncio.Task[None] | None = None
+        self._task_operations = TaskOperations(
+            self._task_bridge, self._lock, self._accept_task_fact_locked, self._task_error,
+            self.clock, proposal_sleep or asyncio.sleep,
+        ) if self._task_bridge is not None else None
         self._memory_idle_task: asyncio.Task[None] | None = None
         self._memory_archive_task: asyncio.Task[None] | None = None
         self.accepting = True
@@ -276,12 +238,12 @@ class MainAgentRuntime:
             runtime_executors.update({
                 "task_assign": self._assign_task,
                 "inspect_tasks": self._task_bridge.inspect_tasks,
-                "answer_task_question": self._run_task_control,
-                "pause_task": self._run_task_control,
-                "resume_task": self._run_task_control,
-                "cancel_task": self._run_task_control,
-                "delete_task": self._run_task_control,
-                "rerun_task": self._run_task_control,
+                "answer_task_question": self._task_operations.execute_control,
+                "pause_task": self._task_operations.execute_control,
+                "resume_task": self._task_operations.execute_control,
+                "cancel_task": self._task_operations.execute_control,
+                "delete_task": self._task_operations.execute_control,
+                "rerun_task": self._task_operations.execute_control,
             })
         self.harness = ToolHarness(
             tool_policy,
@@ -312,14 +274,14 @@ class MainAgentRuntime:
     def task_proposals(self) -> tuple[PendingTaskProposal, ...]:
         """Return immutable proposal views in acceptance order for diagnostics and UI projection."""
 
-        return tuple(self._task_proposals.values())
+        return self._task_operations.proposals if self._task_operations is not None else ()
 
     def restart_busy(self) -> bool:
         """Read active work while the restart route holds this runtime's admission lock."""
         return bool(self._active_invoke or self._pending_trigger or self._barrier_intent or self._preinvoke_settled
                     or self._user_speaking or self._speech_candidate or self._confirmed_speech
                     or self.context_store.has_unsettled_clauses()
-                    or any(not task.done() for task in (*self._proposal_tasks.values(), *self._proposal_commit_tasks.values(), *self._task_control_tasks)))
+                    or (self._task_operations is not None and self._task_operations.busy))
 
     def fence_admission(self) -> None:
         self.accepting = False
@@ -340,8 +302,9 @@ class MainAgentRuntime:
         async with self._lock:
             self.context_store.recover_interrupted_clauses()
             self._refresh_speech_settled_locked()
-            self._ensure_task_event_listener_locked()
             self._resume_memory_idle_locked()
+        if self._task_operations is not None:
+            await self._task_operations.startup()
         self._increment_metric("main.runtime.startup")
 
     async def update_soul(self, soul: str) -> None:
@@ -352,28 +315,12 @@ class MainAgentRuntime:
             self.soul = effective
 
     async def wait_for_task_proposals(self) -> None:
-        """Wait for currently scheduled proposal timers/commits without waiting on the event listener."""
-
-        while True:
-            async with self._lock:
-                tasks = tuple(
-                    task for task in (
-                        *self._proposal_tasks.values(), *self._proposal_commit_tasks.values(),
-                    ) if not task.done()
-                )
-            if not tasks:
-                return
-            await asyncio.gather(*(asyncio.shield(task) for task in tasks), return_exceptions=True)
+        if self._task_operations is not None:
+            await self._task_operations.wait_for_proposals()
 
     async def cancel_task_proposal(self, proposal_id: str) -> bool:
-        """Cancel one still-pending proposal; a committing/durable proposal cannot roll back."""
-
         async with self._lock:
-            proposal = self._task_proposals.get(proposal_id)
-            if proposal is None or proposal.status is not TaskProposalStatus.PENDING:
-                return False
-            self._cancel_proposal_locked(proposal, "explicit_cancel")
-            return True
+            return self._task_operations.cancel(proposal_id) if self._task_operations is not None else False
 
     async def update_transcript(
         self, text: str, *, segment_id: str | None = None, request_prepare: bool = True
@@ -710,25 +657,13 @@ class MainAgentRuntime:
                 self._cancel_pending_proposals_locked("runtime_shutdown")
                 if self._active_invoke is not None:
                     self.harness.cancel(self._active_invoke.request.invoke_id)
-            proposal_tasks = tuple(self._proposal_tasks.values())
-            commit_tasks = tuple(self._proposal_commit_tasks.values())
-            control_tasks = tuple(self._task_control_tasks)
-            event_task = self._task_event_task
-            if event_task is not None:
-                event_task.cancel()
         if task is not None and task is not asyncio.current_task():
             await asyncio.gather(task, return_exceptions=True)
         for memory_task in (memory_idle_task, memory_archive_task):
             if memory_task is not None and memory_task is not asyncio.current_task():
                 await asyncio.gather(memory_task, return_exceptions=True)
-        durable_tasks = (*proposal_tasks, *commit_tasks, *control_tasks)
-        if durable_tasks:
-            await asyncio.gather(
-                *(asyncio.shield(owned) for owned in durable_tasks),
-                return_exceptions=True,
-            )
-        if event_task is not None and event_task is not asyncio.current_task():
-            await asyncio.gather(event_task, return_exceptions=True)
+        if self._task_operations is not None:
+            await self._task_operations.shutdown()
         await self.harness.cancel_observations()
         if first_shutdown:
             self._increment_metric("main.runtime.shutdown")
@@ -811,7 +746,6 @@ class MainAgentRuntime:
             active_input.input_id,
             mode,
             reason,
-            self._latest_context_version,
         )
         current = self._pending_trigger
         if current is None or current.input_id != candidate.input_id:
@@ -819,13 +753,6 @@ class MainAgentRuntime:
             return
         if _TRIGGER_PRIORITY[candidate.mode] >= _TRIGGER_PRIORITY[current.mode]:
             self._pending_trigger = candidate
-        elif candidate.min_context_version > current.min_context_version:
-            self._pending_trigger = PendingTrigger(
-                current.input_id,
-                current.mode,
-                current.reason,
-                candidate.min_context_version,
-            )
 
     def _prepare_barrier_locked(self) -> asyncio.Event | None:
         active = self._active_invoke
@@ -1144,482 +1071,45 @@ class MainAgentRuntime:
             self._context_changed_locked()
 
     async def _assign_task(self, call: ToolCall) -> dict[str, Any]:
-        """Accept one idempotent in-memory proposal and return before its grace timer commits."""
-
         async with self._lock:
-            active_input = self._active_input
-            if self._shutdown or not self.accepting or active_input is None or self._task_bridge is None:
+            if self._shutdown or not self.accepting or self._active_input is None or self._task_operations is None:
                 raise ToolExecutorError("task_runtime_unavailable")
-            self._ensure_task_event_listener_locked()
-            identity = (active_input.input_id, call.call_id)
-            existing_id = self._proposal_calls.get(identity)
-            if existing_id is not None:
-                existing = self._task_proposals[existing_id]
-                self._proposal_calls.move_to_end(identity)
-                self._task_proposals.move_to_end(existing_id)
-                return {
-                    "proposal_id": existing.proposal_id,
-                    "status": "pending_commit" if existing.status is TaskProposalStatus.PENDING
-                    else existing.status.value,
-                }
-            accepted_for_input = sum(
-                1 for input_id, _call_id in self._proposal_calls
-                if input_id == active_input.input_id
-            )
-            if accepted_for_input >= _PROPOSAL_LIMIT_PER_INPUT:
-                raise ToolExecutorError("proposal_limit_reached")
-            proposal_id = self._new_id("proposal")
-            proposal = PendingTaskProposal(
-                proposal_id=proposal_id,
-                origin_input_id=active_input.input_id,
-                title=str(call.arguments["title"]),
-                prompt=str(call.arguments["prompt"]),
-                workspace_id=str(call.arguments["workspace_id"]),
-                owner_profile_id=self._task_bridge.owner_profile_id,
-                status=TaskProposalStatus.PENDING,
-                remaining_seconds=3.0,
-                deadline=self.clock() + 3.0,
-            )
-            self._task_proposals[proposal_id] = proposal
-            self._proposal_calls[identity] = proposal_id
-            if not self._start_proposal_timer_locked(proposal):
-                raise ToolExecutorError("task_proposal_start_failed")
-            try:
-                self._append_proposal_fact_locked(proposal)
-            except BaseException:
-                self._proposal_tasks.pop(proposal_id).cancel()
-                self._task_proposals[proposal_id] = replace(
-                    proposal, status=TaskProposalStatus.FAILED, prompt="", deadline=None,
-                    failure_code="context_projection_failed",
-                )
-                self._retire_terminal_proposals_locked()
-                raise ToolExecutorError("task_proposal_start_failed") from None
+            result = self._task_operations.propose(self._active_input.input_id, call)
         await asyncio.sleep(0)
-        return {"proposal_id": proposal_id, "status": "pending_commit"}
+        return result
 
-    async def _run_task_control(self, call: ToolCall) -> dict[str, Any]:
-        """Transfer a fenced control to Runtime ownership exactly when its Manager call starts."""
-
-        started = asyncio.Event()
-        coroutine = self._owned_task_control(call, started)
-        try:
-            task = asyncio.create_task(coroutine, name=f"task-control-{call.call_id}")
-        except BaseException:
-            coroutine.close()
-            raise ToolExecutorError("task_control_start_failed") from None
-        self._task_control_tasks.add(task)
-        try:
-            try:
-                return await asyncio.shield(task)
-            except asyncio.CancelledError:
-                if not started.is_set():
-                    task.cancel()
-                    await asyncio.gather(task, return_exceptions=True)
-                    raise
-                return await self._await_owned_task(task)
-        finally:
-            if task.done():
-                self._task_control_tasks.discard(task)
-
-    async def _owned_task_control(
-        self, call: ToolCall, started: asyncio.Event,
-    ) -> dict[str, Any]:
-        """Fresh-read, mark Manager-call ownership, then project accepted durable truth."""
-
-        assert self._task_bridge is not None
-        async with self._lock:
-            self._ensure_task_event_listener_locked()
-        result = await self._task_bridge.execute_control(call, action_started=started.set)
-        delay = 0.05
-        while True:
-            async with self._lock:
-                self._has_external_commit = True
-                try:
-                    self._record_task_fact_locked(result)
-                except Exception:
-                    self._ensure_task_event_listener_locked()
-                else:
-                    return result
-            await self._task_event_retry_sleep(delay)
-            delay = min(1.0, delay * 2)
-
-    async def _run_task_proposal(self, proposal_id: str) -> None:
-        """Sleep remaining monotonic grace, win pending→committing, then attempt Manager once."""
-
-        current_task = asyncio.current_task()
-        commit_task: asyncio.Task[None] | None = None
-        commit_started: asyncio.Event | None = None
-        commit_projected = False
-        try:
-            async with self._lock:
-                proposal = self._task_proposals[proposal_id]
-                if proposal.status is not TaskProposalStatus.PENDING or proposal.deadline is None:
-                    return
-                delay = max(0.0, proposal.deadline - self.clock())
-            await self._proposal_sleep(delay)
-            async with self._lock:
-                proposal = self._task_proposals[proposal_id]
-                if proposal.status is not TaskProposalStatus.PENDING or proposal.deadline is None:
-                    return
-                proposal = replace(
-                    proposal, status=TaskProposalStatus.COMMITTING,
-                    remaining_seconds=0.0, deadline=None,
-                )
-                self._task_proposals[proposal_id] = proposal
-                commit_task, commit_started = self._start_proposal_commit_locked(proposal)
-                if commit_task is not None:
-                    try:
-                        self._append_proposal_fact_locked(proposal)
-                    except Exception:
-                        # Terminal settlement below retries the canonical projection.
-                        pass
-            if commit_task is not None:
-                assert commit_started is not None
-                await self._observe_proposal_commit(
-                    proposal_id, commit_task, commit_started,
-                )
-                commit_projected = True
-        except asyncio.CancelledError:
-            if commit_task is not None:
-                assert commit_started is not None
-                await self._observe_proposal_commit(
-                    proposal_id, commit_task, commit_started,
-                )
-                commit_projected = True
-            else:
-                async with self._lock:
-                    proposal = self._task_proposals.get(proposal_id)
-                    if (
-                        self._proposal_tasks.get(proposal_id) is current_task
-                        and proposal is not None
-                        and proposal.status is TaskProposalStatus.PENDING
-                        and proposal.deadline is not None
-                    ):
-                        self._terminalize_proposal_start_locked(
-                            proposal, "unexpected_timer_cancel",
-                        )
-        finally:
-            async with self._lock:
-                if self._proposal_tasks.get(proposal_id) is current_task:
-                    self._proposal_tasks.pop(proposal_id, None)
-                if (
-                    commit_task is not None
-                    and commit_task.done()
-                    and self._proposal_commit_tasks.get(proposal_id) is commit_task
-                ):
-                    self._proposal_commit_tasks.pop(proposal_id, None)
-                    if commit_projected:
-                        self._retire_terminal_proposals_locked()
-
-    def _start_proposal_timer_locked(self, proposal: PendingTaskProposal) -> bool:
-        """Atomically adopt one live timer or terminalize a task-factory rejection."""
-
-        coroutine = self._run_task_proposal(proposal.proposal_id)
-        try:
-            task = asyncio.create_task(
-                coroutine, name=f"task-proposal-{proposal.proposal_id}",
-            )
-        except BaseException:
-            coroutine.close()
-            self._terminalize_proposal_start_locked(proposal, "timer_start_failed")
-            return False
-        if task.cancelled() or task.cancelling():
-            self._terminalize_proposal_start_locked(proposal, "timer_start_cancelled")
-            return False
-        self._proposal_tasks[proposal.proposal_id] = task
-        return True
-
-    def _terminalize_proposal_start_locked(
-        self, proposal: PendingTaskProposal, reason: str,
-    ) -> None:
-        failed = replace(
-            proposal, status=TaskProposalStatus.FAILED, prompt="", deadline=None,
-            failure_code=reason,
-        )
-        self._task_proposals[proposal.proposal_id] = failed
-        self._append_proposal_fact_locked(failed)
-        self._retire_terminal_proposals_locked()
-
-    def _start_proposal_commit_locked(
-        self, proposal: PendingTaskProposal,
-    ) -> tuple[asyncio.Task[None] | None, asyncio.Event | None]:
-        started = asyncio.Event()
-        command = CreateTaskCommand(
-            title=proposal.title,
-            prompt=proposal.prompt,
-            workspace_id=proposal.workspace_id,
-            owner_profile_id=proposal.owner_profile_id,
-            idempotency_key=proposal.proposal_id,
-        )
-        coroutine = self._owned_proposal_commit(proposal.proposal_id, command, started)
-        try:
-            task = asyncio.create_task(
-                coroutine, name=f"task-proposal-commit-{proposal.proposal_id}",
-            )
-        except BaseException:
-            coroutine.close()
-            self._terminalize_proposal_start_locked(proposal, "commit_start_failed")
-            return None, None
-        if task.cancelled() or task.cancelling():
-            self._terminalize_proposal_start_locked(proposal, "commit_start_cancelled")
-            return None, None
-        self._proposal_commit_tasks[proposal.proposal_id] = task
-        return task, started
-
-    async def _observe_proposal_commit(
-        self, proposal_id: str, task: asyncio.Task[None], started: asyncio.Event,
-    ) -> None:
-        """Settle a child cancelled before its first instruction; otherwise observe owned completion."""
-
-        try:
-            await self._await_owned_task(task)
-        except asyncio.CancelledError:
-            if started.is_set() or not task.cancelled():
-                raise
-            await self._settle_proposal_commit_immune(
-                proposal_id, None, "commit_worker_cancelled",
-            )
-
-    async def _owned_proposal_commit(
-        self, proposal_id: str, command: CreateTaskCommand, started: asyncio.Event,
-    ) -> None:
-        """Call Manager exactly once in a shielded child, then retry canonical settlement."""
-
-        started.set()
-        accepted = None
-        failure_code = None
-        assert self._task_bridge is not None
-        coroutine = self._task_bridge.manager.create_task(command)
-        try:
-            manager_task = asyncio.create_task(
-                coroutine, name=f"task-manager-create-{proposal_id}",
-            )
-        except BaseException:
-            close = getattr(coroutine, "close", None)
-            if close is not None:
-                close()
-            failure_code = "task_manager_failed"
-        else:
-            try:
-                accepted = await self._await_owned_task(manager_task)
-            except (Exception, asyncio.CancelledError):
-                failure_code = "task_manager_failed"
-        await self._settle_proposal_commit_immune(proposal_id, accepted, failure_code)
-
-    async def _settle_proposal_commit_immune(
-        self, proposal_id: str, accepted: Any, failure_code: str | None,
-    ) -> None:
-        """Consume owner cancellation until the one Manager outcome has canonical projection."""
-
-        while True:
-            try:
-                await self._settle_proposal_commit(proposal_id, accepted, failure_code)
-                return
-            except asyncio.CancelledError:
-                continue
-
-    async def _settle_proposal_commit(
-        self, proposal_id: str, accepted: Any, failure_code: str | None,
-    ) -> None:
-        delay = 0.05
-        while True:
-            async with self._lock:
-                current = self._task_proposals[proposal_id]
-                terminal = replace(
-                    current,
-                    status=(TaskProposalStatus.COMMITTED if accepted is not None
-                            else TaskProposalStatus.FAILED),
-                    prompt="",
-                    task_id=str(accepted.id) if accepted is not None else None,
-                    failure_code=failure_code,
-                )
-                self._task_proposals[proposal_id] = terminal
-                try:
-                    self._append_proposal_fact_locked(terminal)
-                    if accepted is not None:
-                        self._record_task_fact_locked(task_fact(accepted))
-                    elif self._active_input is not None and not self._shutdown:
-                        self._merge_trigger_locked(InvokeMode.CONTINUE, "task_proposal_failed")
-                        self._kick_locked()
-                except Exception:
-                    if accepted is not None:
-                        self._has_external_commit = True
-                else:
-                    return
-            await self._task_event_retry_sleep(delay)
-            delay = min(1.0, delay * 2)
-
-    @staticmethod
-    async def _await_owned_task(task: asyncio.Task[Any]) -> Any:
-        """Observe a Runtime-owned task through completion despite cancellation of its waiter."""
-
-        while True:
-            try:
-                return await asyncio.shield(task)
-            except asyncio.CancelledError:
-                if task.done():
-                    return task.result()
-
-    def _freeze_pending_proposals_locked(self) -> None:
-        """Freeze every live grace timer at its exact monotonic remaining duration."""
-
-        now = self.clock()
-        for proposal_id, proposal in tuple(self._task_proposals.items()):
-            if proposal.status is not TaskProposalStatus.PENDING or proposal.deadline is None:
-                continue
-            task = self._proposal_tasks.get(proposal_id)
-            if task is not None:
-                self._proposal_tasks.pop(proposal_id, None)
-                task.cancel()
-            frozen = replace(
-                proposal,
-                remaining_seconds=max(0.0, proposal.deadline - now),
-                deadline=None,
-            )
-            self._task_proposals[proposal_id] = frozen
-            self._append_proposal_fact_locked(frozen)
-
-    def _resume_pending_proposals_locked(self) -> None:
-        """Resume only timers frozen by a rejected acoustic speech candidate."""
-
-        for proposal_id, proposal in tuple(self._task_proposals.items()):
-            if proposal.status is not TaskProposalStatus.PENDING or proposal.deadline is not None:
-                continue
-            resumed = replace(proposal, deadline=self.clock() + proposal.remaining_seconds)
-            self._task_proposals[proposal_id] = resumed
-            if not self._start_proposal_timer_locked(resumed):
-                continue
-            self._append_proposal_fact_locked(resumed)
-
-    def _cancel_pending_proposals_locked(self, reason: str) -> None:
-        for proposal in tuple(self._task_proposals.values()):
-            if proposal.status is TaskProposalStatus.PENDING:
-                self._cancel_proposal_locked(proposal, reason)
-
-    def _cancel_proposal_locked(self, proposal: PendingTaskProposal, reason: str) -> None:
-        task = self._proposal_tasks.get(proposal.proposal_id)
-        if task is not None:
-            task.cancel()
-        cancelled = replace(
-            proposal, status=TaskProposalStatus.CANCELLED,
-            prompt="", deadline=None, failure_code=reason,
-        )
-        self._task_proposals[proposal.proposal_id] = cancelled
-        self._append_proposal_fact_locked(cancelled)
-        self._retire_terminal_proposals_locked()
-
-    def _append_proposal_fact_locked(self, proposal: PendingTaskProposal) -> None:
-        payload: dict[str, Any] = {
-            "id": f"proposal:{proposal.proposal_id}",
-            "kind": "task_proposal",
-            "proposal_id": proposal.proposal_id,
-            "title": proposal.title,
-            "workspace_id": proposal.workspace_id,
-            "status": proposal.status.value,
-            "commit_after_ms": 3_000,
-        }
-        if proposal.status is TaskProposalStatus.PENDING:
-            payload["timer_state"] = "running" if proposal.deadline is not None else "frozen"
-            payload["remaining_ms"] = max(0, round(proposal.remaining_seconds * 1_000))
-        if proposal.task_id is not None:
-            payload["task_id"] = proposal.task_id
-        if proposal.failure_code is not None:
-            payload["reason"] = proposal.failure_code
-        self.context_store.append_event("task_fact", payload)
-        self._context_changed_locked()
-
-    def _record_task_fact_locked(self, fact: Mapping[str, Any]) -> None:
-        task_id = str(fact["task_id"])
-        version = int(fact["version"])
-        if self._task_fact_versions.get(task_id, -1) >= version:
+    def _accept_task_fact_locked(self, fact: Mapping[str, Any], *, accepted: bool = False) -> None:
+        if accepted:
+            self._has_external_commit = True
+        if not self.context_store.upsert_task_fact(fact):
             return
-        canonical_id = f"task:{task_id}"
-        for current in self.context_store.fold().task_facts:
-            if current.get("id") == canonical_id and int(current.get("version", -1)) >= version:
-                return
-        self.context_store.append_event("task_fact", fact)
-        self._task_fact_versions[task_id] = version
-        self._task_fact_versions.move_to_end(task_id)
-        while len(self._task_fact_versions) > _TASK_VERSION_LIMIT:
-            self._task_fact_versions.popitem(last=False)
-        self._has_external_commit = True
+        if fact.get("kind") == "task":
+            self._has_external_commit = True
         self._context_changed_locked()
-        if self._active_input is not None and not self._shutdown:
+        should_continue = fact.get("kind") == "task" or fact.get("status") == "failed"
+        if should_continue and self._active_input is not None and not self._shutdown:
             self._merge_trigger_locked(InvokeMode.CONTINUE, "task_fact_updated")
             self._kick_locked()
 
-    def _ensure_task_event_listener_locked(self) -> None:
-        if (
-            self._task_bridge is None
-            or self._shutdown
-            or not self.accepting
-            or (self._task_event_task is not None and not self._task_event_task.done())
-            or not callable(getattr(self._task_bridge.manager, "iter_events", None))
-        ):
-            return
-        self._task_event_task = asyncio.create_task(
-            self._task_event_loop(), name="main-agent-task-events",
-        )
+    async def _task_error(self, code: str) -> None:
+        if self.error_listener is not None:
+            await self.error_listener(code)
 
-    async def _task_event_loop(self) -> None:
-        assert self._task_bridge is not None
-        cursor = 0
-        delay = 0.05
-        while True:
-            try:
-                async for event in self._task_bridge.manager.iter_events(cursor):
-                    fact = await self._task_bridge.fact_for_event(event)
-                    if fact is not None:
-                        async with self._lock:
-                            if self._shutdown:
-                                return
-                            self._record_task_fact_locked(fact)
-                    cursor = max(cursor, int(event.event_id))
-                    delay = 0.05
-                async with self._lock:
-                    if self._shutdown:
-                        return
-            except asyncio.CancelledError:
-                raise
-            except Exception:
-                pass
-            await self._task_event_retry_sleep(delay)
-            delay = min(1.0, delay * 2)
+    def _cancel_pending_proposals_locked(self, reason: str) -> None:
+        if self._task_operations is not None:
+            self._task_operations.cancel_pending(reason)
 
-    def _retire_terminal_proposals_locked(self) -> None:
-        active_input_id = self._active_input.input_id if self._active_input is not None else None
-        for proposal_id, proposal in tuple(self._task_proposals.items()):
-            if (
-                proposal.origin_input_id != active_input_id
-                and proposal_id not in self._proposal_commit_tasks
-                and proposal.status in {
-                    TaskProposalStatus.COMMITTED,
-                    TaskProposalStatus.CANCELLED,
-                    TaskProposalStatus.FAILED,
-                }
-            ):
-                self._remove_proposal_locked(proposal_id)
+    def _freeze_pending_proposals_locked(self) -> None:
+        if self._task_operations is not None:
+            self._task_operations.freeze()
+
+    def _resume_pending_proposals_locked(self) -> None:
+        if self._task_operations is not None:
+            self._task_operations.resume()
 
     def _retire_proposals_for_input_locked(self, input_id: str) -> None:
-        for proposal_id, proposal in tuple(self._task_proposals.items()):
-            if (
-                proposal.origin_input_id == input_id
-                and proposal_id not in self._proposal_commit_tasks
-                and proposal.status in {
-                    TaskProposalStatus.COMMITTED,
-                    TaskProposalStatus.CANCELLED,
-                    TaskProposalStatus.FAILED,
-                }
-            ):
-                self._remove_proposal_locked(proposal_id)
-
-    def _remove_proposal_locked(self, proposal_id: str) -> None:
-        if proposal_id in self._proposal_commit_tasks:
-            return
-        self._task_proposals.pop(proposal_id, None)
-        for identity, current_id in tuple(self._proposal_calls.items()):
-            if current_id == proposal_id:
-                self._proposal_calls.pop(identity, None)
+        if self._task_operations is not None:
+            self._task_operations.retire_input(input_id)
 
     def _observation_accepted(self, observation_id: str, call: ToolCall) -> str:
         """Freeze origin, deduplicate same-input arguments, and append running truth at acceptance."""

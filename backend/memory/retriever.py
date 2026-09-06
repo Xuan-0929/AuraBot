@@ -2,7 +2,8 @@
 
 SQLite remains the authoritative hydration source. Optional retrieval branches are isolated so a broken
 derived vector index or one malformed seed result cannot suppress successful SQLite recall; only sanitized
-branch names enter diagnostics, while packed prompt context remains owned by the Memory module.
+branch names enter diagnostics. This module directly queries its adapters and packs prompt context once
+for MemoryService to return, without seed forwarding wrappers.
 """
 
 from __future__ import annotations
@@ -17,7 +18,6 @@ from .retrieval.query import QueryAnalyzer
 from .retrieval.ranking import filter_relations_for_ranked_memories, hydrate_and_rank_memories
 from .retrieval.rerank import MemoryReranker, RuleBasedMemoryReranker
 from .retrieval.relations import expand_relation_candidates
-from .retrieval.seeds import EntitySeedRetriever, FtsSeedRetriever, VectorSeedRetriever
 from .retrieval.trace import build_recall_trace
 from .stores.sqlite import SQLiteMemoryStore
 from .types import EmbeddingProvider, VectorStore
@@ -35,12 +35,6 @@ class HybridMemoryRetriever:
         self.store = store
         self.vector_store = vector_store
         self.embedding_provider = embedding_provider
-        self.vector_seeds = VectorSeedRetriever(
-            vector_store=vector_store,
-            embedding_provider=embedding_provider,
-        )
-        self.fts_seeds = FtsSeedRetriever(store)
-        self.entity_seeds = EntitySeedRetriever(store)
         self.query_analyzer = QueryAnalyzer()
         self.reranker = reranker or RuleBasedMemoryReranker()
 
@@ -67,29 +61,32 @@ class HybridMemoryRetriever:
         candidates: list[dict[str, Any]] = []
         candidates.extend(_safe_seeds(
             "vector",
-            lambda: self.vector_seeds.retrieve(
-                profile_id=profile_id,
-                query=query,
-                limit=limit,
-                filters=retrieval_filters,
-            ),
+            lambda: [
+                {**item, "source": item.get("source", "vector")}
+                for item in self.vector_store.search(
+                    self.embedding_provider.embed(query),
+                    profile_id=profile_id,
+                    limit=max(limit * 2, 8),
+                    filters=retrieval_filters,
+                )
+            ],
             failed_branches,
         ))
         candidates.extend(_safe_seeds(
             "fts",
-            lambda: self.fts_seeds.retrieve(
+            lambda: self.store.search_fts(
                 profile_id=profile_id,
                 query=query,
-                limit=limit,
+                limit=max(limit, 8),
             ),
             failed_branches,
         ))
         candidates.extend(_safe_seeds(
             "entity",
-            lambda: self.entity_seeds.retrieve(
+            lambda: self.store.search_entities(
                 profile_id=profile_id,
-                entity_names=analysis["entities"],
-                limit=limit,
+                names=analysis["entities"],
+                limit=max(limit, 8),
             ),
             failed_branches,
         ))

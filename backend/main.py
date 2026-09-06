@@ -2,7 +2,8 @@
 
 Startup tolerates absent chat, Pi and speech capabilities. Token activation opens Profile Context/Memory
 and text runtime; voice.start alone prepares speech assets and providers. Shutdown fences realtime before
-closing Profile workers and the durable Task control plane."""
+closing Profile workers and the durable Task control plane. ProfileResources owns lazy speech; Runtime
+keeps Hub.render as its renderer for the entire Profile lifetime."""
 
 from __future__ import annotations
 
@@ -24,7 +25,7 @@ initialize_config()
 from .app.gateway.errors import register_backend_exception_handlers
 from .app.gateway.health_routes import router as health_router
 from .app.gateway.readiness_routes import router as readiness_router
-from .app.gateway.task_routes import register_task_exception_handlers, router as task_router
+from .app.gateway.task_routes import router as task_router
 from .main_agent.context import ContextStore
 from .main_agent.lifecycle import ActiveProfileManager, ProfileResources
 from .main_agent.metrics import LifecycleMetrics
@@ -165,7 +166,6 @@ def create_app(
     application.include_router(task_router)
     application.include_router(readiness_router)
     application.include_router(main_agent_realtime_router)
-    register_task_exception_handlers(application)
     register_backend_exception_handlers(application)
     return application
 
@@ -232,37 +232,14 @@ async def _build_profile(
     resources = ProfileResources(
         profile_id, runtime, None, memory, closeables=tuple(closeables)
     )
+    def create_speech() -> SpeechService:
+        if not settings.speech.enabled:
+            raise RuntimeError("speech_disabled")
+        return (speech_factory(settings.speech, hub, runtime) if speech_factory else
+                _build_speech(settings.speech, hub, runtime, *_prepare_speech(settings.speech)))
+
+    resources.speech_factory = create_speech
     try:
-        async def start_speech() -> None:
-            if not hub.accepting or hub.runtime is not runtime:
-                raise RuntimeError("backend_restarting")
-            if resources.speech is not None:
-                return
-            if not settings.speech.enabled:
-                raise RuntimeError("speech_disabled")
-            speech = (speech_factory(settings.speech, hub, runtime) if speech_factory else
-                      _build_speech(settings.speech, hub, runtime, *_prepare_speech(settings.speech)))
-            runtime.renderer = hub.render
-            try:
-                await speech.startup()
-            except BaseException:
-                await speech.shutdown()
-                raise
-            resources.speech = speech
-            hub.speech = speech
-
-        async def stop_speech() -> None:
-            speech, resources.speech = resources.speech, None
-            if hub.speech is speech:
-                hub.speech = None
-            try:
-                if speech is not None:
-                    await speech.shutdown()
-            finally:
-                await runtime.renderer_disconnected()
-
-        hub.speech_activator = start_speech
-        hub.speech_stopper = stop_speech
         await runtime.startup()
         return resources
     except BaseException:
@@ -271,7 +248,7 @@ async def _build_profile(
 
 
 def _prepare_speech(settings: Any) -> tuple[SileroVadDetector, SmartTurnDetector]:
-    """Validate speech configuration before opening any Profile database or model client."""
+    """Validate static voice assets and dependencies only when voice is activated."""
 
     if not settings.api_key:
         raise RuntimeError("speech_api_key_missing")

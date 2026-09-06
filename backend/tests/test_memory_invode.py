@@ -1,8 +1,8 @@
 """
-验证 Memory 服务、整段对话提炼、内部检索组件与持久化适配器的可观察行为。
+验证 Memory 整段对话提炼、检索流程与持久化适配器的可观察行为。
 
 测试使用临时 SQLite 和内存向量替身覆盖 remember/recall/forget、提取与排序流程；
-短期记忆缓冲区由独立测试模块负责，避免在本文件重复验证同一契约。
+通过当前 Memory module 验证召回降级与预算，不保留旧短期记忆或兼容 façade 测试。
 """
 
 import asyncio
@@ -11,18 +11,15 @@ import sqlite3
 import tempfile
 import threading
 import unittest
+from unittest.mock import patch
 from pathlib import Path
 
 
-from backend.memory.invode import (
-    HashEmbeddingProvider,
-    MemoryService,
-    QdrantLocalVectorStore,
-    SQLiteMemoryStore,
-    StructuredMemoryExtractor,
-    create_embedding_provider,
-    create_default_memory_service,
-)
+from backend.memory.embedding import HashEmbeddingProvider, create_embedding_provider
+from backend.memory.service import MemoryService
+from backend.memory.stores.qdrant import QdrantLocalVectorStore
+from backend.memory.stores.sqlite import SQLiteMemoryStore
+from backend.memory.extractor import StructuredMemoryExtractor
 from backend.memory.extraction.schemas import (
     parse_conversation_extraction_payload,
     parse_structured_extraction_payload,
@@ -38,7 +35,6 @@ from backend.memory.retrieval.query import QueryAnalyzer
 from backend.memory.retrieval.ranking import hydrate_and_rank_memories
 from backend.memory.retrieval.rerank import RuleBasedMemoryReranker
 from backend.memory.retrieval.relations import expand_relation_candidates
-from backend.memory.retrieval.seeds import EntitySeedRetriever, FtsSeedRetriever, VectorSeedRetriever
 from backend.memory.retrieval.trace import build_recall_trace
 from backend.memory.validators import validate_memory_candidate
 from backend.memory.types import MemoryCandidate
@@ -477,6 +473,17 @@ class MemoryConversationTests(unittest.IsolatedAsyncioTestCase):
         self.assertLessEqual(result["char_count"], 80)
         self.assertNotIn("private_blob", result["text"])
         self.assertNotIn("secret-", result["text"])
+
+    async def test_recall_uses_the_context_already_packed_by_retrieval(self):
+        # A successful recall must return the same bounded record without a second pack pass.
+        packed = pack_context([], max_chars=80)
+        with patch.object(self.service.retriever, "recall", return_value={
+            "memories": [], "trace": {}, "packed_context": packed,
+        }):
+            result = await self.service.recall_context_async(
+                profile_id="profile-a", query="query", max_chars=80,
+            )
+        self.assertIs(result, packed)
 
     async def test_consecutive_recall_timeouts_own_only_one_sync_operation_until_shutdown(self):
         started = threading.Event()
@@ -1070,53 +1077,6 @@ class MemoryInvodeTests(unittest.TestCase):
         self.assertEqual(duplicate_result.stale_ids, ["new-positive"])
         self.assertEqual(conflict_result.superseded_ids, ["old-positive", "new-positive"])
 
-    def test_seed_retrievers_fuse_and_expand_related_candidates(self):
-        self.service.remember(
-            profile_id="user-1",
-            content="用户喜欢热拿铁。",
-            source_type="chat",
-            source_id="message-1",
-            memory_type="preference",
-            metadata={"entities": ["热拿铁"]},
-        )
-        self.service.remember(
-            profile_id="user-1",
-            content="用户明天要去咖啡店和阿杰讨论项目。",
-            source_type="chat",
-            source_id="message-2",
-            memory_type="event",
-            metadata={"entities": ["咖啡店", "阿杰", "项目"]},
-        )
-
-        vector_seeds = VectorSeedRetriever(
-            vector_store=self.vector_store,
-            embedding_provider=HashEmbeddingProvider(dimension=32),
-        ).retrieve(profile_id="user-1", query="热拿铁", limit=5, filters={})
-        fts_seeds = FtsSeedRetriever(self.store).retrieve(
-            profile_id="user-1",
-            query="热拿铁",
-            limit=5,
-        )
-        entity_seeds = EntitySeedRetriever(self.store).retrieve(
-            profile_id="user-1",
-            entity_names=["阿杰"],
-            limit=5,
-        )
-        fused = fuse_candidates([*vector_seeds, *fts_seeds, *entity_seeds])
-        relation_candidates, relations = expand_relation_candidates(
-            store=self.store,
-            profile_id="user-1",
-            seed_ids=[item["memory_id"] for item in fused],
-            existing_ids={item["memory_id"] for item in fused},
-        )
-
-        self.assertTrue(any(item["source"] == "vector" for item in vector_seeds))
-        self.assertTrue(any(item["source"] == "fts" for item in fts_seeds))
-        self.assertTrue(any(item["source"] == "entity" for item in entity_seeds))
-        self.assertEqual(fused, sorted(fused, key=lambda item: item["score"], reverse=True))
-        self.assertTrue(relations)
-        self.assertIsInstance(relation_candidates, list)
-
     def test_ranking_and_trace_preserve_candidate_sources(self):
         remembered = self.service.remember(
             profile_id="user-1",
@@ -1476,18 +1436,3 @@ class MemoryFactoryTests(unittest.TestCase):
     def test_embedding_provider_factory_rejects_unknown_production_provider(self):
         with self.assertRaises(ValueError):
             create_embedding_provider({"provider": "unknown"})
-
-    def test_default_memory_service_exposes_index_health(self):
-        with tempfile.TemporaryDirectory() as tmpdir:
-            service = create_default_memory_service(
-                base_path=Path(tmpdir) / "memory",
-                embedding_config={"provider": "hash", "dimension": 16},
-            )
-            try:
-                health = service.health()
-            finally:
-                service.close()
-
-            self.assertEqual(health["embedding"]["provider"], "HashEmbeddingProvider")
-            self.assertEqual(health["embedding"]["dimension"], 16)
-            self.assertEqual(health["qdrant"]["collection"], "aurabot_memory_items")

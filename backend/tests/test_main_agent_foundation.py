@@ -1,6 +1,6 @@
 """Protect canonical Context folding, minimal archive boundaries, and prompt projection.
 
-The tests verify stable user segments, Renderer-ACK-only assistant language, pending-schema migration,
+The tests verify stable user segments, Renderer-ACK-only assistant language, current pending archive boundaries,
 canonical boundary reconstruction, atomic archive cleanup, Observation ordering, and bounded JSON snapshots.
 """
 
@@ -114,58 +114,6 @@ class ContextStoreTests(unittest.TestCase):
                 ({"role": "user", "content": "不要半提交"},),
             )
             self.assertEqual(store.fold().conversation_summaries, ())
-            store.close()
-
-    def test_pending_schema_migrates_to_minimal_boundary_and_reconstructs_canonical_turns(self) -> None:
-        with tempfile.TemporaryDirectory() as directory:
-            path = Path(directory) / "context.sqlite3"
-            connection = sqlite3.connect(path)
-            connection.executescript(
-                r"""
-                CREATE TABLE context_events (
-                  sequence INTEGER PRIMARY KEY AUTOINCREMENT,
-                  event_type TEXT NOT NULL,
-                  payload_json TEXT NOT NULL
-                );
-                INSERT INTO context_events(event_type, payload_json) VALUES
-                  ('user_segment', '{"segment_id":"old","input_id":"i1","text":"旧问题"}');
-                CREATE TABLE pending_conversation_archive (
-                  singleton INTEGER PRIMARY KEY CHECK(singleton = 1),
-                  source_id TEXT NOT NULL,
-                  first_sequence INTEGER NOT NULL,
-                  through_sequence INTEGER NOT NULL,
-                  turns_json TEXT NOT NULL,
-                  origin_input_id TEXT,
-                  origin_revision INTEGER
-                );
-                INSERT INTO pending_conversation_archive VALUES
-                  (1, 'main-agent-context:1:1', 1, 1,
-                   '[{"role":"user","content":"过期副本"}]', 'input-old', 7);
-                """
-            )
-            connection.close()
-
-            store = ContextStore(path)
-            pending = store.pending_conversation_archive()
-            inspection = sqlite3.connect(path)
-            columns = [
-                row[1] for row in inspection.execute(
-                    "PRAGMA table_info(pending_conversation_archive)"
-                ).fetchall()
-            ]
-            inspection.close()
-
-            self.assertEqual(columns, [
-                "singleton", "source_id", "first_sequence", "through_sequence",
-            ])
-            self.assertEqual(
-                store.conversation_archive_turns(pending),
-                ({"role": "user", "content": "旧问题"},),
-            )
-            self.assertEqual(
-                set(pending.__dataclass_fields__),
-                {"source_id", "first_sequence", "through_sequence"},
-            )
             store.close()
 
     def test_last_user_activity_survives_reopen_and_clears_only_when_idle(self) -> None:

@@ -17,9 +17,11 @@ flowchart TB
   HUB <--> AGENT["MainAgentRuntime"]
   AGENT --> CONTEXT["ContextStore"]
   AGENT --> MEMORY["MemoryService"]
-  AGENT --> TASK["TaskManager"]
+  AGENT --> OPS["TaskOperations<br/>三秒提案 · 已接管控制"]
+  OPS --> TASK["TaskManager"]
+  TASK -->|最新事实| CONTEXT
   TASK --> PI["Pi RPC processes"]
-  BACKEND -->|Task REST / SSE| MAIN
+  TASK -->|只读 task.snapshot SSE| MAIN
 ~~~
 
 ## 模块职责
@@ -31,7 +33,8 @@ flowchart TB
 | Console | 经 IPC 提交文字、分页显示历史、只读显示 Task 标题/状态。 |
 | Main Agent | 拥有对话 Context、模型调用、Memory 编排和 Task 工具；内部推理不作为回复展示。 |
 | Memory | 召回、提炼、长期 SQLite/Qdrant 存储；不提供外部管理 API/UI。 |
-| TaskManager | Python 控制面，拥有状态、队列、事件和 Pi 生命周期。 |
+| TaskOperations | Main Agent 内的提案/控制 owner；单提案 worker、三秒冻结恢复，提交后结清，无无限投影重试。 |
+| TaskManager | Python 控制面，拥有状态、队列、事件和 Pi 生命周期；业务入口只有 Main Agent，直接向桌面只输出状态 SSE。 |
 | Pi | 执行面，每个活动 Task 一个 RPC 进程，负责自身 Agent Loop、模型与工具。 |
 
 文字在没有语音资源时也能运行。Profile token 激活 Context、Memory 和文字 Runtime；`voice.start` 才加载语音依赖与资产。
@@ -45,3 +48,10 @@ flowchart TB
 5. 不恢复旧 Electron Chat/Memory/Task 业务服务、兼容 DTO 或 CLI runner。
 
 路径与重启协议见 [配置与生命周期](configuration-and-backend-lifecycle.md)，接口见 [后端契约](backend-runtime-contract.md)，Pi 细节见 [Task Runtime](modules/task-agent.md)。
+
+## 2026-09-06 架构收敛
+
+- Electron 的 ProfileStorage 只建当前身份/人格两表；旧 Chat/Gate/Memory/主动触发、旧配置与历史迁移已退役。
+- Context 的 `context_task_facts` 按稳定 ID/version 保留最新事实；完整 Task 历史仍只在 TaskStore。
+- ProfileResources 唯一持有 Speech。文字打断重置旧采集回合并取消旧 TTS，复用 worker/provider/detector。
+- 详细改动与验证见 [架构优化记录](architecture-optimization.md)。

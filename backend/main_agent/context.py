@@ -1,6 +1,7 @@
 """Persist one Profile's canonical Context, speech-delivery truth, and archive boundary.
 
 The Runtime appends user, observation, think-note, Task, and acknowledged assistant facts here. Conversation
+Task facts are upserted by stable identity/version in a dedicated latest-state table; conversation
 turns are always reconstructed from canonical events; a singleton pending row stores only a stable sequence
 boundary across retry/restart. A successful Memory result is committed atomically with its summary, boundary
 cleanup, terminal Speech Ledger cleanup, pending deletion, and conditional idle-metadata removal.
@@ -97,6 +98,11 @@ class ContextStore:
                   event_type TEXT NOT NULL,
                   payload_json TEXT NOT NULL
                 );
+                CREATE TABLE IF NOT EXISTS context_task_facts (
+                  id TEXT PRIMARY KEY,
+                  version INTEGER,
+                  payload_json TEXT NOT NULL
+                );
                 CREATE TABLE IF NOT EXISTS speech_clauses (
                   sequence INTEGER PRIMARY KEY AUTOINCREMENT,
                   clause_id TEXT NOT NULL UNIQUE,
@@ -120,42 +126,6 @@ class ContextStore:
                   WHERE event_type = 'conversation_summary';
                 """
             )
-            self._migrate_pending_archive_schema()
-
-    def _migrate_pending_archive_schema(self) -> None:
-        """Replace the unpublished expanded pending table with its minimal stable boundary."""
-
-        expected = ("singleton", "source_id", "first_sequence", "through_sequence")
-        columns = tuple(
-            str(row["name"])
-            for row in self._connection.execute(
-                "PRAGMA table_info(pending_conversation_archive)"
-            ).fetchall()
-        )
-        if columns == expected:
-            return
-        if not set(expected).issubset(columns):
-            raise RuntimeError("pending conversation archive schema is invalid")
-        self._connection.executescript(
-            """
-            BEGIN IMMEDIATE;
-            ALTER TABLE pending_conversation_archive
-              RENAME TO pending_conversation_archive_legacy;
-            CREATE TABLE pending_conversation_archive (
-              singleton INTEGER PRIMARY KEY CHECK(singleton = 1),
-              source_id TEXT NOT NULL,
-              first_sequence INTEGER NOT NULL,
-              through_sequence INTEGER NOT NULL
-            );
-            INSERT INTO pending_conversation_archive (
-              singleton, source_id, first_sequence, through_sequence
-            )
-            SELECT singleton, source_id, first_sequence, through_sequence
-            FROM pending_conversation_archive_legacy;
-            DROP TABLE pending_conversation_archive_legacy;
-            COMMIT;
-            """
-        )
 
     def close(self) -> None:
         """Release the SQLite connection; later use is intentionally rejected by sqlite3."""
@@ -177,6 +147,28 @@ class ContextStore:
                 (event_type, encoded),
             )
             return int(cursor.lastrowid)
+
+    def upsert_task_fact(self, fact: Mapping[str, Any]) -> bool:
+        """Persist only a changed/latest Task or proposal fact without folding conversation events."""
+
+        identifier = fact["id"]
+        version = fact.get("version")
+        encoded = _json_object(fact)
+        with self._transaction() as db:
+            previous = db.execute(
+                "SELECT version, payload_json FROM context_task_facts WHERE id = ?", (identifier,)
+            ).fetchone()
+            if previous is not None:
+                if version is not None and previous["version"] is not None and previous["version"] >= version:
+                    return False
+                if previous["payload_json"] == encoded:
+                    return False
+            db.execute(
+                "INSERT INTO context_task_facts(id, version, payload_json) VALUES (?, ?, ?) "
+                "ON CONFLICT(id) DO UPDATE SET version=excluded.version, payload_json=excluded.payload_json",
+                (identifier, version, encoded),
+            )
+            return True
 
     def recover_interrupted_clauses(self) -> int:
         """Explicitly close clauses left nonterminal by a confirmed prior runtime shutdown."""
@@ -251,10 +243,12 @@ class ContextStore:
             rows = self._connection.execute(
                 "SELECT sequence, event_type, payload_json FROM context_events ORDER BY sequence"
             ).fetchall()
+            task_rows = self._connection.execute(
+                "SELECT payload_json FROM context_task_facts ORDER BY id"
+            ).fetchall()
         conversation: list[dict[str, Any]] = []
         segment_positions: dict[str, int] = {}
         observations: dict[str, tuple[int, dict[str, Any]]] = {}
-        task_facts: dict[str, dict[str, Any]] = {}
         summaries: dict[str, tuple[int, dict[str, Any]]] = {}
         think_note: str | None = None
         for row in rows:
@@ -292,15 +286,13 @@ class ContextStore:
                 observations[payload["id"]] = (int(row["sequence"]), merged)
             elif event_type == "think_note" and isinstance(payload.get("text"), str):
                 think_note = payload["text"]
-            elif event_type == "task_fact" and isinstance(payload.get("id"), str):
-                task_facts[payload["id"]] = payload
         return FoldedContext(
             conversation_turns=tuple(conversation),
             observations=tuple(
                 payload for _sequence, payload in sorted(observations.values(), key=lambda item: item[0])
             ),
             think_note=think_note,
-            task_facts=tuple(task_facts[key] for key in sorted(task_facts)),
+            task_facts=tuple(json.loads(row["payload_json"]) for row in task_rows),
             conversation_summaries=tuple(
                 payload for _sequence, payload in sorted(summaries.values(), key=lambda item: item[0])
             ),

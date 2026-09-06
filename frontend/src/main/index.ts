@@ -5,10 +5,7 @@
 import { app, BrowserWindow, ipcMain, Notification, dialog } from 'electron';
 import { join, resolve } from 'node:path';
 import { randomUUID } from 'node:crypto';
-import { createAppDatabase } from '@core/storage/db';
-import { ProfileRepository } from '@core/storage/repositories/profileRepository';
-import { ProfileService } from '@core/profiles/profileService';
-import { PersonaSettingsService } from '@core/profiles/personaSettingsService';
+import { ProfileStorage } from '@core/profiles/profileStorage';
 import { createLive2DModelRegistry } from '@core/live2d/modelRegistry';
 import { IPC_CHANNELS as C } from '@shared/contracts/ipc';
 import type { AgentStatus } from '@shared/contracts/chat';
@@ -24,7 +21,7 @@ if(process.env.AURABOT_USER_DATA_DIR)app.setPath('userData',process.env.AURABOT_
 const projectRoot=resolve(__dirname,'../../..');
 let backend:BackendProcess|undefined;
 let history:ConversationHistory|undefined;
-let profileDb:ReturnType<typeof createAppDatabase>|undefined;
+let profiles:ProfileStorage|undefined;
 let quitting=false;
 let tasks:TaskStatusFeed|undefined;
 const broadcast=(channel:string,value:unknown)=>BrowserWindow.getAllWindows().forEach(window=>window.webContents.send(channel,value));
@@ -33,11 +30,9 @@ async function bootstrap(){
  const root=process.env.AURABOT_USER_DATA_DIR??join(app.getPath('userData'),'desktop-v2');
  const config=new DesktopConfigStore(root,projectRoot);
  history=new ConversationHistory(root);
- profileDb=createAppDatabase({filePath:join(root,'profile.sqlite3'),userDataPath:root});
- const repository=new ProfileRepository(profileDb);
- const profiles=new ProfileService(repository);
- const persona=new PersonaSettingsService(profiles,repository);
- persona.updateActivePersonaSettings(config.current().persona);
+ const profileStore=new ProfileStorage(join(root,'profile.sqlite3'));
+ profiles=profileStore;
+ profileStore.updateActivePersonaSettings(config.current().persona);
  const registry=createLive2DModelRegistry({modelRootPath:app.isPackaged?join(__dirname,'../renderer/assets/live2d'):join(projectRoot,'frontend/public/assets/live2d')});
  const modelState=()=>{const model=registry.resolveCurrentModel(config.current().desktop.currentModelId);return {currentModelId:model?.id??'',currentModelPath:model?.manifestPath??'',models:registry.listAvailableModels()};};
  const bounds=new PetWindowStateStore(root);
@@ -55,7 +50,7 @@ async function bootstrap(){
    if(!BrowserWindow.fromWebContents(event.sender)||event.senderFrame!==event.sender.mainFrame)throw new Error('未知窗口');
    return listener(event,...args);
  });
- handle(C.getInitialState,()=>{const profile=profiles.getOrSeedActiveProfile();return {profile,mainSessionId:`main:${profile.id}`,messages:history!.list(profile.id).messages,agentStatus:agentState,chatError:realtimeError,petSettings:config.current().desktop.pet,live2dModelState:modelState(),notificationSettings:{systemNotificationsEnabled:config.current().desktop.systemNotificationsEnabled,followUpNotificationsEnabled:false,idleNudgeNotificationsEnabled:false,permissionState:Notification.isSupported()?'system_managed':'unsupported'},debugPetOverlay:false};});
+ handle(C.getInitialState,()=>{const profile=profileStore.getOrSeedActiveProfile();return {profile,mainSessionId:`main:${profile.id}`,messages:history!.list(profile.id).messages,agentStatus:agentState,chatError:realtimeError,petSettings:config.current().desktop.pet,live2dModelState:modelState(),notificationSettings:{systemNotificationsEnabled:config.current().desktop.systemNotificationsEnabled,followUpNotificationsEnabled:false,idleNudgeNotificationsEnabled:false,permissionState:Notification.isSupported()?'system_managed':'unsupported'},debugPetOverlay:false};});
  handle(C.openConsoleWindow,()=>{openConsoleWindow();});
  handle(C.openSettingsWindow,()=>{openSettingsWindow();});
  handle(C.getSettings,()=>config.status());
@@ -64,12 +59,12 @@ async function bootstrap(){
    if(typeof force!=='boolean')throw new Error('无效应用请求');
    const previous=config.status();
    const result=await backend!.apply(force);
-   if(!result.busy){persona.updateActivePersonaSettings(config.current().persona);applyPetSettings(config.current().desktop.pet);broadcastLive2DModelState(modelState());if(previous.backendPending||!previous.online)sendPet({id:randomUUID(),type:'reconnect'});}
+   if(!result.busy){profileStore.updateActivePersonaSettings(config.current().persona);applyPetSettings(config.current().desktop.pet);broadcastLive2DModelState(modelState());if(previous.backendPending||!previous.online)sendPet({id:randomUUID(),type:'reconnect'});}
    return result;
  });
- handle(C.getHistory,(_event,before)=>history!.list(profiles.getOrSeedActiveProfile().id,before));
+ handle(C.getHistory,(_event,before)=>history!.list(profileStore.getOrSeedActiveProfile().id,before));
  handle(C.recordDelivery,(event,entry:HistoryEntry)=>{
-   assertPet(event);const saved=history!.record(profiles.getOrSeedActiveProfile().id,entry);broadcastChatMessageUpdated(saved);
+   assertPet(event);const saved=history!.record(profileStore.getOrSeedActiveProfile().id,entry);broadcastChatMessageUpdated(saved);
    if(entry.role==='assistant')broadcastPetActivity({id:entry.id,kind:'chat_reply',message:entry.content,createdAt:saved.createdAt});
    return saved;
  });
@@ -82,14 +77,14 @@ async function bootstrap(){
    if(typeof input?.content!=='string'||!input.content.trim()||input.content.length>8000)throw new Error('请输入有效消息（最多 8000 字符）');
    const id=randomUUID();
    await new Promise<void>((resolve,reject)=>{const timer=setTimeout(()=>{pending.delete(id);reject(new Error('消息确认超时；未自动重发，请确认对话状态。'));},15000);pending.set(id,{resolve,reject,timer});try{sendPet({id,type:'text',text:input.content.trim()});}catch(error){clearTimeout(timer);pending.delete(id);reject(error);}});
-   const message=history!.list(profiles.getOrSeedActiveProfile().id).messages.find(m=>m.id===id);
+   const message=history!.list(profileStore.getOrSeedActiveProfile().id).messages.find(m=>m.id===id);
    if(!message)throw new Error('消息已提交，但历史尚未确认。');
    return {userMessage:message,agentStatus:agentState};
  });
  handle(C.taskSubscribe,(event,enabled)=>{
    if(event.sender.id===pet.webContents.id)throw new Error('Task 只在控制台展示');
    tasks?.stop();tasks=undefined;
-   if(enabled){const sender=event.sender;tasks=new TaskStatusFeed(()=>profiles.getOrSeedActiveProfile().id,value=>{if(!sender.isDestroyed())sender.send(C.tasksChanged,value);});tasks.start();sender.once('destroyed',()=>{tasks?.stop();tasks=undefined;});}
+   if(enabled){const sender=event.sender;tasks=new TaskStatusFeed(()=>profileStore.getOrSeedActiveProfile().id,value=>{if(!sender.isDestroyed())sender.send(C.tasksChanged,value);});tasks.start();sender.once('destroyed',()=>{tasks?.stop();tasks=undefined;});}
  });
  handle(C.getLive2DModelState,()=>modelState());
  handle(C.setPetMousePassthrough,(event,enabled)=>{assertPet(event);if(typeof enabled==='boolean')setPetMousePassthrough(enabled);});
@@ -104,5 +99,5 @@ app.whenReady().then(bootstrap).catch(error=>{dialog.showErrorBox('AuraBot 启�
 app.on('window-all-closed',()=>app.quit());
 app.on('before-quit',event=>{
  if(quitting)return;event.preventDefault();quitting=true;tasks?.stop();
- void (async()=>{try{await backend?.stop();history?.close();profileDb?.close();app.quit();}catch(error){quitting=false;dialog.showErrorBox('AuraBot 尚未退出',error instanceof Error?error.message:'Backend 清理尚未完成，请稍后重试。');}})();
+ void (async()=>{try{await backend?.stop();history?.close();profiles?.close();app.quit();}catch(error){quitting=false;dialog.showErrorBox('AuraBot 尚未退出',error instanceof Error?error.message:'Backend 清理尚未完成，请稍后重试。');}})();
 });

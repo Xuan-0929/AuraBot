@@ -15,6 +15,7 @@ from types import SimpleNamespace
 from backend.app.gateway.readiness_routes import prepare_restart, RestartPrepareRequest
 from backend.main_agent.context import ContextStore, ClauseState
 from backend.main_agent.realtime import RealtimeHub
+from backend.main_agent.lifecycle import ProfileResources
 from backend.main_agent.runtime import MainAgentRuntime
 from backend.main_agent.snapshot import SnapshotProjector
 from backend.main_agent.tasks import TaskBridge
@@ -41,7 +42,8 @@ class DesktopContractTests(unittest.IsolatedAsyncioTestCase):
             snapshot_projector=SnapshotProjector(), tool_policy=ToolSurfacePolicy(),
             provider=provider, renderer=self.hub.render, executors={}, soul='Soul')
         await self.runtime.startup()
-        await self.hub.set_active('profile', 1, self.runtime, None)
+        self.profile = ProfileResources('profile', self.runtime, None, None)
+        await self.hub.set_active('profile', 1, self.profile)
         self.socket = FakeSocket()
         self.session = await self.hub.attach(self.socket)
         self.manager = TaskManager(TaskSettings.from_mapping(
@@ -59,10 +61,10 @@ class DesktopContractTests(unittest.IsolatedAsyncioTestCase):
         self.context.close()
         self.temp.cleanup()
 
-    async def wait_offer(self):
+    async def wait_offer(self, *, after=None):
         for _ in range(100):
             offers = [event for event in self.socket.sent if isinstance(event, dict) and event.get('type') == 'clause.offer']
-            if offers:
+            if offers and offers[-1]['clause_id'] != after:
                 return offers[-1]
             await asyncio.sleep(.001)
         self.fail('missing clause.offer')
@@ -135,15 +137,7 @@ class DesktopContractTests(unittest.IsolatedAsyncioTestCase):
             vad=FakeVad([1.0]), playback_lifecycle=self.hub)
         delivery = SimpleNamespace(startup=AsyncMock(), shutdown=AsyncMock(), cancel_current=AsyncMock())
         speech = SpeechService(self.hub, coordinator, delivery)
-        owner = SimpleNamespace(speech=speech)
-        async def stop():
-            if owner.speech is not None:
-                await owner.speech.shutdown()
-                owner.speech = None
-                self.hub.speech = None
-            await self.runtime.renderer_disconnected()
-        self.hub.speech = speech
-        self.hub.speech_stopper = stop
+        self.profile.speech = speech
         self.session.mode = 'voice'
         await speech.startup()
         await coordinator.accept_mic_frame(b'\0' * 640)
@@ -155,11 +149,11 @@ class DesktopContractTests(unittest.IsolatedAsyncioTestCase):
         if transition == 'detach':
             await self.hub.detach(old_session)
         elif transition == 'refresh':
-            await self.hub.set_active('profile', 2, self.runtime, speech)
+            await self.hub.set_active('profile', 2, self.profile)
         new_socket = FakeSocket()
         new_session = await self.hub.attach(new_socket)
         self.assertTrue(old_session.closed)
-        self.assertIsNone(owner.speech)
+        self.assertIsNone(self.profile.speech)
         self.assertIsNone(self.hub.speech)
         self.assertTrue(coordinator._closed)
         self.assertFalse(coordinator.audio or coordinator.pre_roll)
@@ -224,32 +218,53 @@ class DesktopContractTests(unittest.IsolatedAsyncioTestCase):
         await self._endpoint_final_transcript(partial=False)
 
     async def test_typed_input_during_voice_keeps_spoken_delivery_and_retires_old_mic_turn(self):
-        from unittest.mock import AsyncMock
-        async def offer(clause):
-            port = await self.hub.acquire_renderer_port()
-            await port.offer_clause(clause)
-        old_speech = SimpleNamespace(cancel_current=AsyncMock(), acknowledge=lambda *a, **k: None)
-        new_speech = SimpleNamespace(delivery=offer, cancel_current=AsyncMock(), acknowledge=lambda *a, **k: None)
-        async def stop():
-            self.hub.speech = None
-            await self.runtime.renderer_disconnected()
-        async def start():
-            self.hub.speech = new_speech
-        self.hub.speech = old_speech
-        self.hub.speech_stopper = AsyncMock(side_effect=stop)
-        self.hub.speech_activator = AsyncMock(side_effect=start)
+        from backend.main_agent.speech import SpeechInputCoordinator, SpeechService, ClauseSpeechDelivery, TranscriptUpdate
+        from backend.tests.test_main_agent_speech import FakeStt, FakeVad
+        class Output:
+            def __init__(self):
+                self.started, self.cancelled = asyncio.Event(), asyncio.Event()
+            async def synthesize(self, _text):
+                yield b"\0\0" * 480
+                if not self.started.is_set():
+                    self.started.set()
+                    try:
+                        await asyncio.Event().wait()
+                    finally:
+                        self.cancelled.set()
+        stt = FakeStt()
+        coordinator = SpeechInputCoordinator(self.runtime, stt_provider=stt,
+            vad=FakeVad([1.0, 1.0]), playback_lifecycle=self.hub)
+        output = Output()
+        delivery = ClauseSpeechDelivery(output, self.hub.acquire_renderer_port, self.runtime)
+        speech = SpeechService(self.hub, coordinator, delivery)
+        self.profile.speech = speech
         self.session.mode = 'voice'
-        await self.runtime.update_transcript('unfinished mic', segment_id='mic', request_prepare=False)
+        await speech.startup()
+        mic_worker, delivery_worker = speech._mic_task, delivery._worker
+        await coordinator.accept_mic_frame(b"\0" * 640)
+        old_sink = stt.sessions[0].sink
+        await old_sink(TranscriptUpdate('unfinished mic', '', 'unfinished mic', 'partial'))
         await self.hub.command(self.session, {'type': 'text.submit', 'command_id': 'typed', 'text': 'Typed while talking'})
         offer = await self.wait_offer()
         self.assertEqual(offer['mode'], 'voice')
         self.assertEqual(self.session.mode, 'voice')
-        self.hub.speech_stopper.assert_awaited_once()
-        self.hub.speech_activator.assert_awaited_once()
-        users = [event for event in self.socket.sent if event.get('type') == 'user.message']
+        self.assertIs(self.profile.speech, speech)
+        self.assertIs(speech._mic_task, mic_worker)
+        self.assertIs(delivery._worker, delivery_worker)
+        self.assertFalse(mic_worker.done() or delivery_worker.done())
+        old_version = self.runtime.latest_context_version
+        await old_sink(TranscriptUpdate('late forbidden', '', 'late forbidden', 'partial'))
+        self.assertEqual(self.runtime.latest_context_version, old_version)
+        users = [event for event in self.socket.sent if isinstance(event, dict) and event.get('type') == 'user.message']
         self.assertEqual([(event['text'], event['source']) for event in users], [('Typed while talking', 'text')])
-        ack = next(event for event in self.socket.sent if event.get('type') == 'command.ack')
+        ack = next(event for event in self.socket.sent if isinstance(event, dict) and event.get('type') == 'command.ack')
         self.assertEqual(ack['status'], 'accepted')
+        await output.started.wait()
+        await self.hub.command(self.session, {'type': 'text.submit', 'command_id': 'typed-again', 'text': 'Replace the slow reply'})
+        await asyncio.wait_for(output.cancelled.wait(), .3)
+        next_offer = await self.wait_offer(after=offer['clause_id'])
+        self.assertEqual(next_offer['mode'], 'voice')
+        self.assertIs(delivery._worker, delivery_worker)
 
     async def test_unconfigured_main_model_rejects_text_before_history(self):
         self.runtime.text_available = False

@@ -21,23 +21,18 @@
     "test:backend": "uv run --project ../backend python -m unittest discover -s ../backend/tests -t ..",
     "test:unit": "npm run rebuild:node && vitest run --config configs/vitest.config.ts tests/unit",
     "test:integration": "npm run rebuild:node && vitest run --config configs/vitest.config.ts tests/integration",
-    "test:e2e": "electron-rebuild -f -w better-sqlite3 && npm run build && playwright test --config configs/playwright.config.ts",
-    "eval:memory": "npm run rebuild:node && vitest run --config configs/vitest.config.ts tests/unit/core/memory/memoryEvaluation.spec.ts"
+    "test:e2e": "electron-rebuild -f -w better-sqlite3 && npm run build && playwright test --config configs/playwright.config.ts"
   },
   "dependencies": {
     "@iconify-json/solar": "^1.2.5",
     "@iconify/vue": "^5.0.1",
-    "@langchain/openai": "^1.4.5",
-    "@vueuse/core": "^14.3.0",
     "@wxperia/liquid-glass-vue": "^1.0.9",
     "better-sqlite3": "^12.9.0",
     "live2dcubismcore": "1.0.2",
-    "p-queue": "^9.2.0",
     "pinia": "^3.0.4",
     "pixi-live2d-display": "0.4.0",
     "pixi.js": "6.5.10",
     "vue": "^3.5.34",
-    "ws": "^8.21.3",
     "zod": "^4.4.2"
   },
   "devDependencies": {
@@ -46,7 +41,6 @@
     "@swc/core": "^1.15.3",
     "@types/better-sqlite3": "^7.6.13",
     "@types/node": "^20.19.25",
-    "@types/ws": "^8.18.1",
     "@vitejs/plugin-vue": "^6.0.6",
     "electron": "^41.5.0",
     "electron-builder": "^26.0.12",

@@ -53,5 +53,3 @@ export interface AuraBotApi {
  onChatMessageCreated(listener:(value:Message)=>void):()=>void;
  onChatMessageUpdated(listener:(value:Message)=>void):()=>void;
 }
-
-export interface EventLogRecord {id:string;eventType:string;payload:Record<string,unknown>;createdAt:string;}

@@ -9,8 +9,9 @@ owner；SQLite 是队列和恢复事实源，不存在第二份内存 queue、Sc
 
 ~~~mermaid
 flowchart LR
-  CLIENT["HTTP Client"] --> GW["FastAPI Gateway<br/>REST / SSE"]
-  GW --> TM["TaskManager<br/>唯一运行状态 owner"]
+  MA["Main Agent / TaskOperations"] --> TM["TaskManager<br/>唯一运行状态 owner"]
+  TM --> GW["FastAPI Gateway<br/>只读 task.snapshot SSE"]
+  GW --> CLIENT["Electron Task 列表"]
   TM --> DB["TaskStore<br/>同步 sqlite3"]
   TM --> RUNS["最多 5 个 TaskRun"]
   RUNS --> PROC["process.py<br/>Pi 启停 / reap / session 清理"]
@@ -22,14 +23,14 @@ flowchart LR
 ~~~
 
 已实现创建、查询、SQLite FIFO、固定并发、暂停、恢复、取消、逻辑删除、问题回答、
-业务事件、SSE replay、累计 active timeout、fail-stop、重启与 shutdown 收口。恢复复用
+内部业务事件、只读状态快照 SSE、累计 active timeout、fail-stop、重启与 shutdown 收口。恢复复用
 Pi session，但不恢复进程调用栈，也不保证 Tool 外部副作用 exactly-once。
 
 ## 2. 模块与依赖
 
 ~~~text
 backend/task/
-  __init__.py   # Gateway 的稳定公开边界
+  __init__.py   # Main Agent 与 Gateway 使用的公共模型/Manager
   manager.py    # 命令、dispatcher、TaskRun、execution、recovery、fail-stop、SSE wake
   store.py      # 同步 sqlite3、两表 schema、CAS、事件与 FIFO claim
   process.py    # start_pi / stop_pi / remove_session
@@ -38,7 +39,7 @@ backend/task/
   settings.py   # 路径、timeout 与 pinned runtime 验证
 ~~~
 
-Gateway 只依赖 `backend.task` 的 Manager 和公共模型。Manager 自己构造 Store，并直接拥有
+Main Agent 通过 TaskBridge 调用 `backend.task` 的 Manager 和公共模型；Gateway 只订阅状态快照。Manager 自己构造 Store，并直接拥有
 Pi handle；Store、process 与 RPC 不依赖 Gateway。没有 interface、factory、repository、
 unit-of-work、兼容 adapter 或 deprecated alias。
 
@@ -129,13 +130,12 @@ erDiagram
 
 问题当前值折叠在 tasks 行；完整问题历史由 durable events 保存。所有状态写入、CAS
 version 与业务事件共享 `BEGIN IMMEDIATE` transaction。`event_id` 全局递增，
-`task_sequence` 在单 Task 内唯一递增，SSE 直接按 cursor replay。
+`task_sequence` 在单 Task 内唯一递增，内部 Main Agent 使用 watermark 追踪；桌面 SSE 只发当前状态。
 
-新模型使用 `PRAGMA user_version=2`。空数据库只创建 `tasks` 和 `task_events`；启动时仅将
-首个未发布版本的 v1 原地补充 `workspace_id`、`owner_profile_id` 与 `idempotency_key`，既有行
-标记为 `legacy` 且没有可复用的幂等键。发现旧表、未知版本或未来版本时拒绝启动，不自动删除、
-改名或迁移。用户必须先备份，再删除整个 `<userData>/task` 目录，避免 SQLite 与旧 session
-失去关联。
+当前 schema 使用 `PRAGMA user_version=3`。空库直接建 `tasks` 与 `task_events`，原生
+CHECK/FK/UNIQUE、事务与 CAS 负责数据一致性；当前版本可重新打开，旧版、未知版拒绝且不重建。
+不支持未发布版本迁移，也不维护第二套 DDL 契约或自研 SQL 解析器。启动不做全库外键扫描。
+`tasks_owner_recent_idx` 支持 Profile 的最新状态查询；旧数据按已批准范围一次性重置。
 
 ## 6. 问题、执行与 active timeout
 
@@ -171,26 +171,26 @@ Unicode 安全切块、事件顺序、EOF pending 检查和未知合法 event �
 - fail-stop：任一 durable write 失败后停止 admission、取消 dispatcher、并行回收所有 Pi；
   查询仍可用于诊断，但新的状态命令返回 runtime unavailable。
 - delete：只允许 terminal Task；先提交 tombstone 和 `task.deleted`，再直接清理 session。
-  清理失败返回 500，重复 DELETE 或下次 startup 重试。session 路径本身是 symlink 时只
+  清理失败向 Main Agent 报错，重复删除工具调用或下次 startup 重试。session 路径本身是 symlink 时只
   unlink，不跟随目标。
 
-## 9. Gateway 与事件
+## 9. Main Agent 与只读状态 SSE
 
-| Method | Path | 行为 |
-| --- | --- | --- |
-| POST | `/api/v1/tasks` | 创建 queued Task |
-| GET | `/api/v1/tasks` | cursor 分页和状态过滤 |
-| GET | `/api/v1/tasks/{taskId}` | 查询 snapshot |
-| POST | `/api/v1/tasks/{taskId}/pause` | CAS 暂停 |
-| POST | `/api/v1/tasks/{taskId}/resume` | CAS 恢复 |
-| POST | `/api/v1/tasks/{taskId}/cancel` | CAS 取消 |
-| DELETE | `/api/v1/tasks/{taskId}` | terminal tombstone + session cleanup |
-| GET | `/api/v1/task-events` | Last-Event-ID SSE replay |
+Main Agent 是 TaskManager 唯一业务主入口，使用进程内方法完成创建、查询、回答、暂停、恢复、
+取消、终态删除和重跑。TaskOperations 持有提案和已接管控制：每提案一个 worker，三秒内
+可冻结/恢复/取消，提交后不因调用者取消而撤销。Context 投影失败报告一次，持久 Task 不回滚。
 
-公共 JSON 保持 camelCase，Task response 不暴露 Pi/session/question 内部字段。业务事件保持
-`task.created`、`task.status_changed`、`task.output_appended`、`task.question_raised`、
-`task.question_answered`、`task.deleted`。SSE 内存 condition 只负责无轮询唤醒；持久化
-事件是唯一 replay 真相。`GET /health` 仍精确返回 `{"ok":true,"service":"backend"}`。
+唯一 Task HTTP 出口是 `GET /api/v1/task-events?ownerProfileId=…`：首次/重连立即发送
+`event: task.snapshot` 与 `data: {"tasks":[{"id":"…","title":"…","status":"…"}]}`。
+只含最近创建的 100 个未删除 Task，降序。创建、状态变化、删除通知 snapshot condition；
+输出不会唤醒状态读取。同内容快照不重复发送；空闲保活，断开取消等待。无 REST 控制/查询、
+执行正文、事件 ID 或 Last-Event-ID replay。
+
+完整 `task.created/status_changed/output_appended/question_raised/question_answered/deleted`
+事件保留在 TaskStore。Main Agent 启动先取 watermark，再分批对齐当前 Profile 的记录（含
+删除事实），随后消费较新的重要事件。`ContextStore.upsert_task_fact` 按稳定 ID/version 去重；
+无需 Runtime 版本缓存或逐事件展开全 Context。`GET /health` 仍返回
+`{"ok":true,"service":"backend"}`。
 
 ## 10. 验证边界
 
@@ -201,9 +201,9 @@ smoke，不镜像已删除的内部包。默认测试不调用模型、不需要
 
 ## 桌面接入补充（2026-09-05）
 
-- Electron 只订阅 Task 快照/SSE，不提供创建、暂停、取消、删除等控制按钮。
+- Electron 只订阅 Task 状态快照 SSE，不提供创建、暂停、取消、删除等控制按钮。
 - Main Agent 负责创建、查询、问题回答、暂停、恢复、取消、终态删除和重跑；重跑通过正常 create 路径生成新 Task，并保留来源关联。
-- 列表支持 `ownerProfileId`；Main Agent 工具对每次操作重新检查 Profile 所有权。内部 Task REST 保留，Memory 不提供外部管理接口。
+- 状态流要求 `ownerProfileId`；Main Agent 工具对每次操作重新检查 Profile 所有权。Task REST 已删除，Memory 不提供外部管理接口。
 - 模型和工作目录由 Electron settings.json 配置，Python 仅启动时读取。Pi provider 配置写在 AuraBot 专属数据根的 `pi-agent`，不读取用户全局 Pi home。
 - 未配置 Pi 能力仍能启动桌面/Backend 并读取 Task；创建/恢复等需要执行的操作明确不可用。
 - Apply 的 restart prepare 在检查忙碌状态后阻止新 Task 变更与派发；退出旧 Backend 后才启动新进程。

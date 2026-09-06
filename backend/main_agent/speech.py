@@ -10,7 +10,10 @@ v3.2 share process-wide ONNX sessions, verify both model and license assets befo
 ONNX Runtime for sequential single-thread CPU inference; missing optional packages or assets are reported
 as unavailable capabilities rather than preventing a non-speech Backend from importing or starting.
 ``SpeechService`` drains the active RealtimeHub microphone queue and supervises sequential clause delivery;
-it owns only speech resources and never shuts down MainAgentRuntime.
+it serializes microphone processing with turn resets so typed input can reuse speech workers and detectors.
+Static assets are verified on first load, outside the PCM hot path; resetting a turn invalidates old sinks
+before closing STT and never cancels a running VAD thread before resetting its recurrent state.
+It owns only speech resources and never shuts down MainAgentRuntime.
 """
 
 from __future__ import annotations
@@ -59,6 +62,8 @@ class StreamingSttSession(Protocol):
     """One active streaming recognition turn fed with 16 kHz mono PCM16LE bytes."""
 
     async def send_audio(self, pcm16le: bytes) -> None: ...
+
+    async def finish(self) -> None: ...
 
     async def close(self) -> None: ...
 
@@ -396,6 +401,7 @@ class _LazyLocalDetector:
         self._ort_loader = ort_loader or (lambda: importlib.import_module("onnxruntime"))
         self._numpy_loader = numpy_loader or (lambda: importlib.import_module("numpy"))
         self._load_reason: str | None = None
+        self._session: Any | None = None
 
     def status(self) -> SpeechCapabilityStatus:
         if not self.model_path.is_file():
@@ -418,13 +424,19 @@ class _LazyLocalDetector:
         )
 
     def load_session(self) -> Any | None:
+        if self._load_reason is not None:
+            return None
+        if self._session is not None:
+            return self._session
         status = self.status()
         if not status.available:
+            self._load_reason = status.reason
             return None
         key = (self.capability, self.model_path)
         with _ONNX_LOCK:
             if key in _ONNX_SESSIONS:
-                return _ONNX_SESSIONS[key]
+                self._session = _ONNX_SESSIONS[key]
+                return self._session
             try:
                 ort = self._ort_loader()
                 options = ort.SessionOptions()
@@ -443,6 +455,7 @@ class _LazyLocalDetector:
                 self._load_reason = "model_load_failed"
                 return None
             _ONNX_SESSIONS[key] = session
+            self._session = session
             return session
 
 
@@ -632,6 +645,7 @@ class SpeechInputCoordinator:
         self._session: StreamingSttSession | None = None
         self._segment_id: str | None = None
         self._endpoint_task: asyncio.Task[None] | None = None
+        self._eou_work: asyncio.Task[Any] | None = None
         self._endpoint_generation = 0
         self._closed = False
 
@@ -701,7 +715,17 @@ class SpeechInputCoordinator:
         if self._closed:
             return
         self._closed = True
+        await self.reset_input()
+
+    async def reset_input(self) -> None:
+        """Abort the old turn without final transcription, preserving reusable detectors/providers."""
+
+        self._active = False
+        self._segment_id = None
         await self._cancel_endpoint()
+        if self._eou_work is not None:
+            await asyncio.gather(asyncio.shield(self._eou_work), return_exceptions=True)
+            self._eou_work = None
         await self._finish_turn()
 
     async def _start_candidate(self) -> None:
@@ -716,30 +740,36 @@ class SpeechInputCoordinator:
         await self.runtime.vad_start()
         if self.stt_provider is None:
             return
+        segment_id = self._segment_id
+        async def on_transcript(update: TranscriptUpdate) -> None:
+            await self._on_transcript(update, segment_id)
         try:
-            self._session = await self.stt_provider.start(self._on_transcript)
+            self._session = await self.stt_provider.start(on_transcript)
             for frame in tuple(self.pre_roll):
                 await self._session.send_audio(frame)
         except Exception:
             await self._close_stt()
 
-    async def _on_transcript(self, update: TranscriptUpdate) -> None:
-        if self._closed or not self._active or not isinstance(update, TranscriptUpdate) or not update.full_text:
+    async def _on_transcript(self, update: TranscriptUpdate, segment_id: str | None) -> None:
+        if not self._transcript_current(segment_id) or not update.full_text:
             return
         self._has_transcript = True
         if not self._confirmed:
             self._confirmed = True
             await self._playback("speech_confirmed")
-            if self._closed:
+            if not self._transcript_current(segment_id):
                 return
             await self.runtime.confirm_speech()
-        if self._closed:
+        if not self._transcript_current(segment_id):
             return
         await self.runtime.update_transcript(
             update.full_text,
-            segment_id=self._segment_id,
+            segment_id=segment_id,
             request_prepare=True,
         )
+
+    def _transcript_current(self, segment_id: str | None) -> bool:
+        return not self._closed and self._active and segment_id == self._segment_id
 
     async def _resolve_endpoint(self, generation: int) -> None:
         candidate_at = self.clock()
@@ -858,9 +888,14 @@ class SpeechInputCoordinator:
         if self.eou is None:
             return None
         try:
-            value = await asyncio.to_thread(
+            # A timed-out endpoint stops waiting, not its inference thread. Reuse remains serial,
+            # and reset joins this owner before another turn can use the detector.
+            if self._eou_work is not None:
+                await asyncio.shield(self._eou_work)
+            self._eou_work = asyncio.create_task(asyncio.to_thread(
                 self.eou.completion_probability, b"".join(self.audio)
-            )
+            ))
+            value = await asyncio.shield(self._eou_work)
         except Exception:
             return None
         return float(value) if isinstance(value, (int, float)) and not isinstance(value, bool) else None
@@ -878,8 +913,11 @@ class SpeechInputCoordinator:
         if session is None:
             return True
         try:
-            close = getattr(session, "finish", session.close) if finalize else session.close
-            await asyncio.wait_for(close(), _CLEANUP_TIMEOUT_SECONDS)
+            if finalize:
+                await asyncio.wait_for(session.finish(), _CLEANUP_TIMEOUT_SECONDS)
+            else:
+                # The adapter bounds transport.stop itself and joins its cancelled callbacks.
+                await session.close()
         except asyncio.CancelledError:
             # Service shutdown retries this still-owned session after the mic task has stopped.
             raise
@@ -923,7 +961,7 @@ class SpeechInputCoordinator:
         self.audio.clear()
         if self.vad is not None:
             try:
-                await asyncio.to_thread(self.vad.reset)
+                self.vad.reset()
             except Exception:
                 pass
 
@@ -936,6 +974,8 @@ class SpeechService:
         self.coordinator = coordinator
         self.delivery = delivery
         self._mic_task: asyncio.Task[None] | None = None
+        self._input_lock = asyncio.Lock()
+        self._input_generation = 0
         self._closed = False
 
     @classmethod
@@ -950,7 +990,6 @@ class SpeechService:
         eou: Any,
     ) -> "SpeechService":
         delivery = ClauseSpeechDelivery(output_provider, hub.acquire_renderer_port, runtime)
-        runtime.renderer = delivery
         return cls(
             hub,
             SpeechInputCoordinator(
@@ -977,21 +1016,33 @@ class SpeechService:
     async def cancel_current(self, reason: str) -> None:
         await self.delivery.cancel_current(reason)
 
+    async def reset_input(self) -> None:
+        """Join the current PCM operation, then retire capture while keeping both workers alive."""
+
+        async with self._input_lock:
+            self._input_generation += 1
+            self.hub.mic_queue.clear()
+            await self.coordinator.reset_input()
+
     async def shutdown(self) -> None:
         if self._closed:
             return
         self._closed = True
-        task, self._mic_task = self._mic_task, None
-        if task is not None:
-            task.cancel()
-            await asyncio.gather(task, return_exceptions=True)
-        await self.coordinator.close()
+        async with self._input_lock:
+            task, self._mic_task = self._mic_task, None
+            if task is not None:
+                task.cancel()
+                await asyncio.gather(task, return_exceptions=True)
+            await self.coordinator.close()
         await self.delivery.shutdown()
 
     async def _consume_mic(self) -> None:
         while True:
             frame = await self.hub.mic_queue.get()
-            await self.coordinator.accept_mic_frame(frame)
+            generation = self._input_generation
+            async with self._input_lock:
+                if not self._closed and generation == self._input_generation:
+                    await self.coordinator.accept_mic_frame(frame)
 
 
 @dataclass(frozen=True, slots=True)

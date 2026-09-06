@@ -1,6 +1,14 @@
+/** Owns the desktop Profile database and its current profiles/souls schema.
+ * Seeds one active identity, atomically saves persona fields and returns the same Soul projection
+ * used by settings and Pet realtime; business state and migration history live outside this store.
+ */
 import type { PersonaSettings } from "@shared/contracts/personaSettings";
 import type { Profile, Soul } from "@shared/schemas/profile";
-import type { AppDatabase } from "../db";
+import Database from 'better-sqlite3';
+import { mkdirSync } from 'node:fs';
+import { dirname } from 'node:path';
+import { createDefaultProfile } from './soulService';
+import { createPersonaSettingsFromProfile } from '@shared/contracts/personaSettings';
 
 interface ProfileRow {
   id: string;
@@ -25,10 +33,45 @@ interface ProfileRow {
   soul_updated_at: string | null;
 }
 
-export class ProfileRepository {
-  constructor(private readonly database: AppDatabase) {}
+export class ProfileStorage {
+  private readonly database: Database.Database;
+  constructor(filePath: string) {
+    mkdirSync(dirname(filePath), { recursive: true });
+    this.database = new Database(filePath);
+    try {
+      this.database.pragma('foreign_keys = ON');
+      this.database.exec(`
+        create table if not exists profiles (
+          id text primary key, display_name text not null, active integer not null default 0,
+          created_at text not null, updated_at text not null
+        );
+        create table if not exists souls (
+          id text primary key, profile_id text not null unique references profiles(id) on delete cascade,
+          name text not null, persona text not null, tone text not null,
+          proactive_level text not null, principles_json text not null, taboos_json text not null,
+          reminder_style text not null, reply_preference text not null, speaking_style text not null,
+          relationship text not null, boundaries_json text not null, topic_preferences_json text not null,
+          created_at text not null, updated_at text not null
+        );
+      `);
+    } catch (error) { this.database.close(); throw error; }
+  }
 
-  getActiveProfile(): Profile | undefined {
+  close(): void { this.database.close(); }
+
+  getOrSeedActiveProfile(): Profile {
+    const existing = this.getActiveProfile();
+    if (existing) return existing;
+    const { profile, soul } = createDefaultProfile();
+    this.upsertDefaultProfile(profile, soul);
+    return { ...profile, soul };
+  }
+
+  getActivePersonaSettings(): PersonaSettings {
+    return createPersonaSettingsFromProfile(this.getOrSeedActiveProfile());
+  }
+
+  private getActiveProfile(): Profile | undefined {
     const row = this.database
       .prepare(
         `
@@ -64,7 +107,7 @@ export class ProfileRepository {
     return row ? mapProfile(row) : undefined;
   }
 
-  upsertDefaultProfile(profile: Profile, soul: Soul): void {
+  private upsertDefaultProfile(profile: Profile, soul: Soul): void {
     const write = this.database.transaction(() => {
       this.database
         .prepare(
@@ -152,7 +195,10 @@ export class ProfileRepository {
     write();
   }
 
-  updateActivePersonaSettings(profileId: string, settings: PersonaSettings, now: string): Profile | undefined {
+  updateActivePersonaSettings(settings: PersonaSettings): Profile {
+    const profile = this.getOrSeedActiveProfile();
+    const profileId = profile.id;
+    const now = new Date().toISOString();
     const write = this.database.transaction(() => {
       this.database
         .prepare(
@@ -195,7 +241,7 @@ export class ProfileRepository {
           now,
           profileId
         );
-      return this.getActiveProfile();
+      return this.getActiveProfile() ?? profile;
     });
 
     return write();

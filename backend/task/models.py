@@ -89,10 +89,6 @@ class TaskCommandError(TaskRuntimeError):
     """Raised when an internal Task command violates the Control Plane contract."""
 
 
-class TaskRequestError(TaskRuntimeError):
-    """Raised when Task Gateway input cannot be represented by its public schema."""
-
-
 class TaskNotFound(TaskRuntimeError):
     """Raised when a Task is absent or hidden by logical deletion."""
 
@@ -197,7 +193,6 @@ __all__ = [
     "TaskNotFound",
     "TaskPage",
     "TaskRecord",
-    "TaskRequestError",
     "TaskRuntimeError",
     "TaskRuntimeUnavailable",
     "TaskStateConflict",

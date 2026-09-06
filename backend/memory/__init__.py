@@ -1,32 +1,5 @@
-"""Export internal Memory storage and service capabilities consumed by Main Agent.
+"""Provide the Profile-owned Memory module used by Main Agent.
 
-This package exposes no HTTP management router; profile composition owns its lifetime.
+Composition imports concrete storage and extraction adapters directly. Conversation buffering and
+pending archives belong to Main Agent Context; this package owns long-term ingestion and recall only.
 """
-
-from .invode import (
-    HashEmbeddingProvider,
-    MemoryService,
-    QdrantLocalVectorStore,
-    SegmentState,
-    ShortTermMemoryBuffer,
-    ShortTermPolicy,
-    ShortTermStateError,
-    SQLiteMemoryStore,
-    SQLiteShortTermStore,
-    SummaryRequest,
-    create_default_memory_service,
-)
-
-__all__ = [
-    "HashEmbeddingProvider",
-    "MemoryService",
-    "QdrantLocalVectorStore",
-    "SegmentState",
-    "ShortTermMemoryBuffer",
-    "ShortTermPolicy",
-    "ShortTermStateError",
-    "SQLiteMemoryStore",
-    "SQLiteShortTermStore",
-    "SummaryRequest",
-    "create_default_memory_service",
-]

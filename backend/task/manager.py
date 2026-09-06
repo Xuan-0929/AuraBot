@@ -1,7 +1,7 @@
 """提供由单一 owner 管理的本地 Task runtime 与公开命令门面。
 
 TaskManager 自己拥有同步 Store、SQLite FIFO dispatcher、最多五个 TaskRun、Pi handle、
-active clock、recovery、fail-stop 和 SSE 唤醒。Gateway 只调用本类；process.py 负责进程
+active clock、recovery、fail-stop、内部事件回放与 Profile 状态快照唤醒。Gateway 只调用本类；process.py 负责进程
 边界，rpc.py 负责严格 JSONL，其他模块都不保存 Task 运行状态。
 """
 
@@ -66,6 +66,8 @@ class TaskManager:
         self._runs: dict[UUID, TaskRun] = {}
         self._event_condition = asyncio.Condition()
         self._event_revision = 0
+        self._snapshot_condition = asyncio.Condition()
+        self._snapshot_revision = 0
         self._started = False
         self._closing = False
         self.accepting = True
@@ -139,6 +141,8 @@ class TaskManager:
         self._started = False
         async with self._event_condition:
             self._event_condition.notify_all()
+        async with self._snapshot_condition:
+            self._snapshot_condition.notify_all()
 
     async def create_task(self, command: CreateTaskCommand) -> TaskRecord:
         command, working_directory = self._validate_create_command(command)
@@ -189,9 +193,11 @@ class TaskManager:
         self, *, after_row_id: int | None = None, limit: int = 50,
         statuses: Iterable[TaskStatus] | None = None,
         owner_profile_id: str | None = None,
+        include_deleted: bool = False,
     ) -> TaskPage:
         return self._store.list_tasks(
-            after_row_id=after_row_id, limit=limit, statuses=statuses, owner_profile_id=owner_profile_id
+            after_row_id=after_row_id, limit=limit, statuses=statuses, owner_profile_id=owner_profile_id,
+            include_deleted=include_deleted,
         )
 
     async def get_task(
@@ -288,20 +294,41 @@ class TaskManager:
             self._wake.set()
             return queued
 
+    async def current_event_id(self) -> int:
+        return self._store.current_event_id()
+
+    async def iter_status_snapshots(self, owner_profile_id: str) -> AsyncIterator[list[dict[str, str]]]:
+        """Yield current Profile status on connect and meaningful changes, without polling."""
+
+        previous: list[dict[str, str]] | None = None
+        while not self._closing:
+            revision = self._snapshot_revision
+            snapshot = self._store.status_snapshot(owner_profile_id)
+            if snapshot != previous:
+                previous = snapshot
+                yield snapshot
+            async with self._snapshot_condition:
+                await self._snapshot_condition.wait_for(
+                    lambda: revision != self._snapshot_revision or self._closing
+                )
+
     async def iter_events(
         self, after_event_id: int, task_id: UUID | None = None,
+        *, event_types: Iterable[str] | None = None,
     ) -> AsyncIterator[TaskEvent]:
         cursor = after_event_id
-        while True:
+        types = tuple(event_types or ())
+        while not self._closing:
             revision = self._event_revision
-            events = self._store.events_after(cursor, task_id, 200)
+            events = self._store.events_after(cursor, task_id, 200, event_types=types)
             if events:
                 for event in events:
                     cursor = event.event_id
                     yield event
                 continue
-            if self._closing:
-                return
+            # No await separates the empty read and watermark: filtered-out events can
+            # be skipped safely instead of rescanned after every subsequent output chunk.
+            cursor = self._store.current_event_id()
             async with self._event_condition:
                 if revision == self._event_revision and not self._closing:
                     await self._event_condition.wait()
@@ -396,7 +423,7 @@ class TaskManager:
                 current = self._store.get_task(task.id)
                 await self._commit(lambda: self._store.clear_question(
                     task.id, expected_version=current.version
-                ))
+                ), snapshot_changed=False)
         model_failed = False
         async for event in run.pi.rpc.events():
             if event.type == "text_output":
@@ -405,7 +432,7 @@ class TaskManager:
                     async with self._state_lock:
                         await self._commit(lambda text=text: self._store.append_output(
                             task.id, text
-                        ))
+                        ), snapshot_changed=False)
             elif event.type == "extension_ui_request":
                 question = parse_question_request(event.payload)
                 if question is None:
@@ -504,7 +531,9 @@ class TaskManager:
             return run.active_runtime_ms
         return run.active_runtime_ms + max(1, int((time.monotonic() - run.active_started_at) * 1000))
 
-    async def _commit(self, operation: Callable[[], _Result]) -> _Result:
+    async def _commit(
+        self, operation: Callable[[], _Result], *, snapshot_changed: bool = True,
+    ) -> _Result:
         try:
             result = operation()
         except TaskPersistenceError as error:
@@ -515,6 +544,10 @@ class TaskManager:
         async with self._event_condition:
             self._event_revision += 1
             self._event_condition.notify_all()
+        if snapshot_changed:
+            async with self._snapshot_condition:
+                self._snapshot_revision += 1
+                self._snapshot_condition.notify_all()
         return result
 
     def _begin_fail_stop(self, error: BaseException) -> None:

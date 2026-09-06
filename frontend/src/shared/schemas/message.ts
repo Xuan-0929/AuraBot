@@ -4,7 +4,7 @@
  * Renderer 暴露绝对路径、Task 标识或文件操作协议。
  */
 import { z } from "zod";
-import { isoDateStringSchema } from "./memory";
+const isoDateStringSchema = z.string().datetime({ offset: true });
 
 export const messageRoleSchema = z.enum(["user", "assistant", "system", "tool"]);
 

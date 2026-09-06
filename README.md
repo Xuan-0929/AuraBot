@@ -48,7 +48,7 @@ Electron Main 是唯一 Backend 进程 owner；开发入口启动 Electron/Vite�
 ## 配置、数据与验证
 
 - “保存”只写 JSON。“应用”使已保存设置生效；Backend 或人格变更先检查忙碌状态，经用户明确确认后才中断工作并重启。新 Backend 健康且版本匹配后才标记已应用。
-- 桌面交付历史位于独立的 `conversation-history.sqlite3`，按游标分页。Profile、Context、Memory 和 Task 各自拥有存储；桌面历史不会回灌 Main Agent。
+- 桌面交付历史位于独立的 `conversation-history.sqlite3`，按游标分页。ProfileStorage 仅保存身份/已应用人格，Context 的 Task 最新事实单独去重；Context、Memory 和 Task 各自拥有存储；桌面历史不会回灌 Main Agent。
 - 本轮使用全新运行数据，不迁移旧配置或数据库。数据重置只针对枚举确认的 AuraBot 专属旧数据，保留源码、模型资产、缓存和共享第三方数据。
 
 本地检查入口：
@@ -69,3 +69,6 @@ npm run build
 ~~~
 
 自动测试不等于真实麦克风、音频设备、STT/TTS 或模型 Provider 验收。实际验证结果与限制以 [本轮集成记录](docs/frontend-integration-work.md) 为准；语音安装见 [语音资产](docs/main-agent-speech-assets.md)，完整索引见 [文档](docs/README.md)。
+
+2026-09-06 架构优化：旧 Electron 业务与 Python ShortTerm 实现已退役；Task 只对外提供状态 SSE。
+实现和验证见 [架构优化记录](docs/architecture-optimization.md)。

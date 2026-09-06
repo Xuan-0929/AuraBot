@@ -6,6 +6,8 @@ every replaceable voice session, and keeps an existing same-Profile Runtime aliv
 next-invoke Soul. Switching first clears the old Hub session, then closes Runtime, Speech, Memory,
 Context/provider/tool resources before composing the new Profile. Memory is the existing Profile-scoped
 ``MemoryService``; lifecycle exposes no second browse/job/retry surface and dormant Profiles own nothing.
+ProfileResources alone stores the lazy Speech owner; RealtimeHub reads that owner and requests its
+start/stop operations without maintaining a second resource reference.
 """
 
 from __future__ import annotations
@@ -32,12 +34,35 @@ class ProfileResources:
     memory: Any
     closeables: tuple[Any, ...] = ()
     generation: int = 0
+    speech_factory: Callable[[], Any] | None = None
+
+    async def start_speech(self) -> None:
+        """Open speech lazily for an explicitly activated voice session."""
+
+        if self.speech is not None:
+            return
+        if self.speech_factory is None:
+            raise RuntimeError("speech_unavailable")
+        speech = self.speech_factory()
+        try:
+            await speech.startup()
+        except BaseException:
+            await speech.shutdown()
+            raise
+        self.speech = speech
+
+    async def stop_speech(self) -> None:
+        """Close the one Speech owner before another session can start it."""
+
+        speech, self.speech = self.speech, None
+        if speech is not None:
+            await speech.shutdown()
 
     async def shutdown(self) -> None:
         """Close active work before storage and network adapters in deterministic ownership order."""
 
         await _close(self.runtime)
-        await _close(self.speech)
+        await self.stop_speech()
         await _close(self.memory)
         for owner in self.closeables:
             await _close(owner)
@@ -84,7 +109,7 @@ class ActiveProfileManager:
                 await current.runtime.update_soul(effective_soul)
                 current.generation = generation
                 await self.hub.set_active(
-                    identifier, generation, current.runtime, current.speech
+                    identifier, generation, current
                 )
                 return generation
             if current is not None:
@@ -100,7 +125,7 @@ class ActiveProfileManager:
                     raise RuntimeError("Profile factory returned a mismatched identity")
                 resources.generation = generation
                 await self.hub.set_active(
-                    identifier, generation, resources.runtime, resources.speech
+                    identifier, generation, resources
                 )
             except BaseException:
                 if resources is not None:
@@ -132,12 +157,6 @@ class ActiveProfileManager:
         if not isinstance(profile_id, str) or _PROFILE_ID.fullmatch(profile_id) is None:
             raise ValueError("profile_id is invalid")
         return profile_id
-
-    def _require_active(self, profile_id: str) -> ProfileResources:
-        identifier = self.validate_profile_id(profile_id)
-        if self._active is None or self._active.profile_id != identifier:
-            raise RuntimeError("profile_not_active")
-        return self._active
 
 
 async def _close(owner: Any) -> None:

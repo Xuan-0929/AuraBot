@@ -1,6 +1,6 @@
 """公开 AuraBot Task runtime 的 Manager 门面、产品模型和领域错误。
 
-Gateway 只从本包取得 TaskManager 与公共模型；Store、process 和 RPC 是 Manager 的
+Main Agent 从本包取得 Manager 与产品模型，Gateway 只消费状态快照；Store、process 和 RPC 是 Manager 的
 内部实现，不通过包边界暴露持久化或 Pi 协议细节。
 """
 
@@ -13,7 +13,6 @@ from .models import (
     TaskNotFound,
     TaskPage,
     TaskRecord,
-    TaskRequestError,
     TaskRuntimeUnavailable,
     TaskStateConflict,
     TaskStatus,
@@ -29,7 +28,6 @@ __all__ = [
     "TaskNotFound",
     "TaskPage",
     "TaskRecord",
-    "TaskRequestError",
     "TaskRuntimeUnavailable",
     "TaskStateConflict",
     "TaskStatus",

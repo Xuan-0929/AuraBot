@@ -11,23 +11,14 @@ import type {
   AppInitialState,
   SendChatMessageResult
 } from "@shared/contracts/chat";
-import type { BackendStatus } from "@shared/contracts/backend";
 import type { Live2DModelState } from "@shared/contracts/live2dModel";
 import type { PetCursorPosition } from "@shared/contracts/ipc";
 import type { NotificationSettings } from "@shared/contracts/notificationSettings";
 import type { PetActivity } from "@shared/contracts/pet";
-import type {
-  ModelProviderSettingsPatch,
-  ModelRoleKey,
-  ProactiveSettingsPatch,
-  PublicAppConfig,
-  PublicModelHealthMap
-} from "@shared/contracts/settings";
 import type { Message } from "@shared/schemas/message";
 import {
   DEFAULT_PET_SETTINGS,
-  type PetSettings,
-  type PetSettingsPatch
+  type PetSettings
 } from "@shared/schemas/petSettings";
 import type { Profile } from "@shared/schemas/profile";
 
@@ -42,9 +33,6 @@ interface AuraBotState {
   chatError?:string;
   agentStatus: AgentStatus;
   petSettings: PetSettings;
-  appConfig?: PublicAppConfig;
-  modelHealth?: PublicModelHealthMap;
-  backendStatus?: BackendStatus;
   live2dModelState?: Live2DModelState;
   notificationSettings?: NotificationSettings;
   petActivity?: PetActivity;

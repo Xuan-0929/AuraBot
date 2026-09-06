@@ -1,441 +1,111 @@
-"""
-验证版本化 Task REST/SSE Gateway 只暴露 AuraBot 业务模型。
+"""Verify the desktop Task gateway exposes only Profile-scoped status snapshots.
 
-测试注入具体内存 FakeTaskManager 检查输入映射、camelCase 输出、乐观并发错误、SSE
-cursor 与 lifespan；创建请求只传 workspaceId/ownerProfileId/idempotencyKey，绝不传
-客户端 cwd。fake 不持有 subprocess，进程和持久化行为由 task 子目录测试覆盖。
+A finite snapshot source exercises the actual FastAPI route, required Profile selection, SSE payload,
+keepalive and removed REST surface. Manager/store tests cover durable state and notification behavior.
 """
 
 from __future__ import annotations
 
 import asyncio
-import os
-import sys
-import tempfile
+import json
 import unittest
-from dataclasses import replace
-from datetime import UTC, datetime
-from pathlib import Path
 from unittest.mock import patch
-from uuid import UUID
 
+from fastapi import FastAPI
 from fastapi.testclient import TestClient
+from starlette.requests import Request
 
-os.environ.setdefault(
-    "AURABOT_CONFIG_PATH",
-    str(Path(__file__).parent / "fixtures" / "runtime_config.json"),
-)
-
-from backend.main import create_app
-from backend.task.models import (
-    CreateTaskCommand,
-    TaskEvent,
-    TaskPage,
-    TaskRecord,
-    TaskStateConflict,
-    TaskStatus,
-    TaskVersionConflict,
-)
-from backend.task.process import TaskSessionCleanupError
-from backend.task.manager import TaskManager
-from backend.task.settings import TaskSettings
-from backend.main_agent.settings import WorkspaceRegistry
+from backend.app.gateway.task_routes import router, task_events
 
 
-def task_record(status: TaskStatus = TaskStatus.QUEUED) -> TaskRecord:
-    now = datetime(2026, 8, 20, 12, 0, tzinfo=UTC)
-    return TaskRecord(
-        id=UUID("00000000-0000-4000-8000-000000000001"),
-        row_id=1,
-        title="Fix login",
-        prompt="Run tests and fix login.",
-        working_directory=Path("/tmp/project"),
-        workspace_id="project",
-        owner_profile_id="profile-1",
-        idempotency_key="request-1",
-        status=status,
-        timeout_seconds=1800,
-        active_runtime_ms=0,
-        question_id=UUID("00000000-0000-4000-8000-000000000002"),
-        question_text="private question",
-        question_options=("private option",),
-        question_answer=None,
-        result_text=None,
-        error_code=None,
-        error_message=None,
-        pause_reason=None,
-        rerun_of_task_id=None,
-        version=1,
-        created_at=now,
-        updated_at=now,
-        started_at=None,
-        finished_at=None,
-        deleted_at=None,
-    )
+class SnapshotManager:
+    def __init__(self):
+        self.profile = None
+        self.delay = 0
+        self.closed = False
+        self.waiting = asyncio.Event()
+
+    async def iter_status_snapshots(self, owner_profile_id):
+        self.profile = owner_profile_id
+        try:
+            yield [{"id": "task-1", "title": "Fix login", "status": "queued"}]
+            self.waiting.set()
+            await asyncio.sleep(self.delay)
+            yield [{"id": "task-1", "title": "Fix login", "status": "completed"}]
+        finally:
+            self.closed = True
 
 
-class FakeTaskManager:
-    def __init__(self) -> None:
-        self.task = task_record()
-        self.created_command: CreateTaskCommand | None = None
-        self.started = False
-        self.stopped = False
-        self.after_event_id: int | None = None
-        self.event_filter: UUID | None = None
-        self.raise_state_conflict = False
-        self.raise_unexpected = False
-        self.raise_cleanup = False
-        self.event_delay = 0.0
+def application(manager):
+    app = FastAPI()
+    app.state.task_manager = manager
+    app.include_router(router)
+    return app
 
-    async def startup(self) -> None:
-        self.started = True
-
-    async def shutdown(self) -> None:
-        self.stopped = True
-
-    async def create_task(self, command: CreateTaskCommand) -> TaskRecord:
-        if self.raise_unexpected:
-            raise RuntimeError("secret stack detail")
-        self.created_command = command
-        return self.task
-
-    async def list_tasks(self, **_kwargs) -> TaskPage:
-        return TaskPage(items=(self.task,), next_cursor=None)
-
-    async def get_task(self, _task_id: UUID, include_deleted: bool = False) -> TaskRecord:
-        del include_deleted
-        return self.task
-
-    async def pause_task(self, _task_id: UUID, expected_version: int) -> TaskRecord:
-        if expected_version != self.task.version:
-            raise TaskVersionConflict(expected_version, self.task.version)
-        self.task = replace(self.task, status=TaskStatus.PAUSED, version=2)
-        return self.task
-
-    async def resume_task(self, _task_id: UUID, expected_version: int) -> TaskRecord:
-        if self.raise_state_conflict:
-            raise TaskStateConflict(TaskStatus.RUNNING, TaskStatus.QUEUED)
-        if expected_version != self.task.version:
-            raise TaskVersionConflict(expected_version, self.task.version)
-        return self.task
-
-    async def cancel_task(self, _task_id: UUID, expected_version: int) -> TaskRecord:
-        if expected_version != self.task.version:
-            raise TaskVersionConflict(expected_version, self.task.version)
-        self.task = replace(self.task, status=TaskStatus.CANCELLED, version=2)
-        return self.task
-
-    async def delete_task(self, _task_id: UUID) -> None:
-        if self.raise_cleanup:
-            raise TaskSessionCleanupError("session cleanup failed")
-        return None
-
-    async def iter_events(self, after_event_id: int, task_id: UUID | None = None):
-        self.after_event_id = after_event_id
-        self.event_filter = task_id
-        if self.event_delay:
-            await asyncio.sleep(self.event_delay)
-        yield TaskEvent(
-            event_id=382,
-            task_sequence=7,
-            task_id=self.task.id,
-            type="task.status_changed",
-            occurred_at=self.task.updated_at,
-            payload={"from": "running", "to": "completed"},
-        )
 
 class TaskGatewayTests(unittest.TestCase):
-    def setUp(self):
-        self.manager = FakeTaskManager()
-        self.client_context = TestClient(create_app(task_manager=self.manager))
-        self.client = self.client_context.__enter__()
-
-    def tearDown(self):
-        self.client_context.__exit__(None, None, None)
-
-    def test_lifespan_and_health_contract(self):
-        self.assertTrue(self.manager.started)
-        self.assertEqual(
-            self.client.get("/health").json(), {"ok": True, "service": "backend"}
-        )
-        self.client_context.__exit__(None, None, None)
-        self.assertTrue(self.manager.stopped)
-        self.client_context = TestClient(create_app(task_manager=FakeTaskManager()))
-        self.client = self.client_context.__enter__()
-
-    def test_create_maps_camel_case_workspace_and_hides_internal_fields(self):
-        response = self.client.post(
-            "/api/v1/tasks",
-            json={
-                "title": "Fix login",
-                "prompt": "Run tests and fix login.",
-                "workspaceId": "project",
-                "ownerProfileId": "profile-1",
-                "idempotencyKey": "request-1",
-                "timeoutSeconds": 1800,
-                "rerunOfTaskId": None,
-            },
-        )
-
-        self.assertEqual(response.status_code, 201)
-        body = response.json()
-        self.assertEqual(body["workspaceId"], "project")
-        self.assertEqual(body["ownerProfileId"], "profile-1")
-        self.assertEqual(body["activeRuntimeMs"], 0)
-        self.assertEqual(body["status"], "queued")
-        self.assertNotIn("piSessionId", body)
-        self.assertNotIn("piSessionPath", body)
-        self.assertNotIn("pendingQuestion", body)
-        self.assertEqual(self.manager.created_command.workspace_id, "project")
-        self.assertEqual(self.manager.created_command.owner_profile_id, "profile-1")
-        self.assertEqual(self.manager.created_command.idempotency_key, "request-1")
-        self.assertNotIn("workingDirectory", body)
-
-    def test_create_omits_timeout_and_forwards_manager_validated_bounds(self):
-        omitted = self.client.post(
-            "/api/v1/tasks",
-            json={
-                "title": "x", "prompt": "y", "workspaceId": "project",
-                "ownerProfileId": "profile-1", "idempotencyKey": "request-2",
-            },
-        )
-        self.assertEqual(omitted.status_code, 201)
-        self.assertIsNone(self.manager.created_command.timeout_seconds)
-
-        null = self.client.post(
-            "/api/v1/tasks",
-            json={
-                "title": "x", "prompt": "y", "workspaceId": "project",
-                "ownerProfileId": "profile-1", "idempotencyKey": "request-null",
-                "timeoutSeconds": None,
-            },
-        )
-        self.assertEqual(null.status_code, 422)
-
-        for value in (0, -1, 86_401):
-            with self.subTest(value=value):
-                response = self.client.post(
-                    "/api/v1/tasks",
-                    json={
-                        "title": "x", "prompt": "y",
-                        "workspaceId": "project",
-                        "ownerProfileId": "profile-1",
-                        "idempotencyKey": f"request-{value}",
-                        "timeoutSeconds": value,
-                    },
-                )
-                self.assertEqual(response.status_code, 201)
-                self.assertEqual(self.manager.created_command.timeout_seconds, value)
-
-    def test_create_rejects_client_controlled_working_directory(self):
-        response = self.client.post(
-            "/api/v1/tasks",
-            json={
-                "title": "x",
-                "prompt": "y",
-                "workspaceId": "project",
-                "ownerProfileId": "profile-1",
-                "idempotencyKey": "request-3",
-                "workingDirectory": "/tmp/project",
-                "timeoutSeconds": 1800,
-            },
-        )
-        self.assertEqual(response.status_code, 422)
-
-    def test_real_manager_rejects_missing_or_unknown_workspace_at_rest_boundary(self):
-        with tempfile.TemporaryDirectory() as directory:
-            root = Path(directory)
-            workspace = root / "project"
-            workspace.mkdir()
-            manager = TaskManager(
-                TaskSettings(
-                    database_path=root / "task.sqlite3",
-                    session_root=root / "sessions",
-                    pi_home=root / "pi-home",
-                    node_executable=sys.executable,
-                    pi_cli_path=root / "missing-cli.py",
-                    plugin_entry_path=root / "plugin.ts",
-                    system_prompt_path=root / "prompt.md",
-                    default_timeout_seconds=1800,
-                    workspace_registry=WorkspaceRegistry({"project": workspace.resolve()}),
-                )
+    def test_snapshot_contract_requires_profile_and_exposes_only_title_status(self):
+        manager = SnapshotManager()
+        with TestClient(application(manager)) as client:
+            self.assertEqual(client.get("/api/v1/task-events").status_code, 422)
+            self.assertEqual(client.get("/api/v1/task-events?ownerProfileId=").status_code, 422)
+            response = client.get(
+                "/api/v1/task-events?ownerProfileId=profile-a",
+                headers={"Last-Event-ID": "irrelevant-old-cursor"},
             )
-            with TestClient(create_app(task_manager=manager)) as client:
-                missing = client.post(
-                    "/api/v1/tasks",
-                    json={
-                        "title": "x", "prompt": "y", "ownerProfileId": "profile-1",
-                        "idempotencyKey": "missing-workspace",
-                    },
-                )
-                unknown = client.post(
-                    "/api/v1/tasks",
-                    json={
-                        "title": "x", "prompt": "y", "workspaceId": "unknown",
-                        "ownerProfileId": "profile-1", "idempotencyKey": "unknown-workspace",
-                    },
-                )
-
-        self.assertEqual(missing.status_code, 422)
-        self.assertEqual(unknown.status_code, 400)
-        self.assertEqual(unknown.json()["error"]["code"], "invalid_task_request")
-
-    def test_list_get_pause_cancel_and_delete_contracts(self):
-        listed = self.client.get("/api/v1/tasks?limit=20")
-        fetched = self.client.get(f"/api/v1/tasks/{self.manager.task.id}")
-        paused = self.client.post(
-            f"/api/v1/tasks/{self.manager.task.id}/pause",
-            json={"expectedVersion": 1},
-        )
-        resumed = self.client.post(
-            f"/api/v1/tasks/{self.manager.task.id}/resume",
-            json={"expectedVersion": 2},
-        )
-        cancelled = self.client.post(
-            f"/api/v1/tasks/{self.manager.task.id}/cancel",
-            json={"expectedVersion": 2},
-        )
-        deleted = self.client.delete(f"/api/v1/tasks/{self.manager.task.id}")
-
-        self.assertEqual(listed.status_code, 200)
-        self.assertEqual(listed.json()["items"][0]["id"], str(self.manager.task.id))
-        self.assertEqual(fetched.status_code, 200)
-        self.assertEqual(paused.json()["status"], "paused")
-        self.assertEqual(cancelled.json()["status"], "cancelled")
-        self.assertEqual(deleted.status_code, 204)
-        for response in (
-            listed.json()["items"][0],
-            fetched.json(),
-            paused.json(),
-            resumed.json(),
-            cancelled.json(),
-        ):
-            self.assertNotIn("pendingQuestion", response)
-
-    def test_version_and_state_conflicts_use_stable_error_envelope(self):
-        stale = self.client.post(
-            f"/api/v1/tasks/{self.manager.task.id}/pause",
-            json={"expectedVersion": 99},
-        )
-        self.manager.raise_state_conflict = True
-        state = self.client.post(
-            f"/api/v1/tasks/{self.manager.task.id}/resume",
-            json={"expectedVersion": 1},
-        )
-
-        self.assertEqual(stale.status_code, 409)
-        self.assertEqual(stale.json()["error"]["code"], "task_version_conflict")
-        self.assertEqual(state.status_code, 409)
-        self.assertEqual(state.json()["error"]["code"], "task_state_conflict")
-        self.assertEqual(state.json()["error"]["details"], {})
-
-    def test_delete_cleanup_failure_is_not_reported_as_204_and_can_retry(self):
-        self.manager.raise_cleanup = True
-        with TestClient(
-            create_app(task_manager=self.manager), raise_server_exceptions=False
-        ) as client:
-            failed = client.delete(f"/api/v1/tasks/{self.manager.task.id}")
-            self.manager.raise_cleanup = False
-            retried = client.delete(f"/api/v1/tasks/{self.manager.task.id}")
-
-        self.assertEqual(failed.status_code, 500)
-        self.assertEqual(failed.json()["error"]["code"], "internal_error")
-        self.assertEqual(retried.status_code, 204)
-
-    def test_unexpected_gateway_failure_is_sanitized(self):
-        manager = FakeTaskManager()
-        manager.raise_unexpected = True
-        with TestClient(
-            create_app(task_manager=manager), raise_server_exceptions=False
-        ) as client:
-            response = client.post(
-                "/api/v1/tasks",
-                json={
-                    "title": "Fix login",
-                    "prompt": "Run tests.",
-                    "workspaceId": "project",
-                    "ownerProfileId": "profile-1",
-                    "idempotencyKey": "request-4",
-                    "timeoutSeconds": 1800,
-                },
-            )
-
-        self.assertEqual(response.status_code, 500)
-        self.assertEqual(response.json()["error"]["code"], "internal_error")
-        self.assertNotIn("secret stack detail", response.text)
-        self.assertEqual(
-            response.json()["error"]["message"],
-            "Backend request failed internally.",
-        )
-
-    def test_non_task_value_error_uses_backend_generic_500(self):
-        application = create_app(task_manager=FakeTaskManager())
-
-        @application.get("/test/value-error")
-        async def value_error_route():
-            raise ValueError("private non-task detail")
-
-        with TestClient(application, raise_server_exceptions=False) as client:
-            response = client.get("/test/value-error")
-        self.assertEqual(response.status_code, 500)
-        self.assertEqual(response.json()["error"]["code"], "internal_error")
-        self.assertNotIn("private non-task detail", response.text)
-        self.assertNotEqual(response.json()["error"]["code"], "invalid_task_request")
-
-    def test_sse_uses_last_event_id_and_business_envelope(self):
-        with self.client.stream(
-            "GET",
-            f"/api/v1/task-events?taskId={self.manager.task.id}",
-            headers={"Last-Event-ID": "381"},
-        ) as response:
-            body = "".join(response.iter_text())
-
         self.assertEqual(response.status_code, 200)
-        self.assertEqual(self.manager.after_event_id, 381)
-        self.assertEqual(self.manager.event_filter, self.manager.task.id)
-        self.assertIn("id: 382", body)
-        self.assertIn("event: task.status_changed", body)
-        self.assertIn('"taskSequence":7', body)
-        self.assertNotIn("private-session", body)
+        self.assertEqual(manager.profile, "profile-a")
+        blocks = response.text.strip().split("\n\n")
+        self.assertEqual(len(blocks), 2)
+        for block in blocks:
+            event, data = block.split("\n")
+            self.assertEqual(event, "event: task.snapshot")
+            payload = json.loads(data.removeprefix("data: "))
+            self.assertEqual(set(payload), {"tasks"})
+            self.assertEqual(set(payload["tasks"][0]), {"id", "title", "status"})
+        self.assertNotIn("id:", response.text)
+        self.assertTrue(manager.closed)
 
-    def test_sse_rejects_invalid_or_negative_last_event_id_as_task_request(self):
-        for value in ("not-an-int", "-1"):
-            with self.subTest(value=value):
-                response = self.client.get(
-                    "/api/v1/task-events", headers={"Last-Event-ID": value}
-                )
-                self.assertEqual(response.status_code, 400)
-                self.assertEqual(
-                    response.json()["error"]["code"], "invalid_task_request"
-                )
+    def test_keepalive_does_not_cancel_the_pending_snapshot(self):
+        manager = SnapshotManager()
+        manager.delay = 0.03
+        with patch("backend.app.gateway.task_routes.SSE_KEEPALIVE_SECONDS", 0.01):
+            with TestClient(application(manager)) as client:
+                response = client.get("/api/v1/task-events?ownerProfileId=profile-a")
+        self.assertIn(": keepalive", response.text)
+        self.assertIn('"status":"completed"', response.text)
+        self.assertTrue(manager.closed)
 
-    def test_sse_keepalive_does_not_cancel_pending_database_event(self):
-        self.manager.event_delay = 0.03
-        with patch(
-            "backend.app.gateway.task_routes.SSE_KEEPALIVE_SECONDS",
-            0.01,
-        ):
-            with self.client.stream("GET", "/api/v1/task-events") as response:
-                body = "".join(response.iter_text())
+    def test_only_snapshot_route_remains_and_removed_control_routes_return_404(self):
+        with TestClient(application(SnapshotManager())) as client:
+            document = client.get("/openapi.json").json()
+            self.assertEqual(set(document["paths"]), {"/api/v1/task-events"})
+            for method, path in (
+                ("GET", "/api/v1/tasks"), ("POST", "/api/v1/tasks"),
+                ("GET", "/api/v1/tasks/task-1"), ("POST", "/api/v1/tasks/task-1/pause"),
+                ("POST", "/api/v1/tasks/task-1/resume"), ("POST", "/api/v1/tasks/task-1/cancel"),
+                ("DELETE", "/api/v1/tasks/task-1"),
+            ):
+                with self.subTest(method=method, path=path):
+                    self.assertEqual(client.request(method, path).status_code, 404)
+            parameters = document["paths"]["/api/v1/task-events"]["get"]["parameters"]
+            self.assertEqual([item["name"] for item in parameters], ["ownerProfileId"])
+            self.assertTrue(parameters[0]["required"])
 
-        self.assertIn(": keepalive", body)
-        self.assertIn("id: 382", body)
 
-    def test_openapi_has_only_versioned_task_surface(self):
-        document = self.client.get("/openapi.json").json()
-        paths = document["paths"]
-        self.assertIn("/api/v1/tasks", paths)
-        self.assertIn("/api/v1/tasks/{task_id}", paths)
-        self.assertIn("/api/v1/task-events", paths)
-        self.assertNotIn("/task", paths)
-        self.assertNotIn("/task/events", paths)
-        self.assertNotIn("/tool/plan", paths)
-        self.assertNotIn("/api/v1/tasks/{task_id}/answer", paths)
-        request_schema = document["components"]["schemas"]["CreateTaskRequest"]
-        timeout_schema = request_schema["properties"]["timeoutSeconds"]
-        self.assertNotEqual(timeout_schema.get("default"), 1800)
-        status_values = document["components"]["schemas"]["TaskStatus"]["enum"]
-        self.assertEqual(
-            status_values,
-            ["queued", "running", "waiting", "paused", "completed", "failed", "cancelled"],
-        )
+class TaskGatewayDisconnectTests(unittest.IsolatedAsyncioTestCase):
+    async def test_disconnect_closes_the_pending_snapshot_iterator(self):
+        manager = SnapshotManager()
+        manager.delay = 30
+        app = application(manager)
+        request = Request({"type": "http", "app": app})
+        response = await task_events(request, "profile-a")
+        stream = response.body_iterator
+        self.assertIn("task.snapshot", await anext(stream))
+        pending = asyncio.create_task(anext(stream))
+        await manager.waiting.wait()
+        pending.cancel()
+        with self.assertRaises(asyncio.CancelledError):
+            await pending
+        await stream.aclose()
+        self.assertTrue(manager.closed)

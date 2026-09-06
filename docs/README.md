@@ -1,6 +1,6 @@
 # AuraBot 文档
 
-当前产品、启动与接口文档以 2026-09-05 桌面集成为基准。历史设计不得覆盖下列当前契约。
+当前产品、启动与接口文档以 2026-09-06 架构收敛为基准。历史设计不得覆盖下列当前契约。
 
 | 文档 | 信息所有权 |
 | --- | --- |
@@ -10,6 +10,7 @@
 | [后端契约](backend-runtime-contract.md) | text/voice realtime、交付回执、readiness 与重启协议。 |
 | [Pi Task Runtime](modules/task-agent.md) | Task 状态机、Pi 控制面与执行面。 |
 | [语音资产](main-agent-speech-assets.md) | 可选依赖、模型和许可证安装。 |
+| [架构优化记录](architecture-optimization.md) | 本轮架构变化、工作量对照、检查与真实设备验收边界。 |
 | [当前状态](aurabot-development-status.md) | 集成范围与尚未验证的边界。 |
 | [本轮集成记录](frontend-integration-work.md) | 已批准要求、实际测试/桌面检查及剩余工作。 |
 | [Windows 适配](windows-platform-adaptation.md) | 平台与生产打包限制。 |

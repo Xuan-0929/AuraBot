@@ -20,6 +20,8 @@ os.environ.setdefault(
 
 from backend.main import create_app
 from backend.main_agent.metrics import LifecycleMetrics
+from backend.main_agent.lifecycle import ProfileResources
+from backend.tests.test_main_agent_realtime import FakeRuntime
 from backend.main_agent.realtime import RealtimeHub
 
 
@@ -47,7 +49,7 @@ class Profiles:
     async def activate(self, profile_id: str, soul: str) -> int:
         self.calls.append(f"activate:{profile_id}:{soul}")
         self.active_profile_id = profile_id
-        await self.hub.set_active(profile_id, 1, SimpleNamespace(), object())
+        await self.hub.set_active(profile_id, 1, ProfileResources(profile_id, FakeRuntime(), None, None))
         return 1
 
     async def shutdown(self) -> None:

@@ -30,7 +30,7 @@ class Hub:
         self.active_profile_id = None
         self.active_generation = 0
 
-    async def set_active(self, profile_id, generation, runtime, speech):
+    async def set_active(self, profile_id, generation, resources):
         self.calls.append(f"hub:set:{profile_id}:{generation}")
         self.active_profile_id = profile_id
         self.active_generation = generation

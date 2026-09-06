@@ -175,6 +175,17 @@ key、chunk boundary 和最终 `json.loads` 校验。其他工具等待完整 ar
 - Task 工具通过 TaskBridge fresh-read owner/version；三秒 proposal 在 TaskManager 接受前可被
   barge-in 或 Profile switch 取消，接受后才成为 durable fact。
 
+## 2026-09-06 内部实现收敛
+
+TaskOperations 接管三秒提案、冻结恢复、已接管控制与 Task 事实同步；Runtime 保留输入/grant
+和声学产品语义。Task 最新事实进入 Context 专表，版本去重不做完整 fold。启动先完成当前
+记录对齐再接收工作；投影失败报告一次，无无限重试。旧 ShortTerm 实现和兼容 façade 已删除。
+
+Speech 由 ProfileResources 唯一持有，Hub 不双写。文字打断取消旧 TTS、reset 当前采集，
+保留语音模式和 worker。reset 废弃旧帧/旧 sink，并结清推理线程后复用 detector。静态许可证
+不再逐帧读取。EOU 时限、VAD 候选暂停/误报恢复/确认取消、PREPARE/RESPOND/CONTINUE、
+StrongPause 和 ACK 交付规则均保留。`PendingTrigger.min_context_version` 未被消费，已删除。
+
 ## 5. 极简 realtime 协议
 
 subprotocol 仍为首个未发布的 `aurabot.main-agent.v1`，不兼容旧 wire。

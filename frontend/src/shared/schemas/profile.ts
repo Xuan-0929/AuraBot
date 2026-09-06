@@ -1,5 +1,6 @@
+/** Validates the current desktop identity and Soul shared by Profile storage, settings and realtime. */
 import { z } from "zod";
-import { isoDateStringSchema } from "./memory";
+const isoDateStringSchema = z.string().datetime({ offset: true });
 
 export const soulSchema = z.object({
   id: z.string().min(1),

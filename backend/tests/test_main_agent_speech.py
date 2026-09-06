@@ -13,7 +13,7 @@ import threading
 import unittest
 from pathlib import Path
 from typing import Any
-from unittest.mock import AsyncMock
+from unittest.mock import AsyncMock, patch
 
 from backend.main_agent import ContextStore, SnapshotProjector
 from backend.main_agent.runtime import MainAgentRuntime, PrepareAdmissionPolicy, RendererClause
@@ -23,6 +23,7 @@ from backend.main_agent.speech import (
     DashScopeStreamingSttProvider,
     SpeechInputCoordinator,
     SpeechService,
+    SileroVadDetector,
     TranscriptUpdate,
 )
 from backend.main_agent.tool_runtime import InvokeMode, ToolSurfacePolicy
@@ -92,6 +93,9 @@ class FakeSttSession:
 
     async def close(self) -> None:
         return None
+
+    async def finish(self) -> None:
+        await self.close()
 
 
 class FakeStt:
@@ -170,45 +174,44 @@ class SpeechInputTests(unittest.IsolatedAsyncioTestCase):
         await session.close()
         self.assertTrue(transports[0].stopped)
 
-    async def test_shutdown_during_candidate_close_cancels_mic_and_finishes_cleanup(self) -> None:
+    async def test_shutdown_joins_real_stt_close_before_retiring_microphone(self) -> None:
         from types import SimpleNamespace
         from backend.main_agent.realtime import RealtimeHub
-        entered = asyncio.Event()
-        class InterruptedSession(FakeSttSession):
-            calls = 0
-            stopped = False
-            async def close(self):
-                self.calls += 1
-                if self.calls == 1:
-                    entered.set()
-                    await asyncio.Event().wait()
+        entered, release = threading.Event(), threading.Event()
+        transports = []
+        class ClosingTransport(FakeDashScopeSttTransport):
+            def stop(self):
+                entered.set()
+                release.wait(1)
                 self.stopped = True
-        class Stt:
-            session = None
-            async def start(self, sink):
-                self.session = InterruptedSession(sink)
-                return self.session
-        stt, hub = Stt(), RealtimeHub()
-        coordinator = SpeechInputCoordinator(FakeInputRuntime(), stt_provider=stt,
+        def factory(**kwargs):
+            transport = ClosingTransport(kwargs["on_event"])
+            transports.append(transport)
+            return transport
+        hub = RealtimeHub()
+        coordinator = SpeechInputCoordinator(FakeInputRuntime(),
+            stt_provider=DashScopeStreamingSttProvider("test", transport_factory=factory),
             vad=FakeVad([1.0, 0.0]), vad_stop_ms=20)
-        delivery = SimpleNamespace(startup=AsyncMock(), shutdown=AsyncMock())
-        service = SpeechService(hub, coordinator, delivery)
+        service = SpeechService(hub, coordinator, SimpleNamespace(startup=AsyncMock(), shutdown=AsyncMock()))
         await service.startup()
         mic = service._mic_task
-        hub.mic_queue.put(b"\0" * 640)
-        hub.mic_queue.put(b"\0" * 640)
-        await entered.wait()
-        closing = asyncio.create_task(service.shutdown())
+        closing = None
         try:
-            await asyncio.wait_for(asyncio.shield(closing), .5)
+            hub.mic_queue.put(b"\0" * 640)
+            hub.mic_queue.put(b"\0" * 640)
+            self.assertTrue(await asyncio.to_thread(entered.wait, 1))
+            closing = asyncio.create_task(service.shutdown())
+            await asyncio.sleep(.01)
+            self.assertFalse(closing.done())
+            release.set()
+            await closing
             self.assertTrue(mic.done())
-            self.assertTrue(stt.session.stopped)
-            self.assertEqual(stt.session.calls, 2)
+            self.assertTrue(transports[0].stopped)
         finally:
-            if not mic.done():
-                mic.cancel()
-            await asyncio.gather(mic, return_exceptions=True)
-            await asyncio.gather(closing, return_exceptions=True)
+            release.set()
+            if closing is not None:
+                await closing
+            await service.shutdown()
 
     async def test_dashscope_callbacks_keep_arrival_order_across_confirmation_await(self) -> None:
         entered, release = asyncio.Event(), asyncio.Event()
@@ -423,6 +426,105 @@ class FakeHub:
 
 
 class SpeechServiceTests(unittest.IsolatedAsyncioTestCase):
+    async def test_endpoint_deadline_remains_bounded_but_reset_joins_its_inference(self) -> None:
+        entered, release = threading.Event(), threading.Event()
+        fallback = asyncio.Event()
+        class Runtime(FakeInputRuntime):
+            async def endpoint_fallback(self):
+                fallback.set()
+        class Eou:
+            def completion_probability(self, _audio):
+                entered.set()
+                release.wait(2)
+                raise ValueError("optional inference failed")
+        stt, hub = FakeStt(), FakeHub()
+        coordinator = SpeechInputCoordinator(Runtime(), stt_provider=stt, vad=FakeVad([1.0, 0.0]),
+            eou=Eou(), vad_stop_ms=20, eou_inference_timeout_seconds=.01,
+            unavailable_fallback_seconds=.03)
+        service = SpeechService(hub, coordinator, AsyncMock())
+        await service.startup()
+        resetting = None
+        try:
+            await coordinator.accept_mic_frame(b"\0" * 640)
+            await stt.sessions[0].sink(TranscriptUpdate("input", "", "input", "partial"))
+            await coordinator.accept_mic_frame(b"\0" * 640)
+            await asyncio.wait_for(fallback.wait(), .5)
+            self.assertTrue(entered.is_set())
+            resetting = asyncio.create_task(service.reset_input())
+            await asyncio.sleep(.01)
+            self.assertFalse(resetting.done())
+            release.set()
+            await resetting
+        finally:
+            release.set()
+            if resetting is not None:
+                await asyncio.gather(resetting, return_exceptions=True)
+            await service.shutdown()
+
+    async def test_input_reset_reuses_workers_and_rejects_previous_turn_callbacks(self) -> None:
+        runtime = FakeInputRuntime()
+        stt = FakeStt()
+        hub = FakeHub()
+        coordinator = SpeechInputCoordinator(runtime, stt_provider=stt, vad=FakeVad([1.0, 1.0]))
+        delivery = AsyncMock()
+        service = SpeechService(hub, coordinator, delivery)
+        await service.startup()
+        mic_worker = service._mic_task
+        try:
+            await coordinator.accept_mic_frame(b"\0" * 640)
+            old_sink = stt.sessions[0].sink
+            await old_sink(TranscriptUpdate("old input", "", "old input", "partial"))
+            await service.reset_input()
+            await coordinator.accept_mic_frame(b"\0" * 640)
+            await old_sink(TranscriptUpdate("late old input", "", "late old input", "partial"))
+            await stt.sessions[1].sink(TranscriptUpdate("new input", "", "new input", "partial"))
+            self.assertEqual([text for text, _, _ in runtime.updates], ["old input", "new input"])
+            self.assertIs(service._mic_task, mic_worker)
+            self.assertFalse(mic_worker.done())
+            self.assertIs(service.coordinator, coordinator)
+            self.assertIs(service.delivery, delivery)
+        finally:
+            await service.shutdown()
+
+    async def test_input_reset_waits_for_inflight_vad_before_resetting_state(self) -> None:
+        entered, release = threading.Event(), threading.Event()
+        class HeldVad:
+            running = False
+            def __init__(self):
+                self.frames = []
+            def speech_probability(self, frame):
+                self.frames.append(frame)
+                self.running = True
+                entered.set()
+                release.wait(2)
+                self.running = False
+                return 0.0
+            def reset(self):
+                if self.running:
+                    raise AssertionError("reset raced VAD inference")
+        hub = FakeHub()
+        coordinator = SpeechInputCoordinator(FakeInputRuntime(), vad=HeldVad())
+        service = SpeechService(hub, coordinator, AsyncMock())
+        await service.startup()
+        resetting = None
+        try:
+            hub.mic_queue.put(b"\0" * 640)
+            self.assertTrue(await asyncio.to_thread(entered.wait, 1))
+            hub.mic_queue.put(b"\1" * 640)
+            resetting = asyncio.create_task(service.reset_input())
+            await asyncio.sleep(0.01)
+            self.assertFalse(resetting.done())
+            release.set()
+            await resetting
+            await asyncio.sleep(.01)
+            self.assertFalse(coordinator.audio or coordinator.pre_roll)
+            self.assertEqual(coordinator.vad.frames, [b"\0" * 640])
+        finally:
+            release.set()
+            if resetting is not None:
+                await asyncio.gather(resetting, return_exceptions=True)
+            await service.shutdown()
+
     async def test_service_owns_mic_and_delivery_but_never_runtime(self) -> None:
         hub = FakeHub()
         coordinator = FakeCoordinator()
@@ -436,3 +538,21 @@ class SpeechServiceTests(unittest.IsolatedAsyncioTestCase):
         self.assertEqual(coordinator.frames, [b"\0" * 640])
         self.assertTrue(coordinator.closed)
         self.assertEqual(runtime.shutdown_calls, 0)
+
+
+class LocalModelTests(unittest.TestCase):
+    def test_loaded_detector_does_not_read_static_assets_on_audio_path(self) -> None:
+        from types import SimpleNamespace
+        with tempfile.TemporaryDirectory() as root:
+            model, license_path = Path(root) / "model.onnx", Path(root) / "LICENSE"
+            model.write_bytes(b"test-model")
+            license_path.write_text("MIT License")
+            session = object()
+            ort = SimpleNamespace(SessionOptions=SimpleNamespace,
+                ExecutionMode=SimpleNamespace(ORT_SEQUENTIAL=0),
+                GraphOptimizationLevel=SimpleNamespace(ORT_ENABLE_ALL=0),
+                InferenceSession=lambda *_a, **_kw: session)
+            detector = SileroVadDetector(model, license_path, ort_loader=lambda: ort)
+            self.assertIs(detector.load_session(), session)
+            with patch.object(Path, "read_text", side_effect=AssertionError("audio path reads license")):
+                self.assertIs(detector.load_session(), session)

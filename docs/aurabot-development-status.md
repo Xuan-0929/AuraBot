@@ -1,6 +1,6 @@
 # AuraBot 当前开发状态
 
-更新：2026-09-05。本文描述代码集成范围；本轮执行的测试、桌面检查与剩余限制由 [集成记录](frontend-integration-work.md) 维护。
+更新：2026-09-06。本文描述代码集成范围；本轮执行的测试、桌面检查与剩余限制见 [集成记录](frontend-integration-work.md) 与 [架构优化记录](architecture-optimization.md)。
 
 | 范围 | 当前集成 |
 | --- | --- |
@@ -11,7 +11,7 @@
 | 语音 | 显式开麦；STT partial 内部使用，确认后才进入可见历史；完整输出、持久化、展示后 ACK。 |
 | 可见历史 | Electron 独立 SQLite，稳定 ID 去重和游标分页；只含接受的用户消息与已交付 `say_to_user`。 |
 | Memory | Backend 内部召回/归档；已封存批次独立提炼；外部 API 与管理页移除。 |
-| Task | Python TaskManager + Pi；Main Agent 工具管理生命周期，Console 只显示标题和状态。 |
+| Task | Main Agent 为业务主入口；TaskOperations 单提案 worker；Console 只订阅最新 100 项状态 SSE；无 Task REST。 |
 | 数据 | 全新运行数据，不迁移旧配置/数据库；保留资产、缓存和共享数据。 |
 
 ## 仍须区分的边界

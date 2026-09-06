@@ -13,6 +13,9 @@ import unittest
 from dataclasses import replace
 from datetime import UTC, datetime
 from pathlib import Path
+from unittest.mock import patch
+from types import SimpleNamespace
+from backend.main_agent.task_operations import TaskOperations
 from uuid import UUID, uuid4
 
 from backend.main_agent import ContextStore, MainAgentRuntime, SnapshotProjector
@@ -86,8 +89,13 @@ class Manager:
     async def get_task(self, task_id: UUID, include_deleted: bool = False) -> TaskRecord:
         return self.records[task_id]
 
-    async def list_tasks(self, *, after_row_id=None, limit=50, statuses=None) -> TaskPage:
+    async def current_event_id(self):
+        return 0
+
+    async def list_tasks(self, *, after_row_id=None, limit=50, statuses=None, owner_profile_id=None, include_deleted=False) -> TaskPage:
         items = [item for item in self.records.values() if item.row_id > (after_row_id or 0)]
+        if owner_profile_id is not None:
+            items = [item for item in items if item.owner_profile_id == owner_profile_id]
         if statuses:
             items = [item for item in items if item.status in statuses]
         return TaskPage(tuple(items[:limit]), None)
@@ -99,7 +107,7 @@ class Manager:
         self.records[task_id] = updated
         return updated
 
-    async def iter_events(self, after_event_id: int, task_id=None):
+    async def iter_events(self, after_event_id: int, task_id=None, *, event_types=None):
         while True:
             yield await self.events.get()
 
@@ -175,6 +183,66 @@ class ProposalTests(unittest.IsolatedAsyncioTestCase):
         await self.timers.advance(3.0)
         self.assertEqual(self.manager.created, [])
 
+    async def test_noise_freezes_and_resumes_remaining_grace(self):
+        await self._propose()
+        await self.timers.advance(1.0)
+        await self.runtime.vad_start()
+        await self.timers.advance(10)
+        self.assertEqual(self.manager.created, [])
+        await self.runtime.reject_speech_candidate()
+        await asyncio.sleep(0)
+        await self.timers.advance(1.9)
+        self.assertEqual(self.manager.created, [])
+        await self.timers.advance(0.1)
+        await self.runtime.wait_for_task_proposals()
+        self.assertEqual(len(self.manager.created), 1)
+
+    async def test_context_failure_after_commit_does_not_retry_or_lose_task(self):
+        await self._propose()
+        original = self.context.upsert_task_fact
+        attempts = []
+        def fail_task(fact):
+            if fact.get('kind') == 'task':
+                attempts.append(fact)
+                raise OSError('disk unavailable')
+            return original(fact)
+        with patch.object(self.context, 'upsert_task_fact', side_effect=fail_task):
+            await self.timers.advance(3)
+            await asyncio.wait_for(self.runtime.wait_for_task_proposals(), 1)
+        self.assertEqual(len(self.manager.created), 1)
+        self.assertEqual(len(attempts), 1)
+        self.assertEqual(self.runtime.task_proposals[0].status.value, 'committed')
+
+    async def test_duplicate_task_event_does_not_split_new_utterance(self):
+        await self.runtime.startup()
+        await self._propose()
+        await self.timers.advance(3)
+        await self.runtime.wait_for_task_proposals()
+        await self.runtime.update_transcript('new', segment_id='next', request_prepare=False)
+        input_id = self.runtime.active_input.input_id
+        task_id = next(iter(self.manager.records))
+        self.manager.events.put_nowait(SimpleNamespace(type='task.status_changed', task_id=task_id))
+        for _ in range(4):
+            await asyncio.sleep(0)
+        await self.runtime.update_transcript('new words', segment_id='next', request_prepare=False)
+        self.assertEqual(self.runtime.active_input.input_id, input_id)
+        self.assertEqual(self.runtime.active_input.revision, 2)
+
+    async def test_failed_committed_proposal_projection_still_retires_input(self):
+        await self._propose()
+        old_input = self.runtime.active_input.input_id
+        original = self.context.upsert_task_fact
+        def fail_proposal(fact):
+            if fact.get('kind') == 'task_proposal' and fact.get('status') == 'committed':
+                raise OSError('disk unavailable')
+            return original(fact)
+        with patch.object(self.context, 'upsert_task_fact', side_effect=fail_proposal):
+            await self.timers.advance(3)
+            await self.runtime.wait_for_task_proposals()
+        self.assertEqual(len(self.manager.created), 1)
+        await self.runtime.update_transcript('next', segment_id='next', request_prepare=False)
+        self.assertNotEqual(self.runtime.active_input.input_id, old_input)
+
 
 class TaskBridgeTests(unittest.IsolatedAsyncioTestCase):
     async def test_inspect_filters_owner_and_control_uses_fresh_version(self) -> None:
@@ -198,3 +266,74 @@ class TaskBridgeTests(unittest.IsolatedAsyncioTestCase):
                 "foreign", "pause_task", {"task_id": str(foreign.id)},
             ))
         self.assertEqual(raised.exception.code, "task_not_found")
+
+
+class TaskOwnershipTests(unittest.IsolatedAsyncioTestCase):
+    async def test_cancelled_waiter_before_manager_call_cannot_execute_control(self):
+        manager = Manager()
+        owned = record(owner='owner')
+        manager.records[owned.id] = owned
+        reading = asyncio.Event()
+        release = asyncio.Event()
+        async def delayed_get(*args, **kwargs):
+            reading.set()
+            await release.wait()
+            return owned
+        manager.get_task = delayed_get
+        async def report(_code):
+            pass
+        operations = TaskOperations(TaskBridge(manager, 'owner'), asyncio.Lock(), lambda fact, **_: None,
+                                    report, lambda: 0, asyncio.sleep)
+        self.addAsyncCleanup(operations.shutdown)
+        waiter = asyncio.create_task(operations.execute_control(ToolCall('pause', 'pause_task', {'task_id': str(owned.id)})))
+        await reading.wait()
+        waiter.cancel()
+        await asyncio.gather(waiter, return_exceptions=True)
+        release.set()
+        await operations.shutdown()
+        self.assertEqual(manager.controls, [])
+
+    async def test_accepted_control_survives_cancelled_waiter_and_publishes(self):
+        manager = Manager()
+        owned = record(owner='owner')
+        manager.records[owned.id] = owned
+        started = asyncio.Event()
+        release = asyncio.Event()
+        original = manager.pause_task
+        async def delayed_pause(*args):
+            started.set()
+            await release.wait()
+            return await original(*args)
+        manager.pause_task = delayed_pause
+        published = []
+        async def report(_code):
+            pass
+        operations = TaskOperations(TaskBridge(manager, 'owner'), asyncio.Lock(), lambda fact, **_: published.append(fact),
+                                    report, lambda: 0, asyncio.sleep)
+        self.addAsyncCleanup(operations.shutdown)
+        waiter = asyncio.create_task(operations.execute_control(ToolCall('pause', 'pause_task', {'task_id': str(owned.id)})))
+        await started.wait()
+        waiter.cancel()
+        await asyncio.gather(waiter, return_exceptions=True)
+        release.set()
+        await operations.shutdown()
+        self.assertEqual(len(manager.controls), 1)
+        self.assertEqual(published[0]['version'], owned.version + 1)
+
+    async def test_startup_snapshot_then_follow_pre_snapshot_watermark(self):
+        manager = Manager()
+        owned = record(owner='owner')
+        manager.records[owned.id] = owned
+        async def watermark():
+            return 42
+        async def events(after_event_id, *, event_types=None):
+            self.assertEqual(after_event_id, 42)
+            manager.records[owned.id] = replace(owned, version=owned.version + 1)
+            yield SimpleNamespace(type='task.status_changed', task_id=owned.id)
+        manager.current_event_id = watermark
+        manager.iter_events = events
+        bridge = TaskBridge(manager, 'owner')
+        cursor = await manager.current_event_id()
+        facts = [fact async for fact in bridge.current_facts()]
+        facts.extend([fact async for fact in bridge.facts(cursor)])
+        self.assertEqual([fact['version'] for fact in facts], [owned.version, owned.version + 1])

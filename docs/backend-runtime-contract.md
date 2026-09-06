@@ -11,15 +11,26 @@
 | `POST /api/v1/restart/prepare` | `{force:boolean}` → `{ready,busy:{tasks,memoryWriting,mainAgent}}`。 |
 | `POST /api/v1/main-agent/realtime-token` | `{profileId,soul}` → 一次性 capability。 |
 | `WS /api/v1/main-agent/realtime` | 唯一文字/语音会话，subprotocol `aurabot.main-agent.v1`。 |
-| `GET /api/v1/tasks?ownerProfileId=…` | 当前 Profile 的 Task 分页快照。 |
-| `GET /api/v1/task-events` | 带 `Last-Event-ID` 的 Task SSE 事件流。 |
+| `GET /api/v1/task-events?ownerProfileId=…` | 必填 Profile；只读 `task.snapshot` SSE，最近 100 项标题/状态。 |
 | `GET /api/v1/metrics` | 有界计数/计时，不含对话内容。 |
 
 Token 和 restart prepare 使用受限 Origin。Electron 用启动时的实例标识与配置 revision 确认新进程就绪，不能把其他服务的健康响应误认为自己的进程。Readiness 不执行模型、embedding、Qdrant 网络或付费探测。
 
 非强制重启遇忙返回 `ready:false`，不得改变状态。允许重启时，在 admission 锁内阻止新 token、Runtime 输入/效果和 Task 变更/派发，再由 Electron 请求退出。Memory idle timer 不等于实际写入。
 
-Task 控制 REST 的完整内部契约见 [Task Runtime](modules/task-agent.md)。桌面只消费标题/状态投影，生命周期操作经 Main Agent；Memory 外部路由与管理 UI 已删除。旧 `/task`、Plan、MCP、chat/debug/registry 兼容 API 不恢复。
+Task 创建、查询、回答、暂停、恢复、取消、删除、重跑均由 Main Agent 进程内调用 TaskManager，见 [Task Runtime](modules/task-agent.md)。旧 Task REST 与 DTO 已删除。桌面只消费标题/状态投影；Memory 外部路由与管理 UI 已删除。旧 `/task`、Plan、MCP、chat/debug/registry 兼容 API 不恢复。
+
+## Task 状态流
+
+每次连接先发 `event: task.snapshot`，`data: {"tasks":[{"id":"…","title":"…","status":"…"}]}`。
+只查询该 Profile 最近创建且未删除的 100 项，降序。创建、状态变化、删除会唤醒查询；执行输出
+不会唤醒快照。重复快照不发送，空闲使用 SSE keepalive。重连重新发送当前快照，无事件 ID、
+分页、Last-Event-ID 回放或执行正文。Electron 每个可见控制台只保持一个可取消订阅。
+
+Main Agent 启动先取内部事件 watermark，分批对齐当前 Profile 的记录（含 tombstone），然后
+监听 watermark 后的重要事件。Context 通过 `upsert_task_fact` 原子去重，不再全量 fold 查版本。
+已提交的操作先标记因果归属再写投影；普通重复事实不改变当前输入。投影失败只报告一次，
+Task 持久事实保留，下次正常启动对齐，不无限重试或自动重跑任务。
 
 ## Profile 与资源
 
@@ -27,11 +38,16 @@ Backend startup 创建 TaskManager、RealtimeHub 和 ActiveProfileManager；合�
 
 Profile 身份由 Electron 提供；人格由已应用 JSON 的 `persona` 投影，经 Pet 格式化为 `soul`。Backend 不保存 Profile 配置或 `SOUL.md`。会话默认文字，`session.ready` 不开启麦克风；`voice.start` 才准备 SpeechService，未安装语音能力不妨碍文字。
 
+ProfileResources 唯一持有 Speech，Hub 只派生读取。语音中的 `text.submit` 取消旧 TTS，
+`reset_input` 结清旧采集/STT/endpoint 与在途推理，清旧帧、废弃旧回调，再提交文字；
+voice mode 和已有 worker/provider/detector 保持。普通 EOU 的 `finish()` 继续接受最终转写，
+主动 abort 使用 `close()`。模型/许可静态检查只在激活或首次加载，不在逐帧推理中重复。
+
 ## Realtime 消息
 
 | 方向 | 消息 | 约束 |
 | --- | --- | --- |
-| Pet → Backend | `text.submit {command_id,text}` | 当前文字模式下提交文本。 |
+| Pet → Backend | `text.submit {command_id,text}` | 文字或语音模式均可提交；语音模式保留并先 reset 旧采集。 |
 | Pet → Backend | `voice.start / voice.stop {command_id}` | 显式切换采集与语音能力。 |
 | Backend → Pet | `command.ack {command_id,status,code?}` | 接受或拒绝；拒绝不生成伪用户历史。 |
 | Backend → Pet | `user.message {message_id,text,source}` | 已确认接收的用户消息；STT partial 保持内部。 |

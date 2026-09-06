@@ -88,3 +88,7 @@ Backend startup 只创建 Task 控制面、RealtimeHub 和 Profile owner。首�
 退出顺序为停止 realtime admission → 关闭活动 Profile 的 Runtime/Speech/Memory/存储 → 关闭 TaskManager/Pi → Electron 关闭自身数据库。Task 的恢复状态由 TaskManager 决定，不自动重跑。
 
 本轮采用全新数据，无旧配置/数据库迁移。已授权的数据重置只删除枚举确认的 AuraBot 专属旧配置和数据库；不删除源码、模型/许可证资产、缓存或共享第三方数据。实际执行记录见 [集成记录](frontend-integration-work.md)。生产 Node/Python/Pi 打包仍需另行完成。
+
+2026-09-06：ProfileStorage 直接创建当前两表，无旧业务迁移或每次启动目录清理。Task schema 为 3；
+当前版本重启恢复，旧版拒绝。已核实无占用后清除了 macOS AuraBot 的 `desktop-v2` 专属旧数据，
+外层 Chromium 缓存、仓库、模型和工作区保留。后续启动自动创建新版本数据。

@@ -2,11 +2,12 @@
 
 Inspection, answers, pause/resume/cancel, terminal deletion and rerun all fresh-read owner truth. Rerun
 creates a new normal Task from the previous command; the bridge never changes the Task state machine.
-Only bounded product projections leave this boundary; prompts and working directories remain private."""
+Startup reconciles current records before streaming newer important events.
+Only bounded product projections leave this seam; prompts and working directories remain private."""
 
 from __future__ import annotations
 
-from collections.abc import Callable, Mapping
+from collections.abc import AsyncIterator, Callable, Mapping
 from typing import Any
 from uuid import UUID, uuid4
 
@@ -41,7 +42,7 @@ class TaskBridge:
         self.owner_profile_id = owner_profile_id.strip()
 
     async def inspect_tasks(self, call: ToolCall) -> dict[str, Any]:
-        """Return up to the requested number of owned public records, scanning foreign rows away."""
+        """Query only the requested owner-scoped public records through TaskManager."""
 
         limit = call.arguments.get("limit", 20)
         if type(limit) is not int or not 1 <= limit <= 50:
@@ -51,20 +52,30 @@ class TaskBridge:
             statuses = tuple(TaskStatus(value) for value in raw_statuses)
         except (TypeError, ValueError):
             raise ToolExecutorError("schema_invalid") from None
-        results: list[dict[str, Any]] = []
-        cursor: int | None = None
-        while len(results) < limit:
+        page = await self.manager.list_tasks(
+            limit=limit, statuses=statuses or None, owner_profile_id=self.owner_profile_id,
+        )
+        return {"tasks": [task_fact(task, include_details=False) for task in page.items]}
+
+    async def current_facts(self) -> AsyncIterator[dict[str, Any]]:
+        """Read current owner records in bounded pages, including deleted Task truth."""
+        cursor = None
+        while True:
             page = await self.manager.list_tasks(
-                after_row_id=cursor, limit=200, statuses=statuses or None,
+                after_row_id=cursor, limit=200, owner_profile_id=self.owner_profile_id,
+                include_deleted=True,
             )
-            results.extend(
-                task_fact(task, include_details=False) for task in page.items
-                if task.owner_profile_id == self.owner_profile_id
-            )
+            for task in page.items:
+                yield task_fact(task)
             if page.next_cursor is None:
                 break
             cursor = page.next_cursor
-        return {"tasks": results[:limit]}
+    async def facts(self, after_event_id: int) -> AsyncIterator[dict[str, Any]]:
+        """Follow important facts newer than the startup watermark."""
+        async for event in self.manager.iter_events(after_event_id, event_types=_IMPORTANT_EVENTS):
+            fact = await self.fact_for_event(event)
+            if fact is not None:
+                yield fact
 
     async def answer_task_question(
         self, call: ToolCall, *, action_started: Callable[[], None] = lambda: None,
@@ -132,7 +143,7 @@ class TaskBridge:
         return task_fact(updated)
 
     async def execute_control(
-        self, call: ToolCall, *, action_started: Callable[[], None],
+        self, call: ToolCall, *, action_started: Callable[[], None] = lambda: None,
     ) -> dict[str, Any]:
         """Dispatch one exact configured control while exposing its Manager-call ownership boundary."""
 

@@ -2,7 +2,7 @@
 
 测试使用真实同步 Store 和 fake Pi subprocess 覆盖固定五并发、立即 waiting 回收、命令
 CAS、timeout、recovery 与并行 shutdown；创建入口还统一校验 Task 标题、提示词、工作区、
-owner 与幂等键。Gateway 与 JSON DTO 在各自测试中验证。
+owner 与幂等键。Gateway 快照投影在独立测试中验证；本文件同时覆盖输出不唤醒快照、Profile 隔离与退出。
 """
 
 from __future__ import annotations
@@ -79,6 +79,36 @@ class TaskManagerTests(unittest.IsolatedAsyncioTestCase):
             workspace_id="project", owner_profile_id="profile-1",
             idempotency_key=f"task-{index}", timeout_seconds=timeout,
         )
+
+    async def test_status_snapshots_ignore_output_and_other_profiles_and_close_on_shutdown(self):
+        self.manager.capability_available = False
+        await self.startup()
+        self.manager.capability_available = True
+        # Stop dispatch only, retaining the public command path for deterministic queued snapshots.
+        self.manager._dispatcher.cancel()
+        await asyncio.gather(self.manager._dispatcher, return_exceptions=True)
+        iterator = self.manager.iter_status_snapshots("profile-1")
+        self.assertEqual(await anext(iterator), [])
+        first = await self.manager.create_task(self.command())
+        self.assertEqual((await anext(iterator))[0]["id"], str(first.id))
+        with patch.object(self.manager._store, "status_snapshot", wraps=self.manager._store.status_snapshot) as read:
+            pending = asyncio.create_task(anext(iterator))
+            await asyncio.sleep(0)
+            await self.manager._commit(lambda: self.manager._store.append_output(first.id, "private output"), snapshot_changed=False)
+            await asyncio.sleep(0)
+            self.assertFalse(pending.done())
+            read.assert_not_called()
+            await self.manager.create_task(replace(self.command(2), owner_profile_id="profile-2"))
+            await asyncio.sleep(0)
+            self.assertFalse(pending.done())
+            await self.manager.cancel_task(first.id, first.version)
+            self.assertEqual((await asyncio.wait_for(pending, 1))[0]["status"], "cancelled")
+        pending = asyncio.create_task(anext(iterator))
+        await asyncio.sleep(0)
+        await self.manager.shutdown()
+        with self.assertRaises(StopAsyncIteration):
+            await asyncio.wait_for(pending, 1)
+        await iterator.aclose()
 
     async def test_create_admission_validates_domain_and_deduplicates_idempotency_key(self):
         await self.startup()

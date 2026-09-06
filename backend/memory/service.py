@@ -3,7 +3,8 @@
 Main Agent submits each sealed Profile conversation through ``remember_conversation``. Remote extraction
 remains cancellable; source-id idempotency, atomic SQLite persistence, vector repair, and audit stay inside
 this service. Synchronous store/vector work runs in one private thread operation whose caller waits for local
-convergence before propagating cancellation, so Profile resources cannot close underneath that operation.
+convergence before propagating cancellation, so Profile resources cannot close underneath that operation. Retrieval returns its already packed context
+without repeating JSON budget calculations at the Main Agent call site.
 """
 
 from __future__ import annotations
@@ -332,7 +333,7 @@ class MemoryService:
         self._recall_operation = operation
         operation.add_done_callback(self._consume_recall_operation)
         result = await asyncio.shield(operation)
-        return pack_context(list(result.get("memories", ())), max_chars=budget)
+        return result["packed_context"]
 
     def _consume_recall_operation(self, operation: asyncio.Task[dict[str, Any]]) -> None:
         """Observe completion or failure and release ownership exactly once."""
