@@ -1,7 +1,7 @@
 """Verify lazy Backend composition, local readiness, metrics bounds, and shutdown ownership.
 
 The Backend must start without constructing a Profile Runtime, model, Memory database, Qdrant client,
-or SpeechService. A valid realtime token activates those through the Profile owner; shutdown fences the
+or SpeechService. An explicit Profile activation opens those through the Profile owner; shutdown fences the
 Hub before closing the active Profile and finally the shared TaskManager.
 """
 
@@ -46,11 +46,15 @@ class Profiles:
         self.hub = hub
         self.calls = calls
 
-    async def activate(self, profile_id: str, soul: str) -> int:
+    async def activate(self, profile_id: str, soul: str, **snapshot) -> int:
         self.calls.append(f"activate:{profile_id}:{soul}")
         self.active_profile_id = profile_id
-        await self.hub.set_active(profile_id, 1, ProfileResources(profile_id, FakeRuntime(), None, None))
+        await self.hub.set_active(profile_id, 1, ProfileResources(profile_id, FakeRuntime(), None, None, revision=snapshot["revision"]))
         return 1
+
+    async def renew_session(self, profile_id: str, revision: int) -> int:
+        await self.hub.set_active(profile_id, 2, self.hub.profile)
+        return 2
 
     async def shutdown(self) -> None:
         self.calls.append("stop:profiles")
@@ -69,10 +73,14 @@ class GatewayLifecycleTests(unittest.TestCase):
             readiness = client.get("/api/v1/readiness").json()
             self.assertTrue(readiness["ready"])
             self.assertIsNone(profiles.active_profile_id)
+            activated = client.post("/api/v1/main-agent/profile/activate",
+                headers={"origin": "http://127.0.0.1:6400"},
+                json={"profile_id": "profile_a", "revision": 1, "soul": "Soul A"})
+            self.assertEqual(activated.status_code, 200)
             response = client.post(
                 "/api/v1/main-agent/realtime-token",
                 headers={"origin": "http://127.0.0.1:6400"},
-                json={"profileId": "profile_a", "soul": "Soul A"},
+                json={"profileId": "profile_a", "revision": 1},
             )
             self.assertEqual(response.status_code, 201)
             self.assertEqual(profiles.active_profile_id, "profile_a")

@@ -86,14 +86,15 @@ function sentControls(socket: FakeWebSocket): Array<Record<string, unknown>> {
     .map((value) => JSON.parse(value) as Record<string, unknown>);
 }
 
-const profile={profileId:'profile_default',soul:'Aura'};
+const profile={profileId:'profile_default',revision:1};
+const cue={profile_id:profile.profileId,generation:7,config_revision:1,say_id:'say',call_id:'call',invoke_id:'invoke',avatar:{motion:'nod'}};
 async function connected(options:ConstructorParameters<typeof MainAgentRealtimeClient>[0]={}){
- vi.stubGlobal('fetch',vi.fn(async()=>({ok:true,json:async()=>({token:'token'})})));
+ vi.stubGlobal('fetch',vi.fn(async()=>({ok:true,json:async()=>({token:'token',profile_id:profile.profileId,revision:1,generation:7})})));
  vi.stubGlobal('navigator',{mediaDevices:{getUserMedia:vi.fn(async()=>({getTracks:()=>[]}))}});
  vi.stubGlobal('WebSocket',FakeWebSocket);vi.stubGlobal('AudioContext',FakeAudioContext);vi.stubGlobal('AudioWorkletNode',FakeAudioWorkletNode);
  const client=new MainAgentRealtimeClient(options);const connecting=client.start(profile);
  await vi.waitFor(()=>expect(FakeWebSocket.instances).toHaveLength(1));
- const socket=FakeWebSocket.instances[0];socket.open();socket.message(JSON.stringify({type:'session.ready'}));await connecting;
+ const socket=FakeWebSocket.instances[0];socket.open();socket.message(JSON.stringify({type:'session.ready',profile_id:profile.profileId,generation:7,config_revision:1}));await connecting;
  return {client,socket};
 }
 async function voice(client:MainAgentRealtimeClient,socket:FakeWebSocket){
@@ -108,7 +109,7 @@ describe('formal Pet unified realtime client',()=>{
    let finish!:()=>void;const stored=new Promise<void>(resolve=>finish=resolve);const persist=vi.fn(()=>stored);
    const {client,socket}=await connected({onMessage:persist});expect(FakeAudioContext.instances).toHaveLength(0);
    socket.message(JSON.stringify({type:'clause.offer',clause_id:'text-1',text:'hello',mode:'text'}));
-   await vi.waitFor(()=>expect(persist).toHaveBeenCalledWith({id:'text-1',role:'assistant',content:'hello'}));
+   await vi.waitFor(()=>expect(persist).toHaveBeenCalledWith({id:'text-1',role:'assistant',content:'hello',profileId:profile.profileId,generation:7}));
    expect(sentControls(socket)).toEqual([]);finish();
    await vi.waitFor(()=>expect(sentControls(socket)).toContainEqual({type:'renderer.ack',clause_id:'text-1',complete:true}));await client.stop();
  });
@@ -159,7 +160,7 @@ describe('formal Pet unified realtime client',()=>{
    socket.message(JSON.stringify({type:'clause.offer',clause_id:'old',text:'hello',mode:'text'}));
    await vi.waitFor(()=>expect(persist).toHaveBeenCalled());await client.stop();
    const connecting=client.start(profile);await vi.waitFor(()=>expect(FakeWebSocket.instances).toHaveLength(2));
-   const next=FakeWebSocket.instances[1];next.open();next.message(JSON.stringify({type:'session.ready'}));await connecting;
+   const next=FakeWebSocket.instances[1];next.open();next.message(JSON.stringify({type:'session.ready',profile_id:profile.profileId,generation:7,config_revision:1}));await connecting;
    finish();await new Promise(resolve=>setTimeout(resolve,0));expect(sentControls(next)).toEqual([]);await client.stop();
  });
  it('waits for the output-device clock and excludes a clause interrupted while draining',async()=>{
@@ -191,8 +192,52 @@ describe('formal Pet unified realtime client',()=>{
    let finish!:()=>void;FakeAudioContext.instances[0].close.mockImplementation(()=>new Promise<void>(resolve=>finish=resolve));
    const stopping=client.stop();const connecting=client.start(profile);
    await vi.waitFor(()=>expect(FakeWebSocket.instances).toHaveLength(2));
-   const next=FakeWebSocket.instances[1];next.open();next.message(JSON.stringify({type:'session.ready'}));await connecting;
+   const next=FakeWebSocket.instances[1];next.open();next.message(JSON.stringify({type:'session.ready',profile_id:profile.profileId,generation:7,config_revision:1}));await connecting;
    finish();await stopping;expect(client.currentState).toBe('active');await client.stop();
+ });
+
+ it('emits voice cue only on actual output start, keeps pause identity and closes independently of ACK',async()=>{
+   const perform=vi.fn();const {client,socket}=await connected({onPerformance:perform});await voice(client,socket);
+   socket.message(JSON.stringify({type:'clause.offer',clause_id:'timed',text:'hello',mode:'voice',...cue}));
+   const playback=FakeAudioWorkletNode.instances.find(n=>n.processorName==='aurabot-tts-playback')!;
+   await vi.waitFor(()=>expect(playback.port.sent).toContainEqual({type:'offer',clauseId:'timed'}));
+   expect(perform.mock.calls.some(([event])=>event.type==='start')).toBe(false);
+   playback.port.onmessage?.({data:{type:'clause-start',clauseId:'timed',contextTime:1}} as MessageEvent);
+   await new Promise(resolve=>setTimeout(resolve,20));expect(perform.mock.calls.some(([event])=>event.type==='start')).toBe(false);
+   FakeAudioContext.instances[0].outputTime=1;
+   await vi.waitFor(()=>expect(perform.mock.calls.filter(([event])=>event.type==='start')).toHaveLength(1));
+   playback.port.onmessage?.({data:{type:'clause-start',clauseId:'timed',contextTime:1}} as MessageEvent);
+   socket.message(JSON.stringify({type:'playback.pause'}));socket.message(JSON.stringify({type:'playback.resume'}));
+   socket.message(JSON.stringify({type:'say.closed',clause_count:1,...cue}));
+   await vi.waitFor(()=>expect(perform).toHaveBeenCalledWith(expect.objectContaining({type:'closed',clauseCount:1})));
+   expect(perform.mock.calls.filter(([event])=>event.type==='start')).toHaveLength(1);await client.stop();
+ });
+ it('keeps text ACK independent of visual exceptions and drops old Profile offers',async()=>{
+   const {client,socket}=await connected({onPerformance:()=>{throw new Error('visual unavailable');}});
+   socket.message(JSON.stringify({type:'clause.offer',clause_id:'old-profile',text:'wrong',mode:'text',...cue,profile_id:'other'}));
+   socket.message(JSON.stringify({type:'clause.offer',clause_id:'text-safe',text:'hello',mode:'text',...cue}));
+   await vi.waitFor(()=>expect(sentControls(socket)).toContainEqual({type:'renderer.ack',clause_id:'text-safe',complete:true}));
+   expect(sentControls(socket).some(event=>event.clause_id==='old-profile')).toBe(false);await client.stop();
+ });
+ it('uses the Main-issued token without another activation request',async()=>{
+   const getToken=vi.fn(async()=>({token:'main-token',profile_id:profile.profileId,revision:1,generation:7}));
+   const {client,socket}=await connected({getToken});
+   expect(getToken).toHaveBeenCalledOnce();expect(fetch).not.toHaveBeenCalled();
+   expect(socket.protocols).toContain('aurabot.capability.main-token');await client.stop();
+ });
+ it('aligns the bounded mouth envelope queue to output time and clears it on pause',async()=>{
+   const perform=vi.fn();const {client,socket}=await connected({onPerformance:perform});await voice(client,socket);
+   socket.message(JSON.stringify({type:'clause.offer',clause_id:'mouth',text:'hello',mode:'voice',...cue}));
+   const playback=FakeAudioWorkletNode.instances.find(n=>n.processorName==='aurabot-tts-playback')!;
+   await vi.waitFor(()=>expect(playback.port.sent).toContainEqual({type:'offer',clauseId:'mouth'}));
+   playback.port.onmessage?.({data:{type:'playback-level',clauseId:'mouth',contextTime:0.1,level:0.6}} as MessageEvent);
+   expect(perform.mock.calls.some(([event])=>event.type==='level'&&event.level===0.6)).toBe(false);
+   FakeAudioContext.instances[0].outputTime=0.1;
+   await vi.waitFor(()=>expect(perform).toHaveBeenCalledWith(expect.objectContaining({type:'level',level:0.6})));
+   playback.port.onmessage?.({data:{type:'playback-level',clauseId:'mouth',contextTime:0.2,level:0.9}} as MessageEvent);
+   socket.message(JSON.stringify({type:'playback.pause'}));
+   await vi.waitFor(()=>expect(perform).toHaveBeenCalledWith({type:'pause'}));FakeAudioContext.instances[0].outputTime=0.3;
+   await new Promise(resolve=>setTimeout(resolve,60));expect(perform.mock.calls.some(([event])=>event.type==='level'&&event.level===0.9)).toBe(false);await client.stop();
  });
 
 });

@@ -8,13 +8,18 @@ function subscribe<T>(channel:string,listener:(value:T)=>void):()=>void {
  ipcRenderer.on(channel,handler);return ()=>ipcRenderer.removeListener(channel,handler);
 }
 const api:AuraBotApi={
+ listProfiles:()=>ipcRenderer.invoke(IPC_CHANNELS.listProfiles),getProfile:id=>ipcRenderer.invoke(IPC_CHANNELS.getProfile,id),
+ createProfile:name=>ipcRenderer.invoke(IPC_CHANNELS.createProfile,name),saveProfile:(id,input)=>ipcRenderer.invoke(IPC_CHANNELS.saveProfile,id,input),
+ activateProfile:(id,force,applyOnly)=>ipcRenderer.invoke(IPC_CHANNELS.activateProfile,id,force,applyOnly),deleteProfile:id=>ipcRenderer.invoke(IPC_CHANNELS.deleteProfile,id),
+ importProfileModel:id=>ipcRenderer.invoke(IPC_CHANNELS.importProfileModel,id),verifyProfileResources:(id,version,files)=>ipcRenderer.invoke(IPC_CHANNELS.verifyProfileResources,id,version,files),
+ onProfilesChanged:listener=>subscribe(IPC_CHANNELS.profilesChanged,listener),getRealtimeToken:()=>ipcRenderer.invoke(IPC_CHANNELS.getRealtimeToken),
  getInitialState:()=>ipcRenderer.invoke(IPC_CHANNELS.getInitialState),
  openConsoleWindow:()=>ipcRenderer.invoke(IPC_CHANNELS.openConsoleWindow),
  openSettingsWindow:()=>ipcRenderer.invoke(IPC_CHANNELS.openSettingsWindow),
  getSettings:()=>ipcRenderer.invoke(IPC_CHANNELS.getSettings),
  saveSettings:(config, clearSecrets)=>ipcRenderer.invoke(IPC_CHANNELS.saveSettings, config, clearSecrets),
  applySettings:(force)=>ipcRenderer.invoke(IPC_CHANNELS.applySettings, force),
- getHistory:(before)=>ipcRenderer.invoke(IPC_CHANNELS.getHistory, before),
+ getHistory:(before,profileId)=>ipcRenderer.invoke(IPC_CHANNELS.getHistory, before,profileId),
  recordDelivery:(entry)=>ipcRenderer.invoke(IPC_CHANNELS.recordDelivery, entry),
  sendChatMessage:(input)=>ipcRenderer.invoke(IPC_CHANNELS.sendChatMessage, input),
  petCommandResult:(result)=>ipcRenderer.invoke(IPC_CHANNELS.petCommandResult, result),

@@ -2,7 +2,8 @@
  * Registers the Pet's microphone capture and TTS playback processors in one AudioWorklet module. Capture
  * continuously resamples browser audio to raw 16 kHz/20 ms PCM and emits local RMS speech hints; playback
  * keeps one clause's 24 kHz PCM queued across pauses and reports completion only after audio_end and the
- * render cursor consumes the final source sample. The renderer additionally waits for the device output clock. Pure helpers are exported for deterministic tests.
+ * render cursor consumes the final source sample. Playback emits a single consumption start and a 30 Hz
+ * output-sample RMS envelope, including silence on pause/gaps, for the avatar without consulting mic RMS. The renderer additionally waits for the device output clock. Pure helpers are exported for deterministic tests.
  */
 
 export class ContinuousPcm16Resampler {
@@ -76,6 +77,10 @@ export class ClausePlaybackQueue {
   constructor({ outputSampleRate, maxQueuedSamples = 48_000 }) {
     this.maxQueuedSamples = maxQueuedSamples;
     this.step = 24_000 / outputSampleRate;
+    this.outputSampleRate=outputSampleRate;
+    this.levelFrames=outputSampleRate;
+    this.lastLevel=0;
+    this.started=false;
     this.samples = [];
     this.offset = 0;
     this.position = 0;
@@ -120,19 +125,26 @@ export class ClausePlaybackQueue {
     this.clauseId = null;
     this.finished = false;
     this.completed = false;
+    this.started=false;
+    this.levelFrames=this.outputSampleRate;
   }
 
   render(channel) {
     const events = [];
     channel.fill(0);
-    if (this.paused || this.completed) return events;
-    let rendered=0;
+    this.levelFrames+=channel.length;
+    if (this.paused || this.completed) {
+      if(this.lastLevel!==0){events.push({type:"playback-level",clauseId:this.clauseId,level:0,frameOffset:0});this.lastLevel=0;}
+      return events;
+    }
+    let rendered=0;let energy=0;
     for (let index = 0; index < channel.length && this.offset < this.samples.length; index += 1) {
       rendered=index+1;
       const left = Math.min(this.samples.length - 1, this.offset + Math.floor(this.position));
       const right = Math.min(this.samples.length - 1, left + 1);
       const fraction = this.position - Math.floor(this.position);
       channel[index] = (this.samples[left] * (1 - fraction) + this.samples[right] * fraction) / 32768;
+      energy+=channel[index]*channel[index];
       this.position += this.step;
       const consumed = Math.floor(this.position);
       this.offset = Math.min(this.samples.length, this.offset + consumed);
@@ -141,6 +153,11 @@ export class ClausePlaybackQueue {
         this.samples = this.samples.slice(this.offset);
         this.offset = 0;
       }
+    }
+    if(rendered&&!this.started){this.started=true;events.push({type:"clause-start",clauseId:this.clauseId,frameOffset:0});}
+    const level=Math.sqrt(energy/Math.max(1,channel.length));
+    if((rendered&&this.levelFrames>=this.outputSampleRate/30)||(level===0&&this.lastLevel!==0)){
+      this.levelFrames=0;this.lastLevel=level;events.push({type:"playback-level",clauseId:this.clauseId,level,frameOffset:channel.length});
     }
     if (this.finished && this.offset === this.samples.length && this.clauseId) {
       this.completed = true;
@@ -197,7 +214,8 @@ if (Processor && typeof globalThis.registerProcessor === "function") {
       if (!channel) return true;
       for (const event of this.playback.render(channel)) {
         const {frameOffset,...message}=event;
-        this.port.postMessage({...message,endContextTime:(globalThis.currentFrame+frameOffset)/globalThis.sampleRate});
+        const contextTime=(globalThis.currentFrame+(frameOffset??0))/globalThis.sampleRate;
+        this.port.postMessage({...message,contextTime,...(message.type==="clause-complete"?{endContextTime:contextTime}:{})});
       }
       return true;
     }

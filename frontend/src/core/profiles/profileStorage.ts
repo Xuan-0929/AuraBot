@@ -248,7 +248,7 @@ export class ProfileStorage {
   }
 }
 
-function mapProfile(row: ProfileRow): Profile {
+export function mapProfile(row: ProfileRow): Profile {
   return {
     id: row.id,
     displayName: row.display_name,

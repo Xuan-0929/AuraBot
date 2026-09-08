@@ -24,7 +24,7 @@ it('saves without changing the applied configuration and never returns stored ke
   store.save(store.publicConfig());
   expect(store.snapshot().backend.chat_model.api_key).toBe('private-test-key');
   expect(statSync(store.path).mode & 0o777).toBe(0o600);
-  expect(JSON.parse(readFileSync(store.path, 'utf8')).version).toBe(1);
+  expect(JSON.parse(readFileSync(store.path, 'utf8')).version).toBe(2);
 });
 it('deduplicates delivered records, scopes profiles and paginates after reopen', () => {
   const root = directory();

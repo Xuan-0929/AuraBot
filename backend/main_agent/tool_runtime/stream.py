@@ -1,9 +1,8 @@
-"""Assembles OpenAI Chat Completions tool deltas and incrementally decodes text-only speech.
+"""Decode bounded SAY envelopes and assemble indexed OpenAI tool deltas without field-order assumptions.
 
-The production provider emits one async Chat Completions dialect, so this module tracks only indexed function
-calls from ``choices[].delta.tool_calls``. ``say_to_user`` has one legal JSON member (``text``), allowing a
-small prefix decoder while final ``json.loads`` validation still rejects duplicates, malformed Unicode, and
-schema violations before non-streamed effects execute.
+The finite top-level scanner identifies only text/avatar, while the incremental string decoder emits text
+at punctuation boundaries. Strict final decoding rejects duplicate keys and malformed envelopes, including
+errors discovered after early delivery. Avatar stays optional and is frozen by the authorized Harness.
 """
 
 from __future__ import annotations
@@ -23,7 +22,7 @@ _ESCAPES = {'"': '"', "\\": "\\", "/": "/", "b": "\b", "f": "\f", "n": "\n", "r"
 
 
 class SayTextStream:
-    """Decode the sole top-level ``text`` string and emit punctuation-stable clauses."""
+    """Incrementally decode top-level text, retaining only complete optional avatar data."""
 
     def __init__(self, max_length: int = 8_000) -> None:
         self.max_length = max_length
@@ -33,6 +32,8 @@ class SayTextStream:
         self.emitted = 0
         self.closed = False
         self.error_code: str | None = None
+        self.avatar: Any = None
+        self.object_closed = False
 
     @property
     def remaining_text(self) -> str:
@@ -50,14 +51,25 @@ class SayTextStream:
         if not isinstance(fragment, str):
             raise TypeError("tool argument fragments must be strings")
         self.raw += fragment
-        if self.position is None:
-            try:
-                self.position = _text_start(self.raw)
-            except ValueError:
-                self.error_code = "malformed_arguments"
-                return ()
+        if self.invalid:
+            return ()
+        if len(self.raw) > 64 * 1024:
+            self.error_code = "schema_invalid"
+            return ()
+        try:
+            start, avatar, complete = _scan_say(self.raw)
+            self.avatar = avatar
+            self.object_closed = complete
             if self.position is None:
-                return ()
+                self.position = start
+        except _DuplicateKey:
+            self.error_code = "duplicate_json_key"
+            return ()
+        except ValueError:
+            self.error_code = "malformed_arguments"
+            return ()
+        if self.position is None:
+            return ()
         clauses: list[str] = []
         while not self.closed and self.position < len(self.raw):
             character = self.raw[self.position]
@@ -127,6 +139,7 @@ class SayClause:
     index: int
     call_id: str
     text: str
+    avatar: Any = None
 
 
 @dataclass(slots=True)
@@ -173,7 +186,7 @@ class ToolCallAssembler:
         clauses: list[SayClause] = []
         for index in sorted(self.calls):
             partial = self.calls[index]
-            clauses.extend(SayClause(index, partial.call_id, text) for text in partial.pending_clauses)
+            clauses.extend(SayClause(index, partial.call_id, text, partial.say_stream.avatar if partial.say_stream else None) for text in partial.pending_clauses)
         return tuple(clauses)
 
     def _feed_call(self, item: Any) -> None:
@@ -202,6 +215,12 @@ class ToolCallAssembler:
         arguments = function.get("arguments", "")
         if not isinstance(arguments, str):
             raise ValueError
+        if len(partial.raw_arguments) + len(arguments) > 64 * 1024:
+            partial.parse_error = "arguments_too_large"
+            partial.pending_clauses.clear()
+            return
+        if partial.parse_error == "arguments_too_large":
+            return
         if partial.name == "say_to_user" and partial.say_stream is None:
             partial.say_stream = SayTextStream()
             if partial.raw_arguments:
@@ -294,54 +313,92 @@ def _next_clause_length(text: str) -> int | None:
     return None
 
 
-def _text_start(raw: str) -> int | None:
-    index = 0
-    while index < len(raw) and raw[index].isspace():
-        index += 1
-    if index == len(raw):
-        return None
-    if raw[index] != "{":
-        raise ValueError
-    index += 1
-    while index < len(raw) and raw[index].isspace():
-        index += 1
-    prefix = '"text"'
-    available = raw[index:index + len(prefix)]
-    if not prefix.startswith(available):
-        raise ValueError
-    if len(available) < len(prefix):
-        return None
-    index += len(prefix)
-    while index < len(raw) and raw[index].isspace():
-        index += 1
-    if index == len(raw):
-        return None
-    if raw[index] != ":":
-        raise ValueError
-    index += 1
-    while index < len(raw) and raw[index].isspace():
-        index += 1
-    if index == len(raw):
-        return None
-    if raw[index] != '"':
-        raise ValueError
-    return index + 1
+def _scan_say(raw: str) -> tuple[int | None, Any, bool]:
+    """Scan the two legal members using stdlib JSON tokens; incomplete input is never guessed."""
+    decoder = json.JSONDecoder(object_pairs_hook=_unique, parse_constant=lambda value: (_ for _ in ()).throw(ValueError(value)))
+    position = 0
+    text_start = None
+    avatar = None
+    seen: set[str] = set()
+
+    def whitespace(index: int) -> int:
+        while index < len(raw) and raw[index] in " \t\r\n":
+            index += 1
+        return index
+
+    position = whitespace(position)
+    if position == len(raw):
+        return text_start, avatar, False
+    if raw[position] != "{":
+        raise ValueError("SAY envelope must be an object")
+    position += 1
+    after_comma = False
+    while True:
+        position = whitespace(position)
+        if position == len(raw):
+            return text_start, avatar, False
+        if raw[position] == "}":
+            if after_comma or "text" not in seen or whitespace(position + 1) != len(raw):
+                raise ValueError("invalid SAY envelope")
+            return text_start, avatar, True
+        if raw[position] != '"':
+            raise ValueError("invalid member")
+        try:
+            key, position = decoder.raw_decode(raw, position)
+        except json.JSONDecodeError:
+            return text_start, avatar, False
+        if key in seen:
+            raise _DuplicateKey(key)
+        if key not in {"text", "avatar"}:
+            raise ValueError("unknown SAY member")
+        seen.add(key)
+        position = whitespace(position)
+        if position == len(raw):
+            return text_start, avatar, False
+        if raw[position] != ":":
+            raise ValueError("invalid member separator")
+        position = whitespace(position + 1)
+        if position == len(raw):
+            return text_start, avatar, False
+        if key == "text":
+            if raw[position] != '"':
+                raise ValueError("text must be string")
+            text_start = position + 1
+        try:
+            value, position = decoder.raw_decode(raw, position)
+        except json.JSONDecodeError:
+            return text_start, avatar, False
+        if _contains_surrogate(value):
+            raise ValueError("invalid Unicode")
+        if key == "avatar":
+            avatar = value
+        position = whitespace(position)
+        if position == len(raw):
+            return text_start, avatar, False
+        if raw[position] == ",":
+            position += 1
+            after_comma = True
+        elif raw[position] == "}":
+            after_comma = False
+        else:
+            raise ValueError("invalid member boundary")
 
 
 class _DuplicateKey(ValueError):
     pass
 
 
-def _load_object(raw: str) -> dict[str, Any]:
-    def unique(pairs: list[tuple[str, Any]]) -> dict[str, Any]:
-        result: dict[str, Any] = {}
-        for key, value in pairs:
-            if key in result:
-                raise _DuplicateKey(key)
-            result[key] = value
-        return result
+def _unique(pairs: list[tuple[str, Any]]) -> dict[str, Any]:
+    result: dict[str, Any] = {}
+    for key, value in pairs:
+        if key in result:
+            raise _DuplicateKey(key)
+        result[key] = value
+    return result
 
-    value = json.loads(raw, object_pairs_hook=unique, parse_constant=lambda value: (_ for _ in ()).throw(ValueError(value)))
+
+def _load_object(raw: str) -> dict[str, Any]:
+    value = json.loads(raw, object_pairs_hook=_unique, parse_constant=lambda value: (_ for _ in ()).throw(ValueError(value)))
     if not isinstance(value, dict):
         raise ValueError("tool arguments must be an object")
     return value

@@ -119,7 +119,7 @@ class ActiveProfileManagerTests(unittest.IsolatedAsyncioTestCase):
             )
 
         with tempfile.TemporaryDirectory() as directory:
-            manager = ActiveProfileManager(Path(directory), hub, build)
+            manager = ActiveProfileManager(Path(directory), hub, build, generation_seed=0)
             await manager.activate("profile_a", "Soul A")
             memory_a = memories["profile_a"]
             original_recall = memory_a.recall
@@ -161,7 +161,7 @@ class ActiveProfileManagerTests(unittest.IsolatedAsyncioTestCase):
             )
 
         with tempfile.TemporaryDirectory() as directory:
-            manager = ActiveProfileManager(Path(directory), hub, build)
+            manager = ActiveProfileManager(Path(directory), hub, build, generation_seed=0)
             first = await manager.activate("profile_a", "Soul A")
             second = await manager.activate("profile_a", "Soul A2")
 
@@ -185,7 +185,7 @@ class ActiveProfileManagerTests(unittest.IsolatedAsyncioTestCase):
 
         with tempfile.TemporaryDirectory() as directory:
             root = Path(directory)
-            manager = ActiveProfileManager(root, hub, build)
+            manager = ActiveProfileManager(root, hub, build, generation_seed=0)
             await manager.activate("profile_a", "Soul A")
             await manager.activate("profile_b", "Soul B")
 
@@ -213,7 +213,7 @@ class ActiveProfileManagerTests(unittest.IsolatedAsyncioTestCase):
 
         with tempfile.TemporaryDirectory() as directory:
             root = Path(directory)
-            manager = ActiveProfileManager(root, hub, build)
+            manager = ActiveProfileManager(root, hub, build, generation_seed=0)
             with self.assertRaises(ValueError):
                 await manager.activate("../escape", "Soul")
             await manager.activate("profile_a", "Soul")
@@ -234,7 +234,7 @@ class ActiveProfileManagerTests(unittest.IsolatedAsyncioTestCase):
             )
 
         with tempfile.TemporaryDirectory() as directory:
-            manager = ActiveProfileManager(Path(directory), hub, build)
+            manager = ActiveProfileManager(Path(directory), hub, build, generation_seed=0)
             await manager.activate("profile_a", "Soul A")
             manager.runtime.context.append_event("user_segment", {
                 "segment_id": "a-1", "input_id": "a", "text": "only A",
@@ -301,7 +301,7 @@ class ActiveProfileManagerTests(unittest.IsolatedAsyncioTestCase):
             return resources
 
         with tempfile.TemporaryDirectory() as directory:
-            manager = ActiveProfileManager(Path(directory), hub, build)
+            manager = ActiveProfileManager(Path(directory), hub, build, generation_seed=0)
             await manager.activate("profile_a", "Soul A")
             first_a = builds["profile_a"][0]
             first_a_context = contexts["profile_a"][0]
@@ -364,4 +364,53 @@ class ActiveProfileManagerTests(unittest.IsolatedAsyncioTestCase):
                 reopened_a.memory.recall(profile_id="profile_a", query="咖啡")["memories"],
                 [],
             )
+            await manager.shutdown()
+
+    async def test_failed_retirement_blocks_every_target_until_resource_cleanup_succeeds(self) -> None:
+        calls: list[str] = []
+        builds: list[str] = []
+        allow_close = False
+        hub = Hub(calls)
+
+        class FailingMemory(Memory):
+            async def shutdown(self) -> None:
+                if not allow_close:
+                    raise OSError("archive storage still closing")
+                await super().shutdown()
+
+        async def build(profile_id, path, soul):
+            builds.append(profile_id)
+            (path / "preserved-context.txt").write_text("unarchived private " + profile_id)
+            return ProfileResources(profile_id, Runtime(profile_id, soul, calls),
+                Owner("speech", profile_id, calls),
+                FailingMemory("memory", profile_id, calls) if profile_id == "a" else Memory("memory", profile_id, calls),
+                closeables=(Owner("context", profile_id, calls),))
+
+        with tempfile.TemporaryDirectory() as directory:
+            root = Path(directory)
+            manager = ActiveProfileManager(root, hub, build, generation_seed=0)
+            await manager.activate("a", "Soul A")
+            with self.assertRaises(Exception):
+                await manager.activate("b", "Soul B")
+            self.assertIsNone(manager.active_profile_id)
+            self.assertIsNone(hub.active_profile_id)
+            self.assertEqual(builds, ["a"])
+            for target in ("b", "c", "a"):
+                with self.assertRaisesRegex(RuntimeError, "profile_cleanup_incomplete"):
+                    await manager.activate(target, "Soul target", force=True)
+                self.assertIsNone(manager.active_profile_id)
+                self.assertIsNone(hub.active_profile_id)
+                self.assertEqual(builds, ["a"])
+            self.assertEqual((root / "a" / "preserved-context.txt").read_text(), "unarchived private a")
+            allow_close = True
+            await manager.activate("b", "Soul B")
+            self.assertEqual(manager.active_profile_id, "b")
+            self.assertEqual(builds, ["a", "b"])
+            self.assertEqual(manager._retiring, {})
+            # Successfully closed owners are not invoked again when a later owner needs a retry.
+            self.assertEqual(calls.count("runtime:stop:a"), 1)
+            self.assertEqual(calls.count("speech:stop:a"), 1)
+            self.assertEqual(calls.count("memory:stop:a"), 1)
+            self.assertLess(calls.index("context:stop:a"), calls.index("hub:set:b:3"))
+            self.assertEqual((root / "a" / "preserved-context.txt").read_text(), "unarchived private a")
             await manager.shutdown()

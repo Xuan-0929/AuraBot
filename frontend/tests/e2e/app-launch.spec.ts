@@ -16,7 +16,7 @@ async function launch(userDataDir=mkdtempSync(join(tmpdir(),'aurabot-e2e-'))){
  const pet=await electronApp.firstWindow();await expect.poll(()=>pet.evaluate(()=>Boolean(window.aurabot))).toBe(true);
  return {electronApp,pet,userDataDir};
 }
-async function ready(pet:Page){await expect.poll(()=>pet.evaluate(async()=>(await window.aurabot.getSettings()).online),{timeout:40000}).toBe(true);}
+async function ready(pet:Page){try{await expect.poll(()=>pet.evaluate(async()=>(await window.aurabot.getSettings()).online&&(await window.aurabot.listProfiles()).runtime.online),{timeout:40000}).toBe(true);}catch(error){console.log('STARTUP_DIAGNOSTIC',await pet.evaluate(async()=>{const settings=await window.aurabot.getSettings();return {backend:{online:settings.online,error:settings.error},runtime:(await window.aurabot.listProfiles()).runtime};}));throw error;}}
 async function status(){return (await fetch('http://127.0.0.1:6401/api/v1/readiness')).json();}
 async function close(app:ElectronApplication){await app.close();await expect.poll(async()=>{try{await status();return true;}catch{return false;}},{timeout:10000}).toBe(false);}
 

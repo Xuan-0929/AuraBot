@@ -1,3 +1,7 @@
+/** Loads the pinned Cubism Core and Pixi model renderer without automatic animation ownership.
+ * Each instance receives unique resource URLs, while the new player owns time and parameter synthesis.
+ * Destruction is limited to that instance's textures; hit testing and placement remain reusable.
+ */
 import type { Application, DisplayObject } from "pixi.js";
 import cubismCoreUrl from "live2dcubismcore/live2dcubismcore.min.js?url";
 
@@ -9,22 +13,7 @@ export interface Live2DModelRuntime {
   y: number;
   width: number;
   height: number;
-  internalModel?: {
-    width?: number;
-    height?: number;
-    coreModel?: {
-      getParameterCount(): number;
-      getParameterValueByIndex(index: number): number;
-      setParameterValueByIndex(index: number, value: number): void;
-    };
-    motionManager?: {
-      definitions?: unknown;
-      update?: (model: unknown, now: number) => boolean;
-      on?(event: "motionFinish", listener: () => void): void;
-      off?(event: "motionFinish", listener: () => void): void;
-    };
-    hitAreas?: unknown;
-  };
+  internalModel?: any;
   motion(group: string, index?: number, priority?: number): unknown;
   focus(x: number, y: number, instant?: boolean): void;
   hitTest(areaName: string, x: number, y: number): boolean;
@@ -41,7 +30,7 @@ declare global {
 let cubismCorePromise: Promise<void> | undefined;
 let live2DModelCtorPromise:
   | Promise<{
-      from(modelPath: string, options?: { autoInteract?: boolean }): Promise<unknown>;
+      from(modelPath: unknown, options?: Record<string,unknown>): Promise<unknown>;
       registerTicker(ticker: unknown): void;
     }>
   | undefined;
@@ -92,7 +81,20 @@ export async function ensureLive2DModelCtor() {
 
 export async function loadLive2DModel(modelPath: string): Promise<Live2DModelRuntime> {
   const Live2DModel = await ensureLive2DModelCtor();
-  return (await Live2DModel.from(modelPath, { autoInteract: false })) as Live2DModelRuntime;
+  const absolute=new URL(modelPath,window.location.href).href;
+  const response=await fetch(absolute);
+  if(!response.ok)throw new Error('模型清单加载失败');
+  const manifest=await response.json();
+  const instance=crypto.randomUUID();
+  const scoped=(file:string)=>{const url=new URL(file,absolute);url.searchParams.set('instance',instance);return url.href;};
+  const refs=manifest.FileReferences;
+  if(!refs||!Array.isArray(refs.Textures)||typeof refs.Moc!=='string')throw new Error('模型清单不完整');
+  for(const key of ['Moc','Physics','Pose','UserData','DisplayInfo'])if(typeof refs[key]==='string')refs[key]=scoped(refs[key]);
+  refs.Textures=refs.Textures.map(scoped);
+  // The production player alone discovers and schedules animations. SDK random Idle is unreachable.
+  refs.Motions={};refs.Expressions=[];
+  manifest.url=absolute;
+  return (await Live2DModel.from(manifest, { autoInteract:false,autoUpdate:false,motionPreload:'NONE' })) as Live2DModelRuntime;
 }
 
 export function removeAndDestroyLive2DModel(app: Application | null, model: Live2DModelRuntime | undefined): void {

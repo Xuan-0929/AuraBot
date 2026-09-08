@@ -3,7 +3,8 @@
 DashScope-specific callback fields and credentials terminate inside the adapters and become normalized
 ``TranscriptUpdate`` facts before Main Agent Core can observe them; every non-empty production snapshot,
 including a mutable-only partial, requests existing PREPARE admission. Session callbacks enter Core in arrival
-order; graceful finish drains provider-final text, while cancellation retains bounded transport cleanup
+order; SAY-scoped protocol cancellation removes only that utterance from the existing delivery queue;
+graceful finish drains provider-final text, while cancellation retains bounded transport cleanup
 ownership. TTS exposes only clause audio bytes.
 Silero VAD and Smart Turn
 v3.2 share process-wide ONNX sessions, verify both model and license assets before loading, and configure
@@ -1073,6 +1074,7 @@ class ClauseSpeechDelivery:
         self._queue: asyncio.Queue[_SpeechJob] = asyncio.Queue(max_pending_clauses)
         self._waiters: dict[str, asyncio.Future[bool]] = {}
         self._current_clause_id: str | None = None
+        self._current_say_id: str | None = None
         self._current_port: Any | None = None
         self._worker: asyncio.Task[None] | None = None
         self._delivery_task: asyncio.Task[None] | None = None
@@ -1099,6 +1101,8 @@ class ClauseSpeechDelivery:
     async def _run(self) -> None:
         while True:
             job = await self._queue.get()
+            self._current_clause_id = str(job.clause.clause_id)
+            self._current_say_id = getattr(job.clause, "say_id", None)
             task = asyncio.create_task(self._deliver(job), name="main-agent-speech-clause")
             self._delivery_task = task
             try:
@@ -1123,6 +1127,7 @@ class ClauseSpeechDelivery:
             if port is None:
                 raise SpeechProviderUnavailable("renderer is unavailable")
             self._current_clause_id = clause_id
+            self._current_say_id = getattr(clause, "say_id", None)
             self._current_port = port
             if await port.offer_clause(clause) is not None:
                 raise SpeechProviderUnavailable("renderer rejected clause")
@@ -1162,6 +1167,7 @@ class ClauseSpeechDelivery:
                     pass
             if self._current_clause_id == clause_id:
                 self._current_clause_id = None
+                self._current_say_id = None
                 self._current_port = None
 
     def acknowledge(self, clause_id: str, *, complete: bool) -> bool:
@@ -1171,16 +1177,23 @@ class ClauseSpeechDelivery:
         waiter.set_result(bool(complete))
         return True
 
-    async def cancel_current(self, reason: str = "confirmed_barge_in") -> None:
+    async def cancel_current(self, reason: str = "confirmed_barge_in", *, say_id: str | None = None) -> None:
+        """Cancel all pending delivery, or only the invalidated SAY without disturbing another scope."""
         drained: list[_SpeechJob] = []
+        retained: list[_SpeechJob] = []
         while True:
             try:
-                drained.append(self._queue.get_nowait())
+                job = self._queue.get_nowait()
+                (drained if say_id is None or getattr(job.clause, "say_id", None) == say_id else retained).append(job)
             except asyncio.QueueEmpty:
                 break
-        clause_id = self._current_clause_id
-        port = self._current_port
-        task = self._delivery_task
+        for job in retained:
+            self._queue.task_done()
+            self._queue.put_nowait(job)
+        selected = say_id is None or self._current_say_id == say_id
+        clause_id = self._current_clause_id if selected else None
+        port = self._current_port if selected else None
+        task = self._delivery_task if selected else None
         for job in drained:
             await self.runtime.renderer_ack(str(job.clause.clause_id), complete=False)
             self._queue.task_done()

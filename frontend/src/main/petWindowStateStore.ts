@@ -1,55 +1,16 @@
-import { existsSync, mkdirSync, readFileSync, writeFileSync } from "node:fs";
-import { join } from "node:path";
-import { z } from "zod";
-import type { WindowRectangle } from "./windowPlacement";
-
-const STATE_FILE_NAME = "pet-window-state.json";
-
-const windowRectangleSchema = z.object({
-  x: z.number().finite(),
-  y: z.number().finite(),
-  width: z.number().finite().positive(),
-  height: z.number().finite().positive()
-});
-
-const petWindowStateSchema = z.object({
-  bounds: windowRectangleSchema.optional()
-});
-
+/** Persists Pet window bounds by immutable Profile ID; legacy unowned bounds remain separate.
+ * Main selects a key only after activation, preventing A's layout writes or restoration from
+ * changing B. Atomic file replacement preserves the previous geometry on interrupted writes. */
+import { existsSync, mkdirSync, readFileSync, writeFileSync, renameSync } from 'node:fs';
+import { join } from 'node:path';
+import { z } from 'zod';
+import type { WindowRectangle } from './windowPlacement';
+const rectangle=z.object({x:z.number().finite(),y:z.number().finite(),width:z.number().finite().positive(),height:z.number().finite().positive()});
+const schema=z.object({bounds:rectangle.optional(),profiles:z.record(z.string(),rectangle).default({})});
 export class PetWindowStateStore {
-  private bounds: WindowRectangle | undefined;
-  private readonly filePath: string;
-
-  constructor(private readonly userDataPath: string) {
-    this.filePath = join(userDataPath, STATE_FILE_NAME);
-    this.bounds = this.load();
-  }
-
-  getBounds(): WindowRectangle | undefined {
-    return this.bounds ? { ...this.bounds } : undefined;
-  }
-
-  saveBounds(bounds: WindowRectangle): void {
-    this.bounds = { ...bounds };
-    this.persist();
-  }
-
-  private load(): WindowRectangle | undefined {
-    if (!existsSync(this.filePath)) {
-      return undefined;
-    }
-
-    try {
-      const parsed = petWindowStateSchema.safeParse(JSON.parse(readFileSync(this.filePath, "utf8")));
-
-      return parsed.success ? parsed.data.bounds : undefined;
-    } catch {
-      return undefined;
-    }
-  }
-
-  private persist(): void {
-    mkdirSync(this.userDataPath, { recursive: true });
-    writeFileSync(this.filePath, `${JSON.stringify({ bounds: this.bounds }, null, 2)}\n`, "utf8");
-  }
+ private state:z.infer<typeof schema>={profiles:{}};
+ private readonly filePath:string;
+ constructor(private readonly userDataPath:string){this.filePath=join(userDataPath,'pet-window-state.json');if(existsSync(this.filePath)){try{this.state=schema.parse(JSON.parse(readFileSync(this.filePath,'utf8')));}catch{/* Invalid legacy geometry is ignored, never applied to a different Profile. */}}}
+ getBounds(profileId?:string):WindowRectangle|undefined{const bounds=profileId?this.state.profiles[profileId]:this.state.bounds;return bounds?{...bounds}:undefined;}
+ saveBounds(bounds:WindowRectangle,profileId?:string):void{const safe=rectangle.parse(bounds);if(profileId)this.state.profiles[profileId]=safe;else this.state.bounds=safe;mkdirSync(this.userDataPath,{recursive:true});writeFileSync(this.filePath+'.tmp',JSON.stringify(this.state,null,2)+'\n','utf8');renameSync(this.filePath+'.tmp',this.filePath);}
 }

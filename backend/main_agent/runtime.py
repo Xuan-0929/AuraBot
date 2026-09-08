@@ -103,6 +103,12 @@ class RendererClause:
     invoke_id: str
     input_id: str
     revision: int
+    profile_id: str = ""
+    generation: int = 0
+    config_revision: int = 0
+    say_id: str = ""
+    call_id: str = ""
+    avatar: Mapping[str, str] | None = None
 
 
 @dataclass(slots=True)
@@ -224,6 +230,8 @@ class MainAgentRuntime:
         self.user_message_listener = None
         self.state_listener = None
         self.error_listener = None
+        self.say_closed_listener = None
+        self.generation = 0
         self._published_segments: set[str] = set()
         self._speech_settled = asyncio.Event()
         self._speech_settled.set()
@@ -253,6 +261,8 @@ class MainAgentRuntime:
             state_provider=self._effect_fence,
             observation_acceptance_hook=self._observation_accepted,
             observation_completion_hook=self._observation_completed,
+            say_closed_hook=self._say_closed,
+            diagnostic_hook=self._increment_metric,
             observation_semaphore=observation_semaphore,
         )
 
@@ -1033,6 +1043,12 @@ class MainAgentRuntime:
                 request.invoke_id,
                 request.input_id,
                 request.revision,
+                self.owner_profile_id or "",
+                self.generation,
+                request.tool_surface.avatar_capabilities.revision,
+                f"{request.invoke_id}:{call.call_id}",
+                call.call_id,
+                call.avatar or {},
             )
         try:
             await self.renderer(offer)
@@ -1042,6 +1058,11 @@ class MainAgentRuntime:
         except BaseException:
             await self.renderer_failed(clause_id)
             raise
+
+    async def _say_closed(self, event: dict[str, Any]) -> None:
+        if self.say_closed_listener is not None:
+            await self.say_closed_listener({**event, "generation": self.generation,
+                "profile_id": self.owner_profile_id or event["profile_id"]})
 
     async def renderer_tts_queued(self, clause_id: str) -> bool:
         """Advance a delivery-owned clause only after bounded queue admission."""

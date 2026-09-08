@@ -1,6 +1,7 @@
 """Read one immutable Electron-owned JSON configuration snapshot for Backend composition.
 
-Only the backend section enters domain settings; version/revision stay process metadata. Missing files
+Legacy version 1 and Profile-owned version 2 snapshots share the Backend section; persona is never a
+Backend configuration source. Version/revision stay process metadata. Missing files
 produce safe blank defaults. JSON strings stay literal, and saves never hot reload a running process."""
 
 from __future__ import annotations
@@ -71,11 +72,11 @@ class Config(Mapping[str, Any]):
                 return self
 
             try:
-                loaded = json.loads(resolved_path.read_text(encoding="utf-8")) if resolved_path.is_file() else {"version": 1, "revision": 0, "backend": {}}
+                loaded = json.loads(resolved_path.read_text(encoding="utf-8")) if resolved_path.is_file() else {"version": 2, "revision": 0, "backend": {}}
             except (OSError, UnicodeError, json.JSONDecodeError) as exc:
                 raise ConfigError("Invalid AuraBot JSON configuration") from exc
-            if not isinstance(loaded, dict) or loaded.get("version") != 1:
-                raise ConfigError("AuraBot configuration must be a version 1 object")
+            if not isinstance(loaded, dict) or type(loaded.get("version")) is not int or loaded["version"] not in {1, 2}:
+                raise ConfigError("AuraBot configuration must be a version 1 or 2 object")
             revision = loaded.get("revision", 0)
             backend = loaded.get("backend", {})
             if type(revision) is not int or revision < 0 or not isinstance(backend, dict):

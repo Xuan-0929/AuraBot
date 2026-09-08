@@ -43,7 +43,11 @@ class ToolHarness:
         observation_acceptance_hook: Callable[[str, ToolCall], str] | None = None,
         observation_completion_hook: Callable[[ObservationOutcome], Any] | None = None,
         observation_semaphore: asyncio.Semaphore | None = None,
+        say_closed_hook: Callable[[dict[str, Any]], Any] | None = None,
+        diagnostic_hook: Callable[[str], None] | None = None,
     ) -> None:
+        self.say_closed_hook = say_closed_hook
+        self.diagnostic_hook = diagnostic_hook
         self.policy = policy
         self.executors = dict(executors)
         self.state_provider = state_provider
@@ -126,6 +130,38 @@ class ToolHarness:
         streamed: dict[int, int] = {}
         streamed_receipts: list[StreamedSpeechReceipt] = []
         early_codes: dict[int, str] = {}
+        frozen: dict[int, dict[str, str]] = {}
+        counts: dict[int, int] = {}
+        closed: set[int] = set()
+        cancelled_scopes: set[int] = set()
+
+        async def close_say(call_id: str, index: int, cancelled: bool = False) -> None:
+            if index not in counts or index in cancelled_scopes or (index in closed and not cancelled):
+                return
+            closed.add(index)
+            if cancelled:
+                cancelled_scopes.add(index)
+            if self.say_closed_hook is not None:
+                try:
+                    await self.say_closed_hook({"say_id": f"{invoke_id}:{call_id}", "invoke_id": invoke_id,
+                        "call_id": call_id, "clause_count": counts[index], "cancelled": cancelled,
+                        "profile_id": surface.avatar_capabilities.profile_id,
+                        "config_revision": surface.avatar_capabilities.revision})
+                except Exception:
+                    pass  # Visual notification failure never invalidates delivered text.
+
+        async def deliver(clause: SayClause) -> str | None:
+            avatar = frozen.get(clause.index, surface.avatar_capabilities.validate(clause.avatar))
+            if self.diagnostic_hook is not None and clause.index not in frozen and clause.avatar is not None and clause.avatar != avatar:
+                self.diagnostic_hook("main.avatar.invalid")
+            code = await self._stream_say(clause, invoke_id, surface, event, avatar)
+            if code is None:
+                frozen.setdefault(clause.index, avatar)
+                counts[clause.index] = counts.get(clause.index, 0) + 1
+                streamed[clause.index] = streamed.get(clause.index, 0) + len(clause.text)
+                streamed_receipts.append(StreamedSpeechReceipt(clause.call_id, clause.text, len(streamed_receipts)))
+            return code
+
         try:
             async for chunk in _until_cancelled(chunks, event):
                 for clause in parser.feed(chunk):
@@ -134,21 +170,42 @@ class ToolHarness:
                     if any(index != clause.index for index in streamed):
                         early_codes[clause.index] = "say_limit_exceeded"
                         continue
-                    code = await self._stream_say(clause, invoke_id, surface, event)
+                    code = await deliver(clause)
                     if code:
                         early_codes[clause.index] = code
                         continue
                     parser.accept_say_clause(clause.index, clause.text)
-                    streamed[clause.index] = streamed.get(clause.index, 0) + len(clause.text)
-                    streamed_receipts.append(StreamedSpeechReceipt(clause.call_id, clause.text, len(streamed_receipts)))
+                # Close each complete SAY immediately; a later slow tool must not own its lifetime.
+                for call in parser.finish():
+                    stream = parser.say_stream(call.index)
+                    if stream is None or not stream.object_closed or call.index in closed or call.index in early_codes:
+                        continue
+                    if not parser.can_stream_say(call.index, self.policy.max_calls) or any(index != call.index for index in streamed):
+                        continue
+                    if code := self.policy.validate_arguments(call, surface):
+                        early_codes[call.index] = code
+                        await close_say(call.call_id, call.index, True)
+                        continue
+                    for text in segment_say_text(str(call.arguments["text"])[streamed.get(call.index, 0):], final=True):
+                        code = await deliver(SayClause(call.index, call.call_id, text, stream.avatar))
+                        if code:
+                            early_codes[call.index] = code
+                            break
+                    if self.diagnostic_hook is not None and call.index in frozen and surface.avatar_capabilities.validate(stream.avatar) != frozen[call.index]:
+                        self.diagnostic_hook("main.avatar.late")
+                    await close_say(call.call_id, call.index, call.index in early_codes)
         except asyncio.CancelledError:
             event.set()
+            for call in parser.finish():
+                await close_say(call.call_id, call.index, True)
             raise
         except Exception:
             parser.protocol_error = "provider_stream_error"
 
         calls = parser.finish()
         if event.is_set():
+            for call in calls:
+                await close_say(call.call_id, call.index, True)
             return InvokeSettlement(
                 invoke_id,
                 tuple(ToolReceipt(call.call_id, call.name, False, "invoke_cancelled") for call in calls),
@@ -157,6 +214,8 @@ class ToolHarness:
                 assistant_content_discarded=parser.assistant_content_seen,
             )
         if parser.protocol_error:
+            for call in calls:
+                await close_say(call.call_id, call.index, True)
             return InvokeSettlement(
                 invoke_id,
                 tuple(ToolReceipt(call.call_id, call.name, False, "provider_stream_error") for call in calls)
@@ -189,15 +248,17 @@ class ToolHarness:
             elif definition.effect is EffectClass.SAY:
                 codes[call.index] = "accepted"
                 for text in segment_say_text(str(call.arguments["text"])[streamed.get(call.index, 0):], final=True):
-                    code = await self._execute(ToolCall(call.call_id, call.name, {"text": text}, call.index), invoke_id, event)
-                    codes[call.index] = code
-                    if code != "accepted":
+                    code = await deliver(SayClause(call.index, call.call_id, text, call.arguments.get("avatar")))
+                    codes[call.index] = code or "accepted"
+                    if code:
                         break
-                    streamed_receipts.append(StreamedSpeechReceipt(call.call_id, text, len(streamed_receipts)))
+                await close_say(call.call_id, call.index, codes[call.index] != "accepted")
             elif definition.effect is EffectClass.SAFE_READ:
                 codes[call.index] = self._detach(call, invoke_id)
             else:
                 codes[call.index] = await self._execute(call, invoke_id, event)
+        for call in calls:
+            await close_say(call.call_id, call.index, codes.get(call.index) != "accepted")
         receipts = [self._receipt(call, codes.get(call.index, "executor_failed")) for call in calls]
         if parser.assistant_content_seen:
             receipts.append(ToolReceipt("", "assistant_content", False, "assistant_content_discarded"))
@@ -209,14 +270,14 @@ class ToolHarness:
         )
 
     async def _stream_say(
-        self, clause: SayClause, invoke_id: str, surface: ToolSurface, event: asyncio.Event
+        self, clause: SayClause, invoke_id: str, surface: ToolSurface, event: asyncio.Event, avatar: Mapping[str, str]
     ) -> str | None:
         if "say_to_user" not in surface.names:
             return "tool_not_exposed"
         if code := self._fence_code(EffectClass.SAY, invoke_id, surface, event):
             return code
         result = await self._execute(
-            ToolCall(clause.call_id, "say_to_user", {"text": clause.text}, clause.index),
+            ToolCall(clause.call_id, "say_to_user", {"text": clause.text}, clause.index, avatar=avatar),
             invoke_id,
             event,
         )

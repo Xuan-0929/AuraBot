@@ -1,6 +1,6 @@
 # AuraBot
 
-AuraBot 是带 Live2D 桌宠的陪伴型桌面 AI。文字与语音通过同一个 Main Agent 处理；控制台显示主对话历史和只读 Task 状态，设置窗口管理模型、语音、人格、桌宠与工作目录。
+AuraBot 是带 Live2D 桌宠的陪伴型桌面 AI。文字与语音通过同一个 Main Agent 处理；控制台显示主对话历史和只读 Task 状态，设置窗口管理全局模型 API、语音、桌宠与工作目录；Profile 管理页独立配置人格、Memory 归属、Live2D 模型及动作表情。
 
 ## 当前集成边界
 
@@ -41,15 +41,15 @@ npm run dev
 
 Electron Main 是唯一 Backend 进程 owner；开发入口启动 Electron/Vite，再由 Electron 启动 Python。Vite 使用 `127.0.0.1:6400`，Backend 使用 `127.0.0.1:6401`。不要另外启动第二个 Backend；端口被其他进程占用时应用报告错误，不终止其他进程。
 
-首次运行自动创建 `<Electron userData>/desktop-v2/settings.json`。打开设置，填写 Main Agent 模型与密钥，先“保存”，再“应用”。Task/Pi 和语音可分别配置；更改人格也需保存后应用。无需复制或维护仓库 YAML 配置。
+首次运行自动创建 `<Electron userData>/desktop-v2/settings.json`。打开设置，填写 Main Agent 模型与密钥，先“保存”，再“应用”。Task/Pi 和语音可分别配置；人格和 Live2D 在 Profile 详情独立保存、应用。无需复制或维护仓库 YAML 配置。
 
 `AURABOT_USER_DATA_DIR` 可指定隔离的数据根，此时直接使用该目录，不再追加 `desktop-v2`。Electron 将 JSON 路径通过 `AURABOT_CONFIG_PATH` 传给 Python；Python 只在启动时读取。
 
 ## 配置、数据与验证
 
-- “保存”只写 JSON。“应用”使已保存设置生效；Backend 或人格变更先检查忙碌状态，经用户明确确认后才中断工作并重启。新 Backend 健康且版本匹配后才标记已应用。
-- 桌面交付历史位于独立的 `conversation-history.sqlite3`，按游标分页。ProfileStorage 仅保存身份/已应用人格，Context 的 Task 最新事实单独去重；Context、Memory 和 Task 各自拥有存储；桌面历史不会回灌 Main Agent。
-- 本轮使用全新运行数据，不迁移旧配置或数据库。数据重置只针对枚举确认的 AuraBot 专属旧数据，保留源码、模型资产、缓存和共享第三方数据。
+- 全局设置保存/应用沿用 Backend 重启边界；Profile 人格/视觉保存与应用独立，在明确会话边界更换当前 Profile 资源，无需重启整个 Python 或其他 Task。
+- 每个 Profile 的 Soul、Context、Memory、Qdrant、adaptor 和自有模型包位于独立目录。桌面交付历史保存在 `conversation-history.sqlite3`，按 Profile 分区、按游标分页；回执验证原 Profile/generation，历史不会回灌 Main Agent。
+- 启动时迁移旧 Profile/Soul 与已保存编辑，SQLite backup 保留 WAL，Memory 在安全关闭条件下迁移；原数据和备份保留，不重置用户数据。详见 [Profile 与 Live2D](docs/profile-live2d.md)。
 
 本地检查入口：
 
@@ -66,6 +66,7 @@ cd frontend
 npm run typecheck
 npm test
 npm run build
+npm run test:e2e
 ~~~
 
 自动测试不等于真实麦克风、音频设备、STT/TTS 或模型 Provider 验收。实际验证结果与限制以 [本轮集成记录](docs/frontend-integration-work.md) 为准；语音安装见 [语音资产](docs/main-agent-speech-assets.md)，完整索引见 [文档](docs/README.md)。

@@ -1,6 +1,6 @@
 """Checks Main Agent tools through the exposed capability, stream, and effect boundaries.
 
-The suite protects mode/grant exposure, the text-only incremental say parser, effect grouping, fencing,
+The suite protects mode/grant exposure, the incremental text/avatar say parser, effect grouping, fencing,
 say-first execution before the provider finishes later tools, and detached Observation callbacks. Removed schema self-validation, motion tokens,
 alternate provider event dialects, private caches, and thread-based limiter internals are not tested.
 """
@@ -51,7 +51,7 @@ class ToolSurfaceTests(unittest.TestCase):
         self.assertNotIn("say_to_user", surface.names)
         self.assertNotIn("task_assign", surface.names)
 
-    def test_current_grant_exposes_text_only_say_and_durable_tools(self) -> None:
+    def test_current_grant_exposes_optional_avatar_say_and_durable_tools(self) -> None:
         grant = ResponseGrant("g1", "i1", 1, 2)
         surface = self.policy.freeze_surface(
             InvokeMode.RESPOND,
@@ -64,7 +64,7 @@ class ToolSurfaceTests(unittest.TestCase):
         self.assertIn("say_to_user", surface.names)
         self.assertIn("task_assign", surface.names)
         say = next(item for item in surface.provider_schemas() if item["function"]["name"] == "say_to_user")
-        self.assertEqual(tuple(say["function"]["parameters"]["properties"]), ("text",))
+        self.assertEqual(tuple(say["function"]["parameters"]["properties"]), ("text", "avatar"))
         self.assertNotIn("motion_token", str(surface.provider_schemas()))
 
 

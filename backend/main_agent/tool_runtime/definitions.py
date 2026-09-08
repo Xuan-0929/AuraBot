@@ -9,9 +9,11 @@ from __future__ import annotations
 
 import json
 from collections.abc import Mapping, Sequence
-from dataclasses import dataclass
+from dataclasses import dataclass, field, replace
 from enum import StrEnum
 from typing import Any
+
+from ..avatar import AvatarCapabilities
 
 
 class InvokeMode(StrEnum):
@@ -74,6 +76,7 @@ class ToolCall:
     index: int = 0
     raw_arguments: str = ""
     parse_error: str | None = None
+    avatar: Mapping[str, str] | None = None
 
 
 @dataclass(frozen=True, slots=True)
@@ -129,6 +132,7 @@ class ToolSurface:
     speech_candidate: bool
     confirmed_speech: bool
     definitions: tuple[ToolDefinition, ...]
+    avatar_capabilities: AvatarCapabilities = field(default_factory=AvatarCapabilities)
 
     @property
     def names(self) -> frozenset[str]:
@@ -150,6 +154,7 @@ class ToolSurfacePolicy:
         workspace_ids: Sequence[str] = (),
         task_controls: Sequence[str] = (),
         observation_tools: Sequence[str] = (),
+        avatar_capabilities: AvatarCapabilities | None = None,
         max_calls: int = 8,
         max_durable_calls: int = 1,
         max_note_calls: int = 1,
@@ -166,6 +171,16 @@ class ToolSurfacePolicy:
         self.max_durable_calls = max_durable_calls
         self.max_note_calls = max_note_calls
         self._definitions = _catalog(tuple(sorted(set(workspace_ids))), controls, observations)
+        self.set_avatar_capabilities(avatar_capabilities or AvatarCapabilities())
+
+    def set_avatar_capabilities(self, capabilities: AvatarCapabilities) -> None:
+        self.avatar_capabilities = capabilities
+        self._definitions = tuple(
+            replace(definition, description=capabilities.description(), parameters=_object({
+                "text": _text(maximum=8000), "avatar": capabilities.schema(),
+            }, ("text",))) if definition.name == "say_to_user" else definition
+            for definition in self._definitions
+        )
         self._by_name = {definition.name: definition for definition in self._definitions}
 
     @property
@@ -209,6 +224,7 @@ class ToolSurfacePolicy:
             speech_candidate,
             confirmed_speech,
             tuple(definition for definition in self._definitions if definition.effect in effects),
+            self.avatar_capabilities,
         )
 
     def validate_arguments(self, call: ToolCall, surface: ToolSurface) -> str | None:
@@ -217,6 +233,10 @@ class ToolSurfacePolicy:
         definition = surface.definition(call.name)
         if definition is None:
             return "tool_not_exposed"
+        if call.name == "say_to_user":
+            if not isinstance(call.arguments, Mapping) or set(call.arguments) - {"text", "avatar"}:
+                return "schema_invalid"
+            return None if _matches({"text": call.arguments.get("text")}, _object({"text": _text(maximum=8000)}, ("text",))) else "schema_invalid"
         return None if _matches(call.arguments, definition.parameters) else "schema_invalid"
 
 

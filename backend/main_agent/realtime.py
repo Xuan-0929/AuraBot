@@ -11,6 +11,7 @@ from __future__ import annotations
 import asyncio
 import json
 import secrets
+import sqlite3
 import time
 from collections import OrderedDict
 from dataclasses import dataclass
@@ -21,7 +22,8 @@ from fastapi import APIRouter, HTTPException, Request, Response, WebSocket, stat
 from pydantic import BaseModel, ConfigDict, Field, field_validator
 from starlette.websockets import WebSocketDisconnect
 
-from .lifecycle import ProfileResources
+from .lifecycle import ActiveProfileManager, ProfileResources
+from ..task.models import TaskStatus
 
 
 SUBPROTOCOL = "aurabot.main-agent.v1"
@@ -119,6 +121,7 @@ class VoiceSession:
     generation: int
     send_lock: asyncio.Lock
     current_clause: str | None = None
+    current_say_id: str | None = None
     closed: bool = False
     mode: str = "text"
     clause_mode: str = "text"
@@ -172,6 +175,7 @@ class RealtimeHub:
         self.allowed_origins = frozenset(_origin(value) for value in configured)
         self.tokens = token_store or CapabilityTokens()
         self.profile_activator = profile_activator
+        self.profile_session_renewer: Callable[[str, int], Awaitable[int]] | None = None
         self.mic_queue = MicFrameQueue()
         self.active_profile_id: str | None = None
         self.active_generation = 0
@@ -198,13 +202,15 @@ class RealtimeHub:
         except ValueError:
             return False
 
-    async def activate(self, profile_id: str, soul: str) -> int:
+    async def activate(self, profile_id: str, soul: str, **snapshot: Any) -> int:
         if self.profile_activator is None:
             raise RuntimeError("main_agent_unavailable")
+        if self.activation_lock.locked():
+            raise RuntimeError("activation_in_progress")
         async with self.activation_lock:
             if not self.accepting:
                 raise RuntimeError("backend_restarting")
-            generation = await self.profile_activator(profile_id, soul)
+            generation = await self.profile_activator(profile_id, soul, **snapshot)
             if self.active_profile_id != profile_id or self.active_generation != generation:
                 raise RuntimeError("profile_unavailable")
             return generation
@@ -224,6 +230,7 @@ class RealtimeHub:
             profile.runtime.user_message_listener = self.user_message
             profile.runtime.state_listener = self.agent_state
             profile.runtime.error_listener = self.session_error
+            profile.runtime.say_closed_listener = self.say_closed
 
     async def clear_active(self, profile_id: str, generation: int) -> None:
         async with self._session_lock:
@@ -245,7 +252,8 @@ class RealtimeHub:
             )
             self.session = session
             self.mic_queue.clear()
-        await session.send({"type": "session.ready", "profile_id": session.profile_id})
+        await session.send({"type": "session.ready", "profile_id": session.profile_id,
+            "generation": session.generation, "config_revision": self.profile.revision if self.profile else 0})
         return session
 
     async def detach(self, session: VoiceSession) -> None:
@@ -303,12 +311,22 @@ class RealtimeHub:
             return "session_replaced"
         if session.current_clause is not None:
             return "clause_in_progress"
+        if getattr(clause, "profile_id", "") and (
+            clause.profile_id != session.profile_id or clause.generation != session.generation
+            or clause.config_revision != (self.profile.revision if self.profile else 0)
+        ):
+            return "stale_avatar_scope"
         session.current_clause = str(clause.clause_id)
+        session.current_say_id = getattr(clause, "say_id", None)
         session.clause_mode = session.mode
         session.clause_done = asyncio.Event()
         session.audio_finished = False
         try:
-            await session.send({"type": "clause.offer", "clause_id": session.current_clause, "text": str(clause.text), "mode": session.clause_mode})
+            await session.send({"type": "clause.offer", "clause_id": session.current_clause, "text": str(clause.text), "mode": session.clause_mode,
+                "profile_id": session.profile_id, "generation": session.generation,
+                "config_revision": self.profile.revision if self.profile else 0,
+                "say_id": getattr(clause, "say_id", ""), "call_id": getattr(clause, "call_id", ""),
+                "invoke_id": getattr(clause, "invoke_id", ""), "avatar": dict(getattr(clause, "avatar", None) or {})})
             await self.agent_state("speaking")
         except Exception:
             session.current_clause = None
@@ -358,6 +376,7 @@ class RealtimeHub:
         kwargs = {"mode": "text"} if session.clause_mode == "text" else {}
         accepted = bool(await self.runtime.renderer_ack(clause_id, complete=complete, **kwargs)) if self.runtime else False
         session.current_clause = None
+        session.current_say_id = None
         if session.clause_done is not None:
             session.clause_done.set()
         if self.speech is not None and session.clause_mode == "voice":
@@ -383,8 +402,19 @@ class RealtimeHub:
 
     async def user_message(self, message_id: str, text: str, source: str) -> None:
         if self.session is not None:
-            await self.session.send({"type": "user.message", "message_id": message_id, "text": text, "source": source})
+            await self.session.send({"type": "user.message", "message_id": message_id, "text": text, "source": source,
+                "profile_id": self.session.profile_id, "generation": self.session.generation})
             await self.agent_state("thinking")
+
+    async def say_closed(self, event: dict[str, Any]) -> None:
+        session = self.session
+        if session is not None and event.get("profile_id") == session.profile_id and event.get("generation") == session.generation:
+            await session.send({"type": "say.closed", **event})
+            if event.get("cancelled"):
+                if self.speech is not None:
+                    await self.speech.delivery.cancel_current("say_protocol_cancelled", say_id=event["say_id"])
+                elif session.current_clause is not None and session.current_say_id == event["say_id"]:
+                    await self.cancel_clause(RendererPort(self, session), session.current_clause, "say_protocol_cancelled")
 
     async def render(self, clause: Any) -> None:
         port = await self.acquire_renderer_port()
@@ -495,17 +525,20 @@ class RealtimeHub:
                 await self._close_locked(self.session, "backend_shutdown")
 
 
+class ProfileActivationRequest(BaseModel):
+    model_config = ConfigDict(extra="forbid")
+    profile_id: str = Field(pattern=r"^[A-Za-z0-9][A-Za-z0-9_-]{0,127}$")
+    revision: int = Field(ge=1, strict=True)
+    soul: str = Field(min_length=1, max_length=32 * 1024)
+    adaptor: dict[str, Any] = Field(default_factory=dict)
+    model_version: str = Field(default="", max_length=128)
+    force: bool = False
+
+
 class RealtimeTokenRequest(BaseModel):
     model_config = ConfigDict(extra="forbid", populate_by_name=True)
     profile_id: str = Field(alias="profileId", pattern=r"^[A-Za-z0-9][A-Za-z0-9_-]{0,127}$")
-    soul: str = Field(max_length=32 * 1024)
-
-    @field_validator("soul")
-    @classmethod
-    def nonempty_soul(cls, value: str) -> str:
-        if not value.strip():
-            raise ValueError("soul must be non-empty")
-        return value
+    revision: int = Field(ge=1, strict=True)
 
 
 class RealtimeTokenResponse(BaseModel):
@@ -513,6 +546,9 @@ class RealtimeTokenResponse(BaseModel):
     token: str
     expires_in_ms: int = Field(alias="expiresInMs")
     subprotocol: str
+    profile_id: str
+    revision: int
+    generation: int
 
 
 router = APIRouter(prefix="/api/v1/main-agent", tags=["main-agent-realtime"])
@@ -520,6 +556,78 @@ router = APIRouter(prefix="/api/v1/main-agent", tags=["main-agent-realtime"])
 
 def _hub(scope: Request | WebSocket) -> RealtimeHub:
     return scope.app.state.main_agent_realtime
+
+
+def _require_origin(request: Request) -> RealtimeHub:
+    hub = _hub(request)
+    if not hub.origin_allowed(request.headers.get("origin")):
+        raise HTTPException(403, "origin is not allowed")
+    return hub
+
+
+@router.get("/profile/activation-check")
+async def profile_activation_check(request: Request) -> dict[str, Any]:
+    hub = _require_origin(request)
+    if hub.activation_lock.locked():
+        return {"busy": True, "reason": "activation_in_progress"}
+    busy = bool(hub.runtime is not None and getattr(hub.runtime, "restart_busy", lambda: False)())
+    return {"busy": busy, "reason": "profile_busy" if busy else None}
+
+
+@router.post("/profile/activate")
+async def activate_profile(body: ProfileActivationRequest, request: Request) -> dict[str, Any]:
+    hub = _require_origin(request)
+    try:
+        generation = await hub.activate(body.profile_id, body.soul, revision=body.revision,
+            adaptor=body.adaptor, model_version=body.model_version, force=body.force)
+    except ValueError as error:
+        raise HTTPException(422, str(error)) from None
+    except RuntimeError as error:
+        code = str(error)
+        raise HTTPException(409 if code in {"profile_busy", "activation_in_progress"} else 503,
+            code if code in {"profile_busy", "activation_in_progress", "profile_cleanup_incomplete"} else "main_agent_unavailable") from None
+    except Exception:
+        raise HTTPException(503, "main_agent_unavailable") from None
+    capabilities = getattr(getattr(hub.runtime, "tool_policy", None), "avatar_capabilities", None)
+    names = {"motions": list(capabilities.motion_names), "expressions": [name for name, _ in capabilities.expressions]} if capabilities else {"motions": [], "expressions": []}
+    enabled = sum(1 for entry in body.adaptor.get("entries", {}).values() if entry.get("agent_enabled"))
+    visual_status = "unconfigured" if not body.adaptor.get("model") else (
+        "degraded" if not capabilities or not capabilities.model_available or enabled > len(names["motions"]) + len(names["expressions"]) else "ready")
+    return {"profile_id": body.profile_id, "revision": body.revision, "generation": generation,
+        "runtime_active": True, "visual_status": visual_status, "capability_names": names}
+
+
+@router.get("/profile/{profile_id}/delete-check")
+async def profile_delete_check(profile_id: str, request: Request) -> dict[str, Any]:
+    hub = _require_origin(request)
+    profiles = request.app.state.main_agent_profiles
+    try:
+        identifier = ActiveProfileManager.validate_profile_id(profile_id)
+        path = profiles.profile_path(identifier)
+    except ValueError:
+        raise HTTPException(422, "invalid_profile_id") from None
+    if profiles._lock.locked():
+        return {"allowed": False, "reason": "activation_in_progress"}
+    if identifier in profiles._retiring:
+        return {"allowed": False, "reason": "profile_cleanup_incomplete"}
+    if identifier == hub.active_profile_id:
+        return {"allowed": False, "reason": "active_profile"}
+    page = await request.app.state.task_manager.list_tasks(owner_profile_id=identifier, limit=1,
+        statuses=(TaskStatus.QUEUED, TaskStatus.RUNNING, TaskStatus.WAITING, TaskStatus.PAUSED))
+    if page.items:
+        return {"allowed": False, "reason": "unfinished_tasks"}
+    context = path / "context.sqlite3"
+    if context.is_symlink():
+        return {"allowed": False, "reason": "context_state_unavailable"}
+    if context.exists():
+        try:
+            with sqlite3.connect(context.as_uri() + "?mode=ro", uri=True) as db:
+                if db.execute("SELECT 1 FROM pending_conversation_archive LIMIT 1").fetchone() or db.execute(
+                    "SELECT 1 FROM context_events WHERE event_type IN ('user_segment','assistant_clause') LIMIT 1").fetchone():
+                    return {"allowed": False, "reason": "unarchived_context"}
+        except sqlite3.Error:
+            return {"allowed": False, "reason": "context_state_unavailable"}
+    return {"allowed": True, "reason": None}
 
 
 @router.post("/realtime-token", response_model=RealtimeTokenResponse, status_code=status.HTTP_201_CREATED)
@@ -533,15 +641,22 @@ async def issue_realtime_token(
     if not hub.origin_allowed(origin):
         raise HTTPException(403, "origin is not allowed")
     assert origin is not None
+    if hub.active_profile_id != body.profile_id or hub.profile is None or hub.profile.revision != body.revision:
+        raise HTTPException(409, "profile_snapshot_not_active")
+    if hub.activation_lock.locked():
+        raise HTTPException(409, "activation_in_progress")
+    if hub.profile_session_renewer is None:
+        raise HTTPException(503, "main_agent_unavailable")
     try:
-        generation = await hub.activate(body.profile_id, body.soul)
-    except Exception as exc:
-        raise HTTPException(503, "main_agent_unavailable") from exc
+        async with hub.activation_lock:
+            generation = await hub.profile_session_renewer(body.profile_id, body.revision)
+    except RuntimeError as error:
+        raise HTTPException(409, "activation_in_progress" if str(error) == "activation_in_progress" else "profile_snapshot_not_active") from None
     response.headers["Cache-Control"] = "no-store"
     return RealtimeTokenResponse(
         token=hub.tokens.issue(_origin(origin), body.profile_id, generation),
         expiresInMs=int(hub.tokens.ttl_seconds * 1_000),
-        subprotocol=SUBPROTOCOL,
+        subprotocol=SUBPROTOCOL, profile_id=body.profile_id, revision=body.revision, generation=generation,
     )
 
 

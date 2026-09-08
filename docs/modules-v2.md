@@ -8,7 +8,7 @@ flowchart TB
   SETTINGS["Settings<br/>保存 / 应用"] --> MAIN
   MAIN --> CONFIG["settings.json"]
   MAIN --> HISTORY["conversation-history.sqlite3"]
-  MAIN --> PROFILE["profile.sqlite3<br/>身份 · 已应用人格投影"]
+  MAIN --> PROFILE["profiles/&lt;id&gt;/<br/>Soul · adaptor · applied"]
   MAIN -->|启动 / 重启 / 退出| BACKEND["唯一 Python Backend"]
   MAIN -->|转发文字| PET["Pet Renderer<br/>Live2D · 唯一 WebSocket · 音频"]
   PET -->|交付回执| MAIN
@@ -37,19 +37,19 @@ flowchart TB
 | TaskManager | Python 控制面，拥有状态、队列、事件和 Pi 生命周期；业务入口只有 Main Agent，直接向桌面只输出状态 SSE。 |
 | Pi | 执行面，每个活动 Task 一个 RPC 进程，负责自身 Agent Loop、模型与工具。 |
 
-文字在没有语音资源时也能运行。Profile token 激活 Context、Memory 和文字 Runtime；`voice.start` 才加载语音依赖与资产。
+文字在没有语音资源时也能运行。Main 显式激活冻结 Profile 快照后打开 Context、Memory 和文字 Runtime；token 仅更新当前身份的连接代际；`voice.start` 才加载语音依赖与资产。
 
 ## 数据规则
 
-1. `settings.json` 是运行设置和人格的事实源；Python 仅读取启动快照，不热加载。
-2. `profile.sqlite3` 保存桌面身份及已应用人格投影，不成为第二套设置入口。
+1. `settings.json` 只保存共享设置；Profile 目录内 Soul/adaptor 是该 Profile 配置真源，已应用快照在会话边界传给 Backend。
+2. 旧 `profile.sqlite3` 只作为备份/一次迁移来源，不再运行时写回；迁移和三层播放器见 [Profile 与 Live2D](profile-live2d.md)。
 3. `conversation-history.sqlite3` 只保存接受/交付回执，按游标分页；它不参与模型 Context 或 Memory 召回。
 4. Profile 内的 Context、Memory SQLite/Qdrant 与独立 Task SQLite 由 Backend 拥有。
 5. 不恢复旧 Electron Chat/Memory/Task 业务服务、兼容 DTO 或 CLI runner。
 
 路径与重启协议见 [配置与生命周期](configuration-and-backend-lifecycle.md)，接口见 [后端契约](backend-runtime-contract.md)，Pi 细节见 [Task Runtime](modules/task-agent.md)。
 
-## 2026-09-06 架构收敛
+## 2026-09-06 历史收敛记录（Profile 存储已由上文替换）
 
 - Electron 的 ProfileStorage 只建当前身份/人格两表；旧 Chat/Gate/Memory/主动触发、旧配置与历史迁移已退役。
 - Context 的 `context_task_facts` 按稳定 ID/version 保留最新事实；完整 Task 历史仍只在 TaskStore。

@@ -9,7 +9,7 @@
 | `GET /health` | 精确返回 `{"ok":true,"service":"backend"}`。 |
 | `GET /api/v1/readiness` | `ready`、`configRevision`、`processId`、`instanceId`、`capabilities` 与本地组件状态。 |
 | `POST /api/v1/restart/prepare` | `{force:boolean}` → `{ready,busy:{tasks,memoryWriting,mainAgent}}`。 |
-| `POST /api/v1/main-agent/realtime-token` | `{profileId,soul}` → 一次性 capability。 |
+| `POST /api/v1/main-agent/realtime-token` | `{profileId,revision}` → 当前已激活 Profile 的一次性 capability 和新 generation；不接受 Soul。 |
 | `WS /api/v1/main-agent/realtime` | 唯一文字/语音会话，subprotocol `aurabot.main-agent.v1`。 |
 | `GET /api/v1/task-events?ownerProfileId=…` | 必填 Profile；只读 `task.snapshot` SSE，最近 100 项标题/状态。 |
 | `GET /api/v1/metrics` | 有界计数/计时，不含对话内容。 |
@@ -34,9 +34,9 @@ Task 持久事实保留，下次正常启动对齐，不无限重试或自动重
 
 ## Profile 与资源
 
-Backend startup 创建 TaskManager、RealtimeHub 和 ActiveProfileManager；合法 token 才打开一个 Profile 的 Context、Memory 和文字 Runtime。Inactive Profile 不保持 timer、SQLite/Qdrant 连接或 worker。
+Backend startup 创建 TaskManager、RealtimeHub 和 ActiveProfileManager；Main 显式 `POST /api/v1/main-agent/profile/activate` 提交冻结快照，才打开一个 Profile 的 Context、Memory 和文字 Runtime。Inactive Profile 不保持 timer、SQLite/Qdrant 连接或 worker。
 
-Profile 身份由 Electron 提供；人格由已应用 JSON 的 `persona` 投影，经 Pet 格式化为 `soul`。Backend 不保存 Profile 配置或 `SOUL.md`。会话默认文字，`session.ready` 不开启麦克风；`voice.start` 才准备 SpeechService，未安装语音能力不妨碍文字。
+Profile 身份与已应用 Soul/adaptor 由 Electron repository 同一 revision 生成并传给 Backend；Pet 不拼人格或隐式激活。Backend 不编辑 Profile 配置。会话默认文字，`session.ready` 不开启麦克风；`voice.start` 才准备 SpeechService，未安装语音能力不妨碍文字。
 
 ProfileResources 唯一持有 Speech，Hub 只派生读取。语音中的 `text.submit` 取消旧 TTS，
 `reset_input` 结清旧采集/STT/endpoint 与在途推理，清旧帧、废弃旧回调，再提交文字；
@@ -102,3 +102,7 @@ flowchart LR
 新输入可以重置未封存 timer，但不取消已封存 worker。提炼成功（包括零条记忆）后才清理相应 Context；失败或取消保留可重试边界。内部推理、Observation、Task 事实和未确认 partial 不作为用户可见对话归档。
 
 退出按 realtime admission → 活动 Profile Runtime/Speech/Memory/存储 → TaskManager/Pi 顺序执行。Task 的持久状态与重启恢复归 TaskManager，不因桌面会话断开自动重跑。实际设备/Provider 验证情况见 [集成记录](frontend-integration-work.md)。
+
+## Profile 与视觉扩展
+
+激活/删除检查、能力格式、`avatar` 局部校验、`say.closed` 与实际音频时钟见 [Profile 与 Live2D](profile-live2d.md)。`clause.offer` 与结束事件包含原 Profile、generation、config_revision、say/invoke/call 身份；历史与动画都拒绝过期代际。

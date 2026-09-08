@@ -1,3 +1,5 @@
+<!-- Owns one Pixi canvas/render ticker and its resize observer. Model children own animation
+     and their independent textures; teardown releases the application after child ownership ends. -->
 <template>
   <div ref="hostRef" class="live2d-canvas-host" data-render-state="ready">
     <canvas ref="canvasRef" class="live2d-canvas" />
@@ -5,7 +7,7 @@
 </template>
 
 <script setup lang="ts">
-import { onMounted, onUnmounted, ref } from "vue";
+import { onMounted, onUnmounted, ref, shallowRef } from "vue";
 import { Application } from "pixi.js";
 import { PET_LIVE2D_FALLBACK_SIZE } from "./live2dPlacement";
 import { renderLive2DFrame } from "../../live2d/runtime";
@@ -18,7 +20,7 @@ const emit = defineEmits<{
 
 const hostRef = ref<HTMLDivElement | null>(null);
 const canvasRef = ref<HTMLCanvasElement | null>(null);
-const appRef = ref<Application | null>(null);
+const appRef = shallowRef<Application | null>(null);
 let resizeController: Live2DResizeController | undefined;
 
 onMounted(() => {

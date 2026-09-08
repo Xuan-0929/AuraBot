@@ -75,7 +75,7 @@ class DesktopContractTests(unittest.IsolatedAsyncioTestCase):
         self.assertEqual(offer['mode'], 'text')
         self.assertEqual(self.context.get_clause(offer['clause_id']).state, ClauseState.DRAFT)
         user = next(event for event in self.socket.sent if event.get('type') == 'user.message')
-        self.assertEqual(user, {'type': 'user.message', 'message_id': 'message-1', 'text': 'Hi', 'source': 'text'})
+        self.assertEqual(user, {'type': 'user.message', 'message_id': 'message-1', 'text': 'Hi', 'source': 'text', 'profile_id': 'profile', 'generation': 1})
         self.assertLess(self.socket.sent.index(user), next(i for i,e in enumerate(self.socket.sent) if e.get('type') == 'command.ack'))
         self.assertNotIn('private reasoning', str(self.socket.sent))
         self.assertTrue(await self.hub.renderer_ack(self.session, offer['clause_id'], complete=True))

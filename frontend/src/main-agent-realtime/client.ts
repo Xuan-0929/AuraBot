@@ -3,19 +3,27 @@
  * opens the minimal WebSocket protocol, captures raw 16 kHz PCM, plays the current raw TTS clause in
  * the same AudioContext, and ACKs voice only after physical completion and durable Electron history. Text delivery never requires microphone resources. Local RMS and server VAD gates
  * pause without dropping audio; cancel, overrun, replacement, and teardown share one cleanup path.
+ * Visual SAY scopes carry the frozen server identity; bounded device-clock timers deliver start and output
+ * envelope events to the independent player. Visual failures never participate in the durable ACK fence.
  */
+
+import type { AvatarCue } from "../shared/contracts/avatar";
+import type { PerformanceEvent } from "../features/live2d/performance";
 
 const SUBPROTOCOL = "aurabot.main-agent.v1";
 const DEFAULT_GATEWAY_URL = "http://127.0.0.1:6401";
 const MAX_SOCKET_BACKLOG = 128 * 1024;
 
 export type MainAgentRealtimeState = "off" | "connecting" | "active" | "error";
-export interface VoiceProfile { profileId: string; soul: string; }
+export interface VoiceProfile { profileId: string; revision?: number; }
+export interface RealtimeToken {token:string;profile_id:string;revision:number;generation:number;}
 export interface MainAgentRealtimeClientOptions {
   gatewayUrl?: string;
+  getToken?: () => Promise<RealtimeToken>;
+  onPerformance?: (event: PerformanceEvent) => void;
   onState?: (state: MainAgentRealtimeState, detail?: string) => void;
   onClause?: (text: string | null) => void;
-  onMessage?: (entry: {id:string;role:"user"|"assistant";content:string}) => Promise<void>;
+  onMessage?: (entry: {profileId:string;generation:number;id:string;role:"user"|"assistant";content:string}) => Promise<void>;
   onAgentState?: (state: "idle"|"listening"|"thinking"|"speaking")=>void;
 }
 
@@ -40,12 +48,14 @@ export class PlaybackGate {
   }
 }
 
-interface CurrentClause { id: string; text:string; settled: boolean; cancelled: boolean; draining?:boolean; }
+interface CurrentClause { id: string; text:string; settled: boolean; cancelled: boolean; draining?:boolean; cue?:AvatarCue; mode:"text"|"voice"; profileId:string; serverGeneration:number; started:boolean; startContextTime?:number; startDeadline?:number; }
 interface WorkletMessage {
-  type: "frame" | "candidate" | "released" | "clause-complete" | "overrun";
+  type: "frame" | "candidate" | "released" | "clause-complete" | "clause-start" | "playback-level" | "overrun";
   samples?: Int16Array;
   clauseId?: string;
   endContextTime?: number;
+  contextTime?: number;
+  level?:number;
 }
 
 export class MainAgentRealtimeClient {
@@ -58,6 +68,12 @@ export class MainAgentRealtimeClient {
   private stream: MediaStream | null = null;
   private playback: AudioWorkletNode | null = null;
   private generation = 0;
+  private serverGeneration = 0;
+  private configRevision = 0;
+  private cueTimer:ReturnType<typeof setTimeout>|null=null;
+  private levelTimer:ReturnType<typeof setTimeout>|null=null;
+  private levels:Array<{contextTime:number;level:number}>=[];
+  readonly visualDiagnostics={dropped:0,failures:0,starts:0,clockSkewMs:0};
   private gate = new PlaybackGate();
   private clause: CurrentClause | null = null;
   private voice = false;
@@ -80,9 +96,11 @@ export class MainAgentRealtimeClient {
   get currentState(): MainAgentRealtimeState { return this.state; }
 
   async start(profile: VoiceProfile): Promise<void> {
+    if(this.profile&&(this.profile.profileId!==profile.profileId||this.profile.revision!==profile.revision))await this.stop();
     if(this.socket?.readyState===WebSocket.OPEN && this.state==="active")return;
     if(this.ready)return this.ready;
-    this.profile=profile;
+    this.profile={...profile};
+    this.serverGeneration=0;this.configRevision=profile.revision??0;
     this.controls=Promise.resolve();
     this.gate=new PlaybackGate();
     const generation=++this.generation;
@@ -92,11 +110,16 @@ export class MainAgentRealtimeClient {
     const timeout=setTimeout(()=>{if(generation===this.generation)void this.fail("连接超时");},15000);
     void (async()=>{
       try {
-        const response=await fetch(`${this.gatewayUrl}/api/v1/main-agent/realtime-token`,{method:"POST",headers:{"content-type":"application/json"},body:JSON.stringify(profile),signal:AbortSignal.timeout(10000)});
-        if(!response.ok)throw new Error(`无法建立会话 (${response.status})`);
-        const body=await response.json() as {token?:unknown};
-        if(typeof body.token!=="string"||!body.token)throw new Error("无效会话凭据");
-        if(generation===this.generation)this.openSocket(body.token,generation);
+        let body:Partial<RealtimeToken>;
+        if(this.options.getToken)body=await this.options.getToken();
+        else {
+          const response=await fetch(`${this.gatewayUrl}/api/v1/main-agent/realtime-token`,{method:"POST",headers:{"content-type":"application/json"},body:JSON.stringify({profileId:profile.profileId,revision:profile.revision??0}),signal:AbortSignal.timeout(10000)});
+          if(!response.ok)throw new Error(`无法建立会话 (${response.status})`);
+          body=await response.json() as Partial<RealtimeToken>;
+        }
+        if(typeof body.token!=="string"||!body.token||body.profile_id!==profile.profileId||!Number.isInteger(body.generation)||!Number.isInteger(body.revision))throw new Error("无效或过期会话凭据");
+        if(profile.revision!==undefined&&body.revision!==profile.revision)throw new Error("Profile 配置版本已变化");
+        if(generation===this.generation){this.serverGeneration=body.generation!;this.configRevision=body.revision!;this.openSocket(body.token,generation);}
       }catch(error){if(generation===this.generation)await this.fail(error);}
     })();
     try {await waiting;}finally{clearTimeout(timeout);if(this.ready===waiting)this.ready=null;}
@@ -165,6 +188,7 @@ export class MainAgentRealtimeClient {
   }
 
   private async handleControl(event: Record<string, unknown>, generation: number): Promise<void> {
+    if(!this.matchesIdentity(event)){this.visualDiagnostics.dropped++;return;}
     switch (event.type) {
       case "session.ready":
         this.setState("active");this.readyResolve?.();this.readyResolve=null;this.readyReject=null;
@@ -178,10 +202,22 @@ export class MainAgentRealtimeClient {
       case "clause.offer": {
         const id = String(event.clause_id ?? "");
         if (!id || this.clause) throw new Error("invalid clause offer");
-        this.clause = { id, text:String(event.text??""), settled: false, cancelled: false };
+        const cue=this.cueFrom(event);
+        this.clause = { id, text:String(event.text??""), settled: false, cancelled: false, cue,
+          mode:event.mode==="text"?"text":"voice",profileId:this.profile!.profileId,serverGeneration:this.serverGeneration,started:false };
+        if(cue)this.performance({type:"offer",cue,clauseId:id,mode:this.clause.mode});
         if(event.mode==="text") { await this.completeClause(id); }
         else { this.playback?.port.postMessage({ type: "offer", clauseId: id }); }
 
+        break;
+      }
+      case "say.closed": {
+        const cue=this.cueFrom(event);
+        if(cue)this.performance({type:"closed",cue,clauseCount:Number.isInteger(event.clause_count)?Number(event.clause_count):undefined});
+        break;
+      }
+      case "say.cancel": {
+        const cue=this.cueFrom(event);if(cue)this.performance({type:"cancel",cue});
         break;
       }
       case "clause.audio_end": {
@@ -205,7 +241,7 @@ export class MainAgentRealtimeClient {
         break;
       }
       case "user.message":
-        await this.options.onMessage?.({id:String(event.message_id),role:"user",content:String(event.text)});
+        await this.options.onMessage?.({id:String(event.message_id),role:"user",content:String(event.text),profileId:this.profile!.profileId,generation:this.serverGeneration});
         break;
       case "agent.state":
         if(["idle","listening","thinking","speaking"].includes(String(event.state)))this.options.onAgentState?.(event.state as "idle"|"listening"|"thinking"|"speaking");
@@ -288,6 +324,19 @@ export class MainAgentRealtimeClient {
   }
 
   private handlePlayback(message: WorkletMessage): void {
+    const clause=this.clause;
+    if(message.type==="clause-start"&&clause&&message.clauseId===clause.id&&!clause.started&&!clause.settled){
+      if(!Number.isFinite(message.contextTime)){this.visualDiagnostics.dropped++;return;}
+      if(clause.startContextTime===undefined){clause.startContextTime=message.contextTime;clause.startDeadline=Date.now()+1500;this.scheduleStart(clause);}return;
+    }
+    if(message.type==="playback-level"){
+      if(clause&&message.clauseId===clause.id&&!clause.settled&&!this.gate.blocked&&Number.isFinite(message.level)&&Number.isFinite(message.contextTime)){
+        this.levels.push({contextTime:message.contextTime!,level:Math.max(0,Math.min(1,message.level!))});
+        if(this.levels.length>8){this.levels.shift();this.visualDiagnostics.dropped++;}
+        if(this.levelTimer===null)this.scheduleLevel(clause);
+      }
+      return;
+    }
     if (message.type === "clause-complete" && message.clauseId) {
       const generation=this.generation;
       if(message.endContextTime===undefined){void this.fail("音频输出时钟不可用");return;}
@@ -312,10 +361,13 @@ export class MainAgentRealtimeClient {
       if(!context||this.clause!==clause||clause.settled||generation!==this.generation)return;
     }
     clause.settled = true;
-    await this.options.onMessage?.({id:clause.id,role:"assistant",content:clause.text});
+    await this.options.onMessage?.({id:clause.id,role:"assistant",content:clause.text,profileId:clause.profileId,generation:clause.serverGeneration});
     if(generation!==this.generation||this.clause!==clause||clause.cancelled)return;
     this.onClause(clause.text);
+    if(clause.mode==="text"&&clause.cue)this.performance({type:"start",cue:clause.cue,clauseId:clause.id,mode:"text",text:clause.text});
     this.send({ type: "renderer.ack", clause_id: clause.id, complete: true });
+    if(clause.cue)this.performance({type:"complete",cue:clause.cue,clauseId:clause.id,mode:clause.mode});
+    this.performance({type:"level",level:0});this.clearCueTimer();this.clearLevels();
     if(this.clause===clause)this.clause=null;
   }
 
@@ -329,13 +381,17 @@ export class MainAgentRealtimeClient {
   }
 
   private flushClause(flush = true): void {
+    this.clearCueTimer();this.clearLevels();if(this.clause?.cue)this.performance({type:"cancel",cue:this.clause.cue,clauseId:this.clause.id});this.performance({type:"level",level:0});
     if (flush) this.playback?.port.postMessage({ type: "flush" });
     this.clause = null;
     this.onClause(null);
   }
 
   private applyGate(transition: "pause" | "resume" | null): void {
-    if (transition) this.playback?.port.postMessage({ type: transition });
+    if (transition) {
+      this.playback?.port.postMessage({ type: transition });this.performance({type:transition});
+      if(transition==="pause"){this.clearCueTimer();this.clearLevels();}else if(this.clause&&!this.clause.started)this.scheduleStart(this.clause);
+    }
   }
 
   private send(event: Record<string, unknown>): boolean {
@@ -367,16 +423,62 @@ export class MainAgentRealtimeClient {
       socket.onclose = null;
       socket.close();
     }
-    this.voice=false;
+    this.voice=false;this.clearCueTimer();this.clearLevels();this.performance({type:"reset"});
     this.options.onAgentState?.("idle");
     this.clause=null;
     this.onClause(null);
     await this.stopAudio();
   }
   private async stopAudio():Promise<void>{
+    this.clearCueTimer();this.clearLevels();this.performance({type:"level",level:0});
     const stream=this.stream;this.stream=null;stream?.getTracks().forEach(track=>track.stop());
     this.playback?.port.postMessage({type:"flush"});this.playback=null;
     const context=this.context;this.context=null;if(context&&context.state!=="closed")await context.close();
+  }
+
+  private matchesIdentity(event:Record<string,unknown>):boolean {
+    return (event.profile_id===undefined||event.profile_id===this.profile?.profileId)
+      &&(event.generation===undefined||event.generation===this.serverGeneration)
+      &&(event.config_revision===undefined||event.config_revision===this.configRevision);
+  }
+  private cueFrom(event:Record<string,unknown>):AvatarCue|undefined {
+    if(event.profile_id!==this.profile?.profileId||event.generation!==this.serverGeneration||event.config_revision!==this.configRevision||typeof event.say_id!=="string"||!event.say_id||typeof event.call_id!=="string"||typeof event.invoke_id!=="string")return undefined;
+    const avatar=event.avatar&&typeof event.avatar==='object'&&!Array.isArray(event.avatar)?event.avatar as Record<string,unknown>:{};
+    return {profile_id:this.profile!.profileId,generation:this.serverGeneration,config_revision:this.configRevision,say_id:event.say_id,call_id:event.call_id,invoke_id:event.invoke_id,
+      avatar:{...(typeof avatar.motion==='string'?{motion:avatar.motion}:{}),...(typeof avatar.expression==='string'?{expression:avatar.expression}:{})}};
+  }
+  private performance(event:PerformanceEvent):void {try{this.options.onPerformance?.(event);}catch{this.visualDiagnostics.failures++;}}
+  private clearCueTimer():void {if(this.cueTimer!==null){clearTimeout(this.cueTimer);this.cueTimer=null;}}
+  private clearLevels():void {if(this.levelTimer!==null)clearTimeout(this.levelTimer);this.levelTimer=null;this.levels=[];}
+  private scheduleLevel(clause:CurrentClause):void {
+    const generation=this.generation;const deadline=Date.now()+1500;
+    const check=()=>{
+      this.levelTimer=null;
+      if(generation!==this.generation||this.clause!==clause||clause.settled||this.gate.blocked||!this.context){this.clearLevels();return;}
+      const outputTime=this.context.getOutputTimestamp().contextTime;
+      if(typeof outputTime!=='number'||!Number.isFinite(outputTime)||Date.now()>deadline){this.clearLevels();this.performance({type:"level",level:0});return;}
+      let latest:number|undefined;
+      while(this.levels.length&&this.levels[0].contextTime<=outputTime)latest=this.levels.shift()!.level;
+      if(latest!==undefined)this.performance({type:"level",cue:clause.cue,clauseId:clause.id,level:latest});
+      if(this.levels.length)this.levelTimer=setTimeout(check,Math.max(5,Math.min(50,(this.levels[0].contextTime-outputTime)*1000)));
+    };
+    check();
+  }
+  private scheduleStart(clause:CurrentClause):void {
+    this.clearCueTimer();
+    if(clause.startContextTime===undefined||clause.started||clause.settled||this.gate.blocked||!this.context)return;
+    const generation=this.generation;
+    const check=()=>{
+      this.cueTimer=null;
+      if(generation!==this.generation||this.clause!==clause||clause.started||clause.settled||this.gate.blocked||!this.context)return;
+      const outputTime=this.context.getOutputTimestamp().contextTime;
+      if(typeof outputTime!=='number'||!Number.isFinite(outputTime)||Date.now()>(clause.startDeadline??0)){this.visualDiagnostics.dropped++;return;}
+      const remaining=clause.startContextTime!-outputTime;
+      if(remaining>0.001){this.cueTimer=setTimeout(check,Math.max(5,Math.min(50,remaining*1000)));return;}
+      clause.started=true;this.visualDiagnostics.starts++;this.visualDiagnostics.clockSkewMs=Math.max(0,-remaining*1000);
+      if(clause.cue)this.performance({type:"start",cue:clause.cue,clauseId:clause.id,mode:"voice",text:clause.text});
+    };
+    check();
   }
 
   private setState(state: MainAgentRealtimeState, detail?: string): void {

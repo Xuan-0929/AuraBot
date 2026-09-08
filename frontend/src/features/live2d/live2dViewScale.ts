@@ -1,3 +1,6 @@
+/** Computes avatar placement zoom and persists renderer view transforms per stable Profile ID.
+ * Existing default-profile layout is read once as a legacy fallback; other Profiles never inherit it.
+ */
 import {
   calculateLive2DPlacement,
   clampLive2DViewScale,
@@ -62,8 +65,9 @@ export function calculateFocusedLive2DViewTransform({
   };
 }
 
-export function readStoredLive2DViewTransform(storage: Pick<Storage, "getItem">): Live2DViewTransform {
-  const rawTransform = storage.getItem(LIVE2D_VIEW_TRANSFORM_STORAGE_KEY);
+export function readStoredLive2DViewTransform(storage: Pick<Storage, "getItem">, profileId?:string): Live2DViewTransform {
+  const key=profileId?`${LIVE2D_VIEW_TRANSFORM_STORAGE_KEY}:${profileId}`:LIVE2D_VIEW_TRANSFORM_STORAGE_KEY;
+  const rawTransform = storage.getItem(key)??(profileId==='profile_default'?storage.getItem(LIVE2D_VIEW_TRANSFORM_STORAGE_KEY):null);
   if (rawTransform) {
     try {
       return normalizeLive2DViewTransform(JSON.parse(rawTransform));
@@ -72,12 +76,12 @@ export function readStoredLive2DViewTransform(storage: Pick<Storage, "getItem">)
     }
   }
 
-  const rawScale = storage.getItem(LIVE2D_VIEW_SCALE_STORAGE_KEY);
+  const rawScale = !profileId||profileId==='profile_default'?storage.getItem(LIVE2D_VIEW_SCALE_STORAGE_KEY):null;
   const legacyScale = rawScale ? Number.parseFloat(rawScale) : 1;
 
   return normalizeLive2DViewTransform({ scale: legacyScale });
 }
 
-export function writeStoredLive2DViewTransform(storage: Pick<Storage, "setItem">, value: Live2DViewTransform): void {
-  storage.setItem(LIVE2D_VIEW_TRANSFORM_STORAGE_KEY, JSON.stringify(normalizeLive2DViewTransform(value)));
+export function writeStoredLive2DViewTransform(storage: Pick<Storage, "setItem">, value: Live2DViewTransform, profileId?:string): void {
+  storage.setItem(profileId?`${LIVE2D_VIEW_TRANSFORM_STORAGE_KEY}:${profileId}`:LIVE2D_VIEW_TRANSFORM_STORAGE_KEY, JSON.stringify(normalizeLive2DViewTransform(value)));
 }

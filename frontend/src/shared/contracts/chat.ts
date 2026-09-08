@@ -23,6 +23,8 @@ export interface SendChatMessageResult {
 }
 
 export interface AppInitialState {
+  historyCursor?:number;
+  profileRuntime?:import("./desktop").ProfileRuntimeState;
   chatError?:string;
   profile: Profile;
   mainSessionId: string;

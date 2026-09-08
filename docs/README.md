@@ -1,9 +1,10 @@
 # AuraBot 文档
 
-当前产品、启动与接口文档以 2026-09-06 架构收敛为基准。历史设计不得覆盖下列当前契约。
+当前 Profile/Live2D 契约以 2026-09-08 重构为准，其他业务继续沿用 2026-09-06 架构收敛。历史设计不得覆盖下列当前契约。
 
 | 文档 | 信息所有权 |
 | --- | --- |
+| [Profile 与 Live2D](profile-live2d.md) | 独立目录、迁移、三层系统、资源配置、SAY 作用域和播放器时钟。 |
 | [产品需求](PRD-v2.md) | 用户体验、范围、非目标与验收边界。 |
 | [系统模块](modules-v2.md) | Electron、Pet、Backend 与存储的唯一 owner。 |
 | [配置与生命周期](configuration-and-backend-lifecycle.md) | settings.json、保存/应用、开发启动、忙碌重启与数据布局。 |

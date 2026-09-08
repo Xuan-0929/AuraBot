@@ -3,8 +3,6 @@
  * change live state. Backend and Pi consume saved configuration only during explicit application/start.
  */
 import { existsSync, mkdirSync, readFileSync, writeFileSync, renameSync, chmodSync } from 'node:fs';
-import { createDefaultProfile } from '../core/profiles/soulService';
-import { createPersonaSettingsFromProfile } from '../shared/contracts/personaSettings';
 import { join, isAbsolute } from 'node:path';
 import { desktopConfigSchema, type DesktopConfig, type SettingsState } from '../shared/contracts/desktop';
 
@@ -25,23 +23,25 @@ export class DesktopConfigStore {
   constructor(readonly root:string, projectRoot:string) {
     mkdirSync(root,{recursive:true}); this.path=join(root,'settings.json');
     const blankModel={base_url:'',model_name:'',api_key:'',timeout_seconds:60};
-    const seed=createDefaultProfile();
-    const defaults:DesktopConfig={version:1,revision:0,persona:createPersonaSettingsFromProfile({...seed.profile,soul:seed.soul}),backend:{
+    const defaults:DesktopConfig={version:2,revision:0,backend:{
       app:{data_dir:root,workspaces:[{id:'default',path:projectRoot}]},chat_model:{...blankModel},
       main_agent:{profile_dir:'profiles',web:{tavily_api_key:''},speech:{enabled:false,api_key:'',stt_model_name:'fun-asr-realtime',tts_model_name:'cosyvoice-v3-flash',tts_voice:'longanyang',
         silero_model_path:join(projectRoot,'assets/models/silero-vad.onnx'),silero_license_path:join(projectRoot,'assets/licenses/silero-vad.txt'),
         smart_turn_model_path:join(projectRoot,'assets/models/smart-turn-v3.2.onnx'),smart_turn_license_path:join(projectRoot,'assets/licenses/smart-turn-v3.2.txt')}},
       memory:{embedding:{provider:'hash',dimension:384}},task:{user_data_dir:root,pi_runtime_dir:join(projectRoot,'pi-runtime'),node_executable:process.execPath.includes('Electron')?'node':process.execPath,default_timeout_seconds:1800,model:{...blankModel}}
-    },desktop:{pet:{clickThroughPet:false,displayLanguage:'zh'},currentModelId:'hiyori',systemNotificationsEnabled:true}};
-    this.saved=existsSync(this.path)?desktopConfigSchema.parse(JSON.parse(readFileSync(this.path,'utf8'))):defaults;
-    this.persist();
+    },desktop:{pet:{clickThroughPet:false,displayLanguage:'zh'},systemNotificationsEnabled:true}};
+    const existing=existsSync(this.path)?JSON.parse(readFileSync(this.path,'utf8')):null;
+    this.saved=existing?desktopConfigSchema.parse({...existing,version:2}):defaults;
+    // The repository must back up and import v1 persona before the old file is replaced.
+    if(!existing)this.persist();
   }
+  completeProfileMigration():void { this.persist(); }
   snapshot():DesktopConfig { return structuredClone(this.saved); }
   current():DesktopConfig { return structuredClone(this.applied??this.saved); }
   publicConfig():DesktopConfig { const value=this.snapshot(); for(const path of secretPaths) access(value,path,''); return value; }
   status():SettingsState {
     return {config:this.publicConfig(),appliedRevision:this.applied?.revision??null,pending:JSON.stringify(this.saved)!==JSON.stringify(this.applied),
-      backendPending:JSON.stringify(this.saved.backend)!==JSON.stringify(this.applied?.backend)||JSON.stringify(this.saved.persona)!==JSON.stringify(this.applied?.persona),online:this.online,capabilities:this.capabilities,error:this.error,
+      backendPending:JSON.stringify(this.saved.backend)!==JSON.stringify(this.applied?.backend),online:this.online,capabilities:this.capabilities,error:this.error,
       secrets:Object.fromEntries(secretPaths.map(path=>[path,Boolean(access(this.saved,path))]))};
   }
   save(input:unknown, clearSecrets:string[]=[]):SettingsState {

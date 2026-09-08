@@ -1,301 +1,61 @@
-<template>
-  <div class="live2d-vue-model-anchor" aria-hidden="true" />
-</template>
-
+<!-- Holds one resident AvatarPlayer and applies existing placement/hit-testing to its renderer.
+     Only app/model identity changes replace the model. Configuration/generation updates are forwarded
+     explicitly; placement, focus, hover and semantic delivery never rebuild GPU resources. -->
+<template><div class="live2d-vue-model-anchor" aria-hidden="true" :data-avatar-state="status" :data-motion-starts="starts" :data-cue-drops="drops" /></template>
 <script setup lang="ts">
-import { onUnmounted, watch } from "vue";
-import type { Application } from "pixi.js";
-import { calculateLive2DPlacement } from "./live2dPlacement";
-import type { Live2DSize, Live2DViewTransform } from "../../live2d/live2dDiagnostics";
-import { calculateFocusedLive2DViewTransform } from "../../live2d/live2dViewScale";
-import { createMotionSmoothingUpdateHook } from "../../live2d/motionSmoothing";
-import { useMotionQueueStore } from "../stores/motionQueue";
-import {
-  loadLive2DModel,
-  normalizeLive2DHitAreaNames,
-  removeAndDestroyLive2DModel,
-  renderLive2DFrame,
-  type Live2DModelRuntime
-} from "../../live2d/runtime";
-
-interface FocusPoint {
-  x: number;
-  y: number;
-}
-
-interface PointerPoint {
-  x: number;
-  y: number;
-}
-
-const props = defineProps<{
-  app: Application | null;
-  modelPath: string;
-  focusAt: FocusPoint;
-  canvasSize: { width: number; height: number };
-  pointerAt?: PointerPoint;
-  viewTransform: Live2DViewTransform;
-  zoomRequest?: { id: number; deltaY: number; focalPoint: { x: number; y: number } };
-}>();
-
-const emit = defineEmits<{
-  interactiveChange: [boolean];
-  modelReady: [];
-  viewTransformChange: [Live2DViewTransform];
-}>();
-
-const motionQueueStore = useMotionQueueStore();
-const LIVE2D_MOTION_PRIORITY_IDLE = 1;
-const LIVE2D_MOTION_PRIORITY_FORCE = 3;
-let model: Live2DModelRuntime | undefined;
-let disposed = false;
-let lastMotionSignature: string | undefined;
-let loadGeneration = 0;
-let lastCanvasW = 0;
-let lastCanvasH = 0;
-let naturalModelSize: Live2DSize | undefined;
-let lastMotionUpdateTime = 0;
-let disposeMotionFinishListener: (() => void) | undefined;
-
-function teardownModelFromStage(app: Application | null) {
-  disposeMotionFinishListener?.();
-  disposeMotionFinishListener = undefined;
-  removeAndDestroyLive2DModel(app, model);
-  model = undefined;
-  naturalModelSize = undefined;
-  motionQueueStore.clearQueue();
-}
-
-watch(
-  () => [props.app, props.modelPath] as const,
-  async ([app, modelPath]) => {
-    const gen = ++loadGeneration;
-
-    if (!app || !modelPath) {
-      teardownModelFromStage(app);
-      lastMotionSignature = undefined;
-      return;
-    }
-
-    teardownModelFromStage(app);
-    lastMotionSignature = undefined;
-
-    const nextModel = await loadLive2DModel(modelPath);
-    if (gen !== loadGeneration || disposed) {
-      try {
-        nextModel.destroy({ texture: true, baseTexture: true });
-      } catch {
-        /* ignore */
-      }
-      return;
-    }
-
-    model = nextModel;
-    model.anchor.set(0.5, 0.95);
-    naturalModelSize = resolveNaturalModelSize(model, {
-      width: Math.max(1, Math.round(props.canvasSize.width)),
-      height: Math.max(1, Math.round(props.canvasSize.height))
-    });
-    // pixi-live2d-display defaults autoUpdate to true after init; reasserting
-    // here documents the intent and re-arms the shared ticker if a previous
-    // teardown turned it off via this same model instance.
-    model.autoUpdate = true;
-    app.stage.addChild(model as unknown as DisplayObject);
-    motionQueueStore.setMotionDefinitions(model.internalModel?.motionManager?.definitions);
-    installMotionManagerUpdateHook(model);
-    installMotionFinishListener(model);
-    resizeModel();
-    // Prime focus so the head/eyes look at the most recent cursor position
-    // even before the next IPC tick (otherwise the model stares straight ahead
-    // until the cursor moves again).
-    model.focus(props.focusAt.x, props.focusAt.y);
-    emit("modelReady");
-  },
-  { immediate: true }
-);
-
-watch(
-  () => props.canvasSize,
-  (size) => {
-    const w = Math.max(1, Math.round(size.width));
-    const h = Math.max(1, Math.round(size.height));
-    if (w === lastCanvasW && h === lastCanvasH) {
-      return;
-    }
-    lastCanvasW = w;
-    lastCanvasH = h;
-    resizeModel();
-  },
-  { deep: true }
-);
-
-watch(
-  () => props.viewTransform,
-  () => resizeModel()
-);
-
-watch(
-  () => props.zoomRequest,
-  (request) => {
-    if (!request || !model || !naturalModelSize) {
-      return;
-    }
-    emit(
-      "viewTransformChange",
-      calculateFocusedLive2DViewTransform({
-        hostSize: resolveHostSize(),
-        modelSize: naturalModelSize,
-        compact: false,
-        current: props.viewTransform,
-        focalPoint: request.focalPoint,
-        wheelDeltaY: request.deltaY
-      })
-    );
-  },
-  { deep: true }
-);
-
-watch(
-  () => props.focusAt,
-  (focusAt) => {
-    if (!model) {
-      return;
-    }
-    // Forward every IPC sample to the focus controller so it can interpolate
-    // smoothly toward the cursor. The controller already smooths on its own,
-    // so an additional jitter threshold here prevents slow drags from being
-    // tracked at all.
-    model.focus(focusAt.x, focusAt.y);
-  },
-  { deep: true }
-);
-
-watch(
-  () => motionQueueStore.currentMotion,
-  async (motion) => {
-    if (!model || !motion) {
-      return;
-    }
-    const signature = `${motion.group}:${motion.index ?? "default"}`;
-    if (lastMotionSignature === signature) {
-      if (motion.group !== "Idle") {
-        motionQueueStore.completeCurrentMotion();
-      }
-      return;
-    }
-
-    lastMotionSignature = signature;
-    try {
-      const priority = motion.group === "Idle" ? LIVE2D_MOTION_PRIORITY_IDLE : LIVE2D_MOTION_PRIORITY_FORCE;
-      const result = model.motion(motion.group, motion.index, priority);
-      if (motion.group !== "Idle" && result && typeof (result as Promise<unknown>).then === "function") {
-        const started = await result;
-        if (started === false) {
-          motionQueueStore.completeCurrentMotion();
-        }
-      }
-    } catch {
-      if (motion.group !== "Idle") {
-        motionQueueStore.completeCurrentMotion();
-      }
-    }
-  }
-);
-
-watch(
-  () => props.pointerAt,
-  (pointer) => {
-    if (!model || !pointer) {
-      emit("interactiveChange", false);
-      return;
-    }
-    const areaNames = normalizeLive2DHitAreaNames(model.internalModel?.hitAreas);
-    if (areaNames.length === 0) {
-      emit("interactiveChange", false);
-      return;
-    }
-    const isInteractive = areaNames.some((name) => model?.hitTest(name, pointer.x, pointer.y));
-    emit("interactiveChange", isInteractive);
-  },
-  { deep: true }
-);
-
-function resizeModel() {
-  if (!model) {
-    return;
-  }
-  const hostSize = resolveHostSize();
-  const modelSize = naturalModelSize ?? resolveNaturalModelSize(model, hostSize);
-  const placement = calculateLive2DPlacement({
-    hostSize,
-    modelSize,
-    compact: false,
-    viewTransform: props.viewTransform
-  });
-  model.scale.set(placement.scale);
-  model.x = placement.x;
-  model.y = placement.y;
-  renderLive2DFrame(props.app);
-}
-
-function resolveHostSize(): Live2DSize {
-  return {
-    width: Math.max(1, Math.round(props.canvasSize.width)),
-    height: Math.max(1, Math.round(props.canvasSize.height))
-  };
-}
-
-function resolveNaturalModelSize(model: Live2DModelRuntime, fallbackSize: Live2DSize): Live2DSize {
-  return {
-    width: Math.max(1, Math.round(model.internalModel?.width ?? model.width ?? fallbackSize.width)),
-    height: Math.max(1, Math.round(model.internalModel?.height ?? model.height ?? fallbackSize.height))
-  };
-}
-
-function installMotionManagerUpdateHook(model: Live2DModelRuntime) {
-  const internalModel = model.internalModel;
-  const motionManager = internalModel?.motionManager;
-  const coreModel = internalModel?.coreModel;
-  if (!motionManager?.update || !coreModel) {
-    return;
-  }
-
-  const hookedUpdate = motionManager.update.bind(motionManager);
-  const smoothingUpdate = createMotionSmoothingUpdateHook();
-  lastMotionUpdateTime = 0;
-
-  motionManager.update = (nextCoreModel: unknown, now: number) => {
-    const deltaSeconds = lastMotionUpdateTime > 0 ? now - lastMotionUpdateTime : 0;
-    lastMotionUpdateTime = now;
-    return smoothingUpdate(
-      nextCoreModel as typeof coreModel,
-      deltaSeconds,
-      (updateCoreModel, updateNow) => hookedUpdate(updateCoreModel, updateNow),
-      now
-    );
-  };
-}
-
-function installMotionFinishListener(model: Live2DModelRuntime) {
-  const motionManager = model.internalModel?.motionManager;
-  if (!motionManager?.on) {
-    return;
-  }
-
-  const handleMotionFinish = () => {
-    const current = motionQueueStore.currentMotion;
-    if (current && current.group !== "Idle") {
-      motionQueueStore.completeCurrentMotion();
-    }
-  };
-
-  motionManager.on("motionFinish", handleMotionFinish);
-  disposeMotionFinishListener = () => motionManager.off?.("motionFinish", handleMotionFinish);
-}
-
-onUnmounted(() => {
-  disposed = true;
-  loadGeneration += 1;
-  teardownModelFromStage(props.app);
+import {onBeforeUnmount,watch,ref} from 'vue';
+import type {Application} from 'pixi.js';
+import type {AvatarAdaptor,AvatarState} from '@shared/contracts/avatar';
+import {calculateLive2DPlacement} from './live2dPlacement';
+import type {Live2DSize,Live2DViewTransform} from '../../live2d/live2dDiagnostics';
+import {calculateFocusedLive2DViewTransform} from '../../live2d/live2dViewScale';
+import {createAvatarPlayer,avatarInstances,type AvatarPlayer} from '../../live2d/player';
+import type {PerformanceEvent} from '../../live2d/performance';
+import {normalizeLive2DHitAreaNames,renderLive2DFrame} from '../../live2d/runtime';
+const props=defineProps<{app:Application|null;modelPath:string;adaptor?:AvatarAdaptor;profileId?:string;revision?:number;modelVersion?:string;generation?:number;focusAt:{x:number;y:number};canvasSize:{width:number;height:number};pointerAt?:{x:number;y:number};viewTransform:Live2DViewTransform;zoomRequest?:{id:number;deltaY:number;focalPoint:{x:number;y:number}}}>();
+const emit=defineEmits<{interactiveChange:[boolean];modelReady:[];error:[string];viewTransformChange:[Live2DViewTransform]}>();
+let player:AvatarPlayer|undefined;let disposed=false;let loadGeneration=0;let configurationGeneration=0;let natural:Live2DSize|undefined;
+const pendingReady=new Set<(available:boolean,error?:string)=>void>();
+const status=ref('loading');const loadError=ref('');const starts=ref(0),drops=ref(0);
+const config=()=>({modelPath:props.modelPath,adaptor:props.adaptor,profileId:props.profileId,revision:props.revision,modelVersion:props.modelVersion,generation:props.generation});
+watch(()=>[props.app,props.modelPath] as const,async([app,path])=>{
+ const generation=++loadGeneration;configurationGeneration++;for(const finish of pendingReady)finish(false,'模型已替换');player?.dispose();player=undefined;natural=undefined;loadError.value='';status.value=path?'loading':'unconfigured';
+ if(!app||!path)return;
+ let configuration=0;
+ try{
+  const next=await createAvatarPlayer(app,config(),message=>{if(!disposed&&generation===loadGeneration){loadError.value=message;emit('error',message);}});
+  if(disposed||generation!==loadGeneration){next.dispose();return;}
+  player=next;next.model.anchor.set(0.5,0.95);natural={width:next.model.internalModel.width,height:next.model.internalModel.height};resize();next.model.focus(props.focusAt.x,props.focusAt.y);
+  configuration=++configurationGeneration;
+  await next.configure(config());if(disposed||generation!==loadGeneration||player!==next||configuration!==configurationGeneration)return;
+  await next.prepare();if(disposed||generation!==loadGeneration||player!==next||configuration!==configurationGeneration)return;
+  next.setGeneration(props.generation??0);status.value='ready';emit('modelReady');
+ }catch(error){if(!disposed&&generation===loadGeneration&&(configuration===0||configuration===configurationGeneration)){status.value='error';loadError.value=error instanceof Error?error.message:'模型加载失败';emit('error',loadError.value);}}
+},{immediate:true});
+watch([()=>props.revision,()=>JSON.stringify(props.adaptor)],async()=>{
+ const current=player;if(!current)return;const generation=loadGeneration,configuration=++configurationGeneration;status.value='loading';loadError.value='';
+ const active=()=>!disposed&&generation===loadGeneration&&configuration===configurationGeneration&&player===current;
+ try{await current.configure(config());if(active()){status.value='ready';emit('modelReady');}}
+ catch(error){if(active()){status.value='error';loadError.value=String(error);emit('error',loadError.value);}}
 });
+watch(()=>props.generation,value=>player?.setGeneration(value??0));
+watch(()=>props.canvasSize,resize,{deep:true});watch(()=>props.viewTransform,resize);
+watch(()=>props.focusAt,point=>player?.model.focus(point.x,point.y),{deep:true});
+watch(()=>props.pointerAt,point=>{const model=player?.model;emit('interactiveChange',Boolean(model&&point&&normalizeLive2DHitAreaNames(model.internalModel?.hitAreas).some(name=>model.hitTest(name,point.x,point.y))));},{deep:true});
+watch(()=>props.zoomRequest,request=>{if(request&&player&&natural)emit('viewTransformChange',calculateFocusedLive2DViewTransform({hostSize:props.canvasSize,modelSize:natural,compact:false,current:props.viewTransform,focalPoint:request.focalPoint,wheelDeltaY:request.deltaY}));});
+function resize(){if(!player||!natural)return;const placement=calculateLive2DPlacement({hostSize:props.canvasSize,modelSize:natural,compact:false,viewTransform:props.viewTransform});player.model.scale.set(placement.scale);player.model.x=placement.x;player.model.y=placement.y;renderLive2DFrame(props.app);}
+function requirePlayer(){if(!player)throw new Error('模型尚未加载');return player;}
+function ready():Promise<{available:boolean;error?:string}>{
+ if(disposed)return Promise.resolve({available:false,error:'模型已关闭'});
+ return new Promise(resolve=>{
+  let settled=false,stop=()=>{};
+  const finish=(available:boolean,error?:string)=>{if(settled)return;settled=true;clearTimeout(timer);stop();pendingReady.delete(finish);resolve({available,error});};
+  const timer=setTimeout(()=>finish(false,'模型准备超时，文字与语音仍可使用'),10000);
+  pendingReady.add(finish);
+  stop=watch(status,value=>{if(value==='ready')finish(!loadError.value,loadError.value||undefined);else if(value==='error'||value==='unconfigured')finish(false,loadError.value||'未配置模型');},{immediate:true});
+  if(settled)stop();
+ });
+}
+defineExpose({ready,play:(input:{motion?:string;expression?:string;loop?:boolean})=>requirePlayer().play(input),stop:()=>player?.stop(),setState:(state:AvatarState)=>player?.setState(state),accept:(event:PerformanceEvent)=>{player?.accept(event);starts.value=player?.diagnostics.starts??0;drops.value=player?.diagnostics.dropped??0;},validate:async(file:string,kind:'motion'|'expression')=>{await requirePlayer().load(file,kind);},diagnostics:()=>player?{...player.diagnostics,elapsedMs:player.channel.elapsedMs,instances:{...avatarInstances}}:null});
+onBeforeUnmount(()=>{disposed=true;loadGeneration++;configurationGeneration++;for(const finish of pendingReady)finish(false,'模型已关闭');player?.dispose();player=undefined;});
 </script>

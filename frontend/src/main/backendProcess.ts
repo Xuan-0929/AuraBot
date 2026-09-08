@@ -11,8 +11,8 @@ import type { DesktopConfigStore } from './desktopConfigStore';
 import type { ApplyResult, DesktopConfig } from '../shared/contracts/desktop';
 export const BACKEND_URL='http://127.0.0.1:6401';
 export async function backendJson(path:string,init:RequestInit={}):Promise<any> {
-  const response=await fetch(BACKEND_URL+path,{...init,headers:{Origin:'http://127.0.0.1:6400','Content-Type':'application/json',...init.headers},signal:init.signal?AbortSignal.any([init.signal,AbortSignal.timeout(5000)]):AbortSignal.timeout(5000)});
-  if(!response.ok) throw new Error(`Backend 请求失败 (${response.status})`);
+  const response=await fetch(BACKEND_URL+path,{...init,headers:{Origin:'http://127.0.0.1:6400','Content-Type':'application/json',...init.headers},signal:init.signal??AbortSignal.timeout(5000)});
+  if(!response.ok){let detail='';try{const body=await response.json();if(typeof body.detail==='string')detail=body.detail;}catch{/* Protocol failures do not expose response bodies. */}if(detail==='profile_cleanup_incomplete')throw new Error('旧 Profile 的资源尚未完成关闭；已暂停激活，请稍后重试，原数据保留。');throw new Error(`Backend 请求失败 (${response.status})${detail?': '+detail:''}`);}
   return response.json();
 }
 async function checkPort():Promise<void> {

@@ -1,6 +1,6 @@
 /**
- * Formats Electron's structured active-profile Soul into the system prompt sent by Pet
- * to the Main Agent token contract. Electron remains the only Soul authority; Backend
+ * Formats a frozen Profile Soul into the prompt sent by Electron Main during explicit activation.
+ * Token requests carry identity only; editing an inactive Profile never calls this activation path. Electron remains the only Soul authority; Backend
  * receives this already-effective text and never reconstructs or persists a competing persona document.
  */
 
@@ -13,6 +13,9 @@ export function buildSoulPrompt(soul?: Soul): string {
         `人格：${soul.persona}`,
         `关系：${soul.relationship}`,
         `语气：${soul.tone}`,
+        `主动程度：${soul.proactiveLevel}`,
+        soul.reminderStyle ? `提醒方式：${soul.reminderStyle}` : "",
+        soul.replyPreference ? `回复偏好：${soul.replyPreference}` : "",
         soul.principles.length ? `原则：${soul.principles.join("；")}` : "",
         soul.taboos.length ? `语义禁忌：${soul.taboos.join("；")}` : "",
         `说话方式：${soul.speakingStyle}`,

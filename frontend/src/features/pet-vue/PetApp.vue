@@ -1,7 +1,7 @@
 <!--
   桌宠窗口：组合 Live2D 舞台、唯一的 Main Agent 文字／语音连接、已交付消息气泡与窗口控制。
   语音 clause 经 AudioWorklet 确认播放完成后，由 Electron 持久化再显示并 ACK；文字无需麦克风。
-  Task 业务归 Backend；Live2D 运动与窗口交互分别委托给 motion store 和 preload IPC。
+  Task 业务归 Backend；Live2D 表演由实例播放器消费实际交付事件，窗口交互委托给 preload IPC。
 -->
 <template>
   <main
@@ -18,10 +18,18 @@
       {{ mainAgentClauseText ?? petStore.petActivity?.message }}
     </aside>
 
+    <p v-if="visualError" class="pet-voice-error" role="status">视觉不可用：{{ visualError }}</p>
     <p v-if="voiceError" class="pet-voice-error" role="alert">{{ voiceError }}</p>
     <div class="desktop-pet-model-shell pet-vue-model-shell" data-testid="live2d-model-surface">
       <div class="pet-vue-live2d-frame">
         <Scene
+          ref="scene"
+          :adaptor="petStore.live2dModelState?.adaptor"
+          :profile-id="petStore.live2dModelState?.profileId"
+          :revision="petStore.live2dModelState?.revision"
+          :model-version="petStore.live2dModelState?.modelVersion"
+          :generation="transportGeneration"
+          @error="message => visualError = message"
           :pet-ready="petStore.isInitialized"
           :model-path="petStore.modelPath"
           :focus-at="petStore.focusAt"
@@ -30,7 +38,7 @@
           :zoom-request="live2dZoomRequest"
           @canvas-ready="handleCanvasReady"
           @interactive-area-change="(value) => (isInteractiveAreaHovering = value)"
-          @model-ready="syncAgentMotion"
+          @model-ready="syncAgentState"
           @view-transform-change="handleLive2DViewTransformChange"
         />
       </div>
@@ -65,13 +73,12 @@
 </template>
 
 <script setup lang="ts">
-import { computed, onBeforeUnmount, onMounted, ref, watch } from "vue";
+import { computed, nextTick, onBeforeUnmount, onMounted, ref, watch } from "vue";
 import type { PetResizeDirection } from "@shared/contracts/ipc";
 import {
   MainAgentRealtimeClient,
   type MainAgentRealtimeState
 } from "../../main-agent-realtime/client";
-import { buildSoulPrompt } from "../../core/profiles/soulPrompt";
 import { useAuraBotStore } from "../../app/store";
 import { t } from "../../i18n";
 import {
@@ -82,12 +89,13 @@ import type { Live2DViewTransform } from "../live2d/live2dDiagnostics";
 import { useClickThrough } from "./composables/useClickThrough";
 import ControlButtons from "./components/ControlButtons.vue";
 import Scene from "./live2d/Scene.vue";
-import { useMotionQueueStore } from "./stores/motionQueue";
 
 const resizeDirections: PetResizeDirection[] = ["n", "s", "e", "w", "nw", "ne", "sw", "se"];
 
 const petStore = useAuraBotStore();
-const motionQueueStore = useMotionQueueStore();
+const scene=ref<InstanceType<typeof Scene>>();
+const visualError=ref('');
+const transportGeneration=ref(0);
 
 const isControlsHovering = ref(false);
 const mainAgentRealtimeState = ref<MainAgentRealtimeState>("off");
@@ -106,6 +114,8 @@ const live2dViewTransform = ref(readStoredLive2DViewTransform(window.localStorag
 const live2dZoomRequest = ref<{ id: number; deltaY: number; focalPoint: { x: number; y: number } } | undefined>(undefined);
 
 const mainAgentRealtime = new MainAgentRealtimeClient({
+  getToken:async()=>{const token=await window.aurabot.getRealtimeToken();transportGeneration.value=token.generation;await nextTick();return token;},
+  onPerformance:event=>scene.value?.accept(event),
   onState: (state,detail) => {
     mainAgentRealtimeState.value = state;
     if(state!=="active")voiceEnabled.value=false;
@@ -124,15 +134,19 @@ let unsubscribeCommand:(()=>void)|undefined;
 async function connect(){
   await petStore.loadInitialState();
   const profile=petStore.profile;if(!profile)throw new Error("Profile 尚未就绪");
-  await mainAgentRealtime.start({profileId:profile.id,soul:buildSoulPrompt(profile.soul)});
+  await nextTick();
+  const visual=await scene.value?.ready()??{available:false,error:'未配置模型'};visualError.value=visual.error??'';
+  await mainAgentRealtime.start({profileId:profile.id,revision:petStore.profileRuntime?.revision});
+  return visual;
 }
 onMounted(async()=>{
   unsubscribeCommand=window.aurabot.onPetCommand(async command=>{
     try{
+      let visual:{available:boolean;error?:string}|undefined;
       if(command.type==="disconnect")await mainAgentRealtime.stop();
-      else if(command.type==="reconnect"){await mainAgentRealtime.stop();await connect();}
+      else if(command.type==="reconnect"){await mainAgentRealtime.stop();visual=await connect();}
       else {await connect();await mainAgentRealtime.submitText(command.text??"",command.id);}
-      await window.aurabot.petCommandResult({id:command.id});
+      await window.aurabot.petCommandResult({id:command.id,visual});
     }catch(error){const detail=error instanceof Error?error.message:"连接失败";voiceError.value=detail;await window.aurabot.petCommandResult({id:command.id,error:detail});}
   });
   await window.aurabot.petReady();
@@ -160,47 +174,14 @@ watch(
   { immediate: true }
 );
 
-let lastRequestedMotionSignature: string | undefined;
-
-function syncAgentMotion() {
-  const motion = motionQueueStore.defaultIdleMotion;
-  if (!motion) {
-    return;
-  }
-  lastRequestedMotionSignature = `${motion.group}:${motion.index ?? "default"}`;
-  void motionQueueStore.requestMotion(motion.group, motion.index);
-}
-
-watch(
-  () => petStore.modelPath,
-  () => {
-    lastRequestedMotionSignature = undefined;
-  }
-);
-
-watch(
-  () => [petStore.agentStatus, motionQueueStore.defaultIdleMotion] as const,
-  async ([, idleMotion]) => {
-    if (!idleMotion) {
-      return;
-    }
-    const signature = `${idleMotion.group}:${idleMotion.index ?? "default"}`;
-    // Agent status no longer changes the ambient clip (always Idle), but this
-    // still dedupes against syncAgentMotion and avoids queue churn when the
-    // orchestrator repeats the same status.
-    if (lastRequestedMotionSignature === signature) {
-      return;
-    }
-    lastRequestedMotionSignature = signature;
-    await motionQueueStore.requestMotion(idleMotion.group, idleMotion.index);
-  },
-  { immediate: true }
-);
+function syncAgentState(){const state=petStore.agentStatus;void scene.value?.setState(state==='typing'?'thinking':state);}
+watch(()=>petStore.agentStatus,syncAgentState);
+watch(()=>petStore.profile?.id,id=>{live2dViewTransform.value=readStoredLive2DViewTransform(window.localStorage,id);mainAgentClauseText.value=null;});
 
 async function handleVoiceToggle() {
   const profile=petStore.profile;if(!profile)return;
   voiceError.value="";
-  try {await mainAgentRealtime.toggle({profileId:profile.id,soul:buildSoulPrompt(profile.soul)});voiceEnabled.value=mainAgentRealtime.voiceEnabled;}
+  try {await mainAgentRealtime.toggle({profileId:profile.id,revision:petStore.profileRuntime?.revision});voiceEnabled.value=mainAgentRealtime.voiceEnabled;}
   catch(error){voiceEnabled.value=false;voiceError.value=error instanceof Error?error.message:"语音不可用";}
 }
 
@@ -277,7 +258,7 @@ function handleWheel(event: WheelEvent) {
 
 function handleLive2DViewTransformChange(transform: Live2DViewTransform) {
   live2dViewTransform.value = transform;
-  writeStoredLive2DViewTransform(window.localStorage, transform);
+  writeStoredLive2DViewTransform(window.localStorage, transform, petStore.profile?.id);
 }
 </script>
 

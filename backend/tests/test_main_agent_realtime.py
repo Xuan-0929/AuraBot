@@ -115,8 +115,9 @@ class HubTests(unittest.IsolatedAsyncioTestCase):
         await port.finish_audio("c1")
         await self.hub.renderer_ack(session, "c1", complete=True)
 
-        self.assertEqual(socket.sent[0], {"type": "session.ready", "profile_id": "profile_default"})
-        self.assertEqual(socket.sent[1], {"type": "clause.offer", "clause_id": "c1", "text": "hello", "mode": "voice"})
+        self.assertEqual(socket.sent[0], {"type": "session.ready", "profile_id": "profile_default", "generation": 1, "config_revision": 0})
+        self.assertEqual(socket.sent[1], {"type": "clause.offer", "clause_id": "c1", "text": "hello", "mode": "voice",
+            "profile_id": "profile_default", "generation": 1, "config_revision": 0, "say_id": "", "call_id": "", "invoke_id": "invoke", "avatar": {}})
         self.assertEqual(socket.sent[3], b"\0\0" * 480)
         self.assertEqual(socket.sent[4], {"type": "clause.audio_end", "clause_id": "c1"})
         self.assertEqual(self.runtime.acks, [("c1", True)])
@@ -172,22 +173,31 @@ class GatewayTests(unittest.TestCase):
         self.speech = FakeSpeech()
         self.hub = RealtimeHub(allowed_origins={ORIGIN})
 
-        async def activate(profile_id: str, soul: str) -> int:
+        async def activate(profile_id: str, soul: str, **snapshot) -> int:
             self.assertEqual(soul, "Aura soul")
-            await self.hub.set_active(profile_id, 3, ProfileResources(profile_id, self.runtime, self.speech, None))
+            await self.hub.set_active(profile_id, 3, ProfileResources(profile_id, self.runtime, self.speech, None, revision=snapshot["revision"]))
             return 3
 
+        async def renew(profile_id: str, revision: int) -> int:
+            await self.hub.set_active(profile_id, 4, self.hub.profile)
+            return 4
         self.hub.profile_activator = activate
+        self.hub.profile_session_renewer = renew
         app = FastAPI()
         app.state.main_agent_realtime = self.hub
         app.include_router(router)
         self.client = TestClient(app)
 
     def test_profile_token_opens_ready_session_and_accepts_raw_mic_and_ack_only(self) -> None:
+        request = {"profileId": "profile_default", "revision": 1}
+        self.assertEqual(self.client.post("/api/v1/main-agent/realtime-token", headers={"origin": ORIGIN}, json=request).status_code, 409)
+        activated = self.client.post("/api/v1/main-agent/profile/activate", headers={"origin": ORIGIN},
+            json={"profile_id": "profile_default", "revision": 1, "soul": "Aura soul", "adaptor": {}, "model_version": ""})
+        self.assertEqual(activated.status_code, 200)
         response = self.client.post(
             "/api/v1/main-agent/realtime-token",
             headers={"origin": ORIGIN},
-            json={"profileId": "profile_default", "soul": "Aura soul"},
+            json={"profileId": "profile_default", "revision": 1},
         )
         self.assertEqual(response.status_code, 201)
         body = response.json()
@@ -198,7 +208,7 @@ class GatewayTests(unittest.TestCase):
             headers={"origin": ORIGIN},
             subprotocols=protocols,
         ) as websocket:
-            self.assertEqual(websocket.receive_json(), {"type": "session.ready", "profile_id": "profile_default"})
+            self.assertEqual(websocket.receive_json(), {"type": "session.ready", "profile_id": "profile_default", "generation": 4, "config_revision": 1})
             websocket.send_json({"type": "voice.start", "command_id": "voice-1"})
             self.assertEqual(websocket.receive_json(), {"type": "agent.state", "state": "listening"})
             self.assertEqual(websocket.receive_json()["status"], "accepted")
@@ -206,7 +216,17 @@ class GatewayTests(unittest.TestCase):
             websocket.send_json({"type": "renderer.ack", "clause_id": "unknown", "complete": False})
             self.assertEqual(websocket.receive_json(), {"type": "session.error", "code": "unknown_clause"})
 
-    def test_token_rejects_invalid_identity_empty_soul_and_wrong_origin(self) -> None:
+    def test_activation_exposes_only_stable_cleanup_block_reason(self) -> None:
+        async def blocked(*args, **kwargs):
+            raise RuntimeError("profile_cleanup_incomplete")
+        self.hub.profile_activator = blocked
+        response = self.client.post("/api/v1/main-agent/profile/activate", headers={"origin": ORIGIN},
+            json={"profile_id": "profile_default", "revision": 1, "soul": "private Soul"})
+        self.assertEqual(response.status_code, 503)
+        self.assertEqual(response.json(), {"detail": "profile_cleanup_incomplete"})
+        self.assertNotIn("private Soul", response.text)
+
+    def test_token_rejects_invalid_identity_old_soul_contract_and_wrong_origin(self) -> None:
         for body in (
             {"profileId": "../escape", "soul": "Aura"},
             {"profileId": "profile_default", "soul": ""},
@@ -218,6 +238,6 @@ class GatewayTests(unittest.TestCase):
         response = self.client.post(
             "/api/v1/main-agent/realtime-token",
             headers={"origin": "null"},
-            json={"profileId": "profile_default", "soul": "Aura"},
+            json={"profileId": "profile_default", "revision": 1},
         )
         self.assertEqual(response.status_code, 403)

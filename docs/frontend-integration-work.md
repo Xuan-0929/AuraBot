@@ -1,5 +1,6 @@
 # Frontend integration implementation record
 
+> 2026-09-08 更新：Profile/Soul、Live2D、迁移和 SAY 表演契约已由 [Profile 与 Live2D 重构](profile-live2d.md) 替换；下文旧轮次的“全新数据/重置”记录是历史，不是当前启动行为或本次授权。新测试证据见该文档。
 User-approved specification: this task's implementation request (2026-09-05).
 
 ## Requirements

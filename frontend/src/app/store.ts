@@ -26,6 +26,8 @@ const PET_ACTIVITY_TIMEOUT_MS = 7000;
 type Unsubscribe = () => void;
 
 interface AuraBotState {
+  snapshotRequest:number;
+  profileRuntime?:import("@shared/contracts/desktop").ProfileRuntimeState;
   profile?: Profile;
   mainSessionId?: string;
   messages: Message[];
@@ -45,6 +47,8 @@ interface AuraBotState {
 
 export const useAuraBotStore = defineStore("auraBot", {
   state: (): AuraBotState => ({
+    snapshotRequest:0,
+    profileRuntime:undefined,
     profile:undefined,
     mainSessionId:undefined,
     live2dModelState:undefined,
@@ -64,27 +68,31 @@ export const useAuraBotStore = defineStore("auraBot", {
   getters: {
     modelPath: (state): string =>
       state.live2dModelState?.currentModelPath ??
-      "assets/live2d/hiyori/Hiyori.model3.json",
+      "",
     displayLanguage: (state): PetSettings["displayLanguage"] =>
       state.petSettings.displayLanguage
   },
   actions: {
     async loadInitialState() {
+      const request=++this.snapshotRequest;
       try {
         const state: AppInitialState = await window.aurabot.getInitialState();
+        if(request!==this.snapshotRequest)return;
+        if(this.profile?.id!==state.profile?.id){this.historyCursor=undefined;this.petActivity=undefined;this.petActivityQueue=[];}
         this.$patch({
           ...state,
+          historyCursor:state.historyCursor,
           focusAt: this.petCursorPosition
             ? { x: this.petCursorPosition.localX, y: this.petCursorPosition.localY }
             : this.focusAt
         });
       } finally {
-        this.isInitialized = true;
+        if(request===this.snapshotRequest)this.isInitialized = true;
       }
     },
     async initialize() {
       await this.loadInitialState();
-      const page=await window.aurabot.getHistory();this.messages=page.messages;this.historyCursor=page.nextCursor;
+      const owner=this.profile?.id;const page=await window.aurabot.getHistory(undefined,owner);if(owner!==this.profile?.id)return;this.messages=page.messages;this.historyCursor=page.nextCursor;
     },
     subscribeToPetEvents(): Unsubscribe {
       const unsubscribers: Unsubscribe[] = [
@@ -107,18 +115,22 @@ export const useAuraBotStore = defineStore("auraBot", {
           this.agentStatus = value;
         }),
         window.aurabot.onChatMessageCreated((value) => {
+          if(value.profileId!==this.profile?.id)return;
           if (!this.messages.some((message) => message.id === value.id)) {
             this.messages = [...this.messages, value];
           }
         }),
         window.aurabot.onChatMessageUpdated((value) => {
+          if(value.profileId!==this.profile?.id)return;
           this.messages = upsertMessage(this.messages, value);
         })
       ];
+      if(window.aurabot.onProfilesChanged)unsubscribers.push(window.aurabot.onProfilesChanged(value=>{if(value.selectedId!==this.profile?.id||value.generation!==this.profileRuntime?.generation||value.revision!==this.profileRuntime?.revision)void this.loadInitialState();else this.profileRuntime=value;}));
       return () => unsubscribers.forEach((unsubscribe) => unsubscribe());
     },
     async loadOlderHistory(){
-      if(!this.historyCursor)return;const page=await window.aurabot.getHistory(this.historyCursor);
+      if(!this.historyCursor)return;const owner=this.profile?.id;const page=await window.aurabot.getHistory(this.historyCursor,owner);
+      if(owner!==this.profile?.id)return;
       this.messages=[...page.messages.filter(m=>!this.messages.some(old=>old.id===m.id)),...this.messages];this.historyCursor=page.nextCursor;
     },
     async openConsoleWindow() {
@@ -150,6 +162,7 @@ export const useAuraBotStore = defineStore("auraBot", {
         content: trimmed,
         createdAt: new Date().toISOString()
       };
+      const generation=this.profileRuntime?.generation;
       this.chatError=undefined;
       this.agentStatus = "thinking";
       this.messages = [...this.messages, pending];
@@ -158,9 +171,11 @@ export const useAuraBotStore = defineStore("auraBot", {
           content: trimmed,
           source
         });
+        if(this.profile?.id!==pending.profileId||generation!==this.profileRuntime?.generation)return;
         this.messages = reconcileMessages(this.messages, pending.id, result);
         this.agentStatus = result.agentStatus;
       } catch (error) {
+        if(this.profile?.id!==pending.profileId||generation!==this.profileRuntime?.generation)return;
         this.messages = this.messages.filter((message) => message.id !== pending.id);
         this.agentStatus = "idle";
         this.chatError=error instanceof Error?error.message:"发送失败";

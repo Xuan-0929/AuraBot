@@ -1,6 +1,6 @@
 """Compose Backend Task ownership and the single active Profile for Electron realtime sessions.
 
-Startup tolerates absent chat, Pi and speech capabilities. Token activation opens Profile Context/Memory
+Startup tolerates absent chat, Pi and speech capabilities. Explicit Profile activation opens Context/Memory
 and text runtime; voice.start alone prepares speech assets and providers. Shutdown fences realtime before
 closing Profile workers and the durable Task control plane. ProfileResources owns lazy speech; Runtime
 keeps Hub.render as its renderer for the entire Profile lifetime."""
@@ -11,7 +11,7 @@ import asyncio
 import importlib.util
 import logging
 from collections.abc import AsyncIterator
-from contextlib import asynccontextmanager
+from contextlib import AsyncExitStack, asynccontextmanager
 from pathlib import Path
 from typing import Any
 
@@ -27,7 +27,8 @@ from .app.gateway.health_routes import router as health_router
 from .app.gateway.readiness_routes import router as readiness_router
 from .app.gateway.task_routes import router as task_router
 from .main_agent.context import ContextStore
-from .main_agent.lifecycle import ActiveProfileManager, ProfileResources
+from .main_agent.lifecycle import ActiveProfileManager, ProfileResources, _close
+from .main_agent.profile_storage import prepare_memory_directory
 from .main_agent.metrics import LifecycleMetrics
 from .main_agent.observations import (
     TavilyTools,
@@ -125,6 +126,7 @@ def create_app(
 
             profiles = ActiveProfileManager(settings.profile_root, hub, factory)
         hub.profile_activator = profiles.activate
+        hub.profile_session_renewer = profiles.renew_session
         application.state.config_revision = config.revision
         application.state.capabilities = {
             "text": bool(settings.chat_model.base_url and settings.chat_model.model_name and settings.chat_model.api_key),
@@ -184,67 +186,74 @@ async def _build_profile(
 ) -> ProfileResources:
     """Compose and start the sole active Profile, cleaning partial owners on any failure."""
 
-    context = ContextStore(path / "context.sqlite3")
-    embedding = create_embedding_provider(config.get("memory", {}).get("embedding", {}))
-    vectors = QdrantLocalVectorStore(path=path / "qdrant", vector_size=embedding.dimension)
-    memory = MemoryService(
-        metadata_store=SQLiteMemoryStore(path / "memory.sqlite3"),
-        embedding_provider=embedding,
-        extractor=build_memory_extractor(settings.chat_model),
-        vector_store=vectors,
-    )
-    provider = (provider_factory or build_chat_provider)(settings.chat_model, metrics)
-    reader = WorkspaceReader(settings.workspaces)
-    executors: dict[str, Any] = {
-        "workspace_list": WorkspaceListExecutor(reader),
-        "workspace_read": WorkspaceReadExecutor(reader),
-    }
-    observation_tools: tuple[str, ...] = ()
-    tavily: TavilyTools | None = None
-    if settings.web.tavily_api_key:
-        tavily = TavilyTools(settings.web.tavily_api_key)
-        executors.update({"web_search": tavily.search, "web_read": tavily.read})
-        observation_tools = ("web_search", "web_read")
+    async with AsyncExitStack() as cleanup:
+        memory_path = prepare_memory_directory(path)
+        context = ContextStore(path / "context.sqlite3")
+        cleanup.callback(context.close)
+        embedding = create_embedding_provider(config.get("memory", {}).get("embedding", {}))
+        async with AsyncExitStack() as memory_cleanup:
+            vectors = QdrantLocalVectorStore(path=memory_path / "qdrant", vector_size=embedding.dimension)
+            memory_cleanup.callback(vectors.close)
+            metadata = SQLiteMemoryStore(memory_path / "memory.sqlite3")
+            memory_cleanup.callback(metadata.close)
+            memory = MemoryService(
+                metadata_store=metadata, embedding_provider=embedding,
+                extractor=build_memory_extractor(settings.chat_model), vector_store=vectors,
+            )
+            memory_cleanup.pop_all()
+        cleanup.push_async_callback(memory.shutdown)
+        provider = (provider_factory or build_chat_provider)(settings.chat_model, metrics)
+        cleanup.push_async_callback(_close, provider)
+        reader = WorkspaceReader(settings.workspaces)
+        executors: dict[str, Any] = {
+            "workspace_list": WorkspaceListExecutor(reader),
+            "workspace_read": WorkspaceReadExecutor(reader),
+        }
+        observation_tools: tuple[str, ...] = ()
+        tavily: TavilyTools | None = None
+        if settings.web.tavily_api_key:
+            tavily = TavilyTools(settings.web.tavily_api_key)
+            cleanup.push_async_callback(_close, tavily)
+            executors.update({"web_search": tavily.search, "web_read": tavily.read})
+            observation_tools = ("web_search", "web_read")
 
-    runtime = MainAgentRuntime(
-        context_store=context,
-        snapshot_projector=SnapshotProjector(),
-        tool_policy=ToolSurfacePolicy(
-            workspace_ids=settings.workspaces.ids,
-            observation_tools=observation_tools,
-            task_controls=(
-                "inspect_tasks", "answer_task_question", "pause_task", "resume_task", "cancel_task", "delete_task", "rerun_task",
+        runtime = MainAgentRuntime(
+            context_store=context,
+            snapshot_projector=SnapshotProjector(),
+            tool_policy=ToolSurfacePolicy(
+                workspace_ids=settings.workspaces.ids,
+                observation_tools=observation_tools,
+                task_controls=(
+                    "inspect_tasks", "answer_task_question", "pause_task", "resume_task", "cancel_task", "delete_task", "rerun_task",
+                ),
             ),
-        ),
-        provider=provider,
-        renderer=hub.render,
-        executors=executors,
-        soul=soul,
-        memory_service=memory,
-        task_manager=manager,
-        owner_profile_id=profile_id,
-        metrics=metrics,
-    )
-    runtime.text_available = bool(provider_factory or (settings.chat_model.api_key and settings.chat_model.base_url and settings.chat_model.model_name))
-    closeables: list[Any] = [context, provider]
-    if tavily is not None:
-        closeables.append(tavily)
-    resources = ProfileResources(
-        profile_id, runtime, None, memory, closeables=tuple(closeables)
-    )
-    def create_speech() -> SpeechService:
-        if not settings.speech.enabled:
-            raise RuntimeError("speech_disabled")
-        return (speech_factory(settings.speech, hub, runtime) if speech_factory else
-                _build_speech(settings.speech, hub, runtime, *_prepare_speech(settings.speech)))
+            provider=provider,
+            renderer=hub.render,
+            executors=executors,
+            soul=soul,
+            memory_service=memory,
+            task_manager=manager,
+            owner_profile_id=profile_id,
+            metrics=metrics,
+        )
+        cleanup.push_async_callback(runtime.shutdown)
+        runtime.text_available = bool(provider_factory or (settings.chat_model.api_key and settings.chat_model.base_url and settings.chat_model.model_name))
+        closeables: list[Any] = [context, provider]
+        if tavily is not None:
+            closeables.append(tavily)
+        resources = ProfileResources(
+            profile_id, runtime, None, memory, closeables=tuple(closeables)
+        )
+        def create_speech() -> SpeechService:
+            if not settings.speech.enabled:
+                raise RuntimeError("speech_disabled")
+            return (speech_factory(settings.speech, hub, runtime) if speech_factory else
+                    _build_speech(settings.speech, hub, runtime, *_prepare_speech(settings.speech)))
 
-    resources.speech_factory = create_speech
-    try:
+        resources.speech_factory = create_speech
         await runtime.startup()
+        cleanup.pop_all()
         return resources
-    except BaseException:
-        await resources.shutdown()
-        raise
 
 
 def _prepare_speech(settings: Any) -> tuple[SileroVadDetector, SmartTurnDetector]:

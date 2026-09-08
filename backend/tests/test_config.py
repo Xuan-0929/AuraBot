@@ -24,13 +24,27 @@ class ConfigTests(unittest.TestCase):
             with self.assertRaises(ConfigError):
                 config.initialize(Path(directory) / 'another.json')
 
+    def test_profile_owned_version_two_desktop_config_starts_without_global_persona(self):
+        with tempfile.TemporaryDirectory() as directory:
+            path = Path(directory) / 'settings.json'
+            snapshot = {'version': 2, 'revision': 12, 'backend': {
+                'app': {'data_dir': directory}, 'main_agent': {'profile_dir': 'profiles'},
+                'chat_model': {'model_name': 'fixture', 'api_key': 'local-only'},
+            }, 'desktop': {'systemNotificationsEnabled': True}}
+            path.write_text(json.dumps(snapshot))
+            config = Config().initialize(path)
+            self.assertEqual(config.revision, 12)
+            self.assertEqual(config['main_agent']['profile_dir'], 'profiles')
+            self.assertNotIn('persona', config.as_dict())
+            self.assertNotIn('desktop', config.as_dict())
+
     def test_missing_config_starts_blank_but_invalid_json_is_rejected(self):
         with tempfile.TemporaryDirectory() as directory:
             path = Path(directory) / 'config.json'
             config = Config().initialize(path)
             self.assertEqual(config.as_dict(), {})
             self.assertEqual(config.revision, 0)
-            for raw in ('task: {}', '[]', '{"version":2}', '{"version":1,"backend":[]}'):
+            for raw in ('task: {}', '[]', '{"version":3}', '{"version":true}', '{"version":2.0}', '{"version":1,"backend":[]}'):
                 path.write_text(raw)
                 with self.assertRaises(ConfigError):
                     Config().initialize(path)

@@ -1,5 +1,6 @@
 # AuraBot 当前开发状态
 
+> 2026-09-08 更新：Profile/Soul、Live2D、迁移和 SAY 表演契约已由 [Profile 与 Live2D 重构](profile-live2d.md) 替换；下文旧轮次的“全新数据/重置”记录是历史，不是当前启动行为或本次授权。新测试证据见该文档。
 更新：2026-09-06。本文描述代码集成范围；本轮执行的测试、桌面检查与剩余限制见 [集成记录](frontend-integration-work.md) 与 [架构优化记录](architecture-optimization.md)。
 
 | 范围 | 当前集成 |

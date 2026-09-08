@@ -7,14 +7,15 @@
       <aside class="settings-v2-sidebar">
         <div class="settings-v2-sidebar-brand">AuraBot</div>
         <nav class="settings-v2-navigation" aria-label="设置导航">
-          <button v-for="item in sections" :key="item.key" type="button" class="settings-v2-nav-item" :aria-current="page===item.key?'page':undefined" @click="page=item.key">{{ item.label }}</button>
+          <button v-for="item in sections" :key="item.key" type="button" class="settings-v2-nav-item" :aria-current="page===item.key?'page':undefined" @click="changePage(item.key)">{{ item.label }}</button>
         </nav>
       </aside>
       <section class="settings-v2-content">
         <header class="settings-v2-content-header"><div><span>设置</span><h1>{{ sections.find(s=>s.key===page)?.label }}</h1><p>保存保留修改；应用后才改变当前运行配置。</p></div></header>
         <div class="settings-page-container">
           <p v-if="error" role="alert" class="integration-error">{{ error }}</p>
-          <template v-if="draft && state">
+          <ProfilesPage v-if="page==='profiles'" ref="profilesPage" />
+          <template v-else-if="draft && state">
             <form @submit.prevent="save">
               <section v-if="page==='model'" class="settings-page-section">
                 <article v-for="(model,index) in [draft.backend.chat_model,draft.backend.task.model]" :key="index" class="settings-model-card">
@@ -39,7 +40,7 @@
               <section v-else-if="page==='desktop'" class="settings-page-section">
                 <label class="settings-page-field"><span>显示语言</span><select v-model="draft.desktop.pet.displayLanguage"><option value="zh">中文</option><option value="en">English</option><option value="ja">日本語</option></select></label>
                 <label class="settings-page-toggle"><input v-model="draft.desktop.pet.clickThroughPet" type="checkbox" /> 桌宠鼠标穿透</label>
-                <label class="settings-page-field"><span>Live2D 模型</span><select v-model="draft.desktop.currentModelId"><option v-for="model in store.live2dModelState?.models" :key="model.id" :value="model.id">{{ model.displayName }}</option></select></label>
+                <p>人格与 Live2D 模型在 Profile 管理中独立配置。</p>
                 <label class="settings-page-toggle"><input v-model="draft.desktop.systemNotificationsEnabled" type="checkbox" /> 系统通知</label>
               </section>
               <section v-else-if="page==='workspace'" class="settings-page-section">
@@ -53,7 +54,6 @@
                 <label class="settings-page-field"><span>Task 默认执行超时（秒）</span><input v-model.number="draft.backend.task.default_timeout_seconds" type="number" min="1" max="86400" /></label>
                 <label class="settings-page-field"><span>Node 可执行文件</span><input v-model="draft.backend.task.node_executable" /></label>
               </section>
-              <section v-else-if="page==='persona'" class="settings-page-section"><PersonaSettingsPage v-model="draft.persona" /></section>
               <section v-else class="settings-page-section">
                 <h2>{{ state.online?'Backend 已连接':'Backend 未连接' }}</h2>
                 <ul v-if="state.online && state.capabilities"><li>Main Agent 文字：{{ state.capabilities.text?'已配置':'未配置模型' }}</li><li>实时语音：{{ state.capabilities.voice?'资源已准备，开启麦克风时检查连接':'未启用或缺少密钥、SDK、模型／许可证' }}</li><li>Task / Pi：{{ state.capabilities.tasks?'已配置':'模型或 Pi runtime 不可用' }}</li></ul>
@@ -85,9 +85,11 @@
 import { computed, nextTick, onMounted, onBeforeUnmount, ref } from 'vue';
 import { useAuraBotStore } from '../../app/store';
 import type { BusyState, DesktopConfig, SettingsState } from '../../shared/contracts/desktop';
-import PersonaSettingsPage from './pages/PersonaSettingsPage.vue';
+import ProfilesPage from '../profiles/ProfilesPage.vue';
 const store=useAuraBotStore();
-const sections=[{key:'model',label:'模型'},{key:'voice',label:'实时语音'},{key:'desktop',label:'桌宠'},{key:'workspace',label:'工作目录'},{key:'persona',label:'人格'},{key:'runtime',label:'运行状态'}];
+const sections=[{key:'model',label:'模型'},{key:'voice',label:'实时语音'},{key:'desktop',label:'桌宠'},{key:'workspace',label:'工作目录'},{key:'profiles',label:'Profile 管理'},{key:'runtime',label:'运行状态'}];
+const profilesPage=ref<InstanceType<typeof ProfilesPage>>();
+async function changePage(target:string){if(page.value==='profiles'&&target!=='profiles'&&!await profilesPage.value?.canLeave())return;page.value=target;}
 const page=ref('model');const state=ref<SettingsState>();const draft=ref<DesktopConfig>();const baseline=ref('');const clearSecrets=ref<string[]>([]);
 const working=ref(false);const error=ref('');const busy=ref<BusyState>();const cancelButton=ref<HTMLButtonElement>();
 const dirty=computed(()=>JSON.stringify(draft.value)!==baseline.value||clearSecrets.value.length>0);

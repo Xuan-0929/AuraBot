@@ -100,3 +100,26 @@ describe("useAuraBotStore", () => {
     expect(store.messages).toEqual([message]);expect(store.historyCursor).toBeUndefined();
   });
 });
+
+it('discards late initial-state responses after a newer Profile snapshot has arrived',async()=>{
+ setActivePinia(createPinia());let first!:(value:unknown)=>void;
+ const a={profile:{id:'a'},messages:[],profileRuntime:{generation:1}};
+ const b={profile:{id:'b'},messages:[message('b','user','B')],profileRuntime:{generation:2}};
+ let calls=0;vi.stubGlobal('window',{aurabot:{getInitialState:()=>++calls===1?new Promise(resolve=>first=resolve):Promise.resolve(b)}});
+ const store=useAuraBotStore();const stale=store.loadInitialState();await store.loadInitialState();first(a);await stale;
+ expect(store.profile?.id).toBe('b');expect(store.profileRuntime?.generation).toBe(2);
+});
+it('does not install an old Profile history page when initialization finishes after switching',async()=>{
+ setActivePinia(createPinia());let history!:(value:unknown)=>void;
+ vi.stubGlobal('window',{aurabot:{getInitialState:async()=>({profile:{id:'a'}}),getHistory:()=>new Promise(resolve=>history=resolve)}});
+ const store=useAuraBotStore();const initializing=store.initialize();await vi.waitFor(()=>expect(history).toBeDefined());
+ store.profile={id:'b',displayName:'B',active:true,createdAt:'now',updatedAt:'now'};
+ history({messages:[message('a','assistant','A private')]});await initializing;expect(store.messages).toEqual([]);
+});
+
+it('updates history rows and pagination cursor together on Profile and generation snapshots',async()=>{
+ setActivePinia(createPinia());let cursor:number|undefined=80;const profile={id:'a'};
+ vi.stubGlobal('window',{aurabot:{getInitialState:async()=>({profile,messages:[message('latest','user','visible')],historyCursor:cursor})}});
+ const store=useAuraBotStore();store.historyCursor=10;await store.loadInitialState();expect(store.historyCursor).toBe(80);
+ cursor=undefined;await store.loadInitialState();expect(store.historyCursor).toBeUndefined();
+});
