@@ -4,7 +4,7 @@
  */
 // @vitest-environment jsdom
 
-import { createApp } from "vue";
+import { createApp, nextTick } from "vue";
 import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
 import Composer from "../../../src/features/chat/Composer.vue";
 
@@ -42,6 +42,26 @@ describe("Composer", () => {
     await Promise.resolve();
 
     expect(onSend).toHaveBeenCalledWith("send me");
+    app.unmount();
+  });
+
+  it("keeps send discoverable, blocks empty input and restores failed text", async () => {
+    const onSend = vi.fn(async () => { throw new Error("offline"); });
+    const app = createApp(Composer, { displayLanguage: "en", onSend });
+    app.mount(container);
+    const send = container.querySelector<HTMLButtonElement>("button[type=submit]");
+    expect(send).not.toBeNull();
+    expect(send!.disabled).toBe(true);
+    const input = container.querySelector("textarea")!;
+    input.value = "hello";
+    input.dispatchEvent(new Event("input", { bubbles: true }));
+    await nextTick();
+    expect(send!.disabled).toBe(false);
+    input.dispatchEvent(new KeyboardEvent("keydown", {key:"Enter", isComposing:true, bubbles:true}));
+    expect(onSend).not.toHaveBeenCalled();
+    send!.click();
+    await vi.waitFor(() => expect(input.value).toBe("hello"));
+    expect(onSend).toHaveBeenCalledOnce();
     app.unmount();
   });
 

@@ -26,7 +26,6 @@
   "dependencies": {
     "@iconify-json/solar": "^1.2.5",
     "@iconify/vue": "^5.0.1",
-    "@wxperia/liquid-glass-vue": "^1.0.9",
     "better-sqlite3": "^12.9.0",
     "live2dcubismcore": "1.0.2",
     "pinia": "^3.0.4",

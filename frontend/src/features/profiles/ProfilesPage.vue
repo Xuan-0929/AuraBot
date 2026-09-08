@@ -1,8 +1,10 @@
 <!-- Provides the actual Profile list and independent configuration editor inside Settings.
      Drafts and preview stay local; controlled IPC owns persistence/import/application. The preview
-     uses the production player but never opens a dialogue, starts Memory, or changes selection. -->
+     uses the production player but never opens a dialogue, starts Memory, or changes selection.
+     Native disclosures keep diagnostics optional; modal focus guards preserve safe draft decisions. -->
 <template>
-  <section class="profiles-page" :aria-busy="working">
+  <section ref="profilePage" class="profiles-page" :aria-busy="working">
+    <div class="profile-editor" :inert="modalOpen ? true : undefined">
     <p v-if="error" role="alert" class="profile-error">{{ error }}</p>
     <p v-if="notice" role="status">{{ notice }}</p>
     <p class="profile-runtime">当前选中：{{ selectedName }} · {{ runtime?.online ? `运行时已激活 ${runtime.activeId}` : '运行时离线' }}</p>
@@ -11,28 +13,28 @@
     <p v-if="runtime?.visualStatus==='degraded'" role="status">当前视觉资源不完整，部分能力不可用；文字和语音仍可交付。请在详情页重新验证并应用。</p>
     <template v-if="!detail">
       <form class="profile-create" @submit.prevent="create">
-        <label>新 Profile 名称<input v-model="newName" maxlength="128" required placeholder="例如：工作伙伴" /></label>
-        <button :disabled="working || !newName.trim()">创建 Profile</button>
+        <label>新角色名称<input v-model="newName" maxlength="128" required placeholder="例如：工作伙伴" /></label>
+        <button :disabled="working || !newName.trim()">创建角色</button>
       </form>
-      <p v-if="loading">正在加载 Profile…</p>
-      <p v-else-if="!profiles.length">没有 Profile。创建后即可独立配置人格。</p>
-      <article v-for="profile in profiles" :key="profile.id" class="profile-card">
-        <h2>{{ profile.displayName }} <small v-if="profile.selected">已选中</small> <small v-if="runtime?.activeId===profile.id && runtime.online">已激活</small></h2>
+      <p v-if="loading">正在加载角色…</p>
+      <p v-else-if="!profiles.length">创建第一个角色，开始配置人格。</p>
+      <article v-for="profile in profiles" :key="profile.id" class="profile-card profile-list-row">
+        <div class="profile-list-info"><h2>{{ profile.displayName }} <small v-if="profile.selected">已选中</small> <small v-if="runtime?.activeId===profile.id && runtime.online">已激活</small></h2>
         <p>{{ profile.modelName || '未配置模型' }} · {{ visualLabel(profile.visualStatus) }}</p>
-        <p class="profile-id">{{ profile.id }}</p>
-        <div class="profile-actions">
-          <button :disabled="working" @click="open(profile.id)">打开详情 / 重命名</button>
-          <button :disabled="working || (runtime?.activeId===profile.id && profile.revision===runtime.revision)" @click="activate(profile.id)">激活</button>
-          <button :disabled="working || profile.selected || profiles.length<=1" @click="deleteTarget=profile">删除</button>
         </div>
-        <p v-if="profile.selected">删除前须先切换到其他 Profile。</p>
+        <div class="profile-actions">
+          <button :disabled="working" @click="open(profile.id)">编辑</button>
+          <button :disabled="working || (runtime?.activeId===profile.id && profile.revision===runtime.revision)" @click="activate(profile.id)">激活</button>
+          <button class="danger" :title="profile.selected?'先激活其他角色后才能删除':profiles.length<=1?'至少保留一个角色':'删除角色'" :disabled="working || profile.selected || profiles.length<=1" @click="deleteTarget=profile">删除</button>
+        </div>
+
       </article>
     </template>
     <template v-else-if="draft">
-      <div class="profile-actions"><button @click="leaveDetail">← Profile 列表</button><strong>正在编辑：{{ draft.profile.displayName }}</strong><span v-if="draft.profile.id!==runtime?.selectedId">此编辑不会切换当前会话</span></div>
-      <p class="profile-id">ID：{{ draft.profile.id }}</p>
+      <div class="profile-actions"><button @click="leaveDetail">← 角色列表</button><strong>正在编辑：{{ draft.profile.displayName }}</strong><span v-if="draft.profile.id!==runtime?.selectedId">此编辑不会切换当前会话</span></div>
+      <details class="profile-metadata"><summary>角色标识</summary><code>{{ draft.profile.id }}</code></details>
       <section class="profile-card">
-        <h2>基本信息与 Soul</h2>
+        <h2>人格</h2>
         <label>显示名称<input v-model="draft.profile.displayName" maxlength="128" /></label>
         <template v-if="draft.profile.soul">
           <label v-for="field in soulTextFields" :key="field.key">{{ field.label }}<textarea v-model="draft.profile.soul[field.key]" :rows="field.key==='persona'?4:2" /></label>
@@ -41,13 +43,8 @@
         </template>
       </section>
       <section class="profile-card">
-        <h2>Memory 归属</h2>
-        <code>{{ detail.memory.directory }}</code><p>{{ detail.memory.initialized?'已初始化':'尚未初始化；首次运行时按需创建' }}</p>
-        <p>该目录只属于此 Profile。此页面只读取轻量状态，不启动检索服务，也不修改记忆内容。</p>
-      </section>
-      <section class="profile-card">
-        <h2>Live2D 模型与表演适配</h2>
-        <p>导入会复制完整文件夹，保留原始来源和许可文件。替换模型不改变 Soul 或 Memory。</p>
+        <h2>Live2D 与动作</h2>
+        <p>导入完整文件夹并保留许可文件；人格与记忆保持不变。</p>
         <button :disabled="working" @click="importModel">导入模型文件夹</button>
         <p>{{ draft.adaptor.model?.manifest || '未配置模型；文字功能仍然可用' }}</p>
         <template v-if="draft.adaptor.model">
@@ -55,12 +52,12 @@
           <Live2DPreview v-if="previewOpen" ref="preview" :key="draft.modelVersion" :adaptor="draft.adaptor" :model-path="modelPath" :profile-id="draft.profile.id" :revision="draft.revision" :model-version="draft.modelVersion" @validated="verified" @error="previewError" />
           <div class="profile-actions">
             <button :disabled="!previewOpen" @click="preview?.stop()">停止预览 / 恢复基线</button>
-            <button :disabled="!previewOpen" @click="readDiagnostics">读取播放诊断</button>
+
             <label><input v-model="loopPreview" type="checkbox" /> 循环观察动作</label>
             <label>运行状态<select v-model="previewState" @change="preview?.setState(previewState)"><option v-for="state in states" :key="state" :value="state">{{ state }}</option></select></label>
           </div>
-          <pre v-if="diagnostics" class="profile-diagnostics" aria-label="播放诊断">{{ diagnostics }}</pre>
-          <p>预览待机多个循环，确认素材端点及幅度适合陪伴后再绑定。文件名不代表自然语言语义。</p>
+          <details class="profile-preview-diagnostics"><summary>播放诊断</summary><button :disabled="!previewOpen" @click="readDiagnostics">读取播放诊断</button><pre v-if="diagnostics" class="profile-diagnostics" aria-label="播放诊断">{{ diagnostics }}</pre></details>
+
           <p v-if="!detail.resources.some(r=>r.kind==='expression')">无预设表情</p>
           <div class="profile-resources">
             <article v-for="resource in detail.resources" :key="resource.file" class="profile-resource">
@@ -89,25 +86,31 @@
         <h3>运行状态基线</h3>
         <label v-for="state in states" :key="state">{{ state }}<select v-model="draft.adaptor.states[state]"><option :value="null">{{ state==='idle'?'无待机素材':'回退默认待机' }}</option><option v-for="name in loopEntries" :key="name" :value="name">{{ name }}</option></select></label>
       </section>
+      <section class="profile-card">
+        <h2>记忆信息</h2>
+        <p>{{ detail.memory.initialized?'已初始化':'首次运行时自动初始化' }}</p>
+        <details><summary>角色专属目录</summary><code>{{ detail.memory.directory }}</code></details>
+      </section>
       <footer class="profile-save-bar">
         <span role="status">{{ dirty?'有未保存修改':pending?'已保存，待应用':'已保存且已应用' }} · 保存版本 {{ detail.saved.revision }} / 已应用 {{ detail.applied?.revision ?? '无' }}</span>
-        <button :disabled="working || !dirty" @click="save">保存</button>
+        <button :class="{primary:dirty}" :disabled="working || !dirty" @click="save">保存</button>
         <button :disabled="working || !dirty" @click="loadDetail(detail)">撤销未保存编辑</button>
-        <button :disabled="working || dirty || runtime?.selectedId!==draft.profile.id" @click="activate(draft.profile.id,false,true)">应用</button>
-        <button v-if="runtime?.selectedId!==draft.profile.id" :disabled="working || dirty" @click="activate(draft.profile.id)">激活此 Profile</button>
+        <button :class="{primary:!dirty && pending}" :disabled="working || dirty || runtime?.selectedId!==draft.profile.id" @click="activate(draft.profile.id,false,true)">应用</button>
+        <button v-if="runtime?.selectedId!==draft.profile.id" :disabled="working || dirty" @click="activate(draft.profile.id)">激活此角色</button>
       </footer>
     </template>
-    <div v-if="deleteTarget || busyTarget || leaveResolve" class="profile-dialog-backdrop">
-      <section role="alertdialog" aria-modal="true" class="profile-dialog">
-        <template v-if="deleteTarget"><h2>删除 {{ deleteTarget.displayName }}？</h2><p>将删除该 Profile 自有的 Soul、Context、Memory 与模型文件。存在未完成任务或归档时会拒绝删除。</p><button @click="deleteTarget=undefined">取消</button><button :disabled="working" @click="removeProfile">确认删除 Profile 数据</button></template>
+    </div>
+    <div v-if="modalOpen" class="profile-dialog-backdrop">
+      <section ref="dialog" role="alertdialog" aria-modal="true" :aria-label="deleteTarget?'删除角色':busyTarget?'应用角色':'未保存修改'" class="profile-dialog" @keydown.esc="cancelDialog" @keydown.tab="trapDialogFocus">
+        <template v-if="deleteTarget"><h2>删除 {{ deleteTarget.displayName }}？</h2><p>将删除此角色的人格、会话、记忆与模型文件。存在未完成任务或归档时会拒绝删除。</p><button @click="deleteTarget=undefined">取消</button><button :disabled="working" @click="removeProfile">确认删除角色数据</button></template>
         <template v-else-if="busyTarget"><h2>中断当前会话后应用？</h2><p>当前回复与未交付语音会被撤销，独立 Task 的所有权保持。</p><button @click="busyTarget=undefined">取消</button><button @click="activate(busyTarget.id,true,busyTarget.applyOnly)">确认中断并应用</button></template>
-        <template v-else><h2>此 Profile 有未保存修改</h2><button @click="finishLeave(false)">继续编辑</button><button @click="finishLeave(true)">放弃修改</button><button :disabled="working" @click="saveAndLeave">保存后离开</button></template>
+        <template v-else><h2>此角色有未保存修改</h2><button @click="finishLeave(false)">继续编辑</button><button @click="finishLeave(true)">放弃修改</button><button :disabled="working" @click="saveAndLeave">保存后离开</button></template>
       </section>
     </div>
   </section>
 </template>
 <script setup lang="ts">
-import {computed,onBeforeUnmount,onMounted,ref} from 'vue';
+import {computed,nextTick,onBeforeUnmount,onMounted,ref,watch} from 'vue';
 import type {ProfileConfig,ProfileDetail,ProfileSummary} from '../../shared/contracts/profiles';
 import type {ProfileRuntimeState} from '../../shared/contracts/desktop';
 import {AVATAR_LIMITS,avatarResourceUrl,type AvatarEntry,type AvatarResource,type AvatarState} from '../../shared/contracts/avatar';
@@ -115,10 +118,18 @@ import Live2DPreview from '../live2d/Live2DPreview.vue';
 const profiles=ref<ProfileSummary[]>([]),runtime=ref<ProfileRuntimeState>(),detail=ref<ProfileDetail>(),draft=ref<ProfileConfig>();
 const loading=ref(true),working=ref(false),error=ref(''),notice=ref(''),newName=ref(''),baseline=ref('');
 const diagnostics=ref('');
+const profilePage=ref<HTMLElement>();
 const previewOpen=ref(false),loopPreview=ref(false),previewState=ref<AvatarState>('idle'),combinedMotion=ref(''),combinedExpression=ref('');
 const preview=ref<InstanceType<typeof Live2DPreview>>();
 const deleteTarget=ref<ProfileSummary>(),busyTarget=ref<{id:string;applyOnly:boolean}>();
 const leaveResolve=ref<((leave:boolean)=>void)>();
+const dialog=ref<HTMLElement>();
+const modalOpen=computed(()=>Boolean(deleteTarget.value || busyTarget.value || leaveResolve.value));
+let returnFocus:HTMLElement|null=null;
+watch(modalOpen,async(open)=>{if(open){returnFocus=document.activeElement as HTMLElement;await nextTick();dialog.value?.querySelector('button')?.focus();}else{await nextTick();returnFocus?.focus();}});
+function cancelDialog(){if(working.value)return;deleteTarget.value=undefined;busyTarget.value=undefined;finishLeave(false);}
+function trapDialogFocus(event:KeyboardEvent){const buttons=[...dialog.value!.querySelectorAll<HTMLButtonElement>('button:not(:disabled)')];const first=buttons[0],last=buttons.at(-1);if(event.shiftKey&&document.activeElement===first){event.preventDefault();last?.focus();}else if(!event.shiftKey&&document.activeElement===last){event.preventDefault();first?.focus();}}
+
 const states:AvatarState[]=['idle','listening','thinking','speaking'];
 const soulTextFields=[{key:'name',label:'人格名称'},{key:'persona',label:'人格描述'},{key:'tone',label:'语气'},{key:'speakingStyle',label:'说话方式'},{key:'relationship',label:'关系'},{key:'reminderStyle',label:'提醒方式'},{key:'replyPreference',label:'回复偏好'}] as const;
 const soulListFields=[{key:'principles',label:'原则'},{key:'taboos',label:'禁忌'},{key:'boundaries',label:'边界'},{key:'topicPreferences',label:'偏好话题'}] as const;
@@ -130,13 +141,13 @@ const loopEntries=computed(()=>Object.entries(draft.value?.adaptor.entries??{}).
 const clone=<T,>(value:T):T=>JSON.parse(JSON.stringify(value));
 const lines=(value:string)=>value.split('\n').map(line=>line.trim()).filter(Boolean);
 const visualLabel=(status:string)=>({unconfigured:'未配置视觉',ready:'视觉可用',pending:'待应用',invalid:'资源不可用'}[status]??status);
-async function run(action:()=>Promise<void>){if(working.value)return;working.value=true;error.value='';try{await action();}catch(e){error.value=e instanceof Error?e.message:String(e);}finally{working.value=false;}}
+async function run(action:()=>Promise<void>){if(working.value)return;working.value=true;error.value='';try{await action();}catch(e){error.value=e instanceof Error?e.message:String(e);profilePage.value?.querySelectorAll('.profile-entry details').forEach(group=>{(group as HTMLDetailsElement).open=true;});}finally{working.value=false;}}
 async function refresh(){const result=await window.aurabot.listProfiles();profiles.value=result.profiles;runtime.value=result.runtime;}
 function loadDetail(value:ProfileDetail){detail.value=value;draft.value=clone(value.saved);baseline.value=JSON.stringify(draft.value);}
 async function open(id:string){await run(async()=>{loadDetail(await window.aurabot.getProfile(id));previewOpen.value=false;notice.value='';});}
 async function create(){await run(async()=>{loadDetail(await window.aurabot.createProfile(newName.value.trim()));newName.value='';await refresh();});}
 async function save():Promise<boolean>{let saved=false;await run(async()=>{if(!draft.value)return;loadDetail(await window.aurabot.saveProfile(draft.value.profile.id,{profile:clone(draft.value.profile),adaptor:clone(draft.value.adaptor)}));await refresh();saved=true;});return saved;}
-async function activate(id:string,force=false,applyOnly=false){busyTarget.value=undefined;await run(async()=>{const result=await window.aurabot.activateProfile(id,force,applyOnly);runtime.value=result.runtime;if(result.busy){busyTarget.value={id,applyOnly};return;}await refresh();if(detail.value?.saved.profile.id===id)loadDetail(await window.aurabot.getProfile(id));notice.value=result.runtime.online?'Profile 已激活':'已选中；离线状态下未应用到运行时';});}
+async function activate(id:string,force=false,applyOnly=false){busyTarget.value=undefined;await run(async()=>{const result=await window.aurabot.activateProfile(id,force,applyOnly);runtime.value=result.runtime;if(result.busy){busyTarget.value={id,applyOnly};return;}await refresh();if(detail.value?.saved.profile.id===id)loadDetail(await window.aurabot.getProfile(id));notice.value=result.runtime.online?'角色已激活':'已选中；离线状态下未应用到运行时';});}
 async function removeProfile(){const id=deleteTarget.value?.id;if(!id)return;await run(async()=>{await window.aurabot.deleteProfile(id);deleteTarget.value=undefined;await refresh();});}
 async function importModel(){if(!await canLeave())return;await run(async()=>{const result=await window.aurabot.importProfileModel(detail.value!.saved.profile.id);if(result){previewOpen.value=false;loadDetail(result);await refresh();notice.value='模型已导入保存；请打开预览验证资源并配置语义后应用。';}});}
 function addEntry(resource:AvatarResource){if(!draft.value)return;if(Object.keys(draft.value.adaptor.entries).length>=AVATAR_LIMITS.entries){error.value='语义标记已达到上限';return;}let n=1;while(draft.value.adaptor.entries['entry_'+n])n++;draft.value.adaptor.entries['entry_'+n]={kind:resource.kind,source:{file:resource.file},description:'',agent_enabled:false,playback:{mode:resource.kind==='motion'?'once':'hold'}};}
@@ -160,5 +171,31 @@ onBeforeUnmount(()=>{unsubscribe?.();window.removeEventListener('beforeunload',b
 defineExpose({canLeave});
 </script>
 <style scoped>
-.profiles-page{max-width:1080px}.profile-card{margin:20px 0;padding:22px;border:1px solid #d4c8ba;border-radius:18px;background:#fffaf4a8}.profile-card h2{margin-top:0}.profile-id,code{font-size:12px;overflow-wrap:anywhere}.profile-actions,.profile-create{display:flex;flex-wrap:wrap;align-items:center;gap:12px}.profile-card label,.profile-create label{display:block;margin:12px 0}.profile-card input:not([type=checkbox]),.profile-card textarea,.profile-card select,.profile-create input{display:block;width:100%;padding:9px;border:1px solid #cfc1b3;border-radius:8px;background:#fffaf7;font:inherit;box-sizing:border-box}.profile-card textarea{resize:vertical}.profile-error{color:#a2332d}.profile-entry{border-top:1px solid #d4c8ba;margin-top:20px;padding-top:15px}.profile-resource{display:flex;gap:10px;align-items:center;flex-wrap:wrap;padding:10px 0;border-bottom:1px solid #ded4c8}.profile-resource code{flex:1;min-width:180px}.profile-resource span{font-size:12px}.profile-save-bar{position:sticky;bottom:0;display:flex;gap:10px;flex-wrap:wrap;padding:16px;background:#f6f0e7f5;border-radius:12px}.profile-save-bar span{flex:1;min-width:220px}button{font:inherit;cursor:pointer;padding:9px 14px;border:1px solid #c3b7a8;border-radius:9px;background:#fff8ef;color:#40392f}button:disabled{opacity:.5;cursor:default}small{font-size:12px;background:#e5edde;padding:4px 8px;border-radius:10px}.profile-dialog-backdrop{position:fixed;inset:0;background:#201b185c;display:grid;place-items:center;z-index:110}.profile-dialog{width:min(480px,85vw);padding:28px;background:#fffaf2;border-radius:20px}.profile-dialog button{margin:8px}.profile-runtime{font-size:13px;overflow-wrap:anywhere}.profile-combination{margin-top:20px}.profile-diagnostics{max-height:260px;overflow:auto;font-size:12px;padding:12px;background:#eee8df;border-radius:10px}
+.profiles-page{max-width:100%;padding-top:12px;min-height:100%;font-size:14px}
+.profile-card{margin:0;padding:24px 0;border-bottom:1px solid var(--aura-border);background:transparent}
+.profile-card h2{font-size:15px;font-weight:600;margin:0 0 16px}.profile-card h3{font-size:14px;margin:24px 0 16px}
+.profile-card p{color:var(--aura-muted);font-size:13px;line-height:1.6;overflow-wrap:anywhere}
+.profile-list-row{display:flex;align-items:center;justify-content:space-between;gap:16px;padding:20px 0}
+.profile-list-info{min-width:0}.profile-list-info h2{display:flex;align-items:center;flex-wrap:wrap;gap:8px;margin-bottom:6px}.profile-list-info p{margin:0}
+.profile-id,code{font-size:12px;overflow-wrap:anywhere;color:var(--aura-muted)}
+.profile-actions,.profile-create{display:flex;flex-wrap:wrap;align-items:center;gap:8px}.profile-actions{font-size:13px}.profile-actions>span{color:var(--aura-muted)}
+.profile-create{border-bottom:1px solid var(--aura-border);padding:12px 0 20px;align-items:flex-end}.profile-create label{flex:1;margin:0;min-width:160px}.profile-create input{margin-top:8px}
+.profile-card label{display:grid;grid-template-columns:minmax(130px,30%) minmax(0,1fr);gap:16px;align-items:start;margin:16px 0;line-height:1.6}
+.profile-card label:has(input[type=checkbox]){display:flex;align-items:center;gap:8px}
+.profile-card input:not([type=checkbox]),.profile-card textarea,.profile-card select,.profile-create input{width:100%;min-width:0;box-sizing:border-box;color:var(--aura-text)}
+.profile-card textarea{resize:vertical}.profile-error{color:var(--aura-danger);border-left:2px solid currentColor;padding:8px 12px;overflow-wrap:anywhere}
+.profile-entry{border-top:1px solid var(--aura-border);margin-top:20px;padding-top:8px}
+.profile-resource{display:flex;gap:8px;align-items:center;flex-wrap:wrap;padding:12px 0;border-bottom:1px solid var(--aura-border)}
+.profile-resource code{flex:1;min-width:150px}.profile-resource span{font-size:12px;color:var(--aura-muted)}
+.profile-save-bar{position:sticky;bottom:0;display:flex;align-items:center;gap:8px;flex-wrap:wrap;padding:16px 0;background:var(--aura-bg);border-top:1px solid var(--aura-border);z-index:2}
+.profile-save-bar span{flex:1;min-width:180px;color:var(--aura-muted);font-size:12px;line-height:1.5}
+small{font-size:11px;font-weight:400;background:var(--aura-accent-soft);color:var(--aura-accent);padding:2px 6px;border-radius:4px;white-space:nowrap}
+.profile-dialog-backdrop{position:fixed;inset:0;background:#0007;display:grid;place-items:center;z-index:110}
+.profile-dialog{width:min(480px,85vw);padding:24px;background:var(--aura-surface);color:var(--aura-text);border:1px solid var(--aura-border);border-radius:8px}
+.profile-dialog h2{font-size:18px;margin-top:0}.profile-dialog p{line-height:1.7}.profile-dialog button{margin:8px 8px 0 0}
+.profile-runtime{font-size:12px;overflow-wrap:anywhere;color:var(--aura-muted);margin:4px 0 16px}.profile-combination{margin-top:20px}
+.profile-diagnostics{max-height:260px;overflow:auto;font-size:12px;padding:12px;background:var(--aura-surface-soft);border-radius:6px}
+details{margin:16px 0}summary{cursor:pointer;color:var(--aura-muted);font-size:13px;padding:4px 0}details[open]>summary{margin-bottom:8px}
+.profile-metadata{margin:8px 0}
+@media(max-width:800px){.profile-card label{grid-template-columns:1fr;gap:8px}.profile-list-row{align-items:flex-start;flex-direction:column;gap:12px}.profile-save-bar span{flex-basis:100%}.profile-resource code{flex-basis:100%}.profile-card{padding:20px 0}}
 </style>

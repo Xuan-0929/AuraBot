@@ -24,10 +24,9 @@
       </span>
       <div class="composer-rail-actions composer-rail-actions-end">
         <button
-          v-if="content.trim()"
           type="submit"
           class="composer-send-button"
-          :disabled="submitting"
+          :disabled="submitting || !content.trim()"
           :aria-label="t(displayLanguage, 'send')"
           :title="t(displayLanguage, 'send')"
         >

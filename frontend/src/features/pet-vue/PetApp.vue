@@ -1,6 +1,7 @@
 <!--
   桌宠窗口：组合 Live2D 舞台、唯一的 Main Agent 文字／语音连接、已交付消息气泡与窗口控制。
   语音 clause 经 AudioWorklet 确认播放完成后，由 Electron 持久化再显示并 ACK；文字无需麦克风。
+  控件根据已有全局光标事件显隐，以真实麦克风状态提供持续标记；透明窗口命中与捕获由 useClickThrough 协调。
   Task 业务归 Backend；Live2D 表演由实例播放器消费实际交付事件，窗口交互委托给 preload IPC。
 -->
 <template>
@@ -9,9 +10,11 @@
     :data-agent-status="petStore.agentStatus"
     :data-click-through="petStore.petSettings.clickThroughPet ? 'true' : 'false'"
     :data-resizing="resizeDraggingDirection ? 'true' : 'false'"
+    :data-controls-visible="isHoverUiVisible ? 'true' : 'false'"
     :aria-label="t(petStore.displayLanguage, 'desktopLive2DPet')"
+    @pointerenter="isPointerInside = true"
     @pointermove="handlePointerMove"
-    @pointerleave="void clickThrough.handlePointerLeave()"
+    @pointerleave="handlePointerLeave"
     @wheel="handleWheel"
   >
     <aside v-if="mainAgentClauseText || petStore.petActivity" class="pet-message-bubble" :aria-label="t(petStore.displayLanguage, 'petMessage')">
@@ -37,17 +40,18 @@
           :view-transform="live2dViewTransform"
           :zoom-request="live2dZoomRequest"
           @canvas-ready="handleCanvasReady"
-          @interactive-area-change="(value) => (isInteractiveAreaHovering = value)"
           @model-ready="syncAgentState"
           @view-transform-change="handleLive2DViewTransformChange"
         />
       </div>
       <ControlButtons
-        :visible="true"
+        :visible="isHoverUiVisible"
         :display-language="petStore.displayLanguage"
         :voice-input-active="isVoiceInputActive"
-        :voice-input-state="mainAgentRealtimeState"
+        :voice-input-state="microphoneState"
         @hovering-change="(value) => (isControlsHovering = value)"
+        @focus-change="(value) => (isControlsFocused = value)"
+        @dragging-change="(value) => (isControlDragging = value)"
         @console-open="() => void petStore.openConsoleWindow()"
         @voice-toggle="handleVoiceToggle"
       />
@@ -67,6 +71,7 @@
         @pointermove="(e) => handleResizePointerMove(direction, e)"
         @pointerup="handleResizePointerEnd"
         @pointercancel="handleResizePointerEnd"
+        @lostpointercapture="handleResizePointerEnd"
       />
     </div>
   </main>
@@ -98,16 +103,23 @@ const visualError=ref('');
 const transportGeneration=ref(0);
 
 const isControlsHovering = ref(false);
-const mainAgentRealtimeState = ref<MainAgentRealtimeState>("off");
+const isPointerInside = ref(false);
+const isControlsFocused = ref(false);
+const isControlDragging = ref(false);
+const isVoiceConnecting = ref(false);
 const mainAgentClauseText = ref<string | null>(null);
 const voiceEnabled=ref(false);
 const voiceError=ref("");
+const microphoneError = ref(false);
 const isVoiceInputActive = computed(
   () => voiceEnabled.value
 );
-const isInteractiveAreaHovering = ref(false);
+const microphoneState = computed<MainAgentRealtimeState>(() =>
+  isVoiceConnecting.value ? "connecting" : microphoneError.value ? "error" : voiceEnabled.value ? "active" : "off"
+);
 const isResizeGripHovering = ref(false);
 const resizeDraggingDirection = ref<PetResizeDirection | null>(null);
+const isHoverUiVisible = computed(() => isPointerInside.value || isControlsFocused.value || isControlDragging.value || resizeDraggingDirection.value !== null);
 const pointerAt = ref<{ x: number; y: number } | undefined>(undefined);
 const canvasRef = ref<HTMLCanvasElement | null>(null);
 const live2dViewTransform = ref(readStoredLive2DViewTransform(window.localStorage));
@@ -117,7 +129,7 @@ const mainAgentRealtime = new MainAgentRealtimeClient({
   getToken:async()=>{const token=await window.aurabot.getRealtimeToken();transportGeneration.value=token.generation;await nextTick();return token;},
   onPerformance:event=>scene.value?.accept(event),
   onState: (state,detail) => {
-    mainAgentRealtimeState.value = state;
+    if (state === "error" && (voiceEnabled.value || isVoiceConnecting.value)) microphoneError.value = true;
     if(state!=="active")voiceEnabled.value=false;
     voiceError.value=detail??"";
     void window.aurabot.reportRealtimeError(detail??"");
@@ -159,8 +171,22 @@ const clickThrough = useClickThrough({
   enabled: computed(() => petStore.petSettings.clickThroughPet),
   canvasRef,
   interactiveUiHovering: computed(
-    () => isControlsHovering.value || isResizeGripHovering.value || resizeDraggingDirection.value !== null
+    () => isControlsHovering.value || isControlsFocused.value || isControlDragging.value || isResizeGripHovering.value || resizeDraggingDirection.value !== null
   )
+});
+
+// The existing cursor IPC also reports coordinates outside the transparent window,
+// where native pointerleave is not reliable while Electron forwards mouse moves.
+watch(() => petStore.petCursorPosition, async (position) => {
+  if (!position) return;
+  const { localX: x, localY: y } = position;
+  isPointerInside.value = x >= 0 && y >= 0 && x < window.innerWidth && y < window.innerHeight;
+  await nextTick();
+  const target = isPointerInside.value ? document.elementFromPoint?.(x, y) : null;
+  isControlsHovering.value = Boolean(target?.closest(".pet-action-button"));
+  isResizeGripHovering.value = Boolean(target?.closest(".pet-vue-resize-grip"));
+  if (isPointerInside.value) void clickThrough.handlePointerMove();
+  else void clickThrough.handlePointerLeave();
 });
 
 watch(
@@ -180,9 +206,13 @@ watch(()=>petStore.profile?.id,id=>{live2dViewTransform.value=readStoredLive2DVi
 
 async function handleVoiceToggle() {
   const profile=petStore.profile;if(!profile)return;
+  if (isVoiceConnecting.value) return;
   voiceError.value="";
+  microphoneError.value = false;
+  isVoiceConnecting.value = true;
   try {await mainAgentRealtime.toggle({profileId:profile.id,revision:petStore.profileRuntime?.revision});voiceEnabled.value=mainAgentRealtime.voiceEnabled;}
-  catch(error){voiceEnabled.value=false;voiceError.value=error instanceof Error?error.message:"语音不可用";}
+  catch(error){voiceEnabled.value=false;microphoneError.value=true;voiceError.value=error instanceof Error?error.message:"语音不可用";}
+  finally { isVoiceConnecting.value = false; }
 }
 
 function handleCanvasReady(canvas: HTMLCanvasElement) {
@@ -225,13 +255,21 @@ function handleResizePointerEnd(event: PointerEvent) {
   resizeDraggingDirection.value = null;
 }
 
+function handlePointerLeave() {
+  isPointerInside.value = false;
+  isControlsHovering.value = false;
+  isResizeGripHovering.value = false;
+  void clickThrough.handlePointerLeave();
+}
+
 function handlePointerMove(event: PointerEvent) {
+  isPointerInside.value = true;
   const canvas = canvasRef.value;
   if (canvas) {
     const rect = canvas.getBoundingClientRect();
     pointerAt.value = { x: event.clientX - rect.left, y: event.clientY - rect.top };
   }
-  void clickThrough.handlePointerMove(event);
+  void clickThrough.handlePointerMove();
 }
 
 function handleWheel(event: WheelEvent) {
@@ -354,10 +392,8 @@ function handleLive2DViewTransformChange(transform: Live2DViewTransform) {
 }
 
 .pet-vue-model-shell {
-  /* Inset ring avoids clipping from .desktop-pet overflow:hidden (outline showed corners only). */
-  border-radius: 22px;
-  box-shadow: inset 0 0 0 2px transparent;
-  transition: box-shadow 180ms ease;
+  border-radius: 8px;
+  box-shadow: inset 0 0 0 1px transparent;
 }
 
 .pet-vue-live2d-frame {
@@ -365,16 +401,28 @@ function handleLive2DViewTransformChange(transform: Live2DViewTransform) {
   width: 100%;
   height: 100%;
   min-height: 0;
-  transition: opacity 180ms ease;
 }
 
-.pet-vue-root:hover .pet-vue-model-shell {
-  box-shadow: inset 0 0 0 2px #f97316;
+.pet-vue-root[data-resizing="true"] .pet-vue-model-shell {
+  box-shadow: inset 0 0 0 1px var(--aura-accent);
 }
 
-.pet-vue-root[data-resizing="false"]:hover:not(:has(.pet-vue-resize-grip:hover)) .pet-vue-live2d-frame {
-  opacity: 0.4;
+.pet-vue-resize-grips::after {
+  content: "";
+  position: absolute;
+  right: 5px;
+  bottom: 5px;
+  width: 10px;
+  height: 10px;
+  border-right: 1px solid var(--aura-accent);
+  border-bottom: 1px solid var(--aura-accent);
+  opacity: 0;
+  transition: opacity 140ms ease;
 }
+.pet-vue-root[data-controls-visible="true"] .pet-vue-resize-grips::after,
+.pet-vue-root:focus-within .pet-vue-resize-grips::after,
+.pet-vue-root[data-resizing="true"] .pet-vue-resize-grips::after { opacity: 1; }
+@media (prefers-reduced-motion: reduce) { .pet-vue-resize-grips::after { transition: none; } }
 
 .pet-vue-model-shell .desktop-pet-stage,
 .pet-vue-model-shell .live2d-canvas-host,
@@ -382,7 +430,4 @@ function handleLive2DViewTransformChange(transform: Live2DViewTransform) {
   pointer-events: none;
 }
 
-.pet-quick-controls {
-  pointer-events: auto;
-}
 </style>

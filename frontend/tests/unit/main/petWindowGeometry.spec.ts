@@ -197,3 +197,22 @@ describe("pet window geometry", () => {
     expect(() => createPetWindow()).toThrow("unsupported");
   });
 });
+
+
+test("applying unrelated preferences preserves interactive hit testing, while preference changes reset it", async () => {
+  electronMock.setVisibleOnAllWorkspaces.mockReset();
+  const windows = await loadWindowModule();
+  const { DEFAULT_PET_SETTINGS } = await import("../../../src/shared/schemas/petSettings");
+  const settings = { ...DEFAULT_PET_SETTINGS, clickThroughPet: true };
+  windows.createPetWindow({settings});
+  const native = electronMock.instances[0]!.setIgnoreMouseEvents;
+  expect(native).toHaveBeenLastCalledWith(true, {forward:true});
+  windows.setPetMousePassthrough(false);
+  native.mockClear();
+  windows.applyPetSettings({...settings, displayLanguage:'zh'});
+  expect(native).not.toHaveBeenCalled();
+  windows.applyPetSettings({...settings, clickThroughPet:false});
+  expect(native).toHaveBeenLastCalledWith(false, {forward:true});
+  windows.createPetWindow({settings});
+  expect(native).toHaveBeenLastCalledWith(true, {forward:true});
+});

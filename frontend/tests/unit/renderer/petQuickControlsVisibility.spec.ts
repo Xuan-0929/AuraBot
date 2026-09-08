@@ -1,31 +1,173 @@
-import { readFileSync } from "node:fs";
-import { dirname, join } from "node:path";
-import { fileURLToPath } from "node:url";
-import { describe, expect, test } from "vitest";
+// @vitest-environment jsdom
+/** Exercises rendered pet controls and window hover using mocked desktop/media boundaries;
+ * verifies microphone status and capture interactions without starting a Live2D renderer. */
+import { createApp, defineComponent, h, nextTick, reactive } from 'vue';
+import { afterEach, describe, expect, it, vi } from 'vitest';
+import ControlButtons from '../../../src/features/pet-vue/components/ControlButtons.vue';
 
-const rendererRoot = join(dirname(fileURLToPath(import.meta.url)), "../../../src");
+let cleanup: (() => void) | undefined;
+afterEach(() => { cleanup?.(); cleanup = undefined; });
+function mountControls() {
+  const props = reactive({ visible: false, displayLanguage: 'en' as const, voiceInputActive: false, voiceInputState: 'off' as 'off' | 'connecting' | 'active' | 'error' });
+  const onDraggingChange = vi.fn();
+  const host = document.createElement('div');
+  document.body.append(host);
+  const app = createApp(defineComponent(() => () => h(ControlButtons, { ...props, onDraggingChange })));
+  app.mount(host);
+  cleanup = () => { app.unmount(); host.remove(); };
+  return { host, props, onDraggingChange };
+}
 
-describe("Vue pet quick controls visibility", () => {
-  function readPetAppSource() {
-    return readFileSync(join(rendererRoot, "features/pet-vue/PetApp.vue"), "utf8");
+describe('pet quick controls', () => {
+  it('shows a persistent mic status only for microphone activity, pending connection or error', async () => {
+    const { host, props } = mountControls();
+    const mic = host.querySelector('.pet-action-voice')!;
+    expect(mic.getAttribute('data-persistent')).toBe('false');
+    props.voiceInputState = 'active';
+    await nextTick();
+    expect(mic.getAttribute('data-persistent')).toBe('false');
+    props.voiceInputActive = true;
+    await nextTick();
+    expect(mic.getAttribute('data-persistent')).toBe('true');
+    expect(mic.getAttribute('aria-pressed')).toBe('true');
+    props.voiceInputActive = false;
+    for (const state of ['connecting', 'error'] as const) {
+      props.voiceInputState = state;
+      await nextTick();
+      expect(mic.getAttribute('data-persistent')).toBe('true');
+    }
+  });
+
+  it('retains drag capture and publishes interaction state until release', async () => {
+    const { host, onDraggingChange } = mountControls();
+    const button = host.querySelector('.pet-action-drag') as HTMLButtonElement;
+    Object.assign(button, { setPointerCapture: vi.fn(), hasPointerCapture: () => true, releasePointerCapture: vi.fn() });
+    const movePetWindowBy = vi.fn();
+    Object.assign(window, { aurabot: { movePetWindowBy } });
+    function pointer(type: string, screenX: number, screenY: number) {
+      const event = new Event(type, { bubbles: true });
+      Object.assign(event, { pointerId: 7, screenX, screenY });
+      button.dispatchEvent(event);
+    }
+    pointer('pointerdown', 20, 30);
+    await nextTick();
+    expect(onDraggingChange).toHaveBeenLastCalledWith(true);
+    pointer('pointermove', 25, 38);
+    expect(movePetWindowBy).toHaveBeenCalledWith({ x: 5, y: 8 });
+    pointer('pointercancel', 25, 38);
+    await nextTick();
+    expect(onDraggingChange).toHaveBeenLastCalledWith(false);
+    expect(button.releasePointerCapture).toHaveBeenCalledWith(7);
+  });
+});
+
+let realtimeCallbacks: { onState: (state: string, detail?: string) => void };
+let toggleError: Error | undefined;
+vi.mock('../../../src/app/store', () => ({ useAuraBotStore: () => petStore }));
+vi.mock('../../../src/main-agent-realtime/client', () => ({ MainAgentRealtimeClient: class {
+  voiceEnabled = false;
+  constructor(public options: { onState: (state: string, detail?: string) => void }) { realtimeCallbacks = options; }
+  async toggle() { if (toggleError) throw toggleError; this.voiceEnabled = !this.voiceEnabled; this.options.onState('active'); }
+  async start() { this.options.onState('active'); }
+  async stop() {}
+} }));
+vi.mock('../../../src/features/pet-vue/live2d/Scene.vue', () => ({ default: defineComponent({ setup(_, { expose }) {
+  expose({ ready: async () => ({ available: true }), setState: () => {} });
+  return () => h('canvas');
+} }) }));
+import PetApp from '../../../src/features/pet-vue/PetApp.vue';
+const petStore = reactive({
+  agentStatus: 'idle', displayLanguage: 'en', petSettings: { clickThroughPet: true }, profile: { id: 'a' },
+  petCursorPosition: undefined as undefined | { localX: number; localY: number },
+  loadInitialState: async () => {}, armPetActivityAutoClear: () => {}, openConsoleWindow: vi.fn()
+});
+function mountPet() {
+  toggleError = undefined;
+  petStore.petCursorPosition = undefined;
+  Object.assign(window, { aurabot: {
+    onPetCommand: () => () => {}, petReady: async () => {}, getSettings: async () => ({ online: true }),
+    setPetMousePassthrough: vi.fn(async () => {}), resizePetWindowCorner: vi.fn(async () => {}), reportRealtimeError: async () => {}
+  } });
+  const host = document.createElement('div'); document.body.append(host);
+  const app = createApp(PetApp); app.mount(host);
+  cleanup = () => { app.unmount(); host.remove(); };
+  return host;
+}
+it('reveals controls from existing cursor events, hides on exit and retains keyboard focus', async () => {
+  const host = mountPet();
+  const controls = host.querySelector('.pet-quick-controls')!;
+  await nextTick();
+  expect(controls.getAttribute('data-visible')).toBe('false');
+  petStore.petCursorPosition = { localX: 100, localY: 100 };
+  await nextTick();
+  expect(controls.getAttribute('data-visible')).toBe('true');
+  const chat = host.querySelector('.pet-action-console') as HTMLButtonElement;
+  chat.focus();
+  petStore.petCursorPosition = { localX: -1, localY: -1 };
+  await nextTick();
+  expect(controls.getAttribute('data-visible')).toBe('true');
+  chat.blur();
+  await nextTick();
+  expect(controls.getAttribute('data-visible')).toBe('false');
+});
+it('does not mark the microphone active when only the text transport is connected', async () => {
+  const host = mountPet();
+  await vi.waitFor(() => expect(host.querySelector('.pet-action-voice')?.getAttribute('data-state')).toBe('off'));
+  (host.querySelector('.pet-action-voice') as HTMLButtonElement).click();
+  await vi.waitFor(() => expect(host.querySelector('.pet-action-voice')?.getAttribute('aria-pressed')).toBe('true'));
+});
+
+it('keeps all eight resize directions captured across window exit and releases on cancellation', async () => {
+  const host = mountPet();
+  const root = host.querySelector('main')!;
+  const controls = host.querySelector('.pet-quick-controls')!;
+  for (const direction of ['n', 's', 'e', 'w', 'nw', 'ne', 'sw', 'se']) {
+    const grip = host.querySelector(`.pet-vue-resize-grip--${direction}`) as HTMLElement;
+    Object.assign(grip, { setPointerCapture: vi.fn(), hasPointerCapture: () => true, releasePointerCapture: vi.fn() });
+    function send(type: string) {
+      const event = new Event(type, { bubbles: true });
+      Object.assign(event, { pointerId: 9, movementX: 3, movementY: -2 });
+      grip.dispatchEvent(event);
+    }
+    send('pointerdown');
+    root.dispatchEvent(new Event('pointerleave'));
+    await nextTick();
+    expect(root.getAttribute('data-resizing')).toBe('true');
+    expect(controls.getAttribute('data-visible')).toBe('true');
+    send('pointermove');
+    expect(window.aurabot.resizePetWindowCorner).toHaveBeenLastCalledWith(direction, { x: 3, y: -2 });
+    send('pointercancel');
+    await nextTick();
+    expect(root.getAttribute('data-resizing')).toBe('false');
+    expect(grip.releasePointerCapture).toHaveBeenCalledWith(9);
   }
+});
 
-  test("keeps the three quick control buttons always visible instead of hover-gated", () => {
-    const petAppSource = readPetAppSource();
+it('keeps text transport failures out of the persistent microphone status', async () => {
+  const host = mountPet();
+  await new Promise(resolve => setTimeout(resolve, 0));
+  realtimeCallbacks.onState('error', 'Text transport disconnected');
+  await nextTick();
+  expect(host.querySelector('[role="alert"]')?.textContent).toBe('Text transport disconnected');
+  const mic = host.querySelector('.pet-action-voice')!;
+  expect(mic.getAttribute('data-state')).toBe('off');
+  expect(mic.getAttribute('data-persistent')).toBe('false');
+});
 
-    expect(petAppSource).toContain("<ControlButtons");
-    expect(petAppSource).toContain(':visible="true"');
-    expect(petAppSource).not.toContain(':visible="isHoverUiVisible"');
-  });
-
-  test("keeps orange frame hover while avoiding model fade during resize interactions", () => {
-    const petAppSource = readPetAppSource();
-
-    expect(petAppSource).toMatch(/\.pet-vue-root:hover\s+\.pet-vue-model-shell\s*{[^}]*box-shadow:\s*inset 0 0 0 2px #f97316;/s);
-    expect(petAppSource).toMatch(
-      /\.pet-vue-root\[data-resizing="false"\]:hover:not\(:has\(\.pet-vue-resize-grip:hover\)\)\s+\.pet-vue-live2d-frame\s*{[^}]*opacity:\s*0\.4;/s
-    );
-    expect(petAppSource).not.toContain("pet-vue-model-hovering");
-    expect(petAppSource).not.toContain(":class=\"{ 'pet-vue-model-hovering'");
-  });
+it('keeps microphone failures visible until a successful retry', async () => {
+  const host = mountPet();
+  await new Promise(resolve => setTimeout(resolve, 0));
+  toggleError = new Error('Microphone access denied');
+  const mic = host.querySelector('.pet-action-voice') as HTMLButtonElement;
+  mic.click();
+  await vi.waitFor(() => expect(mic.getAttribute('data-state')).toBe('error'));
+  expect(mic.getAttribute('data-persistent')).toBe('true');
+  expect(host.querySelector('[role="alert"]')?.textContent).toBe('Microphone access denied');
+  toggleError = undefined;
+  mic.click();
+  await vi.waitFor(() => expect(mic.getAttribute('aria-pressed')).toBe('true'));
+  realtimeCallbacks.onState('error', 'Connection lost during capture');
+  await nextTick();
+  expect(mic.getAttribute('data-state')).toBe('error');
+  expect(mic.getAttribute('data-persistent')).toBe('true');
 });

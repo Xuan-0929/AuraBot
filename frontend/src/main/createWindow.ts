@@ -46,7 +46,6 @@ export interface CreatePetWindowOptions {
 export function createPetWindow(options: CreatePetWindowOptions = {}): BrowserWindow {
   const settings = options.settings ?? currentPetSettings;
 
-  currentPetSettings = settings;
   onPetBoundsChanged = options.onBoundsChanged ?? onPetBoundsChanged;
 
   if (petWindow && !petWindow.isDestroyed()) {
@@ -80,6 +79,9 @@ export function createPetWindow(options: CreatePetWindowOptions = {}): BrowserWi
     stopPetCursorTracking();
   });
   loadRenderer(petWindow, "pet");
+  // A newly created window needs its initial preference even when it matches the cached one.
+  currentPetSettings = settings;
+  setPetMousePassthrough(settings.clickThroughPet);
   applyPetSettings(settings);
   startPetCursorTracking();
 
@@ -147,8 +149,9 @@ export function openSettingsWindow(): BrowserWindow {
 }
 
 export function applyPetSettings(settings: PetSettings): void {
+  const changed = currentPetSettings.clickThroughPet !== settings.clickThroughPet;
   currentPetSettings = settings;
-  setPetMousePassthrough(settings.clickThroughPet);
+  if (changed) setPetMousePassthrough(settings.clickThroughPet);
   broadcastPetSettings(settings);
 }
 

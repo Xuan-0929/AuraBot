@@ -5,7 +5,6 @@
 -->
 <template>
   <div v-if="messages.length === 0" class="empty-state">
-    <span class="empty-state-kicker">{{ t(displayLanguage, "mainConversation") }}</span>
     <p>{{ t(displayLanguage, "readyWhenYouAre") }}</p>
   </div>
   <div

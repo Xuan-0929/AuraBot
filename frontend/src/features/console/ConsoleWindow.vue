@@ -1,63 +1,105 @@
 <!--
-  Console 主窗口：呈现主聊天消息与输入区。
-  消息由 Pinia store 从主进程加载，输入通过现有聊天 IPC 发送；该组件不拥有
-  Task 执行控制，只与通用聊天组件和玻璃面板组合。
+  主聊天窗口：以稳定的标题栏、可收起任务列表和连续对话组织现有聊天功能。
+  Pinia 负责消息与设置入口，任务由既有 IPC 推送；侧栏显隐仅属于窗口内的展示状态，
+  窄窗口使用带焦点管理的覆盖面板，不改变任务订阅或执行生命周期。
 -->
 <template>
   <main class="console-window" :aria-label="t(store.displayLanguage, 'consoleTitle')">
-    <button
-      type="button"
-      class="console-settings-button"
-      :aria-label="t(store.displayLanguage, 'openAuraBotSettings')"
-      :title="t(store.displayLanguage, 'settings')"
-      @click="void store.openSettingsWindow()"
-    >
-      <Icon icon="solar:settings-linear" aria-hidden="true" />
-    </button>
+    <header class="console-header" :inert="overlayOpen ? true : undefined">
+      <div class="console-brand">
+        <button ref="sidebarToggle" type="button" class="icon-button" aria-controls="console-tasks" :aria-expanded="sidebarOpen" :aria-label="sidebarOpen ? '收起任务列表' : '展开任务列表'" :title="sidebarOpen ? '收起任务列表' : '展开任务列表'" @click="toggleSidebar">
+          <Icon icon="solar:sidebar-minimalistic-linear" aria-hidden="true" />
+        </button>
+        <span class="aura-wordmark">AuraBot</span>
+      </div>
+      <button type="button" class="icon-button console-settings-button" :aria-label="t(store.displayLanguage, 'openAuraBotSettings')" :title="t(store.displayLanguage, 'settings')" @click="void store.openSettingsWindow()">
+        <Icon icon="solar:settings-linear" aria-hidden="true" />
+      </button>
+    </header>
     <div class="console-body">
-      <aside class="console-tasks" aria-label="Task 状态">
-        <h2>任务</h2><p>通过与 Aura 对话来创建和管理任务。</p>
-        <p v-if="taskError" role="status">{{ taskError }}</p>
-        <p v-else-if="!tasks.length">暂无任务</p>
-        <ul><li v-for="task in tasks" :key="task.id"><strong>{{ task.title }}</strong><span>{{ taskLabels[task.status] ?? task.status }}</span></li></ul>
+      <div v-if="overlayOpen" class="console-sidebar-scrim" aria-hidden="true" @click="closeSidebar" />
+      <aside v-show="sidebarOpen" id="console-tasks" ref="sidebar" class="console-tasks" :class="{'console-tasks-overlay': narrow}" :role="overlayOpen ? 'dialog' : undefined" :aria-modal="overlayOpen ? true : undefined" aria-labelledby="tasks-heading" tabindex="-1" @keydown="handleSidebarKeydown">
+        <div class="console-tasks-heading"><h2 id="tasks-heading">任务</h2><button v-if="narrow" type="button" class="icon-button" aria-label="关闭任务列表" title="关闭任务列表" @click="closeSidebar"><Icon icon="solar:close-circle-linear" aria-hidden="true" /></button></div>
+        <p v-if="taskError" role="status" class="inline-error">{{ taskError }}</p>
+        <p v-else-if="!tasks.length" class="task-empty">暂无任务</p>
+        <ul class="task-list"><li v-for="task in tasks" :key="task.id"><strong>{{ task.title }}</strong><span class="task-status" :data-status="task.status"><Icon :icon="taskIcons[task.status] ?? 'solar:clock-circle-linear'" aria-hidden="true" />{{ taskLabels[task.status] ?? task.status }}</span></li></ul>
       </aside>
-      <section class="console-chat" :aria-label="t(store.displayLanguage, 'mainConversation')">
-        <button v-if="store.historyCursor" type="button" @click="store.loadOlderHistory()">加载更早记录</button>
-        <p v-if="store.chatError" role="alert">{{ store.chatError }}</p>
+      <section class="console-chat" :inert="overlayOpen ? true : undefined" :aria-label="t(store.displayLanguage, 'mainConversation')">
+        <div v-if="store.historyCursor || store.chatError" class="console-chat-notices">
+          <button v-if="store.historyCursor" type="button" class="history-button" @click="store.loadOlderHistory()"><Icon icon="solar:history-linear" aria-hidden="true" />加载更早记录</button>
+          <p v-if="store.chatError" role="alert" class="inline-error">{{ store.chatError }}</p>
+        </div>
         <MessageList :messages="store.messages" :display-language="store.displayLanguage" />
-        <ConsoleGlassPanel variant="control" class="console-composer-glass">
-          <Composer
-            :display-language="store.displayLanguage"
-            :agent-status="store.agentStatus"
-            :on-send="(content) => store.sendMessage(content, 'console')"
-          />
-        </ConsoleGlassPanel>
+        <div class="console-composer"><Composer :display-language="store.displayLanguage" :agent-status="store.agentStatus" :on-send="(content) => store.sendMessage(content, 'console')" /></div>
       </section>
     </div>
   </main>
 </template>
 
 <script setup lang="ts">
-import { onMounted, onBeforeUnmount, ref } from 'vue';
+import { computed, nextTick, onMounted, onBeforeUnmount, ref } from 'vue';
+import { Icon, addCollection } from '@iconify/vue';
+import solarIcons from '@iconify-json/solar/icons.json';
 import type { TaskSummary } from '../../shared/contracts/desktop';
-import { Icon, addCollection } from "@iconify/vue";
-import solarIcons from "@iconify-json/solar/icons.json";
-import { useAuraBotStore } from "../../app/store";
-import { t } from "../../i18n";
-import Composer from "../chat/Composer.vue";
-import MessageList from "../chat/MessageList.vue";
-import ConsoleGlassPanel from "./ConsoleGlassPanel.vue";
+import { useAuraBotStore } from '../../app/store';
+import { t } from '../../i18n';
+import Composer from '../chat/Composer.vue';
+import MessageList from '../chat/MessageList.vue';
 
 addCollection(solarIcons);
 const store = useAuraBotStore();
-const tasks=ref<TaskSummary[]>([]);const taskError=ref('');
-const taskLabels:Record<string,string>={queued:'排队中',running:'执行中',waiting:'等待回答',paused:'已暂停',completed:'已完成',failed:'失败',cancelled:'已取消'};
-let unsubscribe:(()=>void)|undefined;
-function visibility(){void window.aurabot.subscribeTasks(!document.hidden);}
-onMounted(()=>{unsubscribe=window.aurabot.onTasksChanged(value=>{tasks.value=value.tasks;taskError.value=value.error??'';});visibility();document.addEventListener('visibilitychange',visibility);});
-onBeforeUnmount(()=>{unsubscribe?.();document.removeEventListener('visibilitychange',visibility);void window.aurabot.subscribeTasks(false);});
-</script>
+const tasks = ref<TaskSummary[]>([]);
+const taskError = ref('');
+const media = window.matchMedia('(max-width: 959px)');
+const narrow = ref(media.matches);
+const sidebarOpen = ref(!media.matches);
+let wideSidebarOpen = true;
+const overlayOpen = computed(() => narrow.value && sidebarOpen.value);
+const sidebarToggle = ref<HTMLButtonElement>();
+const sidebar = ref<HTMLElement>();
+const taskLabels: Record<string, string> = {queued:'排队中', running:'执行中', waiting:'等待回答', paused:'已暂停', completed:'已完成', failed:'失败', cancelled:'已取消'};
+const taskIcons: Record<string, string> = {running:'solar:play-circle-linear', waiting:'solar:chat-round-line-linear', paused:'solar:pause-circle-linear', completed:'solar:check-circle-linear', failed:'solar:danger-circle-linear', cancelled:'solar:close-circle-linear'};
+let unsubscribe: (() => void) | undefined;
 
-<style scoped>
-.console-tasks{width:235px;flex-shrink:0;padding:24px 18px;overflow:auto;border-right:1px solid #b7aba330;font-size:13px}.console-tasks h2{font-size:18px}.console-tasks p{opacity:.65;line-height:1.6}.console-tasks ul{list-style:none;padding:0}.console-tasks li{padding:14px 0;border-bottom:1px solid #b7aba330;display:flex;flex-direction:column;gap:8px}.console-tasks span{font-size:12px;opacity:.65}@media(max-width:800px){.console-tasks{width:180px}}
-</style>
+async function toggleSidebar() {
+  sidebarOpen.value = !sidebarOpen.value;
+  if (!narrow.value) wideSidebarOpen = sidebarOpen.value;
+  if (overlayOpen.value) {
+    await nextTick();
+    sidebar.value?.querySelector<HTMLButtonElement>('button')?.focus();
+  }
+}
+async function closeSidebar() {
+  sidebarOpen.value = false;
+  await nextTick();
+  sidebarToggle.value?.focus();
+}
+function handleSidebarKeydown(event: KeyboardEvent) {
+  if (!overlayOpen.value) return;
+  if (event.key === 'Escape') { event.preventDefault(); void closeSidebar(); }
+  if (event.key === 'Tab') {
+    // The task list is read-only; its close button is the sole focusable control.
+    event.preventDefault();
+    sidebar.value?.querySelector<HTMLButtonElement>('button')?.focus();
+  }
+}
+function resizeSidebar(event: MediaQueryListEvent) {
+  const focusWasInside = sidebar.value?.contains(document.activeElement);
+  narrow.value = event.matches;
+  sidebarOpen.value = event.matches ? false : wideSidebarOpen;
+  if (focusWasInside && event.matches) void nextTick(() => sidebarToggle.value?.focus());
+}
+function visibility() { void window.aurabot.subscribeTasks(!document.hidden); }
+onMounted(() => {
+  unsubscribe = window.aurabot.onTasksChanged(value => { tasks.value = value.tasks; taskError.value = value.error ?? ''; });
+  visibility();
+  document.addEventListener('visibilitychange', visibility);
+  media.addEventListener('change', resizeSidebar);
+});
+onBeforeUnmount(() => {
+  unsubscribe?.();
+  document.removeEventListener('visibilitychange', visibility);
+  media.removeEventListener('change', resizeSidebar);
+  void window.aurabot.subscribeTasks(false);
+});
+</script>

@@ -1,141 +1,61 @@
 <!--
   桌宠悬浮控制组：提供 Console、正式 Main Agent 麦克风和窗口拖动入口。
-  组件只渲染外部传入的 realtime active/error 状态并转发用户事件；语音连接、媒体资源与
+  使用透明 SVG 按钮显示真实麦克风状态，悬停、聚焦和拖动保持可操作；语音连接、媒体资源与
   clause 播放均由 PetApp 的 MainAgentRealtimeClient 持有，避免在视觉组件中复制状态机。
 -->
 <template>
   <div
     class="pet-quick-controls pet-vue-quick-controls"
-    :data-visible="visible ? 'true' : 'false'"
+    :data-visible="visible || isDragging ? 'true' : 'false'"
     :aria-label="t(displayLanguage, 'petQuickControls')"
     @pointerenter="emit('hoveringChange', true)"
     @pointerleave="emit('hoveringChange', false)"
+    @focusin="emit('focusChange', true)"
+    @focusout="handleFocusOut"
   >
-    <div class="pet-vue-liquid-glass">
-      <LiquidGlass
-        :padding="'0'"
-        :corner-radius="22"
-        :blur-amount="0.095"
-        :displacement-scale="48"
-        :saturation="148"
-        :aberration-intensity="1.45"
-        :elasticity="0.1"
-        :style="liquidGlassSurfaceStyle"
-      >
-        <button
-          class="pet-action-button pet-vue-circle-btn pet-action-console"
-          type="button"
-          :aria-label="t(displayLanguage, 'openAuraBotConsole')"
-          @click="emit('consoleOpen')"
-        >
-          <svg
-            class="pet-vue-control-icon"
-            viewBox="0 0 24 24"
-            fill="none"
-            stroke="currentColor"
-            stroke-width="1.9"
-            stroke-linecap="round"
-            stroke-linejoin="round"
-            aria-hidden="true"
-          >
-            <path
-              d="M17.5 19H9a7 7 0 1 1 6.71-9h1.79a4.5 4.5 0 1 1 0 9Z"
-            />
-          </svg>
-        </button>
-      </LiquidGlass>
-    </div>
-    <div class="pet-vue-liquid-glass">
-      <LiquidGlass
-        :padding="'0'"
-        :corner-radius="22"
-        :blur-amount="0.095"
-        :displacement-scale="48"
-        :saturation="148"
-        :aberration-intensity="1.45"
-        :elasticity="0.1"
-        :style="liquidGlassSurfaceStyle"
-      >
-        <button
-          class="pet-action-button pet-vue-circle-btn pet-action-voice"
-          type="button"
-          :data-active="voiceInputActive ? 'true' : 'false'"
-          :data-state="voiceInputState"
-          :aria-label="voiceInputActive ? '停止语音输入' : t(displayLanguage, 'startVoiceInput')"
-          @click="emit('voiceToggle')"
-        >
-          <svg
-            class="pet-vue-control-icon pet-vue-mic-icon"
-            viewBox="0 0 24 24"
-            fill="none"
-            stroke="currentColor"
-            stroke-width="1.9"
-            stroke-linecap="round"
-            stroke-linejoin="round"
-            aria-hidden="true"
-          >
-            <path d="M12 14a3 3 0 0 0 3-3V7a3 3 0 1 0-6 0v4a3 3 0 0 0 3 3Z" />
-            <path d="M8 11v.5a4 4 0 0 0 8 0V11" />
-            <path d="M12 18v2" />
-          </svg>
-        </button>
-      </LiquidGlass>
-    </div>
-    <div class="pet-vue-liquid-glass">
-      <LiquidGlass
-        :padding="'0'"
-        :corner-radius="22"
-        :blur-amount="0.095"
-        :displacement-scale="48"
-        :saturation="148"
-        :aberration-intensity="1.45"
-        :elasticity="0.1"
-        :style="liquidGlassSurfaceStyle"
-      >
-        <button
-          class="pet-action-button pet-vue-circle-btn pet-action-drag"
-          type="button"
-          :aria-label="t(displayLanguage, 'dragPet')"
-          :data-dragging="isDragging ? 'true' : 'false'"
-          @pointerdown="handleDragPointerDown"
-          @pointermove="handleDragPointerMove"
-          @pointerup="handleDragPointerEnd"
-          @pointercancel="handleDragPointerEnd"
-        >
-          <svg
-            class="pet-vue-control-icon pet-vue-drag-arrows"
-            viewBox="0 0 24 24"
-            fill="none"
-            stroke="currentColor"
-            stroke-width="1.9"
-            stroke-linecap="round"
-            stroke-linejoin="round"
-            aria-hidden="true"
-          >
-            <!-- Four diagonal arrows from center toward corners (move affordance) -->
-            <path d="M12 12 7.25 7.25M7.25 7.25 9.1 7.25M7.25 7.25 7.25 9.1" />
-            <path d="M12 12 16.75 7.25M16.75 7.25 14.9 7.25M16.75 7.25 16.75 9.1" />
-            <path d="M12 12 7.25 16.75M7.25 16.75 9.1 16.75M7.25 16.75 7.25 14.9" />
-            <path d="M12 12 16.75 16.75M16.75 16.75 14.9 16.75M16.75 16.75 16.75 14.9" />
-          </svg>
-        </button>
-      </LiquidGlass>
-    </div>
+    <button class="pet-action-button pet-action-console" type="button"
+      :aria-label="t(displayLanguage, 'openAuraBotConsole')"
+      :title="t(displayLanguage, 'openAuraBotConsole')" @click="emit('consoleOpen')">
+      <svg class="pet-vue-control-icon" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.8" stroke-linecap="round" stroke-linejoin="round" aria-hidden="true">
+        <path d="M21 11.5a8.4 8.4 0 0 1-.9 3.8 8.5 8.5 0 0 1-7.6 4.7 8.4 8.4 0 0 1-3.8-.9L3 21l1.9-5.7a8.4 8.4 0 0 1-.9-3.8 8.5 8.5 0 0 1 4.7-7.6 8.4 8.4 0 0 1 3.8-.9h.5a8.5 8.5 0 0 1 8 8v.5Z" />
+      </svg>
+    </button>
+    <button class="pet-action-button pet-action-voice" type="button"
+      :data-active="voiceInputActive ? 'true' : 'false'" :data-state="voiceInputState"
+      :data-persistent="voiceInputActive || voiceInputState === 'connecting' || voiceInputState === 'error' ? 'true' : 'false'"
+      :aria-pressed="voiceInputActive" :aria-busy="voiceInputState === 'connecting'"
+      :aria-label="voiceLabel" :title="voiceLabel" @click="emit('voiceToggle')">
+      <svg class="pet-vue-control-icon" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.8" stroke-linecap="round" stroke-linejoin="round" aria-hidden="true">
+        <rect x="9" y="2" width="6" height="12" rx="3" />
+        <path d="M5 10v2a7 7 0 0 0 14 0v-2M12 19v3m-4 0h8" />
+        <path v-if="voiceInputState === 'error'" d="m19 2 3 3m0-3-3 3" />
+        <path v-else-if="!voiceInputActive && voiceInputState !== 'connecting'" d="m3 3 18 18" />
+      </svg>
+    </button>
+    <button class="pet-action-button pet-action-drag" type="button"
+      :aria-label="t(displayLanguage, 'dragPet')" :title="t(displayLanguage, 'dragPet')"
+      :data-dragging="isDragging ? 'true' : 'false'"
+      @pointerdown="handleDragPointerDown" @pointermove="handleDragPointerMove"
+      @pointerup="handleDragPointerEnd" @pointercancel="handleDragPointerEnd"
+      @lostpointercapture="handleDragPointerEnd">
+      <svg class="pet-vue-control-icon" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.8" stroke-linecap="round" stroke-linejoin="round" aria-hidden="true">
+        <path d="M12 3v18M3 12h18m-12-6 3-3 3 3m-6 12 3 3 3-3M6 9l-3 3 3 3m12-6 3 3-3 3" />
+      </svg>
+    </button>
   </div>
 </template>
 
 <script setup lang="ts">
-import { ref } from "vue";
-import { LiquidGlass } from "@wxperia/liquid-glass-vue";
+import { computed, ref } from "vue";
 import { t, type DisplayLanguage } from "../../../i18n";
 
-withDefaults(
+const props = withDefaults(
   defineProps<{
     visible: boolean;
     displayLanguage: DisplayLanguage;
-    /** True while the formal Main Agent mic session is connecting or listening. */
+    /** True only while the Main Agent microphone is capturing audio. */
     voiceInputActive?: boolean;
-    /** Real transport state, exposed for active/error styling without inventing a second UI state machine. */
+    /** Microphone operation state; a text-only realtime connection is off here. */
     voiceInputState?: "off" | "connecting" | "active" | "error";
   }>(),
   { voiceInputActive: false, voiceInputState: "off" }
@@ -145,21 +65,21 @@ const emit = defineEmits<{
   consoleOpen: [];
   voiceToggle: [];
   hoveringChange: [boolean];
+  focusChange: [boolean];
+  draggingChange: [boolean];
 }>();
 
-/**
- * LiquidGlass: overlay layers use `top: style.top || "50%"` + `translate(-50%, -50%)`. The inner
- * `GlassContainer` only receives `baseStyle` (merged `style` + transform), not `positionStyles`, so
- * our `style` must include the same `top`/`left` as those defaults or the button box and frosted
- * layers use different anchors. Never pass `top`/`left: "auto"` — they are truthy and skip the "50%"
- * fallback while translate still runs.
- */
-const liquidGlassSurfaceStyle = {
-  position: "relative" as const,
-  top: "50%",
-  left: "50%",
-  zIndex: 1
-};
+const voiceLabel = computed(() => {
+  const english = props.displayLanguage === "en";
+  const japanese = props.displayLanguage === "ja";
+  if (props.voiceInputState === "connecting") return english ? "Connecting microphone" : japanese ? "マイクに接続中" : "正在连接麦克风";
+  if (props.voiceInputState === "error") return english ? "Microphone error — retry" : japanese ? "マイクエラー：再試行" : "麦克风异常，点击重试";
+  return props.voiceInputActive ? (english ? "Stop voice input" : japanese ? "音声入力を停止" : "停止语音输入") : t(props.displayLanguage, "startVoiceInput");
+});
+
+function handleFocusOut(event: FocusEvent) {
+  if (!(event.currentTarget as HTMLElement).contains(event.relatedTarget as Node | null)) emit("focusChange", false);
+}
 
 const isDragging = ref(false);
 const lastDragPosition = ref<{ x: number; y: number } | undefined>(undefined);
@@ -173,6 +93,7 @@ function handleDragPointerDown(event: PointerEvent) {
   target.setPointerCapture(event.pointerId);
   lastDragPosition.value = { x: event.screenX, y: event.screenY };
   isDragging.value = true;
+  emit("draggingChange", true);
 }
 
 function handleDragPointerMove(event: PointerEvent) {
@@ -197,139 +118,60 @@ function handleDragPointerEnd(event: PointerEvent) {
   }
   lastDragPosition.value = undefined;
   isDragging.value = false;
+  emit("draggingChange", false);
 }
 </script>
 
 <style scoped>
-.pet-vue-quick-controls.pet-quick-controls {
+.pet-vue-quick-controls {
   position: absolute;
-  left: auto;
   right: 14px;
   bottom: 18px;
   z-index: 5;
-  flex-direction: column;
-  align-items: center;
-  gap: 10px;
-  padding: 0;
-  border: none;
-  border-radius: 0;
-  background: none;
-  box-shadow: none;
-  backdrop-filter: none;
-  transform: translate(12px, 0);
-  transition:
-    opacity 180ms ease,
-    transform 180ms ease;
-}
-
-.pet-vue-quick-controls[data-visible="true"] {
-  transform: translate(0, 0);
-}
-
-.pet-vue-liquid-glass {
-  position: relative;
-  flex-shrink: 0;
-  line-height: 0;
-  isolation: isolate;
-  width: 44px;
-  height: 44px;
-  display: block;
-  border-radius: 50%;
-  overflow: hidden;
-}
-
-.pet-vue-liquid-glass :deep(.text-white) {
-  flex: 1;
   display: flex;
-  align-items: center;
-  justify-content: center;
-  min-width: 0;
-  min-height: 0;
-  color: var(--aura-ink);
+  flex-direction: column;
+  gap: 4px;
+  pointer-events: none;
 }
-
-.pet-vue-liquid-glass :deep(.glass) {
-  box-sizing: border-box;
-  width: 100%;
-  height: 100%;
-  min-width: 0;
-  min-height: 0;
-  gap: 0;
-  border: 1px solid rgba(255, 255, 255, 0.28);
-  box-shadow: 0 4px 14px rgba(55, 42, 34, 0.08);
-}
-
-.pet-vue-liquid-glass :deep(div.relative) {
-  width: 100%;
-  height: 100%;
-}
-
-.pet-vue-circle-btn {
+.pet-action-button {
   width: 44px;
   height: 44px;
   min-width: 44px;
   min-height: 44px;
   padding: 0;
-  border-radius: 50%;
-  border: none;
+  border: 0;
+  border-radius: 6px;
   background: transparent;
   box-shadow: none;
   display: inline-flex;
   align-items: center;
   justify-content: center;
-  color: var(--aura-ink);
+  color: var(--aura-text);
+  cursor: pointer;
+  opacity: 0;
+  pointer-events: none;
+  transition: color 140ms ease, opacity 140ms ease;
   -webkit-app-region: no-drag;
 }
-
-.pet-vue-circle-btn .pet-vue-control-icon {
+.pet-vue-quick-controls[data-visible="true"] .pet-action-button,
+.pet-vue-quick-controls:focus-within .pet-action-button,
+.pet-action-button[data-persistent="true"] {
+  opacity: 1;
+  pointer-events: auto;
+}
+.pet-action-button:hover,
+.pet-action-button[data-active="true"],
+.pet-action-button[data-state="connecting"],
+.pet-action-button[data-dragging="true"] { color: var(--aura-accent); background: transparent; }
+.pet-action-button[data-state="error"] { color: var(--aura-danger); }
+.pet-action-button:focus-visible { outline: 2px solid var(--aura-accent); outline-offset: -3px; }
+.pet-vue-control-icon {
   width: 22px;
   height: 22px;
-  flex-shrink: 0;
   pointer-events: none;
-  filter: drop-shadow(0 0.5px 0 rgba(255, 255, 255, 0.55))
-    drop-shadow(0 1px 1.5px rgba(45, 32, 24, 0.35));
+  filter: drop-shadow(0 0 1px #fff) drop-shadow(0 1px 1px #0008);
 }
-
-.pet-vue-circle-btn.pet-action-drag {
-  cursor: grab;
-  touch-action: none;
-}
-
-.pet-vue-circle-btn.pet-action-drag[data-dragging="true"] {
-  cursor: grabbing;
-  outline: 2px solid rgba(249, 115, 22, 0.45);
-  outline-offset: 1px;
-}
-
-.pet-vue-circle-btn:hover:not(:disabled):not(.pet-action-voice),
-.pet-vue-circle-btn[data-active="true"]:not(.pet-action-voice) {
-  filter: brightness(1.04);
-}
-
-.pet-action-voice .pet-vue-mic-icon {
-  transition:
-    opacity 180ms ease,
-    filter 180ms ease;
-}
-
-/* Voice off: dimmer; voice on: full contrast + slight lift (brightness). */
-.pet-action-voice[data-active="false"] .pet-vue-mic-icon {
-  opacity: 0.52;
-  filter: brightness(0.78);
-}
-
-.pet-action-voice[data-active="true"] .pet-vue-mic-icon {
-  opacity: 1;
-  filter: drop-shadow(0 0.5px 0 rgba(255, 255, 255, 0.55))
-    drop-shadow(0 1px 1.5px rgba(45, 32, 24, 0.35)) brightness(1.14);
-}
-
-.pet-action-voice[data-state="error"] {
-  outline: 2px solid rgba(220, 38, 38, 0.7);
-  outline-offset: 1px;
-}
-
-.pet-vue-circle-btn:active:not(.pet-action-drag):not(:disabled) {
-  filter: brightness(0.97);
-}
+.pet-action-drag { cursor: grab; touch-action: none; }
+.pet-action-drag[data-dragging="true"] { cursor: grabbing; }
+@media (prefers-reduced-motion: reduce) { .pet-action-button { transition: none; } }
 </style>

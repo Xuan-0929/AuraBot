@@ -1,5 +1,6 @@
 /** Exercises the actual local Provider → Python SAY stream → Pet AvatarPlayer production chain.
- * Settings verifies a real bundled motion through the SDK before exposing its user-selected semantic name.
+ * Settings locates roles by their displayed fixture names and verifies a bundled motion through the SDK
+ * before exposing its user-selected semantic name; internal Profile IDs remain only in IPC assertions.
  * A controlled SSE server gates internal clauses, proving one gesture per SAY, repeatability across SAYs,
  * text-only history, and old-Profile receipt rejection. Every model/data copy is in a temporary root;
  * no paid Provider, microphone, speech service or private user directory is used.
@@ -100,13 +101,17 @@ test('verified Profile ability reaches the real Pet once per SAY and stale Profi
       await window.aurabot.applySettings();
     }, port);
     await ready(pet);
-    const a = (await pet.evaluate(() => window.aurabot.listProfiles())).runtime.activeId!;
+    const initialProfiles = await pet.evaluate(() => window.aurabot.listProfiles());
+    const a = initialProfiles.runtime.activeId!;
+    const aName = initialProfiles.profiles.find(profile => profile.id === a)!.displayName;
     const settingsPromise = app.waitForEvent('window');
     await pet.evaluate(() => window.aurabot.openSettingsWindow());
     const settings = await settingsPromise;
-    await settings.getByRole('button', { name: 'Profile 管理', exact: true }).click();
-    await settings.locator('.profile-card').filter({ hasText: a })
-      .getByRole('button', { name: '打开详情 / 重命名', exact: true }).click();
+    await settings.getByRole('button', { name: '角色配置', exact: true }).click();
+    const aRow = settings.locator('.profile-list-row').filter({
+      has: settings.getByRole('heading', { name: aName })
+    });
+    await aRow.getByRole('button', { name: '编辑', exact: true }).click();
     await settings.getByLabel('打开独立预览').check();
     await expect(settings.locator('.avatar-preview .live2d-vue-model-anchor')).toHaveAttribute('data-avatar-state', 'ready', { timeout: 25_000 });
     const resource = settings.locator('.profile-resource').filter({ hasText: 'motion ·' }).first();
@@ -162,10 +167,10 @@ test('verified Profile ability reaches the real Pet once per SAY and stale Profi
     expect(fixtureErrors).toEqual([]);
 
     const aScope = (await pet.evaluate(() => window.aurabot.listProfiles())).runtime;
-    await settings.getByRole('button', { name: '← Profile 列表', exact: true }).click();
-    await settings.getByLabel('新 Profile 名称').fill('Avatar delivery B');
-    await settings.getByRole('button', { name: '创建 Profile', exact: true }).click();
-    await settings.getByRole('button', { name: '激活此 Profile', exact: true }).click();
+    await settings.getByRole('button', { name: '← 角色列表', exact: true }).click();
+    await settings.getByLabel('新角色名称').fill('Avatar delivery B');
+    await settings.getByRole('button', { name: '创建角色', exact: true }).click();
+    await settings.getByRole('button', { name: '激活此角色', exact: true }).click();
     await expect.poll(async () => {
       const runtime = (await pet.evaluate(() => window.aurabot.listProfiles())).runtime;
       return runtime.online && Boolean(runtime.activeId) && runtime.activeId !== a;
@@ -183,8 +188,8 @@ test('verified Profile ability reaches the real Pet once per SAY and stale Profi
     expect(rejection).toContain('已撤销的 Profile 交付');
     expect(await history(pet, bScope.activeId!)).toEqual([]);
     await expect(history(pet,a)).rejects.toThrow('历史 Profile 已切换');
-    await settings.getByRole('button',{name:'← Profile 列表',exact:true}).click();
-    await settings.locator('.profile-card').filter({hasText:a}).getByRole('button',{name:'激活',exact:true}).click();
+    await settings.getByRole('button',{name:'← 角色列表',exact:true}).click();
+    await aRow.getByRole('button', { name: '激活', exact: true }).click();
     await expect.poll(async()=>{const runtime=(await pet.evaluate(()=>window.aurabot.listProfiles())).runtime;return runtime.online&&runtime.activeId===a;},{timeout:25000}).toBe(true);
     expect((await history(pet, a)).map(message => message.content)).toEqual(expectedA);
     expect(requestCount).toBe(2);

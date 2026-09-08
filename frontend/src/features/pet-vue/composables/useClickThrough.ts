@@ -1,4 +1,8 @@
-import { computed, onUnmounted, ref, type Ref } from "vue";
+/** Coordinates Electron transparent-window hit testing with the pet canvas and controls.
+ * Pointer movement/leave and interaction changes reuse the existing IPC; active captures
+ * keep controls interactive until release. Settings changes invalidate cached native state,
+ * and disposal restores normal mouse handling. */
+import { computed, onUnmounted, ref, watch, type Ref } from "vue";
 
 interface UseClickThroughOptions {
   enabled: Ref<boolean>;
@@ -27,7 +31,7 @@ export function useClickThrough(options: UseClickThroughOptions) {
   const isPassthrough = ref<boolean | undefined>(undefined);
   const isReady = computed(() => options.enabled.value && Boolean(options.canvasRef.value));
 
-  async function handlePointerMove(event: PointerEvent) {
+  async function handlePointerMove() {
     const nextValue = resolvePetMousePassthroughState({
       canvasReady: Boolean(options.canvasRef.value),
       enabled: options.enabled.value,
@@ -44,7 +48,7 @@ export function useClickThrough(options: UseClickThroughOptions) {
     if (!isReady.value) {
       return;
     }
-    await setPassthrough(true);
+    await setPassthrough(!options.interactiveUiHovering.value);
   }
 
   async function setPassthrough(nextValue: boolean) {
@@ -54,6 +58,13 @@ export function useClickThrough(options: UseClickThroughOptions) {
     isPassthrough.value = nextValue;
     await window.aurabot.setPetMousePassthrough(nextValue);
   }
+
+  watch(options.enabled, () => {
+    isPassthrough.value = undefined;
+    void handlePointerMove();
+  });
+
+  watch(options.interactiveUiHovering, () => { void handlePointerMove(); });
 
   onUnmounted(() => {
     if (isPassthrough.value !== undefined) {

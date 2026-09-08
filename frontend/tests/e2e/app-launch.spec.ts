@@ -51,7 +51,7 @@ test('fresh desktop renders Hiyori, exposes unavailable models and applies saved
   await expect(settings.getByRole('status')).toHaveText('配置已应用',{timeout:40000});
   expect((await status()).processId).not.toBe(initial.processId);
   const consolePromise=electronApp.waitForEvent('window');await pet.evaluate(()=>window.aurabot.openConsoleWindow());const consolePage=await consolePromise;
-  await expect(consolePage.getByLabel('Task 状态')).toBeVisible();
+  await expect(consolePage.getByRole('complementary',{name:'任务',exact:true})).toBeVisible();
   await consolePage.locator('textarea').fill('未配置模型时不应记录成功');await consolePage.locator('textarea').press('Enter');
   await expect(consolePage.getByRole('alert')).toContainText('模型尚未配置');
   expect((await pet.evaluate(()=>window.aurabot.getHistory())).messages).toEqual([]);
