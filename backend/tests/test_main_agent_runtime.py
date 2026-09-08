@@ -3,6 +3,7 @@
 The tests cover ActiveInput causality, trigger priority, StrongPause, grants/effect fences, detached
 Observation continuation, seal-time retirement, non-cancellable new-input archive ownership, same-boundary
 retry, bounded real Snapshots, and physical Renderer ACK through public Runtime behavior.
+No-say invocations remain silent; tool receipts are retained only in content-free backend diagnostics.
 """
 
 from __future__ import annotations
@@ -460,6 +461,74 @@ class ActiveInputAndSchedulingTests(RuntimeTestCase):
 
 
 class EffectsObservationAndDeliveryTests(RuntimeTestCase):
+    async def test_provider_failure_reports_once_and_counts_settlement(self) -> None:
+        from backend.main_agent.metrics import LifecycleMetrics
+
+        async def broken(_request):
+            raise RuntimeError("private provider detail")
+            yield {}
+
+        for script in (broken, ({"choices": "invalid"},)):
+            with self.subTest(script=type(script).__name__):
+                metrics = LifecycleMetrics()
+                runtime = self.runtime(ScriptedProvider(script), metrics=metrics)
+                errors = []
+
+                async def error(code):
+                    errors.append(code)
+
+                runtime.error_listener = error
+                await runtime.submit_text("hello")
+                await runtime.wait_until_idle()
+                self.assertEqual(errors, ["main_model_error"])
+                self.assertEqual(metrics.snapshot()["counters"].get("main.receipt.provider_stream_error"), 1)
+
+    async def test_rejected_task_call_only_records_backend_diagnostics(self) -> None:
+        from backend.main_agent.metrics import LifecycleMetrics
+
+        provider = ScriptedProvider((tool_delta(
+            "task-1", "task_assign",
+            '{"title":"demo","prompt":"demo","workspace_id":"unknown"}',
+        ),))
+        metrics = LifecycleMetrics()
+        runtime = self.runtime(provider, metrics=metrics)
+        events = []
+
+        async def error(code):
+            events.append(("error", code))
+
+        async def state(value):
+            events.append(("state", value))
+
+        runtime.error_listener = error
+        runtime.state_listener = state
+        await runtime.submit_text("create a demo task")
+        await runtime.wait_until_idle()
+        self.assertEqual(events, [("state", "idle")])
+        self.assertEqual(metrics.snapshot()["counters"].get("main.receipt.schema_invalid"), 1)
+        self.assertEqual(metrics.snapshot()["counters"].get("main.invoke.silent"), 1)
+        self.assertEqual(runtime.task_proposals, ())
+
+    async def test_no_say_is_silent_with_or_without_ordinary_content(self) -> None:
+        from backend.main_agent.metrics import LifecycleMetrics
+
+        for script in ((), ({"choices": [{"delta": {"content": "ordinary reply"}}]},)):
+            with self.subTest(has_content=bool(script)):
+                metrics = LifecycleMetrics()
+                provider = ScriptedProvider(script)
+                runtime = self.runtime(provider, metrics=metrics)
+                errors = []
+
+                async def error(code):
+                    errors.append(code)
+
+                runtime.error_listener = error
+                await runtime.submit_text("hello")
+                await runtime.wait_until_idle()
+                self.assertEqual(errors, [])
+                self.assertEqual(self.offers, [])
+                self.assertEqual(metrics.snapshot()["counters"].get("main.invoke.silent"), 1)
+
     async def test_effect_fence_rejects_say_after_local_speech_candidate(self) -> None:
         started = asyncio.Event()
         proceed = asyncio.Event()
@@ -467,10 +536,17 @@ class EffectsObservationAndDeliveryTests(RuntimeTestCase):
         async def late_say(_request):
             started.set()
             await proceed.wait()
+            yield {"choices": [{"delta": {"content": "ordinary content beside fenced speech"}}]}
             yield tool_delta("say-1", "say_to_user", '{"text":"stale"}')
 
         provider = ScriptedProvider(late_say)
         runtime = self.runtime(provider)
+        errors = []
+
+        async def error(code):
+            errors.append(code)
+
+        runtime.error_listener = error
         await runtime.submit_text("question")
         await asyncio.wait_for(started.wait(), 1)
         await runtime.vad_start()
@@ -479,6 +555,7 @@ class EffectsObservationAndDeliveryTests(RuntimeTestCase):
 
         self.assertEqual(self.offers, [])
         self.assertEqual(provider.requests[0].settlement.receipts[0].code, "speech_fenced")
+        self.assertEqual(errors, [])
 
     async def test_safe_observation_detaches_and_triggers_continue(self) -> None:
         completed = asyncio.Event()

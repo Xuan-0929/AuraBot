@@ -1,7 +1,7 @@
 """Checks Main Agent tools through the exposed capability, stream, and effect boundaries.
 
 The suite protects mode/grant exposure, the text-only incremental say parser, effect grouping, fencing,
-say-first execution, and detached Observation callbacks. Removed schema self-validation, motion tokens,
+say-first execution before the provider finishes later tools, and detached Observation callbacks. Removed schema self-validation, motion tokens,
 alternate provider event dialects, private caches, and thread-based limiter internals are not tested.
 """
 
@@ -119,6 +119,44 @@ class ToolHarnessTests(unittest.IsolatedAsyncioTestCase):
         self.fence = lambda: EffectFence(
             "invoke", "input", 1, 1, response_grant=self.grant,
         )
+
+    async def test_first_say_clause_is_delivered_before_remaining_tool_stream(self) -> None:
+        spoken = asyncio.Event()
+        release = asyncio.Event()
+        delivered = []
+
+        async def execute(call):
+            delivered.append((call.name, dict(call.arguments)))
+            if call.name == "say_to_user":
+                spoken.set()
+            return {"ok": True}
+
+        async def stream():
+            async for chunk in chunks((0, "say", "say_to_user", '{"text":"我查一下。')):
+                yield chunk
+            await release.wait()
+            async for chunk in chunks(
+                (0, "say", "say_to_user", '"}'),
+                (1, "read", "web_search", '{"query":"Aura"}'),
+            ):
+                yield chunk
+
+        harness = ToolHarness(
+            self.policy, {"say_to_user": execute, "web_search": execute},
+            state_provider=self.fence,
+            observation_acceptance_hook=lambda proposed, _call: proposed,
+        )
+        running = asyncio.create_task(harness.run(stream(), invoke_id="invoke", tool_surface=self.surface))
+        try:
+            await asyncio.wait_for(spoken.wait(), 1)
+            self.assertFalse(running.done())
+            self.assertEqual(delivered, [("say_to_user", {"text": "我查一下。"})])
+        finally:
+            release.set()
+            settlement = await running
+            await harness.wait_for_observations()
+        self.assertTrue(all(receipt.accepted for receipt in settlement.receipts))
+        self.assertEqual([name for name, _arguments in delivered], ["say_to_user", "web_search"])
 
     async def test_say_executes_before_safe_read_and_observation_detaches(self) -> None:
         order: list[str] = []

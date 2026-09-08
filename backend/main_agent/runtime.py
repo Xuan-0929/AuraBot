@@ -7,6 +7,8 @@ owns proposal timers, accepted controls and Task fact synchronization. Memory us
 Context boundary and immediately retires its causal input, then an independent archive worker submits that
 sealed boundary without blocking or being cancelled by later input. Context cleanup occurs only after Memory
 success and never retires the newer causal scope.
+Harness settlements retain content-free receipt counters for backend diagnostics. No say_to_user means
+intentional silence; tool rejections and discarded ordinary content do not become frontend debug errors.
 """
 
 from __future__ import annotations
@@ -963,6 +965,7 @@ class MainAgentRuntime:
                         invoke_id=request.invoke_id,
                         tool_surface=request.tool_surface,
                     )
+                    await self._report_settlement(request)
                 finally:
                     async with self._lock:
                         if self._active_invoke is active:
@@ -979,16 +982,29 @@ class MainAgentRuntime:
             if self.state_listener is not None and not self._shutdown:
                 await self.state_listener("idle")
 
+    async def _report_settlement(self, request: InvokeRequest) -> None:
+        settlement = request.settlement
+        assert settlement is not None
+        for receipt in settlement.receipts:
+            self._increment_metric(f"main.receipt.{receipt.code}")
+        provider_failed = any(receipt.code == "provider_stream_error" for receipt in settlement.receipts)
+        if not settlement.cancelled and not provider_failed and not any(
+            receipt.tool_name == "say_to_user" for receipt in settlement.receipts
+        ):
+            self._increment_metric("main.invoke.silent")
+        current = self._active_input
+        if (settlement.cancelled or self._shutdown or not self.accepting
+                or current is None or (current.input_id, current.revision) != (request.input_id, request.revision)):
+            return
+        if provider_failed and self.error_listener is not None:
+            await self.error_listener("main_model_error")
+
     async def _provider_chunks(self, request: InvokeRequest):
         started_at = time.monotonic()
         self._increment_metric("main.invoke.started")
         try:
             async for chunk in self.provider(request):
                 yield chunk
-        except Exception:
-            if self.error_listener is not None:
-                await self.error_listener("main_model_error")
-            raise
         finally:
             observe = getattr(self.metrics, "observe", None)
             if callable(observe):

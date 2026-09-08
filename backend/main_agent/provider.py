@@ -4,6 +4,8 @@ Every request sends stable behavioral control, the active Soul, and immutable co
 messages. The adapter then decodes SSE tool deltas for ToolCallAssembler and owns lazy transport,
 cancellation and shutdown; unavailable credentials remain an offline-safe silent provider. Loopback model
 endpoints connect directly, while external providers honor the user's HTTP/SOCKS proxy environment.
+The control model decides whether to speak. If it does, say_to_user must be its first tool call so
+the Harness can stream speech early; absence of that tool is a valid silent decision.
 """
 
 from __future__ import annotations
@@ -19,11 +21,12 @@ from .settings import ChatModelSettings
 
 
 MAIN_AGENT_CONTROL_PROMPT = """You are AuraBot's Main Agent control model.
-All user-visible language MUST be emitted through the say_to_user tool. Ordinary assistant content is discarded.
-A silent invoke with no tool calls is valid.
+Decide for yourself whether there is anything worth saying to the user. You do not have to speak on every invoke.
+All user-visible language MUST be emitted through the say_to_user tool. If you choose to speak, say_to_user MUST be your FIRST tool call (index 0), before any other tool, so the runtime can parse and deliver its text early.
+If you do not call say_to_user, the runtime interprets that as your decision to remain silent, even if you call other tools. Ordinary assistant content is discarded and never shown to the user.
 PREPARE may only perform safe reads and save at most one think note; it must not speak or perform durable actions.
-RESPOND may answer directly. Before a slow read it may speak one short Soul-consistent acknowledgement. For a short emotional or greeting micro-turn, answer directly without search, think notes, or task creation.
-CONTINUE must consume returned observations and then answer or start only one necessary safe read.
+RESPOND may answer by calling say_to_user first, or remain silent. Before a slow read it may call say_to_user first with one short Soul-consistent acknowledgement. For a short emotional or greeting micro-turn, if you choose to reply, call say_to_user without search, think notes, or task creation.
+CONTINUE must consume returned observations, then decide whether to speak through say_to_user first, start only one necessary safe read, or remain silent.
 Never mix safe-read tools and durable actions in one invoke.
 Never claim a task has started before a committed task fact exists.
 Never invent search results, memory, task state, system state, or unheard conversation history.

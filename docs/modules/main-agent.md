@@ -137,7 +137,10 @@ Provider 固定为 async OpenAI-compatible Chat Completions SSE。每次请求�
 2. Electron 提供的有效 Soul system。
 3. 不可变 Snapshot JSON user。
 
-普通 assistant content 被丢弃；用户可见语言只能来自 `say_to_user`。静默 invoke 合法。
+Main Agent 自行判断是否有话需要对用户说。需要说话时，必须将 `say_to_user` 作为该次 invoke 的第一个工具调用（index 0），供流水线提前解析与交付；不需要说话时可以只调用其他工具，也可以不调用任何工具。
+没有调用 `say_to_user` 就表示模型选择静默，不是协议故障。普通 assistant content 仍被丢弃，既不转成用户消息，也不因此向前端显示 debug 错误。
+
+排查采用后端已有的只读 `/api/v1/metrics`：`main.invoke.silent` 统计未调用 `say_to_user` 的正常完成调用，`main.receipt.*` 统计工具接收、校验拒绝及普通 content 丢弃等回执。计数有界，不保存提示词、回复正文或密钥，不添加模型重试或后台轮询。真实模型请求/传输失败仍走已有的产品故障提示。
 Snapshot 用一次 JSON round-trip 复制，12,000 字符预算优先保留 runtime state 和 tool schemas，
 再从最旧 conversation、memory、observation 开始裁剪。
 
