@@ -16,4 +16,4 @@ brainstorm时，可以积极向用户询问问题，但是问题数量最好保�
 
 ## 代码简洁指示
 
-别忘了查阅你手边的ponytail技能。
+别忘了查阅你手边的ponytail技能和codebase design技能。

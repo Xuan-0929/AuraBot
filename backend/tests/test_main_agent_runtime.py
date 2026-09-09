@@ -4,6 +4,7 @@ The tests cover ActiveInput causality, trigger priority, StrongPause, grants/eff
 Observation continuation, seal-time retirement, non-cancellable new-input archive ownership, same-boundary
 retry, bounded real Snapshots, and physical Renderer ACK through public Runtime behavior.
 No-say invocations remain silent; tool receipts are retained only in content-free backend diagnostics.
+Public SAY segmentation checks preserve mixed-language whitespace and enforce Unicode code-point limits.
 """
 
 from __future__ import annotations
@@ -683,6 +684,21 @@ class EffectsObservationAndDeliveryTests(RuntimeTestCase):
 
 
 class ClauseSegmentationTests(unittest.TestCase):
+    def test_mixed_language_whitespace_does_not_end_a_clause(self) -> None:
+        for whitespace in (" ", "\t"):
+            with self.subTest(whitespace=repr(whitespace)):
+                text = "Codex 更新完成啦～已经从 0.147.0 升级到最新的 0.153.4 版本，你可以重启 Codex 看看啦😊".replace(" ", whitespace)
+                # The comma remains a soft boundary; spaces around versions and names do not.
+                head, tail = text.split("，", 1)
+                self.assertEqual(segment_say_text(text, final=False), (head + "，",))
+                self.assertEqual(segment_say_text(text, final=True), (head + "，", tail))
+
+    def test_hard_limit_counts_unicode_codepoints(self) -> None:
+        for character in ("a", "中", "😊"):
+            with self.subTest(character=character):
+                self.assertEqual(segment_say_text(character * 79, final=False), ())
+                self.assertEqual(segment_say_text(character * 81, final=True), (character * 80, character))
+
     def test_natural_boundaries_preserve_every_codepoint(self) -> None:
         text = "你好！This is a longer clause, with 3.14 and example.com/path. 最后一句"
         clauses = segment_say_text(text, final=True)

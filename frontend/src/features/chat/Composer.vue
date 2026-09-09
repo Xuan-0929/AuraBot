@@ -1,7 +1,8 @@
 <!--
   主聊天纯文本输入组件：处理 Enter 发送、Shift+Enter 换行和输入区自适应高度。
   它只把正文交给 Renderer store；文件选择、拖放和路径解析在新 Task/Artifact
-  协议确定前不再暴露，Agent 状态仅用于当前聊天生命周期展示。
+  协议确定前不再暴露。Agent 状态映射到发送按钮颜色和本地化提示，
+  共享样式负责外观，提交、输入法与失败恢复流程保持独立。
 -->
 <template>
   <form class="composer" @submit.prevent="handleSubmit">
@@ -18,21 +19,17 @@
       />
     </div>
     <div class="composer-action-rail">
-      <span class="composer-presence" aria-live="polite">
-        <span :class="['composer-status-dot', `composer-status-dot-${agentStatus}`]" aria-hidden="true"></span>
-        {{ agentStatusLabel(displayLanguage, agentStatus) }}
-      </span>
-      <div class="composer-rail-actions composer-rail-actions-end">
         <button
           type="submit"
           class="composer-send-button"
+          :data-status="agentStatus"
+          :aria-description="agentStatusLabel(displayLanguage, agentStatus)"
           :disabled="submitting || !content.trim()"
           :aria-label="t(displayLanguage, 'send')"
-          :title="t(displayLanguage, 'send')"
+          :title="`${t(displayLanguage, 'send')} · ${agentStatusLabel(displayLanguage, agentStatus)}`"
         >
           <Icon class="composer-action-icon" icon="solar:arrow-up-linear" aria-hidden="true" />
         </button>
-      </div>
     </div>
   </form>
 </template>

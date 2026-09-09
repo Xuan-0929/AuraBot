@@ -1,5 +1,6 @@
 <!--
-  聊天消息列表：将通用消息拆成可读段落并在更新后滚动到底部。
+  聊天消息列表：每条通用消息渲染为一个背景框，框内保留现有段落，更新后滚动到底部。
+  不显示角色名称；共享样式以左侧助手、右侧用户区分来源，两者使用相同背景色。
   附件仅作为普通聊天元数据展示名称；文件执行产物的打开/定位不再由本组件
   或 preload 暴露，因为旧 Task artifact 协议已移除。
 -->
@@ -17,13 +18,10 @@
   >
     <article
       v-for="item in displayItems"
-      :key="item.key"
+      :key="item.message.id"
       :class="['message', `message-${item.message.role}`]"
     >
-      <span v-if="item.isFirstSegment" class="message-role">
-        {{ item.message.role === "user" ? t(displayLanguage, "you") : t(displayLanguage, "aura") }}
-      </span>
-      <p>{{ item.segment }}</p>
+      <p v-for="(segment, index) in item.segments" :key="index">{{ segment }}</p>
       <div v-if="item.attachments.length > 0" class="message-attachments">
         <div v-for="attachment in item.attachments" :key="attachment.id" class="message-attachment">
           <span class="message-attachment-name">{{ attachment.name }}</span>
@@ -51,16 +49,11 @@ const props = withDefaults(
 const listRef = ref<HTMLDivElement | null>(null);
 
 const displayItems = computed(() =>
-  props.messages.flatMap((message) => {
-    const segments = getMessageDisplaySegments(message);
-    return segments.map((segment, index) => ({
-      key: `${message.id}-${index}`,
-      message,
-      segment,
-      isFirstSegment: index === 0,
-      attachments: index === segments.length - 1 ? message.attachments ?? [] : []
-    }));
-  })
+  props.messages.map((message) => ({
+    message,
+    segments: getMessageDisplaySegments(message),
+    attachments: message.attachments ?? []
+  }))
 );
 
 watch(

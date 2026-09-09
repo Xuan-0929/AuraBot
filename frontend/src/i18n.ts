@@ -2,7 +2,8 @@
 /**
  * 提供 Renderer 当前保留界面的英中日文案与 Agent 状态标签。
  *
- * 文案服务覆盖 Chat、Memory、Live2D、模型、通知与桌宠设置；旧 Task 状态格式化、
+ * 文案服务覆盖 Chat、Memory、Live2D、模型、通知与桌宠设置；聊天输入提示与
+ * 无障碍名称共用“输入消息”的三语文案。旧 Task 状态格式化、
  * runner 文案和旧执行专属状态不再属于运行时类型。
  */
 
@@ -20,7 +21,7 @@ const UI_TEXT = {
     mainConversation: "Main conversation",
     conversationMessages: "Conversation messages",
     readyWhenYouAre: "I'm here. What feels easiest to start with today?",
-    saySomething: "Say something",
+    saySomething: "Enter a message",
     send: "Send",
     you: "You",
     aura: "Aura",
@@ -191,7 +192,7 @@ const UI_TEXT = {
     mainConversation: "主对话",
     conversationMessages: "对话消息",
     readyWhenYouAre: "我在，今天想先从哪件事开始？",
-    saySomething: "说点什么",
+    saySomething: "输入消息",
     send: "发送",
     you: "你",
     aura: "Aura",

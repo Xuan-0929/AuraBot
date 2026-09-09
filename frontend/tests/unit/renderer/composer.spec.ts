@@ -1,5 +1,5 @@
 /**
- * Composer renderer 测试：覆盖纯文本发送、换行、自适应高度与状态指示。
+ * Composer renderer 测试：覆盖纯文本发送、换行、自适应高度与发送按钮的状态提示；状态文字不再单独占用输入栏。
  * 新附件输入在 Task Runtime 空窗期已移除，组件不得暴露文件选择或拖放入口。
  */
 // @vitest-environment jsdom
@@ -85,14 +85,16 @@ describe("Composer", () => {
     app.unmount();
   });
 
-  it("shows only the agent status light and label in the action rail", () => {
+  it("describes the agent status on the send button without a separate status row", () => {
     const onSend = vi.fn(async () => undefined);
     const app = createApp(Composer, { agentStatus: "thinking", displayLanguage: "en", onSend });
     app.mount(container);
 
-    expect(container.querySelector(".composer-status-dot-thinking")).not.toBeNull();
-    expect(container.querySelector(".composer-presence")?.textContent).toContain("thinking");
-    expect(container.querySelector(".composer-presence-mark")).toBeNull();
+    const send = container.querySelector("button[type=submit]")!;
+    expect(send.getAttribute("aria-description")).toContain("thinking");
+    expect(send.getAttribute("title")).toContain("thinking");
+    expect(send.getAttribute("data-status")).toBe("thinking");
+    expect(container.querySelector(".composer-presence")).toBeNull();
     app.unmount();
   });
 

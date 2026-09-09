@@ -1,7 +1,9 @@
 <!-- Selects Pet, console or settings and initializes their paged visible state.
-     Window events come from Electron; no model Context or business lifecycle is built here. -->
+     Window events come from Electron; no model Context or business lifecycle is built here.
+     The macOS class lets shared styles reserve native window controls and provide drag regions
+     for the hidden title bars configured by main/createWindow. -->
 <template>
-  <div :class="['app-shell', `app-shell-${surface}`]">
+  <div :class="['app-shell', `app-shell-${surface}`, { 'macos-window': isMacOS }]">
     <ConsoleWindow v-if="surface === 'console'" />
     <SettingsWindow v-else-if="surface === 'settings'" />
     <PetApp v-else />
@@ -18,6 +20,7 @@ import { useAuraBotStore } from "./app/store";
 type Surface = "console" | "settings" | "pet";
 
 const store = useAuraBotStore();
+const isMacOS = navigator.userAgent.includes("Macintosh");
 const hash = ref(window.location.hash.toLowerCase());
 let unsubscribeIpc: (() => void) | undefined;
 

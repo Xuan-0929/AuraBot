@@ -1,7 +1,9 @@
 """Decode bounded SAY envelopes and assemble indexed OpenAI tool deltas without field-order assumptions.
 
 The finite top-level scanner identifies only text/avatar, while the incremental string decoder emits text
-at punctuation boundaries. Strict final decoding rejects duplicate keys and malformed envelopes, including
+at punctuation boundaries, with soft splitting after 24 Unicode code points and a hard limit of 80
+code points (not model tokens). Spaces and tabs remain within clauses. Strict final decoding rejects
+duplicate keys and malformed envelopes, including
 errors discovered after early delivery. Avatar stays optional and is frozen by the authorized Harness.
 """
 
@@ -17,7 +19,7 @@ from .definitions import ToolCall
 
 
 _CLAUSE_END = frozenset("。！？!?；;\n")
-_SOFT_END = frozenset("，,、：:—- \t")
+_SOFT_END = frozenset("，,、：:—-")
 _ESCAPES = {'"': '"', "\\": "\\", "/": "/", "b": "\b", "f": "\f", "n": "\n", "r": "\r", "t": "\t"}
 
 

@@ -1,6 +1,7 @@
 <!--
   主聊天窗口：以稳定的标题栏、可收起任务列表和连续对话组织现有聊天功能。
   Pinia 负责消息与设置入口，任务由既有 IPC 推送；侧栏显隐仅属于窗口内的展示状态，
+  标题复用 i18n 三语文案，任务状态使用无外圈 SVG；Vue Transition 配合共享 CSS 横向收展任务面板。
   窄窗口使用带焦点管理的覆盖面板，不改变任务订阅或执行生命周期。
 -->
 <template>
@@ -10,20 +11,24 @@
         <button ref="sidebarToggle" type="button" class="icon-button" aria-controls="console-tasks" :aria-expanded="sidebarOpen" :aria-label="sidebarOpen ? '收起任务列表' : '展开任务列表'" :title="sidebarOpen ? '收起任务列表' : '展开任务列表'" @click="toggleSidebar">
           <Icon icon="solar:sidebar-minimalistic-linear" aria-hidden="true" />
         </button>
-        <span class="aura-wordmark">AuraBot</span>
+        <span class="aura-wordmark">{{ t(store.displayLanguage, 'chat') }}</span>
       </div>
       <button type="button" class="icon-button console-settings-button" :aria-label="t(store.displayLanguage, 'openAuraBotSettings')" :title="t(store.displayLanguage, 'settings')" @click="void store.openSettingsWindow()">
         <Icon icon="solar:settings-linear" aria-hidden="true" />
       </button>
     </header>
     <div class="console-body">
-      <div v-if="overlayOpen" class="console-sidebar-scrim" aria-hidden="true" @click="closeSidebar" />
-      <aside v-show="sidebarOpen" id="console-tasks" ref="sidebar" class="console-tasks" :class="{'console-tasks-overlay': narrow}" :role="overlayOpen ? 'dialog' : undefined" :aria-modal="overlayOpen ? true : undefined" aria-labelledby="tasks-heading" tabindex="-1" @keydown="handleSidebarKeydown">
+      <Transition name="console-scrim">
+        <div v-if="overlayOpen" class="console-sidebar-scrim" aria-hidden="true" @click="closeSidebar" />
+      </Transition>
+      <Transition name="console-sidebar">
+      <aside v-show="sidebarOpen" id="console-tasks" ref="sidebar" class="console-tasks" :class="{'console-tasks-overlay': narrow}" :inert="!sidebarOpen ? true : undefined" :aria-hidden="!sidebarOpen ? true : undefined" :role="overlayOpen ? 'dialog' : undefined" :aria-modal="overlayOpen ? true : undefined" aria-labelledby="tasks-heading" tabindex="-1" @keydown="handleSidebarKeydown">
         <div class="console-tasks-heading"><h2 id="tasks-heading">任务</h2><button v-if="narrow" type="button" class="icon-button" aria-label="关闭任务列表" title="关闭任务列表" @click="closeSidebar"><Icon icon="solar:close-circle-linear" aria-hidden="true" /></button></div>
         <p v-if="taskError" role="status" class="inline-error">{{ taskError }}</p>
         <p v-else-if="!tasks.length" class="task-empty">暂无任务</p>
-        <ul class="task-list"><li v-for="task in tasks" :key="task.id"><strong>{{ task.title }}</strong><span class="task-status" :data-status="task.status"><Icon :icon="taskIcons[task.status] ?? 'solar:clock-circle-linear'" aria-hidden="true" />{{ taskLabels[task.status] ?? task.status }}</span></li></ul>
+        <ul class="task-list"><li v-for="task in tasks" :key="task.id"><strong>{{ task.title }}</strong><span class="task-status" :data-status="task.status"><svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.7" stroke-linecap="round" stroke-linejoin="round" aria-hidden="true"><path :d="taskPaths[task.status] ?? taskPaths.queued" /></svg>{{ taskLabels[task.status] ?? task.status }}</span></li></ul>
       </aside>
+      </Transition>
       <section class="console-chat" :inert="overlayOpen ? true : undefined" :aria-label="t(store.displayLanguage, 'mainConversation')">
         <div v-if="store.historyCursor || store.chatError" class="console-chat-notices">
           <button v-if="store.historyCursor" type="button" class="history-button" @click="store.loadOlderHistory()"><Icon icon="solar:history-linear" aria-hidden="true" />加载更早记录</button>
@@ -58,7 +63,15 @@ const overlayOpen = computed(() => narrow.value && sidebarOpen.value);
 const sidebarToggle = ref<HTMLButtonElement>();
 const sidebar = ref<HTMLElement>();
 const taskLabels: Record<string, string> = {queued:'排队中', running:'执行中', waiting:'等待回答', paused:'已暂停', completed:'已完成', failed:'失败', cancelled:'已取消'};
-const taskIcons: Record<string, string> = {running:'solar:play-circle-linear', waiting:'solar:chat-round-line-linear', paused:'solar:pause-circle-linear', completed:'solar:check-circle-linear', failed:'solar:danger-circle-linear', cancelled:'solar:close-circle-linear'};
+const taskPaths: Record<string, string> = {
+  queued: 'M6 3h12M6 21h12M7 3v4l10 10v4M17 3v4L7 17v4',
+  running: 'M7 4l14 8-14 8Z',
+  waiting: 'M9 8a3 3 0 0 1 6 0c0 3-3 3-3 6M12 19h.01',
+  paused: 'M8 5v14M16 5v14',
+  completed: 'M5 12l4 4L19 6',
+  failed: 'M12 4v10M12 20h.01',
+  cancelled: 'M6 6l12 12M18 6 6 18'
+};
 let unsubscribe: (() => void) | undefined;
 
 async function toggleSidebar() {

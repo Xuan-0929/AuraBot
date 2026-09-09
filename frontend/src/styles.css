@@ -1,7 +1,12 @@
 /*
  * AuraBot 共享设计系统：统一系统字体、深浅色语义 token、基础控件与聊天布局。
  * 设置与角色页面负责各自的内容编排；桌宠控件负责悬停与拖动，本文只提供透明舞台、
- * Canvas 尺寸和消息表面。所有视觉反馈采用 CSS，不创建动画循环或新的渲染实例。
+ * Canvas 尺寸和消息表面。配合 App 的平台标记，为 macOS 隐藏标题栏留出窗口按钮与
+ * 拖动区域；侧栏通过 Vue Transition 类横向收展，并遵循减少动态效果偏好。
+ * 对话正文使用中等字重，消息按来源左右对齐，用户框复用品牌浅绿、助手框使用中性底色。
+ * 输入区默认与发送按钮同排，正文换行时
+ * 由 Composer 按内容增高；发送按钮以语义颜色
+ * 呈现聊天状态。所有视觉反馈采用 CSS，不创建动画循环或新的渲染实例。
  */
 :root {
   color-scheme: light;
@@ -17,6 +22,7 @@
   --aura-danger: #a33735;
   --aura-danger-soft: #f9eae7;
   --aura-warning: #866020;
+  --aura-info: #426889;
   --aura-scrim: #17241d38;
   --aura-ink: var(--aura-text);
   font-family: -apple-system, BlinkMacSystemFont, "Segoe UI", "PingFang SC", "Hiragino Sans GB", "Microsoft YaHei", sans-serif;
@@ -42,6 +48,7 @@
     --aura-danger: #eeaaa1;
     --aura-danger-soft: #402b29;
     --aura-warning: #d9b879;
+    --aura-info: #9ebed5;
     --aura-scrim: #00000070;
   }
 }
@@ -65,9 +72,9 @@ svg { flex-shrink: 0; }
 }
 :is(.app-shell-console, .app-shell-settings) button:hover:not(:disabled) { background: var(--aura-surface-soft); }
 :is(.app-shell-console, .app-shell-settings) button.primary,
-.app-shell-console button.composer-send-button { background: var(--aura-accent); color: var(--aura-on-accent); border-color: transparent; }
+.app-shell-console button.composer-send-button { background: var(--composer-color, var(--aura-accent)); color: var(--aura-on-accent); border-color: transparent; }
 :is(.app-shell-console, .app-shell-settings) button.primary:hover:not(:disabled),
-.app-shell-console button.composer-send-button:hover:not(:disabled) { background: color-mix(in srgb, var(--aura-accent), var(--aura-text) 12%); }
+.app-shell-console button.composer-send-button:hover:not(:disabled) { background: color-mix(in srgb, var(--composer-color, var(--aura-accent)), var(--aura-text) 12%); }
 :is(.app-shell-console, .app-shell-settings) button.danger { color: var(--aura-danger); }
 :is(.app-shell-console, .app-shell-settings) button.danger:hover:not(:disabled) { background: var(--aura-danger-soft); }
 :is(.app-shell-console, .app-shell-settings) button.icon-button { width: 36px; padding: 8px; background: transparent; border-color: transparent; }
@@ -103,31 +110,35 @@ summary:hover { color: var(--aura-text); }
 .task-status[data-status=waiting] { color: var(--aura-warning); }
 .console-sidebar-scrim { position: absolute; inset: 0; z-index: 20; background: var(--aura-scrim); }
 .console-tasks-overlay { position: absolute; inset: 0 auto 0 0; z-index: 21; width: 260px; }
+.console-sidebar-enter-active, .console-sidebar-leave-active { transition: transform 160ms ease-out, margin-right 160ms ease-out; }
+.console-sidebar-enter-from, .console-sidebar-leave-to { transform: translateX(-100%); margin-right: -220px; }
+.console-tasks-overlay:is(.console-sidebar-enter-from, .console-sidebar-leave-to) { margin-right: 0; }
+.console-scrim-enter-active, .console-scrim-leave-active { transition: opacity 160ms ease-out; }
+.console-scrim-enter-from, .console-scrim-leave-to { opacity: 0; }
 .console-chat { display: flex; flex: 1; flex-direction: column; min-width: 0; min-height: 0; }
 .console-chat-notices { flex-shrink: 0; width: min(100%, 808px); max-height: 25%; overflow-y: auto; margin: 0 auto; padding: 12px 24px 0; font-size: 13px; }
 .console-chat-notices p { margin: 8px 0; }
 .app-shell-console .history-button { min-height: 30px; padding: 4px 8px; background: transparent; border-color: transparent; color: var(--aura-muted); font-size: 12px; }
 .message-list { flex: 1; min-height: 0; overflow-y: auto; padding: 32px max(24px, calc((100% - 760px) / 2)); scrollbar-gutter: stable; }
-.message { max-width: 100%; margin: 0 0 24px; font-size: 15px; line-height: 1.7; overflow-wrap: anywhere; }
+.message { max-width: 100%; margin: 0 0 24px; font-size: 15px; font-weight: 500; line-height: 1.7; overflow-wrap: anywhere; }
 .message p { margin: 0; white-space: pre-wrap; }
-.message-role { display: block; margin-bottom: 8px; font-size: 12px; font-weight: 600; color: var(--aura-muted); }
-.message-user { width: fit-content; max-width: 85%; margin-left: auto; padding: 12px 16px; background: var(--aura-surface-soft); border-radius: 8px; }
-.message-user .message-role { position: absolute; width: 1px; height: 1px; overflow: hidden; clip-path: inset(50%); }
+.message p + p { margin-top: 12px; }
+.message-user, .message-assistant { width: fit-content; max-width: 85%; padding: 12px 16px; background: var(--aura-surface-soft); border-radius: 8px; }
+.message-user { margin-left: auto; background: var(--aura-accent-soft); }
+.message-assistant { margin-right: auto; }
 .message-attachments { display: flex; flex-wrap: wrap; gap: 8px; margin-top: 12px; }
 .message-attachment { padding: 6px 10px; border: 1px solid var(--aura-border); border-radius: 6px; font-size: 12px; }
 .empty-state { display: grid; flex: 1; place-items: center; padding: 24px; }
 .empty-state p { margin: 0; color: var(--aura-muted); font-size: 20px; font-weight: 400; text-align: center; }
 .console-composer { flex: 0 0 auto; width: min(100%, 808px); margin: 0 auto; padding: 12px 24px 24px; }
-.composer { padding: 12px; border: 1px solid var(--aura-border); border-radius: 12px; background: var(--aura-surface); }
+.composer { display: grid; grid-template-columns: minmax(0, 1fr) auto; align-items: end; gap: 12px; padding: 12px; border: 1px solid var(--aura-border); border-radius: 12px; background: var(--aura-surface); }
 .composer:focus-within { border-color: var(--aura-accent); }
-.app-shell-console .composer textarea { display: block; min-height: 44px; max-height: 198px; padding: 4px; resize: none; border: none; background: transparent; font-size: 15px; line-height: 1.6; }
+.app-shell-console .composer textarea { display: block; min-height: 36px; max-height: 198px; padding: 6px 4px; resize: none; border: none; background: transparent; font-size: 15px; line-height: 1.6; }
 .composer textarea:focus-visible { outline: none; }
-.composer-action-rail { display: flex; align-items: center; justify-content: space-between; gap: 12px; padding-top: 8px; }
-.composer-presence { display: inline-flex; align-items: center; gap: 6px; padding-left: 4px; color: var(--aura-muted); font-size: 12px; }
-.composer-status-dot { width: 6px; height: 6px; border-radius: 50%; background: var(--aura-accent); }
-.composer-status-dot-idle, .composer-status-dot-offline { background: var(--aura-muted); }
-.composer-status-dot-thinking, .composer-status-dot-typing { background: var(--aura-warning); }
-.app-shell-console .composer-send-button { width: 36px; min-height: 36px; padding: 8px; border-radius: 6px; }
+.composer-action-rail { display: flex; align-items: center; justify-content: flex-end; }
+.app-shell-console .composer-send-button { width: 36px; min-height: 36px; padding: 8px; border-radius: 12px; }
+.composer-send-button:is([data-status=thinking], [data-status=typing]) { --composer-color: var(--aura-warning); }
+.composer-send-button:is([data-status=listening], [data-status=speaking]) { --composer-color: var(--aura-info); }
 
 /* Transparent Live2D stage shared by the pet and explicit Profile preview. */
 .desktop-pet { position: relative; display: grid; place-items: center; width: 100vw; height: 100vh; overflow: hidden; background: transparent; }
@@ -146,6 +157,10 @@ summary:hover { color: var(--aura-text); }
   .console-header { padding-inline: 16px; }
   .message-list { padding: 24px; }
 }
+/* Native traffic lights occupy the upper-left 80px; content paints the titlebar. */
+.macos-window .console-header { padding-left: 96px; -webkit-app-region: drag; }
+.macos-window .settings-v2-sidebar-brand { padding-top: 32px; -webkit-app-region: drag; }
+.macos-window .settings-v2-content-header { -webkit-app-region: drag; }
 @media (prefers-reduced-motion: reduce) {
   *, *::before, *::after { transition-duration: 0s !important; animation: none !important; scroll-behavior: auto !important; }
 }
