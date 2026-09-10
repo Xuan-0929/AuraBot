@@ -63,7 +63,7 @@ test('Profile pages isolate B editing and preview from A, then explicitly activa
   await settings.getByRole('button',{name:'← 角色列表',exact:true}).click();
   const card=settings.locator('.profile-card').filter({has:settings.getByRole('heading',{name:'Profile B'})});await expect(card.getByRole('button',{name:'删除',exact:true})).toBeDisabled();
   const currentRow=settings.locator('.profile-list-row').first();
-  await expect(currentRow).toContainText('Profile B');await expect(currentRow).toContainText('当前角色');
+  await expect(currentRow).toContainText('Profile B');await expect(currentRow).toHaveAttribute('aria-current','true');await expect(currentRow).not.toContainText('视觉可用');
   await expect(currentRow).toHaveClass(/is-current/);
   expect(await currentRow.evaluate(element=>getComputedStyle(element).backgroundColor)).toBe('rgb(229, 238, 232)');
   await settings.screenshot({path:'/private/tmp/aurabot-role-list.png'});

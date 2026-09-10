@@ -1,4 +1,4 @@
-/** Localizes the desktop shell and simplified Backend-projected agent states. Includes model connection and search provider configuration labels. No runtime state is derived here. */
+/** Localizes the desktop shell and simplified Backend-projected agent states. Includes model connections, search configuration and actionable pet runtime reminders. No runtime state is derived here. */
 /**
  * 提供 Renderer 当前保留界面的英中日文案与 Agent 状态标签。
  *
@@ -52,6 +52,12 @@ const UI_TEXT = {
     settingsSectionIntelligence: "Models & Connections",
     settingsSectionIntelligenceHint: "Model connections and memory diagnostics.",
     general: "General",
+    petStatus: "Pet status",
+    runtimeHints: "Runtime reminders",
+    serviceDisconnected: "Service disconnected",
+    chatNotConfigured: "Chat: model not configured",
+    voiceNotConfigured: "Realtime voice: disabled or missing key, SDK, model or license",
+    tasksNotConfigured: "Tasks: model or Pi runtime unavailable",
     generalSettingsHint: "Manage language and common preferences.",
     petBehavior: "Pet Behavior",
     petBehaviorSettingsHint: "Adjust Aura's desktop interactions.",
@@ -232,6 +238,12 @@ const UI_TEXT = {
     settingsSectionIntelligence: "模型与连接",
     settingsSectionIntelligenceHint: "模型连接与记忆调试。",
     general: "通用",
+    petStatus: "桌宠状态",
+    runtimeHints: "运行提示",
+    serviceDisconnected: "服务未连接",
+    chatNotConfigured: "对话：未配置模型",
+    voiceNotConfigured: "实时语音：未启用或缺少密钥、SDK、模型／许可证",
+    tasksNotConfigured: "任务：模型或 Pi runtime 不可用",
     generalSettingsHint: "设置语言和常用选项。",
     petBehavior: "桌宠行为",
     petBehaviorSettingsHint: "调整桌宠的交互方式。",
@@ -416,6 +428,12 @@ const JAPANESE_UI_TEXT: Record<UiTextKey, string> = {
   settingsSectionIntelligence: "モデルと接続",
   settingsSectionIntelligenceHint: "モデル接続とメモリデバッグ。",
   general: "一般",
+  petStatus: "デスクトップペットの状態",
+  runtimeHints: "動作に関するお知らせ",
+  serviceDisconnected: "サービス未接続",
+  chatNotConfigured: "チャット：モデル未設定",
+  voiceNotConfigured: "リアルタイム音声：無効、またはキー・SDK・モデル・ライセンスが不足",
+  tasksNotConfigured: "タスク：モデルまたは Pi runtime を利用できません",
   generalSettingsHint: "言語とよく使う設定を管理します。",
   petBehavior: "ペットの動き",
   petBehaviorSettingsHint: "デスクトップ上での Aura の操作方法を調整します。",

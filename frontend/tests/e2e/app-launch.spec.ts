@@ -1,4 +1,4 @@
-// Validates saved/applied status labels and the current combined settings navigation.
+// Validates saved/applied status labels and the pet status settings navigation.
 /** Runs the real Electron windows, Python child and SQLite delivery path with isolated application data.
  * A local deterministic Chat Completions server checks transport integration without claiming real model,
  * Pi or microphone acceptance. Also verifies saved/applied revisions, no-op desktop application, busy
@@ -35,7 +35,7 @@ test('fresh desktop renders Hiyori, exposes unavailable models and applies saved
   const initial=await status();expect(initial.capabilities).toEqual({text:false,voice:false,tasks:false});
   const settingsPromise=electronApp.waitForEvent('window');await pet.evaluate(()=>window.aurabot.openSettingsWindow());const settings=await settingsPromise;
   await expect(settings.getByRole('button',{name:'保存',exact:true})).toBeDisabled();
-  await settings.getByRole('button',{name:'通用',exact:true}).click();
+  await settings.getByRole('button',{name:'桌宠状态',exact:true}).click();
   await settings.getByLabel('系统通知').uncheck();
   await expect(settings.getByRole('button',{name:'应用',exact:true})).toBeDisabled();
   await settings.getByRole('button',{name:'保存',exact:true}).click();
@@ -56,7 +56,7 @@ test('fresh desktop renders Hiyori, exposes unavailable models and applies saved
   await consolePage.locator('textarea').fill('未配置模型时不应记录成功');await consolePage.locator('textarea').press('Enter');
   await expect(consolePage.getByRole('alert')).toContainText('模型尚未配置');
   expect((await pet.evaluate(()=>window.aurabot.getHistory())).messages).toEqual([]);
-  await settings.getByRole('button',{name:'通用',exact:true}).click();
+  await settings.getByRole('button',{name:'桌宠状态',exact:true}).click();
   await settings.screenshot({path:'/private/tmp/aurabot-settings-verified.png'});
  }finally{await close(electronApp);rmSync(userDataDir,{recursive:true,force:true});}
 });

@@ -2,9 +2,9 @@
      Electron owns validation/persistence and Backend restart; busy confirmation never changes a draft
      or exposes Memory. SecretInput presents length-matched first/last-four previews; deleting a mask records clear intent through
      the existing save IPC, while unchanged keys remain write-only. Native disclosures reveal invalid fields; shared tokens
-     provide compact navigation and responsive forms. General groups desktop and runtime; a separate workspace page describes user-provided task locations;
+     provide compact navigation and responsive forms. Pet status groups desktop preferences with actionable runtime reminders only; a separate workspace page describes user-provided task locations;
      localized headings and status labels expose save/apply state without revision numbers. Workspace actions
-     keep equal spacing between separators. Model connections groups search provider selection with its secret field. Desktop-only changes apply without restarting. -->
+     keep equal spacing between separators. Model connections groups a native search-provider dropdown with its secret field. Desktop-only changes apply without restarting. -->
 <template>
   <main class="settings-window">
     <div class="settings-window-shell settings-v2-layout" :inert="busy ? true : undefined">
@@ -32,11 +32,13 @@
                 </article>
                 <article class="settings-model-card">
                   <h2>{{ t(displayLanguage, 'searchInterface') }}</h2>
-                  <fieldset class="settings-search-providers">
-                    <legend>{{ t(displayLanguage, 'searchProvider') }}</legend>
-                    <label><input v-model="draft.backend.main_agent.web.provider" type="radio" name="search-provider" value="tavily" /> Tavily</label>
-                    <label class="settings-provider-unavailable"><input type="radio" name="search-provider" value="infoquest" disabled /> InfoQuest（{{ t(displayLanguage, 'providerUnavailable') }}）</label>
-                  </fieldset>
+                  <label class="settings-page-field">
+                    <span>{{ t(displayLanguage, 'searchProvider') }}</span>
+                    <select v-model="draft.backend.main_agent.web.provider" name="search-provider">
+                      <option value="tavily">Tavily</option>
+                      <option value="infoquest" disabled>InfoQuest（{{ t(displayLanguage, 'providerUnavailable') }}）</option>
+                    </select>
+                  </label>
                   <label class="settings-page-field"><span>API Key</span><SecretInput v-model="draft.backend.main_agent.web.api_key" :preview="state.secretPreviews?.['main_agent.web.api_key']" :cleared="clearSecrets.includes('main_agent.web.api_key')" @update:model-value="updateSecretIntent('main_agent.web.api_key', $event)" /></label>
                   <p class="settings-hint">{{ t(displayLanguage, 'searchKeyHint') }}</p>
                 </article>
@@ -55,11 +57,10 @@
 
                 <label class="settings-page-toggle"><input v-model="draft.desktop.systemNotificationsEnabled" type="checkbox" /> 系统通知</label>
                 </article>
-                <article class="settings-model-card"><h2>运行状态</h2>
-                <p>{{ state.online?'服务已连接':'服务未连接' }}</p>
-                <ul v-if="state.online && state.capabilities"><li>对话：{{ state.capabilities.text?'已配置':'未配置模型' }}</li><li>实时语音：{{ state.capabilities.voice?'资源已准备，开启麦克风时检查连接':'未启用或缺少密钥、SDK、模型／许可证' }}</li><li>任务：{{ state.capabilities.tasks?'已配置':'模型或 Pi runtime 不可用' }}</li></ul>
-                <p>{{ configStatus }}</p>
-                <p v-if="state.error" role="alert">{{ state.error }}</p>
+                <article v-if="runtimeHints.length || state.error" class="settings-model-card">
+                  <h2>{{ t(displayLanguage, 'runtimeHints') }}</h2>
+                  <ul v-if="runtimeHints.length"><li v-for="hint in runtimeHints" :key="hint">{{ hint }}</li></ul>
+                  <p v-if="state.error" role="alert">{{ state.error }}</p>
                 </article>
               </section>
               <section v-else-if="page==='workspace'" class="settings-page-section">
@@ -104,7 +105,7 @@ import SecretInput from './SecretInput.vue';
 import { t } from '../../i18n';
 import SettingsNavIcon, {type SettingsNavIconName} from './SettingsNavIcon.vue';
 const store=useAuraBotStore();
-const sections=computed<Array<{key:SettingsNavIconName;label:string}>>(()=>[{key:'model',label:t(displayLanguage.value,'modelConnections')},{key:'voice',label:'实时语音'},{key:'general',label:t(displayLanguage.value,'general')},{key:'workspace',label:'工作目录'},{key:'profiles',label:'角色配置'}]);
+const sections=computed<Array<{key:SettingsNavIconName;label:string}>>(()=>[{key:'model',label:t(displayLanguage.value,'modelConnections')},{key:'voice',label:'实时语音'},{key:'general',label:t(displayLanguage.value,'petStatus')},{key:'workspace',label:'工作目录'},{key:'profiles',label:'角色配置'}]);
 const pageContainer=ref<HTMLElement>();
 const profilesPage=ref<InstanceType<typeof ProfilesPage>>();
 async function changePage(target:string){if(page.value==='profiles'&&target!=='profiles'&&!await profilesPage.value?.canLeave())return;page.value=target;await nextTick();if(pageContainer.value)pageContainer.value.scrollTop=0;}
@@ -113,6 +114,18 @@ const working=ref(false);const error=ref('');const busy=ref<BusyState>();const c
 const dirty=computed(()=>JSON.stringify(draft.value)!==baseline.value||clearSecrets.value.length>0);
 const displayLanguage=computed(()=>draft.value?.desktop.pet.displayLanguage ?? store.displayLanguage);
 const configStatus=computed(()=>t(displayLanguage.value,dirty.value?'configUnsaved':state.value?.pending?'configSaved':'configApplied'));
+const runtimeHints=computed(()=>{
+  const current=state.value;
+  if(!current)return [];
+  if(!current.online)return [t(displayLanguage.value,'serviceDisconnected')];
+  const capabilities=current.capabilities;
+  if(!capabilities)return [];
+  const hints=[];
+  if(!capabilities.text)hints.push(t(displayLanguage.value,'chatNotConfigured'));
+  if(!capabilities.voice)hints.push(t(displayLanguage.value,'voiceNotConfigured'));
+  if(!capabilities.tasks)hints.push(t(displayLanguage.value,'tasksNotConfigured'));
+  return hints;
+});
 const speechFields:Array<{key:'stt_model_name'|'tts_model_name'|'tts_voice'|'silero_model_path'|'silero_license_path'|'smart_turn_model_path'|'smart_turn_license_path';label:string}>=[
  {key:'stt_model_name',label:'STT 模型'},{key:'tts_model_name',label:'TTS 模型'},
  {key:'silero_model_path',label:'VAD 模型文件'},{key:'silero_license_path',label:'VAD 许可证文件'},
@@ -148,10 +161,6 @@ onBeforeUnmount(()=>unsubscribe?.());
 .settings-page-container>form{display:flex;flex-direction:column;min-height:100%}
 .settings-page-section{padding:8px 0 24px;flex:1}
 .settings-model-card{padding:20px 0;border-bottom:1px solid var(--aura-border)}
-.settings-search-providers{margin:16px 0;padding:0;border:0;min-width:0}
-.settings-search-providers legend{margin-bottom:12px}
-.settings-search-providers label{display:inline-flex;align-items:center;gap:8px;margin:0 24px 8px 0}
-.settings-provider-unavailable{color:var(--aura-muted)}
 .settings-workspace-add{display:flex;width:fit-content;margin-top:20px}
 .settings-model-card h2,.settings-page-section h2{font-size:15px;font-weight:600;margin:0 0 16px}
 .settings-page-field{display:grid;grid-template-columns:minmax(130px,30%) minmax(0,1fr);align-items:center;gap:16px;margin:16px 0}

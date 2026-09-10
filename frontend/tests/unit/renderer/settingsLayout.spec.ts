@@ -1,7 +1,7 @@
 /** Exercises settings draft/apply IPC and compact advanced controls through the real Vue form.
  * Controlled desktop configuration fixtures verify save safety, native invalid-field revelation,
  * recoverable server errors, and masked-key preservation/replacement/deletion through the real save
- * store, separate workspace and General navigation and localized status labels and search-provider selection, including length-matched first/last-four previews, without starting Electron or a backend. */
+ * store, separate workspace and pet status navigation with actionable runtime reminders and localized status labels and native search-provider dropdown selection, including length-matched first/last-four previews, without starting Electron or a backend. */
 // @vitest-environment jsdom
 import { createApp, nextTick } from 'vue';
 import { createPinia } from 'pinia';
@@ -26,8 +26,8 @@ it('preserves untouched keys and lets password inputs replace or delete every sa
  const save=async()=>{const count=saveSettings.mock.calls.length;host.querySelector('form')!.dispatchEvent(new Event('submit',{bubbles:true,cancelable:true}));await vi.waitFor(()=>expect(saveSettings).toHaveBeenCalledTimes(count+1));await nextTick();};
  expect(keys().map(input=>input.value)).toEqual(['chat••••ture','task••••ture','sear••••••ture']);
  expect(keys().every(input=>input.type==='text')).toBe(true);
- expect(host.querySelector<HTMLInputElement>('input[value="tavily"]')?.checked).toBe(true);
- expect(host.querySelector<HTMLInputElement>('input[value="infoquest"]')?.disabled).toBe(true);
+ expect(host.querySelector<HTMLSelectElement>('select[name="search-provider"]')?.value).toBe('tavily');
+ expect(host.querySelector<HTMLOptionElement>('option[value="infoquest"]')?.disabled).toBe(true);
  expect(host.querySelector('nav button')?.textContent).toBe('模型接入');
  expect(config.publicConfig().backend.chat_model.api_key).toBe('');
  expect(host.textContent).not.toContain('清除已保存密钥');expect(host.textContent).toContain('搜索接口');expect(host.querySelector('.settings-v2-content-header span')).toBeNull();
@@ -83,7 +83,7 @@ it('keeps advanced fields collapsed until invalid or a save failure needs attent
  expect(host.querySelector('details')?.textContent).toContain('Node 可执行文件');
  (navigation[2] as HTMLButtonElement).click();await nextTick();
  expect(host.querySelectorAll('details input')).toHaveLength(0);
- expect(host.textContent).toContain('桌宠鼠标穿透');expect(host.textContent).toContain('服务未连接');
+ expect(navigation[2]!.textContent).toBe('桌宠状态');expect(host.textContent).toContain('运行提示');expect(host.textContent).not.toContain('服务已连接');expect(host.textContent).toContain('桌宠鼠标穿透');expect(host.textContent).toContain('服务未连接');
  const language=host.querySelector('select')!;language.value='en';language.dispatchEvent(new Event('change',{bubbles:true}));await nextTick();
  expect(host.querySelector('.settings-v2-sidebar-brand')?.textContent).toBe('Settings');expect(host.querySelector('.settings-save-bar [role=status]')?.textContent).toBe('Unsaved');
  language.value='ja';language.dispatchEvent(new Event('change',{bubbles:true}));await nextTick();expect(host.querySelector('.settings-v2-sidebar-brand')?.textContent).toBe('設定');

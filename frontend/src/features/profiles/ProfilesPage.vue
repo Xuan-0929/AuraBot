@@ -1,7 +1,7 @@
 <!-- Provides the actual Profile list and independent configuration editor inside Settings.
      Drafts and preview stay local; controlled IPC owns persistence/import/application. The preview
      uses the production player but never opens a dialogue, starts Memory, or changes selection.
-     The current character is pinned with design-system emphasis; rows share text/button alignment, switching is explicit and creation lives after the list.
+     The current character is pinned with design-system emphasis; rows show short model names and only failure statuses, share text/button alignment, switching is explicit and creation lives after the list.
      Localized draft/saved/applied labels replace revision numbers. Native disclosures keep diagnostics optional; modal focus guards preserve safe draft decisions. -->
 <template>
   <section ref="profilePage" class="profiles-page" :aria-busy="working">
@@ -16,15 +16,15 @@
     <template v-if="!detail">
       <p v-if="loading">正在加载角色…</p>
       <p v-else-if="!profiles.length">创建第一个角色，开始配置人格。</p>
-      <article v-for="profile in orderedProfiles" :key="profile.id" class="profile-card profile-list-row" :class="{'is-current':profile.id===runtime?.selectedId}">
-        <div class="profile-list-info"><h2>{{ profile.displayName }} <small v-if="profile.id===runtime?.selectedId">当前角色</small></h2>
-        <p>{{ profile.modelName || '未配置模型' }} · {{ visualLabel(profile.visualStatus) }}</p>
+      <article v-for="profile in orderedProfiles" :key="profile.id" class="profile-card profile-list-row" :class="{'is-current':profile.id===runtime?.selectedId}" :aria-current="profile.id===runtime?.selectedId ? 'true' : undefined">
+        <div class="profile-list-info"><h2>{{ profile.displayName }}</h2>
+        <p>{{ modelDisplayName(profile.modelName) }}<span v-if="profile.visualStatus==='invalid'"> · 模型不可用</span></p>
         </div>
         <div class="profile-actions">
           <button v-if="profile.id!==runtime?.selectedId" :disabled="working" @click="activate(profile.id)">切换到此角色</button>
           <button v-else-if="!runtime?.online" :disabled="working" @click="activate(profile.id)">重试连接</button>
           <button :disabled="working" @click="open(profile.id)">编辑</button>
-          <button class="danger" :title="profile.id===runtime?.selectedId?'先切换到其他角色后才能删除':profiles.length<=1?'至少保留一个角色':'删除角色'" :disabled="working || profile.id===runtime?.selectedId || profiles.length<=1" @click="deleteTarget=profile">删除</button>
+          <button class="profile-delete" :title="profile.id===runtime?.selectedId?'先切换到其他角色后才能删除':profiles.length<=1?'至少保留一个角色':'删除角色'" :disabled="working || profile.id===runtime?.selectedId || profiles.length<=1" @click="deleteTarget=profile">删除</button>
         </div>
 
       </article>
@@ -50,8 +50,8 @@
         </template>
       </section>
       <section class="profile-card">
-        <h2>Live2D 与动作</h2>
-        <p>导入完整文件夹并保留许可文件；人格与记忆保持不变。</p>
+        <h2>Live2D与动作</h2>
+        <p>需导入完整Live2D文件夹</p>
         <button :disabled="working" @click="importModel">导入模型文件夹</button>
         <p>{{ draft.adaptor.model?.manifest || '未配置模型；文字功能仍然可用' }}</p>
         <template v-if="draft.adaptor.model">
@@ -153,7 +153,7 @@ const modelPath=computed(()=>draft.value?.adaptor.model?avatarResourceUrl(draft.
 const loopEntries=computed(()=>Object.entries(draft.value?.adaptor.entries??{}).filter(([,e])=>e.kind==='motion'&&e.playback.mode==='loop').map(([name])=>name));
 const clone=<T,>(value:T):T=>JSON.parse(JSON.stringify(value));
 const lines=(value:string)=>value.split('\n').map(line=>line.trim()).filter(Boolean);
-const visualLabel=(status:string)=>({unconfigured:'未配置视觉',ready:'视觉可用',pending:'待应用',invalid:'资源不可用'}[status]??status);
+const modelDisplayName=(name:string|null)=>name?name.replace(/\.model(?:3)?\.json$/i,''):'未配置模型';
 async function run(action:()=>Promise<void>){if(working.value)return;working.value=true;error.value='';try{await action();}catch(e){error.value=e instanceof Error?e.message:String(e);profilePage.value?.querySelectorAll('.profile-entry details').forEach(group=>{(group as HTMLDetailsElement).open=true;});}finally{working.value=false;}}
 async function refresh(){const result=await window.aurabot.listProfiles();profiles.value=result.profiles;runtime.value=result.runtime;}
 function loadDetail(value:ProfileDetail){detail.value=value;draft.value=clone(value.saved);baseline.value=JSON.stringify(draft.value);}
@@ -205,7 +205,8 @@ defineExpose({canLeave});
 .profile-resource code{flex:1;min-width:150px}.profile-resource span{font-size:12px;color:var(--aura-muted)}
 .profile-save-bar{position:sticky;bottom:0;display:flex;align-items:center;gap:8px;flex-wrap:wrap;padding:16px 0;background:var(--aura-bg);border-top:1px solid var(--aura-border);z-index:2}
 .profile-save-bar span{flex:1;min-width:180px;color:var(--aura-muted);font-size:12px;line-height:1.5}
-small{font-size:11px;font-weight:400;background:var(--aura-accent-soft);color:var(--aura-accent);padding:2px 6px;border-radius:4px;white-space:nowrap}
+.profile-actions>.profile-delete{color:var(--aura-text)}
+.profile-actions>.profile-delete:disabled{opacity:1;background:transparent}
 .profile-dialog-backdrop{position:fixed;inset:0;background:#0007;display:grid;place-items:center;z-index:110}
 .profile-dialog{width:min(480px,85vw);padding:24px;background:var(--aura-surface);color:var(--aura-text);border:1px solid var(--aura-border);border-radius:8px}
 .profile-dialog h2{font-size:18px;margin-top:0}.profile-dialog p{line-height:1.7}.profile-dialog button{margin:8px 8px 0 0}
