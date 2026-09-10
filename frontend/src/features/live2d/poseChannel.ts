@@ -1,7 +1,7 @@
 /** Owns the one bounded body channel and its millisecond clock for every avatar instance.
  * SDK samplers produce poses against a stable rest/baseline buffer; timed weights enter from the
  * last body pose and return gesture-only parameters/parts to the continuing baseline. No frame-wise
- * low-pass, parameter accumulation, random idle, callbacks or motion backlog lives in this channel.
+ * low-pass, parameter accumulation, random selection, callbacks or motion backlog lives in this channel.
  * A bounded union of outgoing parameter IDs preserves control during fades without retaining old clips.
  */
 export interface PoseClip {
@@ -20,6 +20,7 @@ export class PoseChannel {
   private readonly source:Float32Array;
   private baseline?:PoseClip;
   private baselineStarted=0;
+  private baselineFadeStarted=0;
   private gesture?:PoseClip;
   private gestureStarted=0;
   private transitionStarted=0;
@@ -32,10 +33,10 @@ export class PoseChannel {
   get currentGesture(){return this.gesture;}
   get currentBaseline(){return this.baseline;}
   get activeGesture():boolean{return Boolean(this.gesture);}
-  setBaseline(clip:PoseClip|undefined){
-    if(this.baseline===clip)return;
-    const outgoing=this.baseline;this.baseline=clip;this.baselineStarted=this.elapsedMs;
-    this.transition(clip?.fadeInMs??250,outgoing);
+  setBaseline(clip:PoseClip|undefined,restart=false){
+    if(this.baseline===clip&&!restart)return;
+    const outgoing=this.baseline;if(outgoing!==clip)this.baselineFadeStarted=this.elapsedMs;this.baseline=clip;this.baselineStarted=this.elapsedMs;
+    this.transition(Math.min(5000,Math.max(250,clip?.fadeInMs??0,outgoing?.fadeOutMs??0)),outgoing);
   }
   play(clip:PoseClip){const outgoing=this.gesture;this.gesture=clip;this.gestureStarted=this.elapsedMs;this.transition(clip.fadeInMs,outgoing);}
   cancel(durationMs=150){const outgoing=this.gesture;this.gesture=undefined;this.transition(durationMs,outgoing);}
@@ -47,12 +48,21 @@ export class PoseChannel {
   advance(deltaMs:number):number{
     const dt=Number.isFinite(deltaMs)&&deltaMs>0?Math.min(deltaMs,100):0;
     if(!dt)return 0;
+    let remaining=dt;
+    while(remaining>1e-7){
+      if(this.baseline&&this.elapsedMs-this.baselineStarted>=this.baseline.durationMs-1e-7)this.setBaseline(this.baseline,true);
+      const toEnd=this.baseline?Math.max(1e-7,this.baseline.durationMs-(this.elapsedMs-this.baselineStarted)):Infinity;
+      const step=Math.min(remaining,toEnd);this.step(step);remaining-=step;
+    }
+    return dt;
+  }
+  private step(dt:number){
     this.elapsedMs+=dt;
     this.baselinePose.set(this.rest);
     if(this.baseline){const duration=Math.max(1,this.baseline.durationMs);const elapsed=this.elapsedMs-this.baselineStarted;
-      // Keep a stable phase even when floating-point addition lands just below a loop boundary.
-      const time=(elapsed+1e-7)%duration;this.baseline.sample(this.baselinePose,time,this.rest,elapsed);}
-    if(this.gesture&&this.elapsedMs-this.gestureStarted>=this.gesture.durationMs){
+      // Sample the endpoint before restarting: the next cycle blends from the actual outgoing pose.
+      const time=Math.min(elapsed,duration);this.baseline.sample(this.baselinePose,time,this.rest,this.elapsedMs-this.baselineFadeStarted);}
+    if(this.gesture&&this.elapsedMs-this.gestureStarted>=this.gesture.durationMs-1e-7){
       const outgoing=this.gesture;this.gesture=undefined;this.transition(outgoing.fadeOutMs,outgoing);
     }
     this.target.set(this.baselinePose);
@@ -60,6 +70,5 @@ export class PoseChannel {
     const weight=this.transitionMs<=0?1:ease((this.elapsedMs-this.transitionStarted)/this.transitionMs);
     for(let i=0;i<this.pose.length;i++)this.pose[i]=this.source[i]!+(this.target[i]!-this.source[i]!)*weight;
     if(weight>=1)this.outgoingIds.clear();
-    return dt;
   }
 }

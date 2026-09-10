@@ -1,4 +1,4 @@
-/** Localizes the desktop shell and simplified Backend-projected agent states. Includes model connections, search configuration and actionable pet runtime reminders. No runtime state is derived here. */
+/** Localizes the complete Profile workflow and desktop shell and simplified Backend-projected agent states. Includes model connections, search configuration and actionable pet runtime reminders. No runtime state is derived here. */
 /**
  * 提供 Renderer 当前保留界面的英中日文案与 Agent 状态标签。
  *
@@ -7,6 +7,7 @@
  * runner 文案和旧执行专属状态不再属于运行时类型。
  */
 
+import { PROFILE_TEXT } from "./features/profiles/profileText";
 import type { AgentStatus } from "@shared/contracts/chat";
 import type { PetSettings } from "@shared/schemas/petSettings";
 
@@ -14,6 +15,7 @@ export type DisplayLanguage = PetSettings["displayLanguage"];
 
 const UI_TEXT = {
   en: {
+    ...PROFILE_TEXT.en,
     modelConnections: "Model connections",
     searchInterface: "Search interface",
     searchProvider: "Search provider",
@@ -200,6 +202,7 @@ const UI_TEXT = {
     returned: "Returned"
   },
   zh: {
+    ...PROFILE_TEXT.zh,
     modelConnections: "模型接入",
     searchInterface: "搜索接口",
     searchProvider: "搜索服务商",
@@ -390,6 +393,7 @@ const UI_TEXT = {
 export type UiTextKey = keyof typeof UI_TEXT.en;
 
 const JAPANESE_UI_TEXT: Record<UiTextKey, string> = {
+  ...PROFILE_TEXT.ja,
   ...UI_TEXT.en,
   modelConnections: "モデル接続",
   searchInterface: "検索連携",

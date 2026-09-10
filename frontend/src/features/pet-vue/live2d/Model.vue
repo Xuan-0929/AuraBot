@@ -2,6 +2,7 @@
      Only app/model identity changes replace the model. Configuration/generation updates are forwarded
      explicitly; placement, focus, hover and semantic delivery never rebuild GPU resources. -->
 <template><div class="live2d-vue-model-anchor" aria-hidden="true" :data-avatar-state="status" :data-motion-starts="starts" :data-cue-drops="drops" /></template>
+<!-- Configuration watches exclude human-readable labels, so typing a name never restarts playback. -->
 <script setup lang="ts">
 import {onBeforeUnmount,watch,ref} from 'vue';
 import type {Application} from 'pixi.js';
@@ -13,11 +14,11 @@ import {createAvatarPlayer,avatarInstances,type AvatarPlayer} from '../../live2d
 import type {PerformanceEvent} from '../../live2d/performance';
 import {normalizeLive2DHitAreaNames,renderLive2DFrame} from '../../live2d/runtime';
 const props=defineProps<{app:Application|null;modelPath:string;adaptor?:AvatarAdaptor;profileId?:string;revision?:number;modelVersion?:string;generation?:number;focusAt:{x:number;y:number};canvasSize:{width:number;height:number};pointerAt?:{x:number;y:number};viewTransform:Live2DViewTransform;zoomRequest?:{id:number;deltaY:number;focalPoint:{x:number;y:number}}}>();
-const emit=defineEmits<{interactiveChange:[boolean];modelReady:[];error:[string];viewTransformChange:[Live2DViewTransform]}>();
+const emit=defineEmits<{playbackChange:[string];interactiveChange:[boolean];modelReady:[];error:[string];viewTransformChange:[Live2DViewTransform]}>();
 let player:AvatarPlayer|undefined;let disposed=false;let loadGeneration=0;let configurationGeneration=0;let natural:Live2DSize|undefined;
 const pendingReady=new Set<(available:boolean,error?:string)=>void>();
 const status=ref('loading');const loadError=ref('');const starts=ref(0),drops=ref(0);
-const config=()=>({modelPath:props.modelPath,adaptor:props.adaptor,profileId:props.profileId,revision:props.revision,modelVersion:props.modelVersion,generation:props.generation});
+const config=()=>({onPlaybackChange:(name:string)=>emit('playbackChange',name),modelPath:props.modelPath,adaptor:props.adaptor,profileId:props.profileId,revision:props.revision,modelVersion:props.modelVersion,generation:props.generation});
 watch(()=>[props.app,props.modelPath] as const,async([app,path])=>{
  const generation=++loadGeneration;configurationGeneration++;for(const finish of pendingReady)finish(false,'模型已替换');player?.dispose();player=undefined;natural=undefined;loadError.value='';status.value=path?'loading':'unconfigured';
  if(!app||!path)return;
@@ -32,7 +33,7 @@ watch(()=>[props.app,props.modelPath] as const,async([app,path])=>{
   next.setGeneration(props.generation??0);status.value='ready';emit('modelReady');
  }catch(error){if(!disposed&&generation===loadGeneration&&(configuration===0||configuration===configurationGeneration)){status.value='error';loadError.value=error instanceof Error?error.message:'模型加载失败';emit('error',loadError.value);}}
 },{immediate:true});
-watch([()=>props.revision,()=>JSON.stringify(props.adaptor)],async()=>{
+watch([()=>props.revision,()=>JSON.stringify(props.adaptor?{...props.adaptor,entries:Object.fromEntries(Object.entries(props.adaptor.entries).map(([id,{display_name,description,...playback}])=>[id,playback]))}:undefined)],async()=>{
  const current=player;if(!current)return;const generation=loadGeneration,configuration=++configurationGeneration;status.value='loading';loadError.value='';
  const active=()=>!disposed&&generation===loadGeneration&&configuration===configurationGeneration&&player===current;
  try{await current.configure(config());if(active()){status.value='ready';emit('modelReady');}}

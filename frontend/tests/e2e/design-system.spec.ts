@@ -1,3 +1,4 @@
+// Navigation assertions use the current model-connections product label.
 /** Verifies the design system in real Electron windows with isolated application data.
  * Uses local delivered-message fixtures, screenshots both themes/minimum sizes, and exercises
  * sidebar focus, collapsed-field validation and desktop hover without external model requests. */
@@ -32,7 +33,7 @@ test('renders compact chat/settings in both themes and keeps hover controls oper
     await expect(chat.locator('.message-user')).toHaveCount(2);
     await expect(chat.locator('.message-list')).toContainText('你随时知道修改是否已经生效。');
     const settingsPromise = app.waitForEvent('window');await pet.evaluate(() => window.aurabot.openSettingsWindow());const settings = await settingsPromise;
-    await expect(settings.getByRole('heading',{name:'模型',exact:true})).toBeVisible();
+    await expect(settings.getByRole('heading',{name:'模型接入',exact:true})).toBeVisible();
     async function size(page:Page,width:number,height:number) {
       const handle = await app.browserWindow(page);
       await handle.evaluate((window, dimensions) => window.setContentSize(dimensions.width, dimensions.height), {width,height});

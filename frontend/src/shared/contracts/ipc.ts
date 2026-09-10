@@ -1,5 +1,5 @@
 /** Defines typed IPC for desktop settings, visible history and Pet-owned realtime.
- * Electron validates callers and payloads; Task is read-only and Memory has no renderer surface.
+ * Profile SOUL opening accepts an identity only, never an arbitrary path. Electron validates callers and payloads; Task is read-only and Memory has no renderer surface.
  */
 import type { AppInitialState, SendChatMessageInput, SendChatMessageResult, AgentStatus } from './chat';
 import type { Live2DModelState } from './live2dModel';
@@ -10,7 +10,7 @@ import type { ProfileDetail, ProfileSummary, ProfileSaveInput } from './profiles
 import type { ProfileRuntimeState, RealtimeToken, PetCommandResult } from './desktop';
 import type { DesktopConfig, SettingsState, ApplyResult, HistoryPage, HistoryEntry, TaskSummary, PetCommand } from './desktop';
 export const IPC_CHANNELS = {
- listProfiles:'profiles:list',getProfile:'profiles:get',createProfile:'profiles:create',saveProfile:'profiles:save',activateProfile:'profiles:activate',deleteProfile:'profiles:delete',importProfileModel:'profiles:import-model',verifyProfileResources:'profiles:verify-resources',profilesChanged:'profiles:changed',getRealtimeToken:'profiles:realtime-token',
+ openProfileSoul:'profiles:open-soul',listProfiles:'profiles:list',getProfile:'profiles:get',createProfile:'profiles:create',saveProfile:'profiles:save',activateProfile:'profiles:activate',deleteProfile:'profiles:delete',importProfileModel:'profiles:import-model',verifyProfileResources:'profiles:verify-resources',profilesChanged:'profiles:changed',getRealtimeToken:'profiles:realtime-token',
  getInitialState:'app:get-initial-state',openConsoleWindow:'window:open-console',openSettingsWindow:'window:open-settings',
  getSettings:'settings:get',saveSettings:'settings:save',applySettings:'settings:apply',settingsChanged:'settings:changed',
  getHistory:'history:list',recordDelivery:'history:delivered',sendChatMessage:'chat:send-message',
@@ -33,7 +33,8 @@ export type PetResizeCorner = Extract<PetResizeDirection, "nw" | "ne" | "sw" | "
 export interface AuraBotApi {
  getInitialState():Promise<AppInitialState>;
  listProfiles():Promise<{profiles:ProfileSummary[];runtime:ProfileRuntimeState}>; getProfile(id:string):Promise<ProfileDetail>;
- createProfile(name:string):Promise<ProfileDetail>; saveProfile(id:string,input:ProfileSaveInput):Promise<ProfileDetail>;
+ openProfileSoul(id:string,reveal?:boolean):Promise<void>;
+ createProfile(name:string,language?:'zh'|'en'|'ja'):Promise<ProfileDetail>; saveProfile(id:string,input:ProfileSaveInput):Promise<ProfileDetail>;
  activateProfile(id:string,force?:boolean,applyOnly?:boolean):Promise<{runtime:ProfileRuntimeState;busy?:boolean}>;
  deleteProfile(id:string):Promise<void>; importProfileModel(id:string):Promise<ProfileDetail|null>;
  verifyProfileResources(id:string,modelVersion:string,files:string[]):Promise<ProfileDetail>;

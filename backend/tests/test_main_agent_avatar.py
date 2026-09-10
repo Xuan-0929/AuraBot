@@ -387,3 +387,26 @@ class LateEnvelopeTests(unittest.IsolatedAsyncioTestCase):
         self.assertIn("a1", cancelled)
         self.assertNotIn("b1", cancelled)
         await delivery.shutdown()
+
+
+class ResidentPoolTests(unittest.TestCase):
+    """Activation accepts bounded mixed pools without exposing runtime motion loops to tools."""
+
+    def test_mixed_pool_and_empty_description(self):
+        value = adaptor()
+        value['schema_version'] = 2
+        value['entries']['idle'] = {**value['entries']['nod'], 'agent_enabled': False, 'playback': {'mode': 'loop'}}
+        value['entries']['nod']['description'] = ''
+        value['entries']['nod']['display_name'] = 'Nod'
+        value['states'] = {'idle': ['idle', 'smile'], 'thinking': ['smile'], 'listening': [], 'speaking': []}
+        compiled = AvatarCapabilities.compile(value)
+        self.assertNotIn('idle', compiled.motion_names)
+        self.assertEqual(dict(compiled.motions)['nod'], 'Nod')
+
+    def test_invalid_pool_shapes(self):
+        for pool in ('smile', None, ['smile', 'smile'], ['missing'], ['nod'], ['smile'] * 9, [False]):
+            value = adaptor()
+            value['schema_version'] = 2
+            value['states'] = {'idle': pool, 'thinking': [], 'listening': [], 'speaking': []}
+            with self.assertRaises(ValueError, msg=repr(pool)):
+                AvatarCapabilities.compile(value)

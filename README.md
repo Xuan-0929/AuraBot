@@ -43,7 +43,7 @@ npm run dev
 
 Electron Main 是唯一 Backend 进程 owner；开发入口启动 Electron/Vite，再由 Electron 启动 Python。Vite 使用 `127.0.0.1:6400`，Backend 使用 `127.0.0.1:6401`。不要另外启动第二个 Backend；端口被其他进程占用时应用报告错误，不终止其他进程。
 
-首次运行在选定的安装目录创建 `settings.json`，默认登记 `default: 安装目录` 和 `home: 用户家目录`。打开设置，填写 Main Agent 模型与密钥，先“保存”，再“应用”。Task/Pi 和语音可分别配置；人格和 Live2D 在 Profile 详情独立保存、应用。无需复制或维护仓库 YAML 配置。
+首次运行在选定的安装目录创建 `settings.json`，默认登记 `default: 安装目录` 和 `home: 用户家目录`。打开设置，填写 Main Agent 模型与密钥，先“保存”，再“应用”。Task/Pi 和语音可分别配置；角色配置页分为“角色”和“模型与动作”：人格保存为独立 `SOUL.md`，可在页面或文本编辑器修改；动作在常驻预览旁命名和设置用途。保存后明确应用，才改变当前角色。详见 [Profile 与 Live2D](docs/profile-live2d.md)。无需复制或维护仓库 YAML 配置。
 
 `AURABOT_USER_DATA_DIR` 是当前源码运行方式的安装目录入口，后续启动也需设置为同一目录；未指定时沿用 `<Electron userData>/desktop-v2`。Pi 依赖、Pi 扩展、Profile、历史、Task 会话和配置放在安装目录；源码及其 Python/前端开发环境仍可位于仓库中。安装脚本仅准备运行依赖，不修改已有配置或数据。
 

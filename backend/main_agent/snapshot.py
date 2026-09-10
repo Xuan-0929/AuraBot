@@ -3,7 +3,7 @@
 ContextStore supplies ordered heard conversation; Runtime identifies every segment in the current ActiveInput
 and supplies Memory plus the frozen tool surface. The projector preserves current input ahead of older variable
 facts, deterministically truncates it only when required, and always keeps runtime/tool authority. Soul is a
-separate system message. User-provided workspace names and absolute paths are static location context,
+separate complete system message with its own bound; an insufficient budget raises instead of truncating it. User-provided workspace names and absolute paths are static location context,
 not Pi filesystem permissions; projection does not scan those directories.
 """
 
@@ -22,7 +22,7 @@ class SnapshotBudget:
     """Total and section character bounds for one provider request."""
 
     max_prompt_chars: int = 12_000
-    soul_chars: int = 2_000
+    soul_chars: int = 34 * 1024
     conversation_chars: int = 6_000
     summary_chars: int = 2_000
     observation_chars: int = 3_000
@@ -77,6 +77,8 @@ class SnapshotProjector:
 
         if not isinstance(soul, str):
             raise TypeError("soul must be text")
+        if len(soul) > self.budget.soul_chars:
+            raise ValueError("soul_budget_exceeded")
         protected = frozenset(str(value) for value in protected_segment_ids)
         conversation = _conversation_records(
             context.conversation_turns,
@@ -109,7 +111,7 @@ class SnapshotProjector:
         return Snapshot(
             conversation_turns=tuple(_copy(sections["conversation"])),
             conversation_summaries=tuple(_copy(sections["conversation_summaries"])),
-            soul=soul[: self.budget.soul_chars],
+            soul=soul,
             observations=tuple(_copy(sections["observations"])),
             think_note=sections["think_note"],
             task_facts=tuple(_copy(sections["task_facts"])),

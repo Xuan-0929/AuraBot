@@ -1,6 +1,6 @@
 // @vitest-environment jsdom
 /** Mounts the real Vue Model component to exercise watcher wiring and asynchronous ownership.
- * Only the SDK factory is deferred; actual Vue lifecycle/configuration forwarding remains production code.
+ * Only the SDK factory is deferred; metadata-only edits are ignored while actual Vue lifecycle/configuration forwarding remains production code.
  */
 import {afterEach,expect,it,vi} from 'vitest';
 import {createApp,h,markRaw,nextTick,onUnmounted,reactive,shallowRef,toRaw} from 'vue';
@@ -24,16 +24,16 @@ function mount(onCanvasDestroy?:()=>void){
 async function flush(){await nextTick();await Promise.resolve();await nextTick();}
 it('reconciles latest revision and generation after a deferred initial model load',async()=>{
  const load=deferred<ReturnType<typeof fake>>();factory.mockReturnValue(load.promise);const {props,host}=mount();
- props.revision=2;props.generation=9;props.adaptor.states.idle='new_idle';await flush();
+ props.revision=2;props.generation=9;props.adaptor.states.idle=['new_idle'];await flush();
  const player=fake();load.resolve(player);await vi.waitFor(()=>expect(host.querySelector('[data-avatar-state]')?.getAttribute('data-avatar-state')).toBe('ready'));
- expect(player.configure).toHaveBeenCalledWith(expect.objectContaining({revision:2,generation:9,adaptor:expect.objectContaining({states:expect.objectContaining({idle:'new_idle'})})}));
+ expect(player.configure).toHaveBeenCalledWith(expect.objectContaining({revision:2,generation:9,adaptor:expect.objectContaining({states:expect.objectContaining({idle:['new_idle']})})}));
  expect(player.setGeneration).toHaveBeenLastCalledWith(9);expect(factory).toHaveBeenCalledOnce();
 });
 it('keeps the resident model across content-equal store refresh and forwards nested draft edits',async()=>{
  const player=fake();factory.mockResolvedValue(player);const {props,host,unmount}=mount();await vi.waitFor(()=>expect(host.querySelector('[data-avatar-state]')?.getAttribute('data-avatar-state')).toBe('ready'));
  props.adaptor=JSON.parse(JSON.stringify(toRaw(props.adaptor)));await flush();expect(factory).toHaveBeenCalledOnce();expect(player.dispose).not.toHaveBeenCalled();
  props.adaptor.entries.nod={kind:'motion',source:{file:'model/nod.motion3.json'},description:'原始说明',agent_enabled:false,playback:{mode:'once'}};await flush();
- player.configure.mockClear();props.adaptor.entries.nod.description='嵌套草稿更改';await flush();expect(player.configure).toHaveBeenCalledWith(expect.objectContaining({adaptor:expect.objectContaining({entries:expect.objectContaining({nod:expect.objectContaining({description:'嵌套草稿更改'})})})}));
+ player.configure.mockClear();props.adaptor.entries.nod.description='嵌套草稿更改';props.adaptor.entries.nod.display_name='新名称';await flush();expect(player.configure).not.toHaveBeenCalled();props.adaptor.entries.nod.playback.fade_in_ms=100;await flush();expect(player.configure).toHaveBeenCalledOnce();
  expect(factory).toHaveBeenCalledOnce();unmount();expect(player.dispose).toHaveBeenCalledOnce();
 });
 it('releases a late factory result once when the component has already unmounted',async()=>{

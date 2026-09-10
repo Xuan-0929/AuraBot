@@ -6,6 +6,7 @@ require completed audio; binary PCM and playback gates remain confined to voice 
 available during voice mode, resetting microphone input while preserving spoken delivery. ProfileResources
 is the sole Speech owner; this transport reads it and retires Runtime session state exactly once."""
 
+# Activation validates the whole UTF-8 SOUL document and adds only controlled name metadata.
 from __future__ import annotations
 
 import asyncio
@@ -530,6 +531,7 @@ class ProfileActivationRequest(BaseModel):
     profile_id: str = Field(pattern=r"^[A-Za-z0-9][A-Za-z0-9_-]{0,127}$")
     revision: int = Field(ge=1, strict=True)
     soul: str = Field(min_length=1, max_length=32 * 1024)
+    display_name: str | None = Field(default=None, max_length=128)
     adaptor: dict[str, Any] = Field(default_factory=dict)
     model_version: str = Field(default="", max_length=128)
     force: bool = False
@@ -578,7 +580,13 @@ async def profile_activation_check(request: Request) -> dict[str, Any]:
 async def activate_profile(body: ProfileActivationRequest, request: Request) -> dict[str, Any]:
     hub = _require_origin(request)
     try:
-        generation = await hub.activate(body.profile_id, body.soul, revision=body.revision,
+        if not body.soul.strip():
+            raise ValueError("soul_empty")
+        if len(body.soul.encode("utf-8")) > 32 * 1024:
+            raise ValueError("soul_too_large")
+        soul = body.soul if body.display_name is None else (
+            "Character name (identity data): " + json.dumps(body.display_name, ensure_ascii=False) + "\n\n" + body.soul)
+        generation = await hub.activate(body.profile_id, soul, revision=body.revision,
             adaptor=body.adaptor, model_version=body.model_version, force=body.force)
     except ValueError as error:
         raise HTTPException(422, str(error)) from None

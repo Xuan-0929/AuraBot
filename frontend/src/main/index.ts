@@ -1,15 +1,16 @@
 /** Composes the desktop shell and one Backend process around a controlled Profile repository.
  * AURABOT_USER_DATA_DIR selects the installation/data root independently of source code.
  * Main migrates configuration, serves owned model packages, serializes selection/application and
- * fences history receipts by their original Profile/generation. Pet alone owns realtime media;
+ * opens only a repository-owned Profile SOUL path through shell; fences history receipts by their original Profile/generation. Pet alone owns realtime media;
  * Backend exclusively owns Context, Memory, task state and the active business lifecycle. */
-import { app, BrowserWindow, ipcMain, Notification, dialog } from 'electron';
+import { app, BrowserWindow, ipcMain, Notification, dialog, shell } from 'electron';
 import { join, resolve, dirname } from 'node:path';
 import { randomUUID } from 'node:crypto';
 import { existsSync,readFileSync } from 'node:fs';
 import { createLive2DModelRegistry } from '@core/live2d/modelRegistry';
 import { ProfileRepository, findModelManifests } from '@core/profiles/profileRepository';
-import { buildSoulPrompt } from '@core/profiles/soulPrompt';
+import { t } from '../i18n';
+import { validateSoul } from '@core/profiles/soulPrompt';
 import { registerProfileResourceScheme, installProfileResourceProtocol } from './profileResources';
 import { avatarResourceUrl } from '@shared/contracts/avatar';
 import type {ProfileConfig} from '@shared/contracts/profiles';
@@ -82,7 +83,7 @@ async function bootstrap(){
  handle(C.saveSettings,(_event,value,clear=[])=>{if(backend!.busy||switching)throw new Error('正在启动或应用配置，请完成后再保存。');if(!Array.isArray(clear)||!clear.every(k=>typeof k==='string'))throw new Error('无效密钥操作');const result=config.save(value,clear);changed();return result;});
  handle(C.applySettings,async(_event,force=false)=>{
    if(typeof force!=='boolean')throw new Error('无效应用请求');
-   if(switching)throw new Error('正在应用 Profile，请稍候');
+   if(switching)throw new Error('activation_in_progress');
    const previous=config.status();
    const result=await backend!.apply(force);
    if(!result.busy){applyPetSettings(config.current().desktop.pet);if(previous.backendPending||!previous.online)await activate(runtime.selectedId,true,false,true);}
@@ -122,9 +123,10 @@ async function bootstrap(){
  });
  const activate=async(id:string,force=false,applyOnly=false,restore=false)=>{
    if(switching)throw new Error('正在切换 Profile，请稍候');
-   if(applyOnly&&id!==runtime.selectedId)throw new Error('请先显式激活此 Profile');
+   if(applyOnly&&id!==runtime.selectedId)throw new Error('active_profile');
    const detail=profileStore.get(id);
    const target=restore?(detail.applied??detail.saved):detail.saved;
+   validateSoul(target.soulText);
    if(runtime.online&&runtime.activeId===id&&runtime.revision===target.revision&&applied?.modelVersion===target.modelVersion)return {runtime};
    if(!force&&runtime.online&&agentState!=='idle')return {runtime,busy:true};
    switching=true;const beforeRuntime={...runtime};let revoked=false;
@@ -134,7 +136,7 @@ async function bootstrap(){
      await petRequest('disconnect');revoked=true;
      runtime={...runtime,activeId:null,online:false,generation:runtime.generation+1};
      tasks?.stop();
-     const result=await backendJson('/api/v1/main-agent/profile/activate',{method:'POST',body:JSON.stringify({profile_id:id,revision:target.revision,soul:buildSoulPrompt(target.profile.soul),adaptor:target.adaptor,model_version:target.modelVersion,force}),signal:AbortSignal.timeout(40000)});
+     const result=await backendJson('/api/v1/main-agent/profile/activate',{method:'POST',body:JSON.stringify({profile_id:id,revision:target.revision,soul:target.soulText,display_name:target.profile.displayName,adaptor:target.adaptor,model_version:target.modelVersion,force}),signal:AbortSignal.timeout(40000)});
      profileStore.select(id);applied=target;
      runtime={selectedId:id,activeId:id,revision:target.revision,generation:result.generation,online:result.runtime_active===true,visualStatus:result.visual_status,capabilityNames:result.capability_names};
      realtimeError='';agentState='idle';broadcastAgentStatus(agentState);
@@ -148,30 +150,31 @@ async function bootstrap(){
  };
  handle(C.listProfiles,()=>({profiles:profileStore.list(),runtime}));
  handle(C.getProfile,(_event,id)=>profileStore.get(id));
- handle(C.createProfile,(_event,name)=>{let result=profileStore.create(name);try{result=seedModel(result.saved.profile.id);}catch{/* Created identity remains editable without an optional bundled model. */}profilesChanged();return result;});
- handle(C.saveProfile,(_event,id,input)=>{if(switching)throw new Error('正在应用 Profile，请稍候');const result=profileStore.save(id,input);profilesChanged();return result;});
+ handle(C.createProfile,(_event,name,language='zh')=>{let result=profileStore.create(name,language);try{result=seedModel(result.saved.profile.id);}catch{/* Created identity remains editable without an optional bundled model. */}profilesChanged();return result;});
+ handle(C.openProfileSoul,async(_event,id,reveal=false)=>{profileStore.get(id);const path=profileStore.soulPath(id);if(reveal===true){shell.showItemInFolder(path);return;}const error=await shell.openPath(path);if(error)throw new Error('soul_open_failed');});
+ handle(C.saveProfile,(_event,id,input)=>{if(switching)throw new Error('activation_in_progress');const result=profileStore.save(id,input);profilesChanged();return result;});
  handle(C.activateProfile,(_event,id,force=false,applyOnly=false)=>{if(typeof force!=='boolean'||typeof applyOnly!=='boolean')throw new Error('无效激活请求');return activate(id,force,applyOnly);});
  handle(C.deleteProfile,async(_event,id)=>{
-   profileStore.get(id);if(switching)throw new Error('正在切换 Profile');
-   if(id===runtime.selectedId)throw new Error('请先切换到其他 Profile');
-   if(!config.online)throw new Error('Backend 离线，无法确认任务和归档所有权；暂不能删除');
+   profileStore.get(id);if(switching)throw new Error('activation_in_progress');
+   if(id===runtime.selectedId)throw new Error('active_profile');
+   if(!config.online)throw new Error('offline_delete');
    switching=true;try{const guard=await backendJson('/api/v1/main-agent/profile/'+encodeURIComponent(id)+'/delete-check');
-   const reasons:Record<string,string>={active_profile:'请先切换到其他 Profile',unfinished_tasks:'该 Profile 仍有未完成任务',unarchived_context:'该 Profile 仍有未归档的上下文',context_state_unavailable:'无法安全读取归档状态',activation_in_progress:'正在切换 Profile'};
-   profileStore.delete(id,{allowed:guard.allowed===true,reason:reasons[guard.reason]??guard.reason??undefined});profilesChanged();}finally{switching=false;}
+
+   profileStore.delete(id,{allowed:guard.allowed===true,reason:guard.reason??undefined});profilesChanged();}finally{switching=false;}
  });
  handle(C.importProfileModel,async(event,id)=>{
-   profileStore.get(id);if(switching)throw new Error('正在应用 Profile');
+   profileStore.get(id);if(switching)throw new Error('activation_in_progress');
    switching=true;try{
-   const chosen=await dialog.showOpenDialog(BrowserWindow.fromWebContents(event.sender)!,{title:'导入完整 Live2D 模型文件夹',properties:['openDirectory']});
+   const chosen=await dialog.showOpenDialog(BrowserWindow.fromWebContents(event.sender)!,{title:t(config.current().desktop.pet.displayLanguage,'pImport'),properties:['openDirectory']});
    if(chosen.canceled||!chosen.filePaths[0])return null;
    const folder=chosen.filePaths[0];const manifests=findModelManifests(folder);
-   if(!manifests.length)throw new Error('文件夹内没有 .model3.json 模型入口');
+   if(!manifests.length)throw new Error('import_failed');
    let index=0;
-   if(manifests.length>1){const pick=await dialog.showMessageBox(BrowserWindow.fromWebContents(event.sender)!,{type:'question',title:'选择模型入口',message:'此文件夹包含多个模型，请选择入口',buttons:[...manifests,'取消'],cancelId:manifests.length,noLink:true});index=pick.response;if(index===manifests.length)return null;}
+   if(manifests.length>1){const pick=await dialog.showMessageBox(BrowserWindow.fromWebContents(event.sender)!,{type:'question',title:t(config.current().desktop.pet.displayLanguage,'pSelectManifest'),message:t(config.current().desktop.pet.displayLanguage,'pManifestHelp'),buttons:[...manifests,t(config.current().desktop.pet.displayLanguage,'pCancel')],cancelId:manifests.length,noLink:true});index=pick.response;if(index===manifests.length)return null;}
    const result=profileStore.importModel(id,folder,manifests[index]!);profilesChanged();return result;
    }finally{switching=false;}
  });
- handle(C.verifyProfileResources,(_event,id,version,files)=>{if(switching)throw new Error('正在应用 Profile');const result=profileStore.verifyResources(id,version,files);profilesChanged();return result;});
+ handle(C.verifyProfileResources,(_event,id,version,files)=>{if(switching)throw new Error('activation_in_progress');const result=profileStore.verifyResources(id,version,files);profilesChanged();return result;});
  handle(C.getRealtimeToken,async event=>{assertPet(event);if(!runtime.online||!runtime.activeId)throw new Error('Profile 尚未激活');const owner=runtime.activeId,generation=runtime.generation,revision=runtime.revision;const token=await backendJson('/api/v1/main-agent/realtime-token',{method:'POST',body:JSON.stringify({profileId:owner,revision})});if(owner!==runtime.activeId||generation!==runtime.generation||revision!==runtime.revision)throw new Error('Profile 已切换');runtime={...runtime,generation:token.generation};profilesChanged();return token;});
  handle(C.getLive2DModelState,()=>modelState());
  handle(C.setPetMousePassthrough,(event,enabled)=>{assertPet(event);if(typeof enabled==='boolean')setPetMousePassthrough(enabled);});

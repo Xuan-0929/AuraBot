@@ -3,22 +3,22 @@
      or exposes Memory. SecretInput presents length-matched first/last-four previews; deleting a mask records clear intent through
      the existing save IPC, while unchanged keys remain write-only. Native disclosures reveal invalid fields; shared tokens
      provide compact navigation and responsive forms. Pet status groups desktop preferences with actionable runtime reminders only; a separate workspace page describes user-provided task locations;
-     localized headings and status labels expose save/apply state without revision numbers. Workspace actions
+     Profile detail headings own the top back action and name; localized headings and status labels expose save/apply state without revision numbers. Workspace actions
      keep equal spacing between separators. Model connections groups a native search-provider dropdown with its secret field. Desktop-only changes apply without restarting. -->
 <template>
   <main class="settings-window">
     <div class="settings-window-shell settings-v2-layout" :inert="busy ? true : undefined">
       <aside class="settings-v2-sidebar">
         <div class="settings-v2-sidebar-brand">{{ t(displayLanguage, 'settings') }}</div>
-        <nav class="settings-v2-navigation" aria-label="设置导航">
+        <nav class="settings-v2-navigation" :aria-label="t(displayLanguage,'settingsNavigation')">
           <button v-for="item in sections" :key="item.key" type="button" class="settings-v2-nav-item" :aria-current="page===item.key?'page':undefined" @click="changePage(item.key)"><SettingsNavIcon :name="item.key" /><span>{{ item.label }}</span></button>
         </nav>
       </aside>
       <section class="settings-v2-content">
-        <header class="settings-v2-content-header"><h1>{{ sections.find(s=>s.key===page)?.label }}</h1></header>
+        <header class="settings-v2-content-header"><button v-if="page==='profiles' && editingName!==null" class="profile-back" :aria-label="t(displayLanguage,'pBack')" @click="profilesPage?.leaveDetail()"><Icon :icon="backIcon" /></button><h1>{{ sections.find(s=>s.key===page)?.label }}<template v-if="page==='profiles' && editingName!==null"> · {{ editingName }}</template></h1></header>
         <div ref="pageContainer" class="settings-page-container">
           <p v-if="error" role="alert" class="integration-error">{{ error }}</p>
-          <ProfilesPage v-if="page==='profiles'" ref="profilesPage" :display-language="displayLanguage" />
+          <ProfilesPage v-if="page==='profiles'" ref="profilesPage" :display-language="displayLanguage" @editing="editingName=$event" />
           <template v-else-if="draft && state">
             <form ref="settingsForm" @submit.prevent="save" @invalid.capture="revealInvalid">
               <section v-if="page==='model'" class="settings-page-section">
@@ -100,12 +100,16 @@
 import { computed, nextTick, onMounted, onBeforeUnmount, ref, watch } from 'vue';
 import { useAuraBotStore } from '../../app/store';
 import type { BusyState, DesktopConfig, SettingsState } from '../../shared/contracts/desktop';
+import {Icon} from '@iconify/vue';
+import solarIcons from '@iconify-json/solar/icons.json';
+const backIcon={...solarIcons.icons['arrow-left-linear'],width:24,height:24};
+const editingName=ref<string|null>(null);
 import ProfilesPage from '../profiles/ProfilesPage.vue';
 import SecretInput from './SecretInput.vue';
 import { t } from '../../i18n';
 import SettingsNavIcon, {type SettingsNavIconName} from './SettingsNavIcon.vue';
 const store=useAuraBotStore();
-const sections=computed<Array<{key:SettingsNavIconName;label:string}>>(()=>[{key:'model',label:t(displayLanguage.value,'modelConnections')},{key:'voice',label:'实时语音'},{key:'general',label:t(displayLanguage.value,'petStatus')},{key:'workspace',label:'工作目录'},{key:'profiles',label:'角色配置'}]);
+const sections=computed<Array<{key:SettingsNavIconName;label:string}>>(()=>[{key:'model',label:t(displayLanguage.value,'modelConnections')},{key:'voice',label:t(displayLanguage.value,'pVoice')},{key:'general',label:t(displayLanguage.value,'petStatus')},{key:'workspace',label:t(displayLanguage.value,'pWorkspaces')},{key:'profiles',label:t(displayLanguage.value,'pTitle')}]);
 const pageContainer=ref<HTMLElement>();
 const profilesPage=ref<InstanceType<typeof ProfilesPage>>();
 async function changePage(target:string){if(page.value==='profiles'&&target!=='profiles'&&!await profilesPage.value?.canLeave())return;page.value=target;await nextTick();if(pageContainer.value)pageContainer.value.scrollTop=0;}
@@ -178,4 +182,8 @@ onBeforeUnmount(()=>unsubscribe?.());
 .settings-dialog h2{font-size:18px;margin-top:0}.settings-dialog li{margin:12px 0;line-height:1.6}.settings-dialog button{margin:12px 12px 0 0}
 @media(max-width:800px){.settings-v2-layout{grid-template-columns:148px minmax(0,1fr)}.settings-v2-sidebar{padding:24px 8px}.settings-v2-sidebar-brand{padding-left:8px}.settings-v2-nav-item{gap:8px;padding:10px 8px}.settings-v2-content{padding:0 20px}.settings-v2-content-header{padding:24px 0 16px}.settings-page-field{grid-template-columns:1fr;gap:8px;margin:16px 0}.settings-save-bar{flex-wrap:wrap}.settings-save-bar span{min-width:150px}}
 @media(max-width:500px){.settings-v2-layout{display:flex;flex-direction:column}.settings-v2-sidebar{padding:12px;border-right:0;border-bottom:1px solid var(--aura-border);overflow:visible}.settings-v2-sidebar-brand{display:none}.settings-v2-navigation{display:flex;overflow:auto}.settings-v2-nav-item{width:auto;white-space:nowrap}.settings-v2-nav-item :deep(svg){display:none}.settings-v2-content{flex:1}}
+</style>
+
+<style scoped>
+.settings-v2-content-header{display:flex;align-items:center;justify-content:flex-start;gap:12px}.profile-back{display:grid;place-items:center;width:36px;height:36px;padding:6px;-webkit-app-region:no-drag}.profile-back svg{width:22px;height:22px}
 </style>

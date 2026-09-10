@@ -6,6 +6,7 @@ Token issuance only checks the active snapshot. Failed retirement blocks every a
 remaining owners close; completed shutdown steps are never repeated. Dormant Profiles own no active handles.
 """
 
+# SOUL remains complete; the bound includes the controlled name envelope above a 32 KiB document.
 from __future__ import annotations
 
 import asyncio
@@ -117,8 +118,8 @@ class ActiveProfileManager:
 
         identifier = self.validate_profile_id(profile_id)
         effective_soul = str(soul).strip()
-        if not effective_soul or len(effective_soul) > 32 * 1024:
-            raise ValueError("soul must be non-empty and at most 32 KiB")
+        if not effective_soul or len(effective_soul.encode("utf-8")) > 34 * 1024:
+            raise ValueError("soul_envelope_invalid")
         if type(revision) is not int or revision < 0:
             raise ValueError("invalid_revision")
         if model_version and (not isinstance(model_version, str) or not _PROFILE_ID.fullmatch(model_version)):

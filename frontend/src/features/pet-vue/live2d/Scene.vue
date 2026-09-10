@@ -16,6 +16,7 @@
         :view-transform="viewTransform"
         :zoom-request="zoomRequest"
         @interactive-change="(value) => emit('interactiveAreaChange', value)"
+        @playback-change="name=>emit('playbackChange',name)"
         @model-ready="() => emit('modelReady')"
         @error="message => emit('error', message)"
         @view-transform-change="(value) => emit('viewTransformChange', value)"
@@ -45,6 +46,7 @@ defineProps<{
 }>();
 
 const emit = defineEmits<{
+  playbackChange:[string];
   canvasReady: [HTMLCanvasElement];
   interactiveAreaChange: [boolean];
   modelReady: [];

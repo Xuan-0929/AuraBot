@@ -7,7 +7,7 @@ import { tmpdir } from 'node:os';
 import { join } from 'node:path';
 import Database from 'better-sqlite3';
 import { ProfileStorage } from '../../../../src/core/profiles/profileStorage';
-import { buildSoulPrompt } from '../../../../src/core/profiles/soulPrompt';
+import { legacySoulMarkdown } from '../../../../src/core/profiles/soulPrompt';
 const open: {root:string; storage:ProfileStorage}[]=[];
 function createStorage(prefix:string) {
  const root=mkdtempSync(join(tmpdir(),prefix));const storage=new ProfileStorage(join(root,'profile.sqlite3'));open.push({root,storage});
@@ -73,6 +73,6 @@ describe("ProfileStorage", () => {
 it('reopens current identity/persona and creates only profiles/souls tables',()=>{
  const storage=createStorage('aura-profile-schema-');const before=storage.getOrSeedActiveProfile();
  storage.updateActivePersonaSettings({...storage.getActivePersonaSettings(),name:'Auri',tone:'Quiet and direct'});const path=join(open[0].root,'profile.sqlite3');storage.close();
- const reopened=new ProfileStorage(path);open[0].storage=reopened;const profile=reopened.getOrSeedActiveProfile();expect(profile.id).toBe(before.id);expect(profile.createdAt).toBe(before.createdAt);expect(profile.displayName).toBe('Auri');expect(buildSoulPrompt(profile.soul)).toContain('Quiet and direct');
+ const reopened=new ProfileStorage(path);open[0].storage=reopened;const profile=reopened.getOrSeedActiveProfile();expect(profile.id).toBe(before.id);expect(profile.createdAt).toBe(before.createdAt);expect(profile.displayName).toBe('Auri');expect(legacySoulMarkdown(profile.soul,profile.displayName)).toContain('Quiet and direct');
  const db=new Database(path,{readonly:true});try{expect(db.prepare("select name from sqlite_master where type='table' order by name").all()).toEqual([{name:'profiles'},{name:'souls'}]);}finally{db.close();}
 });

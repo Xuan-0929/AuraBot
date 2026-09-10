@@ -78,5 +78,8 @@
       "perMachine": false,
       "allowToChangeInstallationDirectory": true
     }
+  },
+  "allowScripts": {
+    "better-sqlite3": true
   }
 }

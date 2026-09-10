@@ -1,5 +1,5 @@
 /** Exposes only typed desktop IPC; Pet delivery and command methods are checked by Main against its webContents.
- * Renderer has no filesystem or Memory API access. Every subscription has an explicit disposer.
+ * SOUL opening carries only a Profile identity. Renderer has no filesystem or Memory API access. Every subscription has an explicit disposer.
  */
 import { contextBridge, ipcRenderer } from 'electron';
 import { IPC_CHANNELS, type AuraBotApi } from '@shared/contracts/ipc';
@@ -9,7 +9,8 @@ function subscribe<T>(channel:string,listener:(value:T)=>void):()=>void {
 }
 const api:AuraBotApi={
  listProfiles:()=>ipcRenderer.invoke(IPC_CHANNELS.listProfiles),getProfile:id=>ipcRenderer.invoke(IPC_CHANNELS.getProfile,id),
- createProfile:name=>ipcRenderer.invoke(IPC_CHANNELS.createProfile,name),saveProfile:(id,input)=>ipcRenderer.invoke(IPC_CHANNELS.saveProfile,id,input),
+ openProfileSoul:(id,reveal)=>ipcRenderer.invoke(IPC_CHANNELS.openProfileSoul,id,reveal),
+ createProfile:(name,language)=>ipcRenderer.invoke(IPC_CHANNELS.createProfile,name,language),saveProfile:(id,input)=>ipcRenderer.invoke(IPC_CHANNELS.saveProfile,id,input),
  activateProfile:(id,force,applyOnly)=>ipcRenderer.invoke(IPC_CHANNELS.activateProfile,id,force,applyOnly),deleteProfile:id=>ipcRenderer.invoke(IPC_CHANNELS.deleteProfile,id),
  importProfileModel:id=>ipcRenderer.invoke(IPC_CHANNELS.importProfileModel,id),verifyProfileResources:(id,version,files)=>ipcRenderer.invoke(IPC_CHANNELS.verifyProfileResources,id,version,files),
  onProfilesChanged:listener=>subscribe(IPC_CHANNELS.profilesChanged,listener),getRealtimeToken:()=>ipcRenderer.invoke(IPC_CHANNELS.getRealtimeToken),

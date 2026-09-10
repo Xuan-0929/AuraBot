@@ -14,7 +14,7 @@ import { fileURLToPath } from 'node:url';
 import { _electron as electron, expect, test, type ElectronApplication, type Page } from '@playwright/test';
 
 const appRoot = resolve(dirname(fileURLToPath(import.meta.url)), '../..');
-const semantic = 'verified_gesture';
+let semantic = ''; // Runtime IDs are discovered after the user names the action.
 const firstText = ['第一分句已经交付。', '第二分句保持同一次表演。'];
 const secondText = ['新的调用可以重复动作。', '这一句仍属于第二次表演。'];
 test.setTimeout(150_000);
@@ -50,6 +50,7 @@ test('verified Profile ability reaches the real Pet once per SAY and stale Profi
   const offeredMotionEnums: string[][] = [];
   const offeredExpressionEnums: string[][] = [];
   const fixtureErrors: string[] = [];
+  const receivedSouls:string[]=[];
   const provider = createServer((request, response) => {
     let raw = '';
     request.setEncoding('utf8');
@@ -57,6 +58,7 @@ test('verified Profile ability reaches the real Pet once per SAY and stale Profi
     request.on('end', () => {
       try {
         const envelope = JSON.parse(raw);
+        receivedSouls.push(JSON.stringify(envelope.messages));
         const say = envelope.tools?.find((tool: { function?: { name?: string } }) => tool.function?.name === 'say_to_user');
         offeredMotionEnums.push(say?.function.parameters.properties.avatar.properties.motion.enum ?? []);
         offeredExpressionEnums.push(say?.function.parameters.properties.avatar.properties.expression.enum ?? []);
@@ -113,20 +115,20 @@ test('verified Profile ability reaches the real Pet once per SAY and stale Profi
       has: settings.getByRole('heading', { name: aName })
     });
     await aRow.getByRole('button', { name: '编辑', exact: true }).click();
-    await settings.getByLabel('打开独立预览').check();
+    await settings.getByLabel('SOUL',{exact:true}).fill('Companion. '.repeat(250)+'TAIL_RULE_COMPLETE_SOUL');
+    await settings.getByRole('tab',{name:'模型与动作',exact:true}).click();
     await expect(settings.locator('.avatar-preview .live2d-vue-model-anchor')).toHaveAttribute('data-avatar-state', 'ready', { timeout: 25_000 });
-    const resource = settings.locator('.profile-resource').filter({ hasText: 'motion ·' }).first();
-    const resourceFile = await resource.locator('code').innerText();
-    await resource.getByRole('button', { name: '预览 / 验证', exact: true }).click();
-    await expect(resource.getByText('motion · 已验证', { exact: true })).toBeVisible();
-    await resource.getByRole('button', { name: '添加语义标记', exact: true }).click();
-    await settings.getByLabel('稳定名称').fill(semantic);
-    await settings.getByLabel('稳定名称').blur();
-    await settings.getByLabel('用途说明').fill('已通过真实 SDK 预览确认的测试动作；名称只表示本测试选定的资源。');
-    await settings.getByLabel('向 Agent 开放').check();
+    const resource = settings.locator('.resource-row').first();
+    const resourceFile = await resource.locator('.resource-choice').getAttribute('title');
+    await resource.locator('.resource-choice').click();
+    await settings.getByLabel('名称',{exact:true}).fill('已验证的测试动作');
+    await settings.getByLabel('允许角色在对话中使用').check();
+    await settings.getByLabel('用途说明').fill('通过真实 SDK 预览确认的测试资源。');
     await settings.locator('.profile-save-bar').getByRole('button', { name: '保存', exact: true }).click();
     await expect(settings.locator('.profile-save-bar')).toContainText('已保存');
-    await settings.getByLabel('打开独立预览').uncheck();
+    const configured=await pet.evaluate(id=>window.aurabot.getProfile(id),a);
+    semantic=Object.keys(configured.saved.adaptor.entries).find(id=>configured.saved.adaptor.entries[id].agent_enabled)!;
+    await settings.getByRole('tab',{name:'角色',exact:true}).click();
     await expect(settings.locator('.avatar-preview canvas')).toHaveCount(0);
     await settings.locator('.profile-save-bar').getByRole('button', { name: '应用', exact: true }).click();
     await expect.poll(async () => (await pet.evaluate(() => window.aurabot.listProfiles())).runtime.capabilityNames?.motions,
@@ -144,6 +146,7 @@ test('verified Profile ability reaches the real Pet once per SAY and stale Profi
     await expect(anchor).toHaveAttribute('data-motion-starts', '1', { timeout: 15_000 });
     await expect.poll(async () => (await history(pet, a)).map(message => message.content))
       .toEqual(['请执行第一次测试表演。', firstText[0]]);
+    expect(receivedSouls[0]).toContain('TAIL_RULE_COMPLETE_SOUL');
     expect(offeredMotionEnums[0]).toEqual(['none', semantic]);
     // Hiyori has no expression files: the provider must only receive the application control value.
     expect(offeredExpressionEnums[0]).toEqual(['neutral']);
@@ -168,7 +171,7 @@ test('verified Profile ability reaches the real Pet once per SAY and stale Profi
     expect(fixtureErrors).toEqual([]);
 
     const aScope = (await pet.evaluate(() => window.aurabot.listProfiles())).runtime;
-    await settings.getByRole('button', { name: '← 角色列表', exact: true }).click();
+    await settings.getByRole('button', { name: '返回角色列表', exact: true }).click();
     await settings.getByRole('button',{name:'创建',exact:true}).click();
   await settings.getByLabel('新角色名称').fill('Avatar delivery B');
     await settings.getByRole('button', { name: '创建角色', exact: true }).click();
@@ -190,7 +193,7 @@ test('verified Profile ability reaches the real Pet once per SAY and stale Profi
     expect(rejection).toContain('已撤销的 Profile 交付');
     expect(await history(pet, bScope.activeId!)).toEqual([]);
     await expect(history(pet,a)).rejects.toThrow('历史 Profile 已切换');
-    await settings.getByRole('button',{name:'← 角色列表',exact:true}).click();
+    await settings.getByRole('button',{name:'返回角色列表',exact:true}).click();
     await aRow.getByRole('button', { name: '切换到此角色', exact: true }).click();
     await expect.poll(async()=>{const runtime=(await pet.evaluate(()=>window.aurabot.listProfiles())).runtime;return runtime.online&&runtime.activeId===a;},{timeout:25000}).toBe(true);
     expect((await history(pet, a)).map(message => message.content)).toEqual(expectedA);

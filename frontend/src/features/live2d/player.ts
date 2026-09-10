@@ -1,5 +1,6 @@
 /** Owns a resident Live2D instance's SDK sampling, composition and resource lifetime.
- * One Pixi ticker advances body, expression, output-lip envelope and physics. Preview and Pet create
+ * One Pixi ticker advances random resident rounds, body, expression, output-lip envelope and physics.
+ * Loaded resident snapshots are adopted atomically; SAY temporarily owns the expression override. Preview and Pet create
  * separate players; only versioned delivery events reach PerformanceDirector. Framework's high-level
  * motion/Idle scheduler is never run, and curve evaluation stays in the pinned Cubism Framework.
  */
@@ -10,21 +11,34 @@ import {avatarResourceUrl,emptyAvatarAdaptor} from '@shared/contracts/avatar';
 import {loadLive2DModel,removeAndDestroyLive2DModel,type Live2DModelRuntime} from './runtime';
 import {CubismSampler,type SampledClip} from './cubismSampler';
 import {PoseChannel,ease} from './poseChannel';
+import {ResidentScheduler} from './residentScheduler';
 import {PerformanceDirector,type PerformanceEvent} from './performance';
-export interface PlayerConfig {modelPath:string;adaptor?:AvatarAdaptor;profileId?:string;revision?:number;modelVersion?:string;generation?:number;}
+export interface PlayerConfig {modelPath:string;adaptor?:AvatarAdaptor;profileId?:string;revision?:number;modelVersion?:string;generation?:number;onPlaybackChange?:(name:string)=>void;}
 export const avatarInstances={created:0,destroyed:0,active:0};
 export class AvatarPlayer {
  readonly sampler:CubismSampler;
  readonly channel:PoseChannel;
- readonly diagnostics={updates:0,requests:0,starts:0,finishes:0,dropped:0,resourceErrors:0};
+ readonly diagnostics={updates:0,requests:0,starts:0,finishes:0,dropped:0,resourceErrors:0,residentDraws:0,residentStarts:0,residentFailures:0,residentStale:0};
  private director:PerformanceDirector;
  private generation:number;
  private clips=new Map<string,SampledClip>();
+ private failedResources=new Set<string>();
  private pending=new Map<string,Promise<SampledClip>>();
  private abort=new AbortController();
  private disposed=false;
  private state:AvatarState='idle';
  private stateEpoch=0;
+ private resident:ResidentScheduler;
+ private residentExpression?:SampledClip;
+ private residentClips=new Map<string,SampledClip>();
+ private residentEntries:Record<string,AvatarEntry>={};
+ private residentStates=emptyAvatarAdaptor().states;
+ private idleBaseline?:SampledClip;
+ private sayActive=false;
+ private previewActive=false;
+ private candidatePaused=false;
+ private expressionOwnedIds=new Set<string>();
+ private expressionSettling=false;
  private previewEpoch=0;
  private expression?:SampledClip;
  private expressionStart=0;
@@ -39,13 +53,13 @@ export class AvatarPlayer {
  private pinned=new Set<string>();
  private mouth=0;
  private mouthTarget=0;
- private rawLoop?:SampledClip;
  private wasGesture=false;
  adaptor:AvatarAdaptor;
- constructor(readonly app:Application,readonly model:Live2DModelRuntime,public config:PlayerConfig,sdk:any,private readonly onError:(message:string)=>void=()=>{}){
+ constructor(readonly app:Application,readonly model:Live2DModelRuntime,public config:PlayerConfig,sdk:any,private readonly onError:(message:string)=>void=()=>{},private readonly random:()=>number=Math.random){
   this.configFingerprint=JSON.stringify(config.adaptor??emptyAvatarAdaptor());this.adaptor=config.adaptor??emptyAvatarAdaptor();this.generation=config.generation??0;
   this.sampler=new CubismSampler(model.internalModel.coreModel,sdk);this.channel=new PoseChannel(this.sampler.rest);
   this.expressionFrom=this.sampler.rest.map(()=>0);this.expressionDelta=this.expressionFrom.slice();this.expressionBase=this.sampler.rest.slice();this.expressionTarget=this.sampler.rest.slice();
+  this.resident=new ResidentScheduler(id=>this.startResident(id),random);
   this.director=this.makeDirector();model.autoUpdate=false;
   app.stage.addChild(model as unknown as DisplayObject);app.ticker.add(this.tick,this,UPDATE_PRIORITY.HIGH);
   avatarInstances.created++;avatarInstances.active++;
@@ -53,21 +67,50 @@ export class AvatarPlayer {
  async configure(config:PlayerConfig){
   const fingerprint=JSON.stringify(config.adaptor??emptyAvatarAdaptor());
   if(this.config.revision===config.revision&&this.configFingerprint===fingerprint){this.setGeneration(config.generation??this.generation);return;}
-  this.configFingerprint=fingerprint;this.stateEpoch++;
-  this.director.clear();this.config=config;this.adaptor=config.adaptor??emptyAvatarAdaptor();this.generation=config.generation??this.generation;this.director=this.makeDirector();
+  this.configFingerprint=fingerprint;this.stateEpoch++;this.failedResources.clear();
+  this.director.clear();this.candidatePaused=false;this.syncResidentPause();this.config=config;this.adaptor=config.adaptor??emptyAvatarAdaptor();this.generation=config.generation??this.generation;this.director=this.makeDirector();
   await this.prepare();
  }
- private makeDirector(){return new PerformanceDirector({profile_id:this.config.profileId??'',generation:this.generation,config_revision:this.config.revision??0},{start:avatar=>this.perform(avatar),finish:()=>{this.channel.cancel();this.setExpression(undefined,150);},level:value=>{this.mouthTarget=value;},voice:owned=>{this.voiceOwned=owned;}});}
- setGeneration(generation:number){if(this.generation===generation)return;this.director.clear();this.generation=generation;this.director=this.makeDirector();}
- accept(event:PerformanceEvent){if(this.disposed)return;try{this.director.accept(event);}catch{this.diagnostics.dropped++;}}
+ private makeDirector(){return new PerformanceDirector({profile_id:this.config.profileId??'',generation:this.generation,config_revision:this.config.revision??0},{start:avatar=>{this.sayActive=true;this.syncResidentPause();this.perform(avatar);},finish:()=>{this.channel.cancel();this.sayActive=false;this.candidatePaused=false;this.syncResidentPause();this.setExpression(this.residentExpression,this.residentFade(this.residentExpression));},level:value=>{this.mouthTarget=value;},voice:owned=>{this.voiceOwned=owned;}});}
+ setGeneration(generation:number){if(this.generation===generation)return;this.director.clear();this.candidatePaused=false;this.generation=generation;this.director=this.makeDirector();this.syncResidentPause();}
+ accept(event:PerformanceEvent){if(this.disposed)return;try{if(event.type==='pause')this.candidatePaused=true;else if(event.type==='resume'||event.type==='reset')this.candidatePaused=false;this.syncResidentPause();this.director.accept(event);}catch{this.diagnostics.dropped++;}}
+ private syncResidentPause(){this.resident.pause(this.sayActive||this.previewActive||this.candidatePaused);}
  async prepare(){
-  const names=[this.adaptor.states.idle,...Object.values(this.adaptor.states),...Object.entries(this.adaptor.entries).filter(([,entry])=>entry.agent_enabled).map(([name])=>name)];
-  this.pinned=new Set(names.filter((name):name is string=>Boolean(name)).map(name=>{const entry=this.adaptor.entries[name];return entry?this.clipKey(entry.source.file,entry.kind,entry):'';}));
+  const epoch=++this.stateEpoch;const adaptor=JSON.parse(JSON.stringify(this.adaptor)) as AvatarAdaptor;
+  const names=[...Object.values(adaptor.states).flat(),...Object.entries(adaptor.entries).filter(([,entry])=>entry.agent_enabled).map(([name])=>name)];
+  this.pinned=new Set(names.map(name=>{const entry=adaptor.entries[name];return entry?this.clipKey(entry.source.file,entry.kind,entry):'';}));
+  const available=new Map<string,SampledClip>();
   for(const name of new Set(names)){
-   if(this.disposed)return;if(!name)continue;const entry=this.adaptor.entries[name];if(!entry)continue;
-   try{await this.load(entry.source.file,entry.kind,entry);}catch(error){this.report(error);}
+   if(this.disposed||epoch!==this.stateEpoch){this.diagnostics.residentStale++;return;}
+   const entry=adaptor.entries[name];if(!entry||!adaptor.validated_resources?.includes(entry.source.file))continue;
+   const key=this.clipKey(entry.source.file,entry.kind,entry);if(this.failedResources.has(key))continue;
+   try{const clip=await this.load(entry.source.file,entry.kind,entry);available.set(name,clip);}catch(error){if(this.disposed||epoch!==this.stateEpoch){this.diagnostics.residentStale++;return;}this.failedResources.add(key);this.diagnostics.residentFailures++;this.report(error);}
   }
-  await this.setState(this.state);
+  if(this.disposed||epoch!==this.stateEpoch){this.diagnostics.residentStale++;return;}
+  this.residentClips=available;this.residentEntries=adaptor.entries;this.residentStates=adaptor.states;
+  // Scheduling compares resource identity as well as timing, without retaining SDK evaluators itself.
+  const candidates=new Map([...available].map(([id,clip])=>{const entry=adaptor.entries[id]!;return [id,{identity:this.clipKey(entry.source.file,entry.kind,entry),kind:clip.kind,durationMs:clip.durationMs,fadeInMs:clip.fadeInMs,fadeOutMs:clip.fadeOutMs}] as const;}));
+  this.resident.configure(adaptor.states,candidates);
+  this.resident.setState(this.state);
+ }
+ private startResident(name:string|undefined){
+  if(this.disposed)return;
+  this.diagnostics.residentDraws++;
+  const entry=name?this.residentEntries[name]:undefined;
+  const clip=name?this.residentClips.get(name):undefined;
+  if(clip){
+   this.diagnostics.residentStarts++;
+   if(clip.kind==='motion'){
+    this.residentExpression=undefined;this.setExpression(undefined,this.residentFade());this.channel.setBaseline(clip,true);
+    if(name&&this.residentStates.idle.includes(name))this.idleBaseline=clip;
+   }else{
+    const idle=this.residentStates.idle.map(id=>this.residentClips.get(id)).filter(c=>c?.kind==='motion').filter((c):c is SampledClip=>!!c);
+    if(!this.idleBaseline||!idle.includes(this.idleBaseline))this.idleBaseline=idle[Math.min(idle.length-1,Math.floor(Math.max(0,this.random())*idle.length))];
+    this.channel.setBaseline(this.idleBaseline);this.residentExpression=clip;this.setExpression(clip,this.residentFade(clip));
+   }
+  }else{this.residentExpression=undefined;this.channel.setBaseline(undefined);this.setExpression(undefined,this.residentFade());}
+  const label=name&&this.adaptor.entries[name]?.source.file===entry?.source.file?this.adaptor.entries[name]?.display_name:entry?.display_name;
+  this.config.onPlaybackChange?.(label||name||'');
  }
  private url(file:string){
   if(this.config.profileId&&this.config.modelVersion)return avatarResourceUrl(this.config.profileId,this.config.modelVersion,file);
@@ -85,8 +128,8 @@ export class AvatarPlayer {
    const text=await response.text();if(text.length>4*1024*1024)throw new Error('动画资源超过 4 MiB');
    const clip=this.sampler.create(JSON.parse(text),kind,entry?.playback);
    if(this.disposed)throw new Error('预览已关闭');
-   // Enabled entries and four state resources fit below this bound; raw preview is an LRU tail.
-   if(this.clips.size>=48){const first=[...this.clips.keys()].find(key=>!this.pinned.has(key));if(first)this.clips.delete(first);}
+   // At most 64 configured resources plus a 16-item raw-preview LRU tail.
+   if(this.clips.size>=80){const first=[...this.clips.keys()].find(key=>!this.pinned.has(key));if(first)this.clips.delete(first);}
    this.clips.set(key,clip);return clip;
   })();this.pending.set(key,promise);
   try{return await promise;}finally{this.pending.delete(key);}
@@ -97,11 +140,9 @@ export class AvatarPlayer {
   return this.clips.get(`${kind}:${entry.source.file}:${JSON.stringify(entry.playback)}`);
  }
  async setState(state:AvatarState){
-  const previous=this.state;this.state=state;
-  if(previous===state&&this.channel.elapsedMs>0&&this.rawLoop)return;
-  const epoch=++this.stateEpoch;const name=this.adaptor.states[state]??this.adaptor.states.idle;const entry=name?this.adaptor.entries[name]:undefined;
-  if(!entry){this.channel.setBaseline(undefined);return;}
-  try{const clip=await this.load(entry.source.file,'motion',entry);if(this.disposed||epoch!==this.stateEpoch)return;this.rawLoop=undefined;this.channel.setBaseline(clip);}catch(error){this.report(error);}
+  if(this.disposed)return;
+  this.state=state;this.resident.setState(state);
+  if(this.previewActive){this.previewEpoch++;this.channel.cancel();this.resident.restart();this.previewActive=false;this.syncResidentPause();}
  }
  perform(avatar:AvatarInstruction){
   if(avatar.motion&&avatar.motion!=='none'){
@@ -112,21 +153,31 @@ export class AvatarPlayer {
   else if(avatar.expression){const expression=this.readyEntry(avatar.expression,'expression');if(expression)this.setExpression(expression);else this.diagnostics.dropped++;}
  }
  async play(input:{motion?:string;expression?:string;loop?:boolean}){
-  const epoch=++this.previewEpoch;
-  const motion=input.motion?await this.load(input.motion,'motion'):undefined;
-  const expression=input.expression?await this.load(input.expression,'expression'):undefined;
-  if(this.disposed||epoch!==this.previewEpoch)return;
-  if(motion){this.diagnostics.requests++;this.diagnostics.starts++;if(input.loop){this.rawLoop=motion;this.channel.setBaseline(motion);}else this.channel.play(motion);}
-  this.setExpression(expression);
+  const epoch=++this.previewEpoch;this.previewActive=true;this.syncResidentPause();
+  try{
+   const motion=input.motion?await this.load(input.motion,'motion'):undefined;
+   const expression=input.expression?await this.load(input.expression,'expression'):undefined;
+   if(this.disposed||epoch!==this.previewEpoch)return;
+   if(motion){this.diagnostics.requests++;this.diagnostics.starts++;if(input.loop){this.channel.setBaseline(motion);}else this.channel.play(motion);}
+   this.setExpression(expression);
+  }catch(error){if(!this.disposed&&epoch===this.previewEpoch){this.previewActive=false;this.syncResidentPause();}throw error;}
  }
- stop(){this.previewEpoch++;this.rawLoop=undefined;this.channel.cancel();this.setExpression(undefined);void this.setState('idle');}
+ stop(){this.previewEpoch++;this.previewActive=false;this.channel.cancel();this.state='idle';this.resident.pause(true);this.resident.setState('idle');this.resident.restart();this.syncResidentPause();this.setExpression(this.residentExpression,this.residentFade(this.residentExpression));}
+ private residentFade(clip?:SampledClip){return Math.min(5000,Math.max(250,clip?.fadeInMs??0,this.expression?.fadeOutMs??0));}
  private setExpression(clip:SampledClip|undefined,fade?:number){
   if(this.expression===clip)return;
+  this.expressionSettling=true;
+  for(const id of this.expression?.ids??[])this.expressionOwnedIds.add(id);for(const id of clip?.ids??[])this.expressionOwnedIds.add(id);
   this.expressionFrom.set(this.expressionDelta);this.expressionFade=fade??(clip?.fadeInMs??this.expression?.fadeOutMs??200);this.expression=clip;this.expressionStart=this.channel.elapsedMs;
  }
  private tick=()=>this.advance(this.app.ticker.deltaMS);
  advance(deltaMs:number){
-  if(this.disposed)return;
+  if(this.disposed||!Number.isFinite(deltaMs)||deltaMs<=0)return;
+  // Substeps share one clock; include resident boundaries exactly at every display refresh rate.
+  let remaining=Math.min(deltaMs,100);
+  while(remaining>1e-7){const step=Math.min(remaining,1000/120,this.resident.remaining);this.advanceStep(step);remaining-=step;this.resident.advance(step);}
+ }
+ private advanceStep(deltaMs:number){
   try{
    this.director.advance(deltaMs);
    const dt=this.channel.advance(deltaMs);if(!dt)return;
@@ -155,14 +206,15 @@ export class AvatarPlayer {
    if(mouthIndex>=0&&lipOwned)core.setParameterValueByIndex(mouthIndex,this.mouth);
    for(let remaining=dt;remaining>0;){const step=Math.min(1000/60,remaining);internal.physics?.evaluate(core,step/1000);internal.pose?.updateParameters(core,step/1000);remaining-=step;}
    // Expression eye closure and TTS opening have final ownership over conflicting physics curves.
-   if(this.expression)for(const id of ['ParamEyeLOpen','ParamEyeROpen'])if(this.expression.ids.has(id)){const i=this.sampler.index(id);if(i>=0)core.setParameterValueByIndex(i,this.expressionTarget[i]);}
+   for(const id of ['ParamEyeLOpen','ParamEyeROpen'])if(this.expressionOwnedIds.has(id)){const i=this.sampler.index(id);if(i>=0)core.setParameterValueByIndex(i,this.expressionTarget[i]);}
    if(mouthIndex>=0&&lipOwned)core.setParameterValueByIndex(mouthIndex,this.mouth);
+   if(weight>=1&&this.expressionSettling){this.expressionOwnedIds.clear();for(const id of this.expression?.ids??[])this.expressionOwnedIds.add(id);this.expressionSettling=false;}
    core.update();this.diagnostics.updates++;
    if(this.wasGesture&&!this.channel.activeGesture)this.diagnostics.finishes++;this.wasGesture=this.channel.activeGesture;
   }catch(error){this.report(error);this.channel.cancel();this.setExpression(undefined);}
  }
  private report(error:unknown){this.diagnostics.resourceErrors++;if(this.diagnostics.resourceErrors<=5)this.onError(error instanceof Error?error.message:'动画不可用');}
- dispose(){if(this.disposed)return;this.disposed=true;this.abort.abort();this.director.clear();this.previewEpoch++;this.stateEpoch++;this.app.ticker.remove(this.tick,this);this.clips.clear();this.pending.clear();removeAndDestroyLive2DModel(this.app,this.model);avatarInstances.destroyed++;avatarInstances.active--;}
+ dispose(){if(this.disposed)return;this.disposed=true;this.abort.abort();this.director.clear();this.previewEpoch++;this.stateEpoch++;this.app.ticker.remove(this.tick,this);this.clips.clear();this.residentClips.clear();this.pending.clear();removeAndDestroyLive2DModel(this.app,this.model);avatarInstances.destroyed++;avatarInstances.active--;}
 }
 export async function createAvatarPlayer(app:Application,config:PlayerConfig,onError?:(message:string)=>void):Promise<AvatarPlayer>{
  const model=await loadLive2DModel(config.modelPath);

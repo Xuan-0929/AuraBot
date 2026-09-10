@@ -63,7 +63,7 @@ it('crossfades real parameter and part tracks without inserting default pose and
  const baseline=sampler.create(constantMotion([{target:'Parameter',id:'ParamAngleX',value:4}],4),'motion',{fade_in_ms:200,fade_out_ms:200});
  const gesture=sampler.create(constantMotion([{target:'Parameter',id:'ParamAngleX',value:15},{target:'Parameter',id:'ParamAngleY',value:20},{target:'PartOpacity',id:core._partIds[0],value:0.2}],0.5),'motion',{fade_in_ms:200,fade_out_ms:200});
  expect(gesture.fadeInMs).toBe(200);expect(gesture.fadeOutMs).toBe(200);
- const channel=new PoseChannel(sampler.rest);channel.setBaseline(baseline);for(let i=0;i<10;i++)channel.advance(20);
+ const channel=new PoseChannel(sampler.rest);channel.setBaseline(baseline);for(let i=0;i<13;i++)channel.advance(20);
  expect(channel.pose[angleX]).toBeCloseTo(4);const entryPose=channel.pose.slice();channel.play(gesture);expect(channel.pose).toEqual(entryPose);
  channel.advance(1);expect(Math.abs(channel.pose[angleX]!-entryPose[angleX]!)).toBeLessThan(0.01);
  for(let i=0;i<10;i++)channel.advance(20);expect(channel.pose[angleX]).toBeCloseTo(15);expect(channel.pose[angleY]).toBeCloseTo(20);expect(channel.pose[part]).toBeCloseTo(0.2);
@@ -81,7 +81,7 @@ it('lets a new real gesture take ownership mid-motion beyond the old completion 
  const baseline=sampler.create(constantMotion([{target:'Parameter',id:'ParamAngleX',value:4}],4),'motion',{fade_in_ms:200,fade_out_ms:200});
  const old=sampler.create(constantMotion([{target:'Parameter',id:'ParamAngleX',value:15},{target:'Parameter',id:'ParamAngleY',value:20},{target:'PartOpacity',id:core._partIds[0],value:0.2}],0.5),'motion',{fade_in_ms:200,fade_out_ms:200});
  const next=sampler.create(constantMotion([{target:'Parameter',id:'ParamAngleX',value:-8}],1.2),'motion',{fade_in_ms:200,fade_out_ms:200});
- const channel=new PoseChannel(sampler.rest);channel.setBaseline(baseline);for(let i=0;i<10;i++)channel.advance(20);channel.play(old);for(let i=0;i<15;i++)channel.advance(20);
+ const channel=new PoseChannel(sampler.rest);channel.setBaseline(baseline);for(let i=0;i<13;i++)channel.advance(20);channel.play(old);for(let i=0;i<15;i++)channel.advance(20);
  const before=channel.pose.slice();channel.play(next);expect(channel.pose).toEqual(before);channel.advance(1);expect(Math.abs(channel.pose[x]!-before[x]!)).toBeLessThan(0.01);
  for(let i=0;i<20;i++)channel.advance(20);
  expect(channel.activeGesture).toBe(true);expect(channel.pose[x]).toBeCloseTo(-8);expect(channel.pose[y]).toBeCloseTo(sampler.rest[y]!);expect(channel.pose[part]).toBeCloseTo(sampler.rest[part]!);

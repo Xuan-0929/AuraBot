@@ -1,7 +1,7 @@
 """Compile one verified Profile adaptor into immutable, bounded Main Agent capabilities.
 
 Electron owns configuration and SDK verification; this boundary validates execution semantics and file
-ownership again before activation. The same frozen capability record supplies provider enums, descriptions,
+ownership and natural-language display names again before activation. The same frozen capability record supplies provider enums, descriptions,
 and optional avatar validation, so visual failures never discard an otherwise valid SAY text envelope.
 """
 from __future__ import annotations
@@ -58,7 +58,7 @@ class AvatarCapabilities:
     def compile(cls, adaptor: Any, *, profile_id: str = "", revision: int = 0, live2d_root: Path | None = None) -> "AvatarCapabilities":
         if not isinstance(adaptor, Mapping):
             raise ValueError("invalid_adaptor")
-        if type(adaptor.get("schema_version")) is not int or adaptor["schema_version"] != 1:
+        if type(adaptor.get("schema_version")) is not int or adaptor["schema_version"] not in (1, 2):
             raise ValueError("unsupported_adaptor_schema")
         if type(adaptor.get("revision")) is not int or adaptor["revision"] < 1 or (revision and adaptor["revision"] != revision):
             raise ValueError("adaptor_revision_mismatch")
@@ -93,6 +93,9 @@ class AvatarCapabilities:
             description = entry.get("description", "")
             if not isinstance(description, str) or len(description) > DESCRIPTION_LIMIT:
                 raise ValueError("invalid_description")
+            display_name = entry.get("display_name", name)
+            if not isinstance(display_name, str) or not display_name.strip() or len(display_name) > 128:
+                raise ValueError("invalid_display_name")
             source = entry.get("source", {})
             file = source.get("file") if isinstance(source, Mapping) else None
             if not isinstance(file, str) or not _safe_reference(file):
@@ -111,13 +114,29 @@ class AvatarCapabilities:
             if live2d_root is not None:
                 available = available and _owned_file(live2d_root, file)
             if enabled and available:
-                (motions if kind == "motion" else expressions).append((name, description))
+                (motions if kind == "motion" else expressions).append((name, display_name + (": " + description if description else "")))
         states = adaptor.get("states", {})
         if not isinstance(states, Mapping) or set(states) - {"idle", "listening", "thinking", "speaking"}:
             raise ValueError("invalid_states")
+        if adaptor["schema_version"] == 2 and set(states) != {"idle", "listening", "thinking", "speaking"}:
+            raise ValueError("invalid_states")
+        total = 0
         for value in states.values():
-            if value is not None and (not isinstance(value, str) or value not in entries or entries[value].get("kind") != "motion" or entries[value].get("playback", {}).get("mode") != "loop"):
+            if adaptor["schema_version"] == 1:
+                if value is not None and not isinstance(value, str):
+                    raise ValueError("invalid_state_binding")
+                value = [] if value is None else [value]
+            if not isinstance(value, list) or len(value) > 8 or any(not isinstance(name, str) for name in value):
                 raise ValueError("invalid_state_binding")
+            if len(set(value)) != len(value):
+                raise ValueError("invalid_state_binding")
+            total += len(value)
+            for name in value:
+                entry = entries.get(name)
+                if entry is None or (entry.get("kind"), entry.get("playback", {}).get("mode")) not in {("motion", "loop"), ("expression", "hold")}:
+                    raise ValueError("invalid_state_binding")
+        if total > 32:
+            raise ValueError("state_binding_limit")
         return cls(profile_id, revision, tuple(motions), tuple(expressions), model_available)
 
 

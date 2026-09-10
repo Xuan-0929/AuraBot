@@ -1,3 +1,4 @@
+// Navigation assertions use the current model-connections product label.
 // Validates saved/applied status labels and the pet status settings navigation.
 /** Runs the real Electron windows, Python child and SQLite delivery path with isolated application data.
  * A local deterministic Chat Completions server checks transport integration without claiming real model,
@@ -44,7 +45,7 @@ test('fresh desktop renders Hiyori, exposes unavailable models and applies saved
   await settings.getByRole('button',{name:'应用',exact:true}).click();
   await expect(settings.getByRole('status')).toHaveText('已应用');
   expect((await status()).processId).toBe(initial.processId);
-  await settings.getByRole('button',{name:'模型',exact:true}).click();
+  await settings.getByRole('button',{name:'模型接入',exact:true}).click();
   await settings.getByLabel('模型名称',{exact:true}).first().fill('unconfigured-smoke');
   await settings.getByRole('button',{name:'保存',exact:true}).click();
   await expect(settings.getByRole('status')).toHaveText('已保存');
@@ -52,7 +53,10 @@ test('fresh desktop renders Hiyori, exposes unavailable models and applies saved
   await expect(settings.getByRole('status')).toHaveText('已应用',{timeout:40000});
   expect((await status()).processId).not.toBe(initial.processId);
   const consolePromise=electronApp.waitForEvent('window');await pet.evaluate(()=>window.aurabot.openConsoleWindow());const consolePage=await consolePromise;
-  await expect(consolePage.getByRole('complementary',{name:'任务',exact:true})).toBeVisible();
+  const taskToggle=consolePage.getByRole('button',{name:'展开任务列表',exact:true});
+  await expect(taskToggle.or(consolePage.getByRole('complementary',{name:'任务',exact:true})).first()).toBeVisible();
+  if(await taskToggle.isVisible()){await taskToggle.click();await expect(consolePage.getByRole('dialog')).toBeVisible();await consolePage.keyboard.press('Escape');}
+  else await expect(consolePage.getByRole('complementary',{name:'任务',exact:true})).toBeVisible();
   await consolePage.locator('textarea').fill('未配置模型时不应记录成功');await consolePage.locator('textarea').press('Enter');
   await expect(consolePage.getByRole('alert')).toContainText('模型尚未配置');
   expect((await pet.evaluate(()=>window.aurabot.getHistory())).messages).toEqual([]);

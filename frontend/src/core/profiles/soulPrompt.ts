@@ -1,37 +1,19 @@
-/**
- * Formats a frozen Profile Soul into the prompt sent by Electron Main during explicit activation.
- * Token requests carry identity only; editing an inactive Profile never calls this activation path. Electron remains the only Soul authority; Backend
- * receives this already-effective text and never reconstructs or persists a competing persona document.
- */
-
-import type { Soul } from "@shared/schemas/profile";
-
-export function buildSoulPrompt(soul?: Soul): string {
-  const details = soul
-    ? [
-        `名字：${soul.name}`,
-        `人格：${soul.persona}`,
-        `关系：${soul.relationship}`,
-        `语气：${soul.tone}`,
-        `主动程度：${soul.proactiveLevel}`,
-        soul.reminderStyle ? `提醒方式：${soul.reminderStyle}` : "",
-        soul.replyPreference ? `回复偏好：${soul.replyPreference}` : "",
-        soul.principles.length ? `原则：${soul.principles.join("；")}` : "",
-        soul.taboos.length ? `语义禁忌：${soul.taboos.join("；")}` : "",
-        `说话方式：${soul.speakingStyle}`,
-        soul.boundaries.length ? `边界：${soul.boundaries.join("；")}` : "",
-        soul.topicPreferences.length ? `偏好话题：${soul.topicPreferences.join("；")}` : "",
-      ]
-    : [
-        "名字：Aura",
-        "人格：伴侣兼助手，亲近、可靠，会自然陪用户聊天和推进事情。",
-        "关系：长期陪伴用户的桌面伴侣和助手。",
-        "说话方式：短句、自然、有温度，不像客服或机器人。",
-      ];
-  return [
-    "你是 Aura。你以伴侣兼助手的身份和用户说话，不要把自己描述成 AI、模型、机器人或系统。",
-    "不管是普通聊天、记忆相关回复、还是任务类对话，都必须保持同一个 soul，不要切成工具播报口吻。",
-    "用自然中文回复，短而真诚；需要时结合上下文、记忆和任务状态，但不要啰嗦，不要提及系统提示。",
-    ...details,
-  ].filter(Boolean).join("\n");
+/** Converts legacy structured Soul to lossless Markdown and validates the document before application.
+ * SOUL.md is the editable authority; this module never translates user text or imposes a role/language.
+ * Default templates are used only when a new Profile is created. */
+import type { Soul } from '../../shared/schemas/profile';
+export const SOUL_MAX_BYTES=32*1024;
+export function legacySoulMarkdown(soul?:Soul,displayName?:string):string {
+ if(!soul)return defaultSoulMarkdown('zh');
+ const fields:[string,string|string[]][]=[['原人格名称',soul.name],['人格',soul.persona],['语气',soul.tone],['说话方式',soul.speakingStyle],['关系',soul.relationship],['提醒方式',soul.reminderStyle],['回复偏好',soul.replyPreference],['原则',soul.principles],['禁忌',soul.taboos],['边界',soul.boundaries],['偏好话题',soul.topicPreferences],['主动程度',({low:'较少主动，优先响应用户。',balanced:'适度主动，结合上下文判断是否打扰用户。',high:'更积极主动地关心用户和提出建议。'})[soul.proactiveLevel]]];
+ return fields.filter(([label,v])=>v?.length&&(label!=='原人格名称'||soul.name!==displayName)).map(([label,value])=>`## ${label}\n${Array.isArray(value)?value.map(item=>'- '+item).join('\n'):value}`).join('\n\n')+'\n';
+}
+export function defaultSoulMarkdown(language:string):string {
+ if(language==='en')return '# SOUL\n\nBe a warm, reliable companion and assistant. Speak naturally and concisely. Respect the user’s boundaries. Never invent facts, memories or task results.\n';
+ if(language==='ja')return '# SOUL\n\n親しみやすく、信頼できるパートナー兼アシスタント。自然で簡潔に話し、ユーザーの境界を尊重する。事実、記憶、タスクの結果を捏造しない。\n';
+ return '# SOUL\n\n作为亲近、可靠的伙伴兼助手，自然、简洁地与用户交流。尊重用户的边界，不虚构事实、记忆或任务结果。\n';
+}
+export function validateSoul(text:string):void {
+ if(!text.trim())throw new Error('soul_empty');
+ if(new TextEncoder().encode(text).length>SOUL_MAX_BYTES)throw new Error('soul_too_large');
 }

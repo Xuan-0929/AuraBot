@@ -1,16 +1,17 @@
 # Profile 与 Live2D 表演系统
 
-本页描述 2026-09-08 重构后的生产路径。旧 motion queue、状态 watcher 选片和全参数 smoothing 已移除。Profile 配置不再由全局 persona 与 Soul SQLite 同时维护。
+本页描述截至 2026-09-10 的角色编辑与表演生产路径。旧 motion queue、状态 watcher 选片和全参数 smoothing 已移除。Profile 配置不再由全局 persona 与 Soul SQLite 同时维护。
 
 ## 使用入口
 
-设置窗口 → **Profile 管理**。可以创建、打开详情、重命名、显式激活和删除 Profile。详情页独立编辑结构化 Soul、查看 Memory 归属、导入模型、预览及标记资源。查看 B 不会激活 B。
+设置窗口 → **角色配置**。当前角色在列表顶部用浅绿色底色标记；通过“切换到此角色”明确切换，查看或预览其他角色不会改变当前会话。
 
-1. 导入完整模型文件夹；有多个 `.model3.json` 时选择入口。资源复制到 Profile 自有包，保留原目录和许可文件。
-2. 打开预览，逐项播放真实 motion/expression。没有表情的模型显示“无预设表情”。内置 Hiyori 有 10 个动作，没有预设表情；系统不猜测文件语义。
-3. 为预览验证通过的资源设置稳定语义名称、说明、播放类型及 Agent 开关。可配置待机和 listening/thinking/speaking 基线，预览单项、组合、循环及状态切换。
-4. **保存**提交当前编辑；**应用**在会话边界更新当前 Profile。未激活 Profile 需要显式激活。离开未保存页面时选择保存、放弃或继续编辑。
-5. “读取播放诊断”按需展示当前预览实例和更新计数，不逐帧更新 Vue。关闭预览或离开详情即释放该实例。
+- 顶部箭头返回列表，标题显示角色名称。“角色”页签只有统一名称和一个 SOUL 编辑框；Memory 与 ID 放在折叠信息中。
+- “模型与动作”页签自动打开独立预览。左侧人偶、右侧可滚动资源列表与就地编辑区；窄窗口上下排列，资源区独立滚动。
+- 导入完整模型文件夹，有多个 `.model3.json` 时选择入口。复制自有资源包，保留目录和许可文件。逐项预览后填写自然语言名称与用途，开启“允许角色在对话中使用”或设为默认待机。
+- 右侧“常驻”页签独占待机、聆听、思考和说话的多选候选池配置，动作与表情混合随机；动作／表情条目的高级设置仅保留 fade 与资源文件。组合预览入口已移除。没有表情素材时显示“无预设表情”；Hiyori 的动作编号不被自动翻译成语义。
+- **保存**只保存文件，**应用**在会话边界生效。离开脏页面时选择保存、放弃或继续编辑。切换页签保留草稿，离开模型页签立即释放预览实例。
+- 界面文字支持中文、英文、日文。用户的 SOUL、名称和动作说明不会随界面语言翻译；新角色使用创建时界面语言的 SOUL 模板。
 
 ## 数据与所有权
 
@@ -19,7 +20,8 @@
   index.json                       # 选中 ID；不包含人格/记忆
   <stable_profile_id>/
     profile.json                           # 身份、统一 revision、模型版本
-    soul.json                              # 完整结构化 Soul
+    SOUL.md                                # 唯一可编辑的人格正文
+    .soul-v1-backup/                        # 旧结构化配置和应用快照备份
     applied.json                           # 最近应用的冻结恢复快照
     context.sqlite3                        # Backend 独占
     memory/
@@ -37,6 +39,25 @@ Electron 只读写配置、资源及已交付历史，不修改 Memory SQLite/Qd
 保存使用临时文件和可重放 journal；同内容不递增 revision。Soul 与 adaptor 共用 revision，保存不改变正在进行的 invoke。模型包保留已保存/已应用版本，以免替换或预览释放影响旧实例；当前实现保守保留历史包，尚不自动垃圾回收。
 
 首次迁移在旧全局设置回写之前进行：使用 SQLite backup 保留 WAL；保留原 Profile ID/Soul、有效未应用 persona 编辑和原 Context。Memory 迁移在取得与 Qdrant 相同的排他锁后复制到 `memory/`，验证后原子提交。原存储、备份和完成标记保留；重复启动不会重复导入。未知归属历史留在 legacy 分区，不复制给新 Profile。迁移失败不会删除来源。
+
+## SOUL 文件与外部编辑
+
+`SOUL.md` 是 UTF-8 Markdown 原文；页面、“打开 SOUL.md”及“在文件夹中显示”均指向同一 Profile 文件。IPC 只接受 Profile ID，不暴露任意文件读写。当前已应用的正文保存在冻结恢复快照中，外部保存不会立即改变对话。
+
+进入详情、窗口重新获得焦点及应用前读取文件指纹，没有后台轮询。外部变更产生一个新的保存 revision。无页面草稿时自动载入并提示待应用；有草稿时展示双方文本，选择载入磁盘或保留草稿后继续。保存携带期望指纹，过期写入被拒绝。
+
+新格式迁移备份 `profile.json`、`soul.json`、`applied.json` 和旧 journal，完整转换所有旧人格字段；已有 `SOUL.md` 优先保留。保存和应用版本分别转换，不触碰 Context/Memory。旧文件仅用于备份，不再写回。原人格名称和显示名的差异保留在 Markdown 中供用户整理。
+
+SOUL 可保存为空草稿，但应用要求非空且 UTF-8 正文不超过 32 KiB。外部超限文件可读取、缩短；迁移不截断它。后端完整保留正文，取消原 2000 字符截断。身份名称作为受控元数据添加，传递上限另预留 2 KiB 的名称包络；上下文 JSON 的 12000 字符预算独立于 SOUL 系统消息。显式设置过小 SOUL 预算时报告 `soul_budget_exceeded`。
+
+```mermaid
+flowchart LR
+  Editor[页面 SOUL 编辑框] -->|期望指纹 / 保存| File[Profile 的 SOUL.md]
+  External[外部文本编辑器] --> File
+  File -->|焦点 / 进入 / 应用前检查| Draft[已保存版本]
+  Draft -->|明确应用| Snapshot[冻结的 SOUL + 动作能力]
+  Snapshot --> Agent[当前会话]
+```
 
 ## 三层与生命周期
 
@@ -59,21 +80,33 @@ flowchart TD
 
 历史回执含原 Profile 和 generation，由 Main 验证后存储；分页按 Profile 查询。历史是实际交付事实，不回灌 Agent Context。旧 generation 的音频、回执及视觉事件直接丢弃。
 
+## 常驻候选池与连续播放（v2）
+
+- 每个状态的 ID 数组混合 `loop motion` 和 `hold expression`，每轮等概率选一个，允许连续重复。动作一轮结束再抽；表情淡入完成后保持 5 秒。重复状态通知不重抽。
+- 抽到表情时，身体继续有效待机 motion；没有待机 motion 则平滑回到模型基线。对话实际交付开始后暂停重抽，身体、呼吸、物理继续；SAY 完成／取消平滑释放覆盖层并恢复常驻目标。迟到加载由配置代际拒绝。
+- 身体通道先采样末端，再从实际姿态过渡到下一轮；同一 clip 再抽也处理首尾衔接，原生逐参数淡入累计时间保持单调。常驻过渡至少 250 ms，采用更长的有效资源 fade（上限 5000 ms）。这不能消除素材曲线内部故意绘制的瞬变。
+- 一个 Pixi ticker 用有界小步长推进所有层，不增加定时器、队列或每帧 UI 更新。配置预热最多 64 个资源，临时预览 LRU 最多 16 个额外资源；失败候选在该配置版本内排除。
+- 旧 v1 的单 ID 转为单元素数组，`null` 转空数组。保存配置和 applied 快照各自升级，原文件留作 `.v1-backup`，不递增内容 revision、不改变 SOUL 或 Memory。旧保存日志也保留备份后恢复。
+- 用途说明仅在启用对话使用时显示，允许空字符串；关闭开关保留已写说明。删除对话标记保留素材的常驻归属。新接口仍使用稳定内部 ID，常驻池不进入工具枚举。
+- 三语“常驻”页有四个状态的分组多选、选中计数和正式播放器预览。状态资源验证失败保留旧选择；预览名称通过低频播放器事件同步。
+
 ## Adaptor 与资源协议
 
-`adaptor.json` 的结构为 `schema_version:1`、`revision`、`model.manifest`、`entries`、`states`、`validated_resources`。entry 使用相对文件引用，包含 kind、description、agent_enabled、playback；验证凭据绑定不可变模型包版本。
+`adaptor.json` 的结构为 `schema_version:2`、`revision`、`model.manifest`、`entries`、`states`、`validated_resources`。entry 使用相对文件引用，包含 kind、display_name、description、agent_enabled、playback；验证凭据绑定不可变模型包版本。
 
 | 约束 | 值 |
 | --- | --- |
 | entry 数量 / Agent 开放数量 | 128 / 32 |
-| 名称 / 描述 | ASCII 标识符最多 64 字符 / 256 字符 |
+| 内部 ID / 显示名称 / 描述 | 稳定 ASCII ID 最多 64 字符 / 自然语言名称 128 字符 / 用途 256 字符 |
 | motion | once 或 loop；Agent 只能调用 once |
-| expression | hold，作用域为一次 SAY |
-| 运行状态 | idle/listening/thinking/speaking；仅 loop motion，未绑定回退 idle |
+| expression | hold，可用于 SAY 或常驻；对话表情临时覆盖常驻目标 |
+| 运行状态 | idle/listening/thinking/speaking；ID 数组，每状态最多 8 项、合计最多 32 项；允许 loop motion / hold expression；未绑定回退 idle |
 | 保留控制值 | motion `none`；expression `neutral` |
 | fade 覆盖 | `fade_in_ms` / `fade_out_ms`，有限 0–5000 毫秒 |
 | 文件夹导入 | 最多 1 GiB / 10000 文件；不接受 symlink |
 | 动画读取 | 单资源最多 4 MiB；SDK 分配前验证结构与计数 |
+
+新标记的内部 ID 自动生成，显示名称修改不会破坏调用或状态绑定；旧 ID 保留，旧配置无 display_name 时展示原 ID。同一资源可有独立 once 与 loop entry，Agent 只接收一次性动作与表情。
 
 配置不自动裁剪；超限直接拒绝。未被清单引用的文件列为待验证，真实 SDK 验证后才可开放。`aurabot-model://profile/<id>/<version>/...` 协议只提供该 Profile 已保存/应用包的资源；拒绝路径穿越、编码绕过、绝对路径和 symlink。无需 file://、关闭 webSecurity 或降低 context isolation。
 
@@ -112,7 +145,7 @@ npm run build
 npm run test:e2e
 ```
 
-`npm test` 与 E2E 分别 rebuild Node / Electron 原生 SQLite ABI，应顺序执行。E2E 固定单 worker，使用临时 `AURABOT_USER_DATA_DIR` 和本地 Provider fixture，避免多个应用竞争 Backend 端口。真实 Core 单元测试读取内置合法 Hiyori；Electron E2E 额外检查真实页面、WebGL 像素与 Worklet。自动化结果不代表真实声卡/麦克风或付费 Provider 已验收。
+`package.json.allowScripts` 仅允许已有 better-sqlite3 构建，兼容 npm 12 的脚本策略。`npm test` 与 E2E 分别 rebuild Node / Electron 原生 SQLite ABI，应顺序执行。E2E 固定单 worker，使用临时 `AURABOT_USER_DATA_DIR` 和本地 Provider fixture，避免多个应用竞争 Backend 端口。真实 Core 单元测试读取内置合法 Hiyori；Electron E2E 额外检查真实页面、WebGL 像素与 Worklet。自动化结果不代表真实声卡/麦克风或付费 Provider 已验收。
 
 ## 本次验收证据（2026-09-08）
 
@@ -132,3 +165,25 @@ npm run test:e2e
 真实 Core 测试用已安装运行库和 Hiyori 模型，断言 30/60/120 Hz 循环、逐参数 fade、旧专属参数/部件透明度回归、闭眼/眨眼、退出期间控制权、TTS/表情嘴部冲突，以及只更改 Soul 不重置基线时间。它们与 GPU E2E 互补，不能推导出所有第三方素材都自然流畅。
 
 未执行真实麦克风/扬声器、STT/TTS 云服务或付费 Provider 验收；没有制作或签名发布 macOS/Windows 安装包。测试从构建产物启动 Electron，不等价于发布安装包实机验收。
+
+## 角色编辑页验收（2026-09-10）
+
+| 检查 | 结果 |
+| --- | --- |
+| Backend 全量 unittest | 246/246，通过；新增完整 SOUL 与自然语言能力名称检查 |
+| 前端 typecheck | 通过 |
+| 前端全量单元／集成 | 34 文件、160/160，通过；包括 SOUL 外部修改冲突、迁移、真实 Vue 两页签及三语 |
+| 构建 | 通过；保留现有 Pixi 静态／动态导入警告 |
+| Electron 全量 E2E | 7/7，通过；真实 Core/WebGL、合成 PCM Worklet、三语页面与窄窗口、长 SOUL 实际进入本地 Provider、独立预览释放与重启恢复 |
+
+首轮回归发现旧 E2E 仍使用“模型”导航名和常驻任务栏假设，现已更新为“模型接入”及等待实际折叠／展开视图；同时修正组合选择框无障碍名称与窄窗口布局。最终完整 E2E 一轮通过，不以单项复跑代替全量结果。
+
+这些测试全部使用临时数据；未调用付费服务，未使用真实麦克风、扬声器或云 STT/TTS，未构建签名安装包。真实 Core/WebGL 与合成输出时钟的通过，不等同于外部音频设备验收。
+
+### 常驻 v2 验证记录（2026-09-11）
+
+本轮后端完整 unittest 为 248/248，前端完整 unit 为 177/177（35 文件）；typecheck 与构建通过。真实 Cubism/Core 测试覆盖 30/60/120 Hz、原生逐参数 fade 单调性、同项首尾交接、参数/部件退出、常驻表情恢复、暂停后取消、迟到预加载，以及同 ID 换绑同时间参数的资源。页面测试覆盖三语、用途说明可空和隐藏保留、多选失败恢复、常驻归属保留；迁移测试使用临时目录并核对旧文件备份与 applied 差异。
+
+Electron 曾完整通过 7/7。最终构建的最新完整运行是 6/7：Profile 管理/常驻多轮随机预览/重启、真实模型渲染、SAY 指令和陈旧回执隔离均通过；合成 AudioWorklet 场景出现 `capture timeout`，独立复测三次同样失败。进一步用不加载 AuraBot 或 Live2D 的独立静音 Electron 探针复现：AudioContext 为 running，2.5 秒后 currentTime 仅约 0.0053 秒，输出 contextTime 为 0，无 Worklet 帧。说明本机音频时钟当时未正常推进，具体系统原因未定位；没有重启音频服务、改设备或将失败记为通过。此前另有一次端口占用导致启动失败，占用消失后完整复跑通过，未终止未知进程。
+
+本机临时诊断记录：`/private/tmp/aurabot-resident-{unit,backend,typecheck,e2e}.log`、`/private/tmp/aurabot-resident-e2e-port-conflict.log`、`/private/tmp/aurabot-resident-e2e-audio-timeout.log`、`/private/tmp/aurabot-resident-audio-repeat.log`、`/private/tmp/aurabot-audio-probe.log`。系统音频恢复后，在 frontend 目录运行 `npm run test:e2e` 重新验收；真实麦克风/扬声器、付费 Provider 和签名安装包仍未实机验证。测试和探针均未使用真实用户数据。
