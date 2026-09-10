@@ -1,4 +1,5 @@
 /** Composes the desktop shell and one Backend process around a controlled Profile repository.
+ * AURABOT_USER_DATA_DIR selects the installation/data root independently of source code.
  * Main migrates configuration, serves owned model packages, serializes selection/application and
  * fences history receipts by their original Profile/generation. Pet alone owns realtime media;
  * Backend exclusively owns Context, Memory, task state and the active business lifecycle. */
@@ -22,10 +23,10 @@ import { ConversationHistory } from './conversationHistory';
 import { BackendProcess, backendJson } from './backendProcess';
 import { TaskStatusFeed } from './taskStatusFeed';
 import { PetWindowStateStore } from './petWindowStateStore';
-import { createPetWindow, openConsoleWindow, openSettingsWindow, applyPetSettings, broadcastLive2DModelState, broadcastChatMessageUpdated, broadcastPetActivity, broadcastAgentStatus, setPetMousePassthrough, movePetWindowBy, resizePetWindowCorner } from './createWindow';
+import { createPetWindow, openConsoleWindow, openSettingsWindow, applyPetSettings, broadcastLive2DModelState, broadcastChatMessageUpdated, broadcastPetActivity, broadcastAgentStatus, setPetMousePassthrough, movePetWindowBy, resizePetWindowCorner, restorePetWindowBounds } from './createWindow';
 
 registerProfileResourceScheme();
-if(process.env.AURABOT_USER_DATA_DIR)app.setPath('userData',process.env.AURABOT_USER_DATA_DIR);
+if(process.env.AURABOT_USER_DATA_DIR)app.setPath('userData',resolve(process.env.AURABOT_USER_DATA_DIR));
 const projectRoot=resolve(__dirname,'../../..');
 let backend:BackendProcess|undefined;
 let history:ConversationHistory|undefined;
@@ -35,7 +36,7 @@ let tasks:TaskStatusFeed|undefined;
 const broadcast=(channel:string,value:unknown)=>BrowserWindow.getAllWindows().forEach(window=>window.webContents.send(channel,value));
 
 async function bootstrap(){
- const root=process.env.AURABOT_USER_DATA_DIR??join(app.getPath('userData'),'desktop-v2');
+ const root=resolve(process.env.AURABOT_USER_DATA_DIR??join(app.getPath('userData'),'desktop-v2'));
  const settingsPath=join(root,'settings.json');
  const legacySettings=existsSync(settingsPath)?JSON.parse(readFileSync(settingsPath,'utf8')):null;
  const config=new DesktopConfigStore(root,projectRoot);
@@ -137,7 +138,7 @@ async function bootstrap(){
      profileStore.select(id);applied=target;
      runtime={selectedId:id,activeId:id,revision:target.revision,generation:result.generation,online:result.runtime_active===true,visualStatus:result.visual_status,capabilityNames:result.capability_names};
      realtimeError='';agentState='idle';broadcastAgentStatus(agentState);
-     const savedBounds=bounds.getBounds(id);if(savedBounds)pet.setBounds(savedBounds);
+     const savedBounds=bounds.getBounds(id);if(savedBounds)restorePetWindowBounds(pet,savedBounds);
      broadcastLive2DModelState(modelState());profilesChanged();tasks?.start();
      if(petReady){const ack=await petRequest('reconnect');if(ack?.visual){runtime={...runtime,visualStatus:ack.visual.available?(runtime.visualStatus==='degraded'?'degraded':'ready'):'unavailable',visualError:ack.visual.error};}}
      if(!restore||!detail.applied)profileStore.markApplied(id,target.revision);

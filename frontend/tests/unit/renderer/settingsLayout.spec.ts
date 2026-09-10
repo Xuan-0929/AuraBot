@@ -1,6 +1,7 @@
 /** Exercises settings draft/apply IPC and compact advanced controls through the real Vue form.
  * Controlled desktop configuration fixtures verify save safety, native invalid-field revelation,
- * and recoverable server errors without starting Electron or a backend. */
+ * recoverable server errors, and masked-key preservation/replacement/deletion through the real save
+ * store, separate workspace and General navigation and localized status labels and search-provider selection, including length-matched first/last-four previews, without starting Electron or a backend. */
 // @vitest-environment jsdom
 import { createApp, nextTick } from 'vue';
 import { createPinia } from 'pinia';
@@ -12,6 +13,35 @@ import SettingsWindow from '../../../src/features/settings/SettingsWindow.vue';
 import { DesktopConfigStore } from '../../../src/main/desktopConfigStore';
 let dispose:()=>void=()=>{};
 afterEach(()=>{dispose();vi.unstubAllGlobals();});
+it('preserves untouched keys and lets password inputs replace or delete every saved key',async()=>{
+ const root=mkdtempSync(join(tmpdir(),'aura-secrets-'));const config=new DesktopConfigStore(root,root);
+ const seed=config.snapshot();seed.backend.chat_model.api_key='chat-fixture';seed.backend.task.model.api_key='task-fixture';seed.backend.main_agent.web.api_key='search-fixture';seed.backend.main_agent.speech.api_key='speech-fixture';config.save(seed);
+ const saveSettings=vi.fn(async(value,clear)=>config.save(structuredClone(value),structuredClone(clear)));
+ Object.assign(window,{aurabot:{getSettings:async()=>config.status(),saveSettings,onSettingsChanged:()=>()=>{}}});
+ const host=document.createElement('div');document.body.append(host);const app=createApp(SettingsWindow);app.use(createPinia());app.mount(host);
+ dispose=()=>{app.unmount();host.remove();rmSync(root,{recursive:true,force:true});};
+ await vi.waitFor(()=>expect(host.querySelectorAll('input[data-secret-input]')).toHaveLength(3));
+ const keys=()=>[...host.querySelectorAll<HTMLInputElement>('input[data-secret-input]')];
+ const edit=async(input:HTMLInputElement,value:string)=>{input.value=value;input.dispatchEvent(new Event('input',{bubbles:true}));await nextTick();};
+ const save=async()=>{const count=saveSettings.mock.calls.length;host.querySelector('form')!.dispatchEvent(new Event('submit',{bubbles:true,cancelable:true}));await vi.waitFor(()=>expect(saveSettings).toHaveBeenCalledTimes(count+1));await nextTick();};
+ expect(keys().map(input=>input.value)).toEqual(['chat••••ture','task••••ture','sear••••••ture']);
+ expect(keys().every(input=>input.type==='text')).toBe(true);
+ expect(host.querySelector<HTMLInputElement>('input[value="tavily"]')?.checked).toBe(true);
+ expect(host.querySelector<HTMLInputElement>('input[value="infoquest"]')?.disabled).toBe(true);
+ expect(host.querySelector('nav button')?.textContent).toBe('模型接入');
+ expect(config.publicConfig().backend.chat_model.api_key).toBe('');
+ expect(host.textContent).not.toContain('清除已保存密钥');expect(host.textContent).toContain('搜索接口');expect(host.querySelector('.settings-v2-content-header span')).toBeNull();
+ await edit(host.querySelector('input')!,'https://example.invalid/v1');await save();
+ expect(config.snapshot().backend.chat_model.api_key).toBe('chat-fixture');
+ expect(keys()[0]!.value).toBe('chat••••ture');
+ await edit(keys()[0]!,'new-chat-fixture');await edit(keys()[1]!,'');await edit(keys()[2]!,'');await save();
+ expect(config.snapshot().backend.chat_model.api_key).toBe('new-chat-fixture');expect(config.snapshot().backend.task.model.api_key).toBe('');expect(config.snapshot().backend.main_agent.web.api_key).toBe('');
+ expect(keys()[1]!.value).toBe('');expect(keys()[2]!.value).toBe('');
+ (host.querySelectorAll('nav button')[1] as HTMLButtonElement).click();await nextTick();
+ // Even deleting a single mask character must never save a partial mask as the key.
+ keys()[0]!.dispatchEvent(new InputEvent('beforeinput',{inputType:'deleteContentBackward',bubbles:true,cancelable:true}));await nextTick();await save();expect(config.snapshot().backend.main_agent.speech.api_key).toBe('');
+ expect(saveSettings.mock.calls.every(([value])=>!JSON.stringify(value).includes('•'))).toBe(true);
+});
 it('requires save before apply and defaults the busy dialog to cancel',async()=>{
  const root=mkdtempSync(join(tmpdir(),'aura-form-'));const config=new DesktopConfigStore(root,root);config.markApplied(config.snapshot());config.online=true;
  const saveSettings=vi.fn(async(value,clear)=>config.save(structuredClone(value),structuredClone(clear)));
@@ -43,12 +73,19 @@ it('keeps advanced fields collapsed until invalid or a save failure needs attent
  host.querySelector('form')!.dispatchEvent(new Event('submit',{bubbles:true,cancelable:true}));
  await vi.waitFor(()=>expect(host.querySelector('[role="alert"]')?.textContent).toContain('配置校验失败'));
  expect(advanced.every(group=>group.open)).toBe(true);
- const navigation=host.querySelectorAll('nav button');expect(navigation).toHaveLength(6);expect(navigation[4]!.textContent).toBe('角色配置');expect(host.querySelectorAll('nav svg')).toHaveLength(6);expect([...host.querySelectorAll('nav svg')].every(icon=>icon.getAttribute('viewBox')==='0 0 24 24')).toBe(true);
+ const navigation=host.querySelectorAll('nav button');expect(navigation).toHaveLength(5);expect(navigation[4]!.textContent).toBe('角色配置');expect(host.querySelectorAll('nav svg')).toHaveLength(5);expect([...host.querySelectorAll('nav svg')].every(icon=>icon.getAttribute('viewBox')==='0 0 24 24')).toBe(true);
  (navigation[1] as HTMLButtonElement).click();await nextTick();
  expect(host.querySelectorAll('details input')).toHaveLength(6);
  expect([...host.querySelectorAll('label')].find(label=>label.textContent==='音色')?.closest('details')).toBeNull();
  (navigation[3] as HTMLButtonElement).click();await nextTick();
+ expect(host.textContent).toContain('向 Main Agent 提供');expect(host.textContent).not.toContain('只能访问');
  expect(host.querySelectorAll('details input')).toHaveLength(2);
  expect(host.querySelector('details')?.textContent).toContain('Node 可执行文件');
+ (navigation[2] as HTMLButtonElement).click();await nextTick();
+ expect(host.querySelectorAll('details input')).toHaveLength(0);
+ expect(host.textContent).toContain('桌宠鼠标穿透');expect(host.textContent).toContain('服务未连接');
+ const language=host.querySelector('select')!;language.value='en';language.dispatchEvent(new Event('change',{bubbles:true}));await nextTick();
+ expect(host.querySelector('.settings-v2-sidebar-brand')?.textContent).toBe('Settings');expect(host.querySelector('.settings-save-bar [role=status]')?.textContent).toBe('Unsaved');
+ language.value='ja';language.dispatchEvent(new Event('change',{bubbles:true}));await nextTick();expect(host.querySelector('.settings-v2-sidebar-brand')?.textContent).toBe('設定');
 
 });

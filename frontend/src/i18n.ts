@@ -1,9 +1,9 @@
-/** Localizes the desktop shell and simplified Backend-projected agent states. No runtime state is derived here. */
+/** Localizes the desktop shell and simplified Backend-projected agent states. Includes model connection and search provider configuration labels. No runtime state is derived here. */
 /**
  * 提供 Renderer 当前保留界面的英中日文案与 Agent 状态标签。
  *
  * 文案服务覆盖 Chat、Memory、Live2D、模型、通知与桌宠设置；聊天输入提示与
- * 无障碍名称共用“输入消息”的三语文案。旧 Task 状态格式化、
+ * 无障碍名称共用“输入消息”的三语文案，配置状态统一为未保存、已保存、已应用。旧 Task 状态格式化、
  * runner 文案和旧执行专属状态不再属于运行时类型。
  */
 
@@ -14,6 +14,12 @@ export type DisplayLanguage = PetSettings["displayLanguage"];
 
 const UI_TEXT = {
   en: {
+    modelConnections: "Model connections",
+    searchInterface: "Search interface",
+    searchProvider: "Search provider",
+    providerUnavailable: "Not yet supported",
+    searchKeyHint: "Enter an API key to enable search",
+
     appTitle: "AuraBot",
     consoleTitle: "AuraBot Console",
     consoleDashboardTitle: "Aura Dashboard",
@@ -26,6 +32,9 @@ const UI_TEXT = {
     you: "You",
     aura: "Aura",
     settings: "Settings",
+    configUnsaved: "Unsaved",
+    configSaved: "Saved",
+    configApplied: "Applied",
     openSettingsMenu: "Open settings menu",
     settingsMenu: "Settings menu",
     quickSettings: "Quick settings",
@@ -185,6 +194,12 @@ const UI_TEXT = {
     returned: "Returned"
   },
   zh: {
+    modelConnections: "模型接入",
+    searchInterface: "搜索接口",
+    searchProvider: "搜索服务商",
+    providerUnavailable: "暂未支持",
+    searchKeyHint: "填写密钥后启用搜索",
+
     appTitle: "AuraBot",
     consoleTitle: "AuraBot 控制台",
     consoleDashboardTitle: "Aura 仪表盘",
@@ -197,6 +212,9 @@ const UI_TEXT = {
     you: "你",
     aura: "Aura",
     settings: "设置",
+    configUnsaved: "未保存",
+    configSaved: "已保存",
+    configApplied: "已应用",
     openSettingsMenu: "打开设置菜单",
     settingsMenu: "设置菜单",
     quickSettings: "快捷设置",
@@ -361,6 +379,11 @@ export type UiTextKey = keyof typeof UI_TEXT.en;
 
 const JAPANESE_UI_TEXT: Record<UiTextKey, string> = {
   ...UI_TEXT.en,
+  modelConnections: "モデル接続",
+  searchInterface: "検索連携",
+  searchProvider: "検索プロバイダー",
+  providerUnavailable: "未対応",
+  searchKeyHint: "APIキーを入力すると検索が有効になります",
   appTitle: "AuraBot",
   consoleTitle: "AuraBot コンソール",
   consoleDashboardTitle: "Aura ダッシュボード",
@@ -373,6 +396,9 @@ const JAPANESE_UI_TEXT: Record<UiTextKey, string> = {
   you: "あなた",
   aura: "Aura",
   settings: "設定",
+    configUnsaved: "未保存",
+    configSaved: "保存済み",
+    configApplied: "適用済み",
   openSettingsMenu: "設定メニューを開く",
   settingsMenu: "設定メニュー",
   quickSettings: "クイック設定",

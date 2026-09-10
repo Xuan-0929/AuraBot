@@ -1,3 +1,4 @@
+// Validates saved/applied status labels and the current combined settings navigation.
 /** Exercises the actual local Provider → Python SAY stream → Pet AvatarPlayer production chain.
  * Settings locates roles by their displayed fixture names and verifies a bundled motion through the SDK
  * before exposing its user-selected semantic name; internal Profile IDs remain only in IPC assertions.
@@ -124,7 +125,7 @@ test('verified Profile ability reaches the real Pet once per SAY and stale Profi
     await settings.getByLabel('用途说明').fill('已通过真实 SDK 预览确认的测试动作；名称只表示本测试选定的资源。');
     await settings.getByLabel('向 Agent 开放').check();
     await settings.locator('.profile-save-bar').getByRole('button', { name: '保存', exact: true }).click();
-    await expect(settings.locator('.profile-save-bar')).toContainText('已保存，待应用');
+    await expect(settings.locator('.profile-save-bar')).toContainText('已保存');
     await settings.getByLabel('打开独立预览').uncheck();
     await expect(settings.locator('.avatar-preview canvas')).toHaveCount(0);
     await settings.locator('.profile-save-bar').getByRole('button', { name: '应用', exact: true }).click();
@@ -168,9 +169,10 @@ test('verified Profile ability reaches the real Pet once per SAY and stale Profi
 
     const aScope = (await pet.evaluate(() => window.aurabot.listProfiles())).runtime;
     await settings.getByRole('button', { name: '← 角色列表', exact: true }).click();
-    await settings.getByLabel('新角色名称').fill('Avatar delivery B');
+    await settings.getByRole('button',{name:'创建',exact:true}).click();
+  await settings.getByLabel('新角色名称').fill('Avatar delivery B');
     await settings.getByRole('button', { name: '创建角色', exact: true }).click();
-    await settings.getByRole('button', { name: '激活此角色', exact: true }).click();
+    await settings.getByRole('button', { name: '切换到此角色', exact: true }).click();
     await expect.poll(async () => {
       const runtime = (await pet.evaluate(() => window.aurabot.listProfiles())).runtime;
       return runtime.online && Boolean(runtime.activeId) && runtime.activeId !== a;
@@ -189,7 +191,7 @@ test('verified Profile ability reaches the real Pet once per SAY and stale Profi
     expect(await history(pet, bScope.activeId!)).toEqual([]);
     await expect(history(pet,a)).rejects.toThrow('历史 Profile 已切换');
     await settings.getByRole('button',{name:'← 角色列表',exact:true}).click();
-    await aRow.getByRole('button', { name: '激活', exact: true }).click();
+    await aRow.getByRole('button', { name: '切换到此角色', exact: true }).click();
     await expect.poll(async()=>{const runtime=(await pet.evaluate(()=>window.aurabot.listProfiles())).runtime;return runtime.online&&runtime.activeId===a;},{timeout:25000}).toBe(true);
     expect((await history(pet, a)).map(message => message.content)).toEqual(expectedA);
     expect(requestCount).toBe(2);

@@ -28,7 +28,7 @@ let onPetBoundsChanged: ((bounds: WindowRectangle) => void) | undefined;
 let petCursorTrackingInterval: NodeJS.Timeout | undefined;
 
 const CONSOLE_WINDOW_SIZE = {
-  width: 1280,
+  width: 914,
   height: 820
 };
 const SETTINGS_WINDOW_SIZE = {
@@ -87,6 +87,15 @@ export function createPetWindow(options: CreatePetWindowOptions = {}): BrowserWi
   startPetCursorTracking();
 
   return petWindow;
+}
+
+/** Restores saved pet geometry onto whichever display is currently available.
+ * Profile persistence records absolute coordinates, so a previously attached display may no longer
+ * exist when this process starts or activates a Profile. Keep restoration at this window seam so
+ * every caller gets the same visible-work-area guarantee.
+ */
+export function restorePetWindowBounds(window: BrowserWindow, bounds: WindowRectangle): void {
+  window.setBounds(clampPetBoundsToVisibleWorkArea(normalizePetBoundsSize(bounds)));
 }
 
 export function openConsoleWindow(): BrowserWindow {

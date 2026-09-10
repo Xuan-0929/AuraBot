@@ -1,7 +1,7 @@
 """Protect Observation identity, bounded web results, and workspace trust boundaries.
 
 Tests use the public async executors and filesystem results. Removed DNS-pinned HTTP parsing, deadline thread
-pools, Harness-owned dedupe caches, and limiter internals are deliberately absent because Tavily now performs
+pools, Harness-owned dedupe caches, and limiter internals are deliberately absent because the Tavily adapter now performs
 public-page extraction and Runtime owns one canonical Observation registry.
 """
 
@@ -10,15 +10,17 @@ from __future__ import annotations
 import json
 import tempfile
 import unittest
+
 from pathlib import Path
 from typing import Any
 
 from backend.main_agent.observations import (
     ObservationLedger,
     ObservationSecurityError,
-    TavilyTools,
+    WebTools,
     WorkspaceReader,
 )
+from backend.main_agent.web_provider import TavilyProvider
 from backend.main_agent.settings import WorkspaceRegistry
 from backend.main_agent.tool_runtime import ToolCall
 
@@ -74,13 +76,13 @@ class ObservationLedgerTests(unittest.TestCase):
         self.assertEqual([item["id"] for item in ledger.fold()], ["z", "a"])
 
 
-class TavilyToolsTests(unittest.IsolatedAsyncioTestCase):
+class WebToolsTests(unittest.IsolatedAsyncioTestCase):
     async def test_search_registers_bounded_sources_and_read_uses_managed_extract(self) -> None:
         client = FakeClient([
             FakeResponse({"results": [{"title": "Aura", "url": "https://example.com/a", "content": "snippet"}]}),
             FakeResponse({"results": [{"url": "https://example.com/a", "raw_content": "# title\n" + "x" * 70_000}]}),
         ])
-        tools = TavilyTools("secret", client=client, max_sources=8)
+        tools = WebTools(TavilyProvider("secret", client=client), max_sources=8)
         search = await tools.search(ToolCall("s", "web_search", {"query": "Aura"}))
         source_id = search["results"][0]["source_id"]
         read = await tools.read(ToolCall("r", "web_read", {"source_id": source_id}))
@@ -90,6 +92,7 @@ class TavilyToolsTests(unittest.IsolatedAsyncioTestCase):
         self.assertEqual(client.requests[0][1]["json"]["query"], "Aura")
         self.assertEqual(client.requests[1][0], "https://api.tavily.com/extract")
         self.assertEqual(client.requests[1][1]["json"], {
+            "api_key": "secret",
             "urls": ["https://example.com/a"],
             "extract_depth": "basic",
             "format": "markdown",
@@ -101,7 +104,7 @@ class TavilyToolsTests(unittest.IsolatedAsyncioTestCase):
 
     async def test_read_rejects_unknown_source_without_provider_request(self) -> None:
         client = FakeClient([])
-        tools = TavilyTools("secret", client=client)
+        tools = WebTools(TavilyProvider("secret", client=client))
         with self.assertRaises(ObservationSecurityError):
             await tools.read(ToolCall("r", "web_read", {"source_id": "unknown"}))
         self.assertEqual(client.requests, [])

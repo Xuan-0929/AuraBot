@@ -1,4 +1,5 @@
-"""Protect canonical Context folding, minimal archive boundaries, and prompt projection.
+"""Workspace context checks also ensure declared paths reach the model without filesystem scanning.
+Protect canonical Context folding, minimal archive boundaries, and prompt projection.
 
 The tests verify stable user segments, Renderer-ACK-only assistant language, current pending archive boundaries,
 canonical boundary reconstruction, atomic archive cleanup, Observation ordering, and bounded JSON snapshots.
@@ -254,6 +255,19 @@ class ContextStoreTests(unittest.TestCase):
 
 
 class SnapshotProjectorTests(unittest.TestCase):
+    def test_user_workspace_locations_enter_model_context_without_directory_scanning(self) -> None:
+        directories = {"default": "/user-selected/install", "home": "/Users/example"}
+        projector = SnapshotProjector(workspaces=directories)
+        directories["default"] = "/later-change"
+        snapshot = projector.project(FoldedContext((), (), None, ()), soul="Aura")
+        context = json.loads(snapshot.prompt)["user_workspaces"]
+        self.assertEqual(context["directories"], [
+            {"id": "default", "path": "/user-selected/install"},
+            {"id": "home", "path": "/Users/example"},
+        ])
+        self.assertIn("not Pi filesystem access boundaries", context["purpose"])
+
+
     def test_section_budget_truncates_text_without_removing_any_protected_segment(self) -> None:
         turns = tuple({
             "role": "user",

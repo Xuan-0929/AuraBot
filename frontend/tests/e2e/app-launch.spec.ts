@@ -1,3 +1,4 @@
+// Validates saved/applied status labels and the current combined settings navigation.
 /** Runs the real Electron windows, Python child and SQLite delivery path with isolated application data.
  * A local deterministic Chat Completions server checks transport integration without claiming real model,
  * Pi or microphone acceptance. Also verifies saved/applied revisions, no-op desktop application, busy
@@ -34,28 +35,28 @@ test('fresh desktop renders Hiyori, exposes unavailable models and applies saved
   const initial=await status();expect(initial.capabilities).toEqual({text:false,voice:false,tasks:false});
   const settingsPromise=electronApp.waitForEvent('window');await pet.evaluate(()=>window.aurabot.openSettingsWindow());const settings=await settingsPromise;
   await expect(settings.getByRole('button',{name:'保存',exact:true})).toBeDisabled();
-  await settings.getByRole('button',{name:'桌宠',exact:true}).click();
+  await settings.getByRole('button',{name:'通用',exact:true}).click();
   await settings.getByLabel('系统通知').uncheck();
   await expect(settings.getByRole('button',{name:'应用',exact:true})).toBeDisabled();
   await settings.getByRole('button',{name:'保存',exact:true}).click();
-  await expect(settings.getByRole('status')).toHaveText('已保存，待应用');
+  await expect(settings.getByRole('status')).toHaveText('已保存');
   expect((await status()).processId).toBe(initial.processId);
   await settings.getByRole('button',{name:'应用',exact:true}).click();
-  await expect(settings.getByRole('status')).toHaveText('配置已应用');
+  await expect(settings.getByRole('status')).toHaveText('已应用');
   expect((await status()).processId).toBe(initial.processId);
   await settings.getByRole('button',{name:'模型',exact:true}).click();
   await settings.getByLabel('模型名称',{exact:true}).first().fill('unconfigured-smoke');
   await settings.getByRole('button',{name:'保存',exact:true}).click();
-  await expect(settings.getByRole('status')).toHaveText('已保存，待应用');
+  await expect(settings.getByRole('status')).toHaveText('已保存');
   await settings.getByRole('button',{name:'应用',exact:true}).click();
-  await expect(settings.getByRole('status')).toHaveText('配置已应用',{timeout:40000});
+  await expect(settings.getByRole('status')).toHaveText('已应用',{timeout:40000});
   expect((await status()).processId).not.toBe(initial.processId);
   const consolePromise=electronApp.waitForEvent('window');await pet.evaluate(()=>window.aurabot.openConsoleWindow());const consolePage=await consolePromise;
   await expect(consolePage.getByRole('complementary',{name:'任务',exact:true})).toBeVisible();
   await consolePage.locator('textarea').fill('未配置模型时不应记录成功');await consolePage.locator('textarea').press('Enter');
   await expect(consolePage.getByRole('alert')).toContainText('模型尚未配置');
   expect((await pet.evaluate(()=>window.aurabot.getHistory())).messages).toEqual([]);
-  await settings.getByRole('button',{name:'运行状态',exact:true}).click();
+  await settings.getByRole('button',{name:'通用',exact:true}).click();
   await settings.screenshot({path:'/private/tmp/aurabot-settings-verified.png'});
  }finally{await close(electronApp);rmSync(userDataDir,{recursive:true,force:true});}
 });
@@ -96,7 +97,7 @@ test('real Python text delivery persists only say_to_user and busy restart cance
   await settings.getByRole('button',{name:'应用',exact:true}).click();
   await expect(settings.getByRole('alertdialog')).toBeVisible();
   await settings.getByRole('button',{name:'仍然应用',exact:true}).click();
-  await expect(settings.getByRole('status')).toHaveText('配置已应用',{timeout:40000});
+  await expect(settings.getByRole('status')).toHaveText('已应用',{timeout:40000});
   expect((await status()).processId).not.toBe(before.processId);
   expect((await pet.evaluate(()=>window.aurabot.getHistory())).messages.map(m=>m.content)).toEqual(['你好','已完成文字交付。','这轮会在应用时中断']);
   const ids=(await pet.evaluate(()=>window.aurabot.getHistory())).messages.map(m=>m.id);

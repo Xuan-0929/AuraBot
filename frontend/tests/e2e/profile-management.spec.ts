@@ -1,3 +1,4 @@
+// Validates saved/applied status labels and the current combined settings navigation.
 /** Drives real Settings Profile pages against Electron's repository and the Python lifecycle.
  * A/B data and imported bundled assets live exclusively in a temporary user-data root; no provider,
  * microphone or paid service is used. Preview checks exercise the real production Cubism player. */
@@ -17,12 +18,13 @@ test('Profile pages isolate B editing and preview from A, then explicitly activa
   const initial=await pet.evaluate(()=>window.aurabot.listProfiles());const a=initial.runtime.selectedId;
   const settingsPromise=app.waitForEvent('window');await pet.evaluate(()=>window.aurabot.openSettingsWindow());const settings=await settingsPromise;
   await settings.getByRole('button',{name:'角色配置',exact:true}).click();
+  await settings.getByRole('button',{name:'创建',exact:true}).click();
   await settings.getByLabel('新角色名称').fill('Profile B');await settings.getByRole('button',{name:'创建角色',exact:true}).click();
   await expect(settings.getByText('正在编辑：Profile B',{exact:true})).toBeVisible();
   const b=(await pet.evaluate(()=>window.aurabot.listProfiles())).profiles.find(p=>p.displayName==='Profile B')!.id;expect(b).not.toBe(a);
   await settings.getByLabel('人格描述',{exact:true}).fill('B 的私有人格，只属于 B。');
   await settings.getByRole('button',{name:'保存',exact:true}).click();
-  await expect(settings.getByText('已保存，待应用',{exact:false})).toBeVisible();
+  await expect(settings.getByText('已保存',{exact:false})).toBeVisible();
   expect((await pet.evaluate(()=>window.aurabot.listProfiles())).runtime.activeId).toBe(a);
   const aSoul=JSON.parse(readFileSync(join(userDataDir,'profiles',a,'soul.json'),'utf8'));
   const bSoul=JSON.parse(readFileSync(join(userDataDir,'profiles',b,'soul.json'),'utf8'));expect(bSoul.persona).toBe('B 的私有人格，只属于 B。');expect(aSoul.persona).not.toBe(bSoul.persona);
@@ -54,12 +56,17 @@ test('Profile pages isolate B editing and preview from A, then explicitly activa
   await settings.getByLabel('用途说明').fill('用户已预览的测试动作。');await settings.getByLabel('向 Agent 开放').check();
   await settings.getByRole('button',{name:'保存',exact:true}).click();
   await settings.getByLabel('打开独立预览').uncheck();await expect(settings.locator('canvas')).toHaveCount(0);
-  await settings.getByRole('button',{name:'激活此角色',exact:true}).click();
+  await settings.getByRole('button',{name:'切换到此角色',exact:true}).click();
   await expect.poll(async()=>(await pet.evaluate(()=>window.aurabot.listProfiles())).runtime.activeId,{timeout:20000}).toBe(b);
   const state=await pet.evaluate(()=>window.aurabot.getInitialState());expect(state.profile.id).toBe(b);expect(state.live2dModelState.adaptor?.entries.previewed_motion.agent_enabled).toBe(true);
   expect(existsSync(join(userDataDir,'profiles',a,'live2d','packages'))).toBe(true);expect(existsSync(join(userDataDir,'profiles',b,'live2d','packages'))).toBe(true);
   await settings.getByRole('button',{name:'← 角色列表',exact:true}).click();
   const card=settings.locator('.profile-card').filter({has:settings.getByRole('heading',{name:'Profile B'})});await expect(card.getByRole('button',{name:'删除',exact:true})).toBeDisabled();
+  const currentRow=settings.locator('.profile-list-row').first();
+  await expect(currentRow).toContainText('Profile B');await expect(currentRow).toContainText('当前角色');
+  await expect(currentRow).toHaveClass(/is-current/);
+  expect(await currentRow.evaluate(element=>getComputedStyle(element).backgroundColor)).toBe('rgb(229, 238, 232)');
+  await settings.screenshot({path:'/private/tmp/aurabot-role-list.png'});
   await expect.poll(async()=>(await pet.evaluate(id=>window.aurabot.getProfile(id),b)).applied?.adaptor.entries.previewed_motion?.agent_enabled).toBe(true);
   await app.close();
   app=await electron.launch({args:[join(appRoot,'out/main/index.js')],cwd:appRoot,env:{...process.env,AURABOT_USER_DATA_DIR:userDataDir}});

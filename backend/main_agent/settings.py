@@ -1,4 +1,4 @@
-"""解析 Main Agent 的模型、语音、Web 与路径设置并维护受信任工作区目录。
+"""解析 Main Agent 的模型、语音、Web 与路径设置（兼容旧 Tavily 密钥字段）并维护受信任工作区目录。
 
 配置加载器保留原始 YAML 后，本模块把 app/main_agent/chat_model 段变成不可变路径设置；
 WorkspaceRegistry 只接受由配置声明的真实目录，TaskManager 用它将 workspace_id 解析为
@@ -207,16 +207,20 @@ class ChatModelSettings:
 class WebSettings:
     """Optional public-web credentials; an empty key means no web capability."""
 
-    tavily_api_key: str = ""
+    api_key: str = ""
+    provider: str = "tavily"
 
     @classmethod
     def from_config(cls, raw: Mapping[str, Any]) -> "WebSettings":
         if not isinstance(raw, Mapping):
             raise ValueError("main_agent.web must be a mapping.")
-        value = raw.get("tavily_api_key", "")
+        provider = raw.get("provider", "tavily")
+        if provider != "tavily":
+            raise ValueError("main_agent.web.provider is unsupported.")
+        value = raw.get("api_key", raw.get("tavily_api_key", ""))
         if not isinstance(value, str):
-            raise ValueError("main_agent.web.tavily_api_key must be text.")
-        return cls(value.strip())
+            raise ValueError("main_agent.web.api_key must be text.")
+        return cls(api_key=value.strip(), provider=provider)
 
 
 @dataclass(frozen=True, slots=True)

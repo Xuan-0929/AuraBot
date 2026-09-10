@@ -3,7 +3,8 @@
 Startup tolerates absent chat, Pi and speech capabilities. Explicit Profile activation opens Context/Memory
 and text runtime; voice.start alone prepares speech assets and providers. Shutdown fences realtime before
 closing Profile workers and the durable Task control plane. ProfileResources owns lazy speech; Runtime
-keeps Hub.render as its renderer for the entire Profile lifetime."""
+keeps Hub.render as its renderer for the entire Profile lifetime. Applied workspaces enter the model
+snapshot as user-provided names and paths without scanning directories. WebTools uses the configured search adapter for search and read."""
 
 from __future__ import annotations
 
@@ -30,8 +31,9 @@ from .main_agent.context import ContextStore
 from .main_agent.lifecycle import ActiveProfileManager, ProfileResources, _close
 from .main_agent.profile_storage import prepare_memory_directory
 from .main_agent.metrics import LifecycleMetrics
+from .main_agent.web_provider import create_search_provider
 from .main_agent.observations import (
-    TavilyTools,
+    WebTools,
     WorkspaceListExecutor,
     WorkspaceReadExecutor,
     WorkspaceReader,
@@ -210,16 +212,16 @@ async def _build_profile(
             "workspace_read": WorkspaceReadExecutor(reader),
         }
         observation_tools: tuple[str, ...] = ()
-        tavily: TavilyTools | None = None
-        if settings.web.tavily_api_key:
-            tavily = TavilyTools(settings.web.tavily_api_key)
-            cleanup.push_async_callback(_close, tavily)
-            executors.update({"web_search": tavily.search, "web_read": tavily.read})
+        web_tools: WebTools | None = None
+        if settings.web.api_key:
+            web_tools = WebTools(create_search_provider(settings.web.provider, settings.web.api_key))
+            cleanup.push_async_callback(_close, web_tools)
+            executors.update({"web_search": web_tools.search, "web_read": web_tools.read})
             observation_tools = ("web_search", "web_read")
 
         runtime = MainAgentRuntime(
             context_store=context,
-            snapshot_projector=SnapshotProjector(),
+            snapshot_projector=SnapshotProjector(workspaces={key: str(settings.workspaces.require(key)) for key in settings.workspaces.ids}),
             tool_policy=ToolSurfacePolicy(
                 workspace_ids=settings.workspaces.ids,
                 observation_tools=observation_tools,
@@ -239,8 +241,8 @@ async def _build_profile(
         cleanup.push_async_callback(runtime.shutdown)
         runtime.text_available = bool(provider_factory or (settings.chat_model.api_key and settings.chat_model.base_url and settings.chat_model.model_name))
         closeables: list[Any] = [context, provider]
-        if tavily is not None:
-            closeables.append(tavily)
+        if web_tools is not None:
+            closeables.append(web_tools)
         resources = ProfileResources(
             profile_id, runtime, None, memory, closeables=tuple(closeables)
         )

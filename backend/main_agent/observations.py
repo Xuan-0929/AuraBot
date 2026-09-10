@@ -1,8 +1,7 @@
-"""Provide causal Observation state plus bounded Tavily and workspace read executors.
+"""Provide causal Observation state plus bounded provider-neutral Web and workspace read executors.
 
-Runtime owns one ObservationLedger for request reuse and terminal persistence. TavilyTools shares a small
-opaque source map across ``web_search`` and ``web_read`` and delegates public-page extraction to Tavily's
-managed API. Producer content fits Runtime's JSON scalar boundary; WorkspaceReader also enforces no-follow,
+Runtime owns one ObservationLedger for request reuse and terminal persistence. WebTools shares a small
+opaque source map across ``web_search`` and ``web_read`` and delegates public-page extraction to the selected search adapter. Producer content fits Runtime's JSON scalar boundary; WorkspaceReader also enforces no-follow,
 secret, binary, file-size, and paging boundaries beneath configured roots.
 """
 
@@ -20,6 +19,7 @@ from collections import OrderedDict
 from collections.abc import Mapping
 from typing import Any
 
+from .web_provider import ObservationExecutorError, SearchProvider
 from .settings import WorkspaceRegistry, WorkspaceRegistryError
 from .tool_runtime import ToolCall
 
@@ -37,10 +37,6 @@ _SECRET_SUFFIXES = (".pem", ".key", ".p12", ".pfx", ".jks", ".keystore")
 
 class ObservationSecurityError(ValueError):
     """Stable secret-free trust-boundary rejection."""
-
-
-class ObservationExecutorError(RuntimeError):
-    """Stable external provider failure without upstream detail."""
 
 
 def _copy(value: Any) -> Any:
@@ -122,50 +118,28 @@ class ObservationLedger:
             self._dedupe.pop((fact["origin_input_id"], fact["kind"], canonical), None)
 
 
-class TavilyTools:
-    """Share one lazy async client and bounded source registry for Tavily search and managed extract."""
+class WebTools:
+    """Keep bounded source references and tool results independent of the provider."""
 
-    def __init__(
-        self,
-        api_key: str,
-        *,
-        client: Any | None = None,
-        timeout_seconds: float = 10.0,
-        max_sources: int = 256,
-    ) -> None:
-        if not api_key:
-            raise ValueError("Tavily API key is required")
-        self.api_key = api_key
-        self.timeout_seconds = timeout_seconds
+    def __init__(self, provider: SearchProvider, *, max_sources: int = 256) -> None:
+        self.provider = provider
         self.max_sources = max_sources
-        self._client = client
         self._sources: OrderedDict[str, str] = OrderedDict()
 
     async def search(self, call: ToolCall) -> dict[str, Any]:
-        payload = {
-            "api_key": self.api_key,
-            "query": call.arguments["query"],
-            "search_depth": "basic",
-            "max_results": 8,
-            "include_answer": False,
-            "include_raw_content": False,
-            "include_images": False,
-        }
-        data = await self._post("https://api.tavily.com/search", payload)
+        query = call.arguments["query"]
         results = []
-        for item in data.get("results", ())[:8]:
-            if not isinstance(item, Mapping):
-                continue
+        for item in (await self.provider.search(query))[:8]:
             try:
-                source_id = self._register(item.get("url"))
+                source_id = self._register(item.url)
             except ObservationSecurityError:
                 continue
             results.append({
                 "source_id": source_id,
-                "title": str(item.get("title", ""))[:500],
-                "snippet": str(item.get("content", ""))[:4_000],
+                "title": item.title[:500],
+                "snippet": item.snippet[:4_000],
             })
-        return {"query": call.arguments["query"], "results": results}
+        return {"query": query, "results": results}
 
     async def read(self, call: ToolCall) -> dict[str, Any]:
         source_id = call.arguments["source_id"]
@@ -174,33 +148,7 @@ class TavilyTools:
         except (KeyError, TypeError) as exc:
             raise ObservationSecurityError("source_id is unknown") from exc
         self._sources.move_to_end(source_id)
-        data = await self._post("https://api.tavily.com/extract", {
-            "urls": [url],
-            "extract_depth": "basic",
-            "format": "markdown",
-            "include_images": False,
-        })
-        results = data.get("results", ())
-        if not isinstance(results, list) or not results or not isinstance(results[0], Mapping):
-            raise ObservationExecutorError("web_extract_failed")
-        return {"source_id": source_id, "content": _truncate(str(results[0].get("raw_content", "")))}
-
-    async def _post(self, url: str, payload: dict[str, Any]) -> dict[str, Any]:
-        try:
-            client = self._client
-            if client is None:
-                import httpx
-                client = self._client = httpx.AsyncClient()
-            response = await client.post(url, json=payload, timeout=self.timeout_seconds)
-            response.raise_for_status()
-            data = response.json()
-            if not isinstance(data, dict):
-                raise ValueError
-            return data
-        except ObservationExecutorError:
-            raise
-        except Exception as exc:
-            raise ObservationExecutorError("web_provider_failed") from exc
+        return {"source_id": source_id, "content": _truncate(await self.provider.read(url))}
 
     def _register(self, raw: Any) -> str:
         if not isinstance(raw, str):
@@ -217,9 +165,7 @@ class TavilyTools:
         return source_id
 
     async def aclose(self) -> None:
-        if self._client is not None:
-            await self._client.aclose()
-            self._client = None
+        await self.provider.aclose()
 
 
 def _truncate(text: str) -> str:
@@ -414,6 +360,6 @@ class WorkspaceReadExecutor:
 
 
 __all__ = [
-    "ObservationExecutorError", "ObservationLedger", "ObservationSecurityError", "TavilyTools",
+    "ObservationExecutorError", "ObservationLedger", "ObservationSecurityError", "WebTools",
     "WorkspaceListExecutor", "WorkspaceReadExecutor", "WorkspaceReader",
 ]

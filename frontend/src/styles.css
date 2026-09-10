@@ -1,5 +1,6 @@
 /*
  * AuraBot 共享设计系统：统一系统字体、深浅色语义 token、基础控件与聊天布局。
+ * 设置表单使用框内焦点描边，避免配置与角色页的滚动容器裁切高亮。
  * 设置与角色页面负责各自的内容编排；桌宠控件负责悬停与拖动，本文只提供透明舞台、
  * Canvas 尺寸和消息表面。配合 App 的平台标记，为 macOS 隐藏标题栏留出窗口按钮与
  * 拖动区域；侧栏通过 Vue Transition 类横向收展，并遵循减少动态效果偏好。
@@ -60,6 +61,7 @@ button { -webkit-app-region: no-drag; }
 button:disabled { cursor: default; opacity: .45; }
 button, input, textarea, select { transition: color 140ms, background-color 140ms, border-color 140ms; }
 :focus-visible { outline: 2px solid var(--aura-accent); outline-offset: 3px; }
+.app-shell-settings :is(input, textarea, select):focus-visible { outline-offset: -2px; }
 ::selection { background: var(--aura-accent-soft); color: var(--aura-text); }
 svg { flex-shrink: 0; }
 [hidden] { display: none !important; }

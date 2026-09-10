@@ -2,7 +2,9 @@
 
 ## 配置事实源
 
-Electron Main 创建并维护一个 JSON 文件：默认 `<Electron userData>/desktop-v2/settings.json`。设置 `AURABOT_USER_DATA_DIR` 时直接使用该目录作为数据根，不追加 `desktop-v2`。
+当前产品尚未发行应用安装包，采用源码运行。用户通过 `AURABOT_USER_DATA_DIR` 指定安装目录；Electron Main 在该目录维护 `settings.json`。未指定时沿用 `<Electron userData>/desktop-v2`。安装目录用于运行依赖与持久化数据，源码仓库和开发环境可以位于别处。
+
+从仓库根运行 `node frontend/scripts/install-runtime.mjs "$AURABOT_USER_DATA_DIR"`，将锁定的 Pi 依赖与 AuraBot 扩展安装到该目录；该命令不修改用户配置。首次启动默认登记 `default: 安装目录` 和 `home: 用户家目录`，Pi 路径默认为 `<安装目录>/pi-runtime`。重新启动不覆盖已有工作区或安装路径，不自动迁移旧安装。
 
 ~~~text
 {
@@ -13,7 +15,7 @@ Electron Main 创建并维护一个 JSON 文件：默认 `<Electron userData>/de
 }
 ~~~
 
-上面是结构示意，不是可复制的完整配置。首次启动会生成符合 schema 的默认值，通过设置页修改即可。Renderer 获取脱敏内容及“是否已配置”标志；密钥输入为空表示保留，清除须显式选择。
+上面是结构示意，不是可复制的完整配置。首次启动会生成符合 schema 的默认值，通过设置页修改即可。Renderer 获取脱敏配置与首尾四位、等长黑点的密钥预览。未编辑时保留；删除预览后保存时，前端通过原有清除列表表达清除意图；输入新密钥后保存则替换。
 
 | 字段 | 用途 |
 | --- | --- |
@@ -21,7 +23,7 @@ Electron Main 创建并维护一个 JSON 文件：默认 `<Electron userData>/de
 | `backend.chat_model` | Main Agent 与内部 Memory 提炼使用的模型地址、名称、密钥、超时。 |
 | `backend.main_agent.speech` | 语音开关、DashScope、STT/TTS 型号及本地模型/许可证路径。 |
 | `backend.main_agent.web` | 可选 Tavily 密钥；未配置则不开放 Web 工具。 |
-| `backend.app.workspaces` | 已登记的工作区 ID 和绝对路径。 |
+| `backend.app.workspaces` | 用户提供的目录名称/ID 和绝对路径，直接进入 Main Agent 上下文，供理解项目与选择 Task 起始目录；不是 Pi 文件访问白名单。 |
 | `backend.task` | Pi 模型、Node、默认超时及应用管理的数据/安装路径。 |
 | `backend.memory.embedding` | 当前桌面配置使用本地 hash embedding、384 维。 |
 | `desktop` | 共享桌宠与桌面偏好；模型和布局按 Profile 管理。 |
@@ -70,7 +72,7 @@ Backend startup 只创建 Task 控制面、RealtimeHub 和 Profile owner。Main 
 ## 数据布局与退出
 
 ~~~text
-<数据根>/
+<安装目录>/
 ├── settings.json                 # Electron：共享保存设置
 ├── conversation-history.sqlite3  # Electron：分页的可见交付历史
 ├── profiles/<profile_id>/
@@ -81,9 +83,26 @@ Backend startup 只创建 Task 控制面、RealtimeHub 和 Profile owner。Main 
 ├── task/
 │   ├── task-runtime.sqlite3      # Backend：Task 状态/事件
 │   └── sessions/                 # Pi：执行会话
-└── pi-agent/                     # Electron 生成 Pi provider 配置
+├── pi-agent/                     # Electron 生成 Pi provider 配置
+├── pi-runtime/                   # 锁定的 Pi CLI 依赖
+└── pi-aurabot-task/               # 配套 Pi 扩展与依赖
 ~~~
 
 退出顺序为停止 realtime admission → 关闭活动 Profile 的 Runtime/Speech/Memory/存储 → 关闭 TaskManager/Pi → Electron 关闭自身数据库。Task 的恢复状态由 TaskManager 决定，不自动重跑。
 
-启动执行可重入迁移，保留旧 Profile 身份、Soul、有效未应用编辑和数据归属。SQLite 使用一致性备份，Qdrant 在排他锁和关闭边界迁移；成功前不删除源数据。详细保存/应用/激活、删除保护与目录见 [Profile 与 Live2D](profile-live2d.md)。生产 Node/Python/Pi 打包边界见 Windows 适配。
+启动执行可重入迁移，保留旧 Profile 身份、Soul、有效未应用编辑和数据归属。SQLite 使用一致性备份，Qdrant 在排他锁和关闭边界迁移；成功前不删除源数据。详细保存/应用/激活、删除保护与目录见 [Profile 与 Live2D](profile-live2d.md)。当前不提供 Node/Python/Pi 应用发行包；现阶段安装脚本依赖本机 Node/npm，Python 与前端仍从源码启动。
+
+
+### 搜索接口
+
+设置 → 模型接入 → 搜索接口中选择搜索服务商并填写 API Key。当前只接入 Tavily；
+InfoQuest 标记为暂未支持。密钥为空时不注册 Main Agent 的 Web 工具，填写后仍需保存并应用。
+密钥输入继续显示前四位、末四位和等长黑点，删除内容并保存即可清除。
+
+配置使用 `backend.main_agent.web.provider`（当前为 `tavily`）与
+`backend.main_agent.web.api_key`。旧 `tavily_api_key` 在 Electron 和后端读取时兼容，
+新字段存在时优先，即使为空；之后正常写入只保留新字段，配置版本仍为 2。
+
+后端 WebTools 管理搜索结果引用及内容边界，通过 search/read/aclose 接口使用 Tavily 适配器。
+适配器共享一个延迟创建的 HTTP 客户端；搜索与正文提取均携带密钥。更换提供商不改变
+Main Agent 的 web_search/web_read 参数和结果结构；本轮不支持多厂商并用或自动回退。

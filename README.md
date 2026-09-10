@@ -21,15 +21,17 @@ flowchart LR
 
 ## 开发启动
 
-需要 Node.js 22.19+、npm 与 [uv](https://docs.astral.sh/uv/)。macOS 是主要开发平台；Windows 打包与实机验证的边界见 [Windows 适配](docs/windows-platform-adaptation.md)。
+当前仅从源码开发运行，尚未发行应用安装包。需要 Node.js 22.19+、npm 与 [uv](https://docs.astral.sh/uv/)。macOS 是主要开发平台；Windows 打包与实机验证的边界见 [Windows 适配](docs/windows-platform-adaptation.md)。
 
 在仓库根目录安装依赖：
 
 ~~~bash
 uv sync --project backend --locked
-npm ci --prefix pi-aurabot-task
-npm ci --prefix pi-runtime
 npm ci --prefix frontend
+
+# 自选安装目录；源码仓库可以位于其他位置。
+export AURABOT_USER_DATA_DIR="$HOME/AuraBot"
+node frontend/scripts/install-runtime.mjs "$AURABOT_USER_DATA_DIR"
 ~~~
 
 启动：
@@ -41,9 +43,11 @@ npm run dev
 
 Electron Main 是唯一 Backend 进程 owner；开发入口启动 Electron/Vite，再由 Electron 启动 Python。Vite 使用 `127.0.0.1:6400`，Backend 使用 `127.0.0.1:6401`。不要另外启动第二个 Backend；端口被其他进程占用时应用报告错误，不终止其他进程。
 
-首次运行自动创建 `<Electron userData>/desktop-v2/settings.json`。打开设置，填写 Main Agent 模型与密钥，先“保存”，再“应用”。Task/Pi 和语音可分别配置；人格和 Live2D 在 Profile 详情独立保存、应用。无需复制或维护仓库 YAML 配置。
+首次运行在选定的安装目录创建 `settings.json`，默认登记 `default: 安装目录` 和 `home: 用户家目录`。打开设置，填写 Main Agent 模型与密钥，先“保存”，再“应用”。Task/Pi 和语音可分别配置；人格和 Live2D 在 Profile 详情独立保存、应用。无需复制或维护仓库 YAML 配置。
 
-`AURABOT_USER_DATA_DIR` 可指定隔离的数据根，此时直接使用该目录，不再追加 `desktop-v2`。Electron 将 JSON 路径通过 `AURABOT_CONFIG_PATH` 传给 Python；Python 只在启动时读取。
+`AURABOT_USER_DATA_DIR` 是当前源码运行方式的安装目录入口，后续启动也需设置为同一目录；未指定时沿用 `<Electron userData>/desktop-v2`。Pi 依赖、Pi 扩展、Profile、历史、Task 会话和配置放在安装目录；源码及其 Python/前端开发环境仍可位于仓库中。安装脚本仅准备运行依赖，不修改已有配置或数据。
+
+工作目录是用户希望 Main Agent 了解的任务位置参考。Main Agent 的上下文包含登记名称和绝对路径，指派任务时仍通过工作区 ID 选择起始目录；它不是 Pi 的文件访问沙箱。已有安装保留原来的工作区和 Pi 路径，不自动迁移或新增默认项。Electron 将 JSON 路径通过 `AURABOT_CONFIG_PATH` 传给 Python；Python 只在启动时读取。
 
 ## 配置、数据与验证
 

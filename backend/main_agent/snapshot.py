@@ -3,7 +3,8 @@
 ContextStore supplies ordered heard conversation; Runtime identifies every segment in the current ActiveInput
 and supplies Memory plus the frozen tool surface. The projector preserves current input ahead of older variable
 facts, deterministically truncates it only when required, and always keeps runtime/tool authority. Soul is a
-separate system message.
+separate system message. User-provided workspace names and absolute paths are static location context,
+not Pi filesystem permissions; projection does not scan those directories.
 """
 
 from __future__ import annotations
@@ -58,8 +59,9 @@ class Snapshot:
 class SnapshotProjector:
     """Create a compact provider payload without compatibility copies or mutable source aliases."""
 
-    def __init__(self, budget: SnapshotBudget | None = None) -> None:
+    def __init__(self, budget: SnapshotBudget | None = None, *, workspaces: Mapping[str, str] | None = None) -> None:
         self.budget = budget or SnapshotBudget()
+        self.workspaces = dict(workspaces or {})
 
     def project(
         self,
@@ -97,6 +99,11 @@ class SnapshotProjector:
             "runtime_state": runtime,
             "allowed_tool_surface": tools,
         }
+        if self.workspaces:
+            sections["user_workspaces"] = {
+                "purpose": "User-provided directory references for understanding projects and choosing Task starting locations; not Pi filesystem access boundaries.",
+                "directories": [{"id": key, "path": path} for key, path in self.workspaces.items()],
+            }
         _fit(sections, self.budget.max_prompt_chars, protected)
         prompt = _encode(sections)
         return Snapshot(
