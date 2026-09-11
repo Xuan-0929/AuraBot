@@ -70,11 +70,9 @@ const emit = defineEmits<{
 }>();
 
 const voiceLabel = computed(() => {
-  const english = props.displayLanguage === "en";
-  const japanese = props.displayLanguage === "ja";
-  if (props.voiceInputState === "connecting") return english ? "Connecting microphone" : japanese ? "マイクに接続中" : "正在连接麦克风";
-  if (props.voiceInputState === "error") return english ? "Microphone error — retry" : japanese ? "マイクエラー：再試行" : "麦克风异常，点击重试";
-  return props.voiceInputActive ? (english ? "Stop voice input" : japanese ? "音声入力を停止" : "停止语音输入") : t(props.displayLanguage, "startVoiceInput");
+  if (props.voiceInputState === "connecting") return t(props.displayLanguage, "microphoneConnecting");
+  if (props.voiceInputState === "error") return t(props.displayLanguage, "microphoneErrorRetry");
+  return props.voiceInputActive ? t(props.displayLanguage, "stopVoiceInput") : t(props.displayLanguage, "startVoiceInput");
 });
 
 function handleFocusOut(event: FocusEvent) {

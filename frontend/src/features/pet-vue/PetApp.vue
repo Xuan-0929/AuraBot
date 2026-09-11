@@ -21,7 +21,7 @@
       {{ mainAgentClauseText ?? petStore.petActivity?.message }}
     </aside>
 
-    <p v-if="visualError" class="pet-voice-error" role="status">视觉不可用：{{ visualError }}</p>
+    <p v-if="visualError" class="pet-voice-error" role="status">{{ t(petStore.displayLanguage, 'visualUnavailable') }}：{{ visualError }}</p>
     <p v-if="voiceError" class="pet-voice-error" role="alert">{{ voiceError }}</p>
     <div class="desktop-pet-model-shell pet-vue-model-shell" data-testid="live2d-model-surface">
       <div class="pet-vue-live2d-frame">
@@ -159,7 +159,7 @@ onMounted(async()=>{
       else if(command.type==="reconnect"){await mainAgentRealtime.stop();visual=await connect();}
       else {await connect();await mainAgentRealtime.submitText(command.text??"",command.id);}
       await window.aurabot.petCommandResult({id:command.id,visual});
-    }catch(error){const detail=error instanceof Error?error.message:"连接失败";voiceError.value=detail;await window.aurabot.petCommandResult({id:command.id,error:detail});}
+    }catch(error){const detail=error instanceof Error?error.message:t(petStore.displayLanguage, 'connectionFailed');voiceError.value=detail;await window.aurabot.petCommandResult({id:command.id,error:detail});}
   });
   await window.aurabot.petReady();
   const settings=await window.aurabot.getSettings();
@@ -211,7 +211,7 @@ async function handleVoiceToggle() {
   microphoneError.value = false;
   isVoiceConnecting.value = true;
   try {await mainAgentRealtime.toggle({profileId:profile.id,revision:petStore.profileRuntime?.revision});voiceEnabled.value=mainAgentRealtime.voiceEnabled;}
-  catch(error){voiceEnabled.value=false;microphoneError.value=true;voiceError.value=error instanceof Error?error.message:"语音不可用";}
+  catch(error){voiceEnabled.value=false;microphoneError.value=true;voiceError.value=error instanceof Error?error.message:t(petStore.displayLanguage, 'voiceUnavailable');}
   finally { isVoiceConnecting.value = false; }
 }
 

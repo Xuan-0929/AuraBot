@@ -1,3 +1,4 @@
+<!-- Renders the localized Agent activity indicator from the shared i18n vocabulary. -->
 <template>
   <div class="status-bar" aria-label="Agent status">
     <span :class="['status-dot', `status-dot-${status}`]" />
@@ -15,6 +16,6 @@ withDefaults(
     status: AgentStatus;
     displayLanguage?: PetSettings["displayLanguage"];
   }>(),
-  { displayLanguage: "en" }
+  { displayLanguage: "zh" }
 );
 </script>

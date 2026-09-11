@@ -31,6 +31,7 @@ if(process.env.AURABOT_USER_DATA_DIR)app.setPath('userData',resolve(process.env.
 const projectRoot=resolve(__dirname,'../../..');
 let backend:BackendProcess|undefined;
 let history:ConversationHistory|undefined;
+let desktopConfig:DesktopConfigStore|undefined;
 
 let quitting=false;
 let tasks:TaskStatusFeed|undefined;
@@ -40,7 +41,7 @@ async function bootstrap(){
  const root=resolve(process.env.AURABOT_USER_DATA_DIR??join(app.getPath('userData'),'desktop-v2'));
  const settingsPath=join(root,'settings.json');
  const legacySettings=existsSync(settingsPath)?JSON.parse(readFileSync(settingsPath,'utf8')):null;
- const config=new DesktopConfigStore(root,projectRoot);
+ const config=desktopConfig=new DesktopConfigStore(root,projectRoot);
  history=new ConversationHistory(root);
  const shared=config.snapshot().backend;
  const dataRoot=resolve(dirname(config.path),shared.app.data_dir);
@@ -185,9 +186,9 @@ async function bootstrap(){
  pet.webContents.on('render-process-gone',()=>{petReady=false;for(const item of pending.values()){clearTimeout(item.timer);item.reject(new Error('桌宠窗口已断开'));}pending.clear();});
  try{await backend.start();await activate(runtime.selectedId,true,false,true);}catch(error){config.error=error instanceof Error?error.message:'Backend 启动失败';changed();openSettingsWindow();}
 }
-app.whenReady().then(bootstrap).catch(error=>{dialog.showErrorBox('AuraBot 启动失败',error instanceof Error?error.message:'无法初始化应用数据。');app.quit();});
+app.whenReady().then(bootstrap).catch(error=>{const language=desktopConfig?.current().desktop.pet.displayLanguage??'zh';dialog.showErrorBox(t(language,'startupFailedTitle'),error instanceof Error?error.message:t(language,'startupFailedMessage'));app.quit();});
 app.on('window-all-closed',()=>app.quit());
 app.on('before-quit',event=>{
  if(quitting)return;event.preventDefault();quitting=true;tasks?.stop();
- void (async()=>{try{await backend?.stop();history?.close();app.quit();}catch(error){quitting=false;dialog.showErrorBox('AuraBot 尚未退出',error instanceof Error?error.message:'Backend 清理尚未完成，请稍后重试。');}})();
+ void (async()=>{try{await backend?.stop();history?.close();app.quit();}catch(error){quitting=false;const language=desktopConfig?.current().desktop.pet.displayLanguage??'zh';dialog.showErrorBox(t(language,'quitFailedTitle'),error instanceof Error?error.message:t(language,'quitFailedMessage'));}})();
 });

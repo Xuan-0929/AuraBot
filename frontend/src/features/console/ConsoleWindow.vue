@@ -8,7 +8,7 @@
   <main class="console-window" :aria-label="t(store.displayLanguage, 'consoleTitle')">
     <header class="console-header" :inert="overlayOpen ? true : undefined">
       <div class="console-brand">
-        <button ref="sidebarToggle" type="button" class="icon-button" aria-controls="console-tasks" :aria-expanded="sidebarOpen" :aria-label="sidebarOpen ? '收起任务列表' : '展开任务列表'" :title="sidebarOpen ? '收起任务列表' : '展开任务列表'" @click="toggleSidebar">
+        <button ref="sidebarToggle" type="button" class="icon-button" aria-controls="console-tasks" :aria-expanded="sidebarOpen" :aria-label="t(store.displayLanguage, sidebarOpen ? 'taskSidebarCollapse' : 'taskSidebarExpand')" :title="t(store.displayLanguage, sidebarOpen ? 'taskSidebarCollapse' : 'taskSidebarExpand')" @click="toggleSidebar">
           <Icon icon="solar:sidebar-minimalistic-linear" aria-hidden="true" />
         </button>
         <span class="aura-wordmark">{{ t(store.displayLanguage, 'chat') }}</span>
@@ -23,15 +23,15 @@
       </Transition>
       <Transition name="console-sidebar">
       <aside v-show="sidebarOpen" id="console-tasks" ref="sidebar" class="console-tasks" :class="{'console-tasks-overlay': narrow}" :inert="!sidebarOpen ? true : undefined" :aria-hidden="!sidebarOpen ? true : undefined" :role="overlayOpen ? 'dialog' : undefined" :aria-modal="overlayOpen ? true : undefined" aria-labelledby="tasks-heading" tabindex="-1" @keydown="handleSidebarKeydown">
-        <div class="console-tasks-heading"><h2 id="tasks-heading">任务</h2><button v-if="narrow" type="button" class="icon-button" aria-label="关闭任务列表" title="关闭任务列表" @click="closeSidebar"><Icon icon="solar:close-circle-linear" aria-hidden="true" /></button></div>
+        <div class="console-tasks-heading"><h2 id="tasks-heading">{{ t(store.displayLanguage, 'taskList') }}</h2><button v-if="narrow" type="button" class="icon-button" :aria-label="t(store.displayLanguage, 'closeTaskList')" :title="t(store.displayLanguage, 'closeTaskList')" @click="closeSidebar"><Icon icon="solar:close-circle-linear" aria-hidden="true" /></button></div>
         <p v-if="taskError" role="status" class="inline-error">{{ taskError }}</p>
-        <p v-else-if="!tasks.length" class="task-empty">暂无任务</p>
-        <ul class="task-list"><li v-for="task in tasks" :key="task.id"><strong>{{ task.title }}</strong><span class="task-status" :data-status="task.status"><svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.7" stroke-linecap="round" stroke-linejoin="round" aria-hidden="true"><path :d="taskPaths[task.status] ?? taskPaths.queued" /></svg>{{ taskLabels[task.status] ?? task.status }}</span></li></ul>
+        <p v-else-if="!tasks.length" class="task-empty">{{ t(store.displayLanguage, 'noTasks') }}</p>
+        <ul class="task-list"><li v-for="task in tasks" :key="task.id"><strong>{{ task.title }}</strong><span class="task-status" :data-status="task.status"><svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.7" stroke-linecap="round" stroke-linejoin="round" aria-hidden="true"><path :d="taskPaths[task.status] ?? taskPaths.queued" /></svg>{{ taskLabel(task.status) }}</span></li></ul>
       </aside>
       </Transition>
       <section class="console-chat" :inert="overlayOpen ? true : undefined" :aria-label="t(store.displayLanguage, 'mainConversation')">
         <div v-if="store.historyCursor || store.chatError" class="console-chat-notices">
-          <button v-if="store.historyCursor" type="button" class="history-button" @click="store.loadOlderHistory()"><Icon icon="solar:history-linear" aria-hidden="true" />加载更早记录</button>
+          <button v-if="store.historyCursor" type="button" class="history-button" @click="store.loadOlderHistory()"><Icon icon="solar:history-linear" aria-hidden="true" />{{ t(store.displayLanguage, 'loadEarlierHistory') }}</button>
           <p v-if="store.chatError" role="alert" class="inline-error">{{ store.chatError }}</p>
         </div>
         <MessageList :messages="store.messages" :display-language="store.displayLanguage" />
@@ -62,7 +62,7 @@ let wideSidebarOpen = true;
 const overlayOpen = computed(() => narrow.value && sidebarOpen.value);
 const sidebarToggle = ref<HTMLButtonElement>();
 const sidebar = ref<HTMLElement>();
-const taskLabels: Record<string, string> = {queued:'排队中', running:'执行中', waiting:'等待回答', paused:'已暂停', completed:'已完成', failed:'失败', cancelled:'已取消'};
+const taskLabelKeys = {queued:'taskQueued', running:'taskRunning', waiting:'taskWaiting', paused:'taskPaused', completed:'taskCompleted', failed:'taskFailed', cancelled:'taskCancelled'} as const;
 const taskPaths: Record<string, string> = {
   queued: 'M6 3h12M6 21h12M7 3v4l10 10v4M17 3v4L7 17v4',
   running: 'M7 4l14 8-14 8Z',
@@ -73,6 +73,7 @@ const taskPaths: Record<string, string> = {
   cancelled: 'M6 6l12 12M18 6 6 18'
 };
 let unsubscribe: (() => void) | undefined;
+function taskLabel(status: string) { const key = taskLabelKeys[status as keyof typeof taskLabelKeys]; return key ? t(store.displayLanguage, key) : status; }
 
 async function toggleSidebar() {
   sidebarOpen.value = !sidebarOpen.value;

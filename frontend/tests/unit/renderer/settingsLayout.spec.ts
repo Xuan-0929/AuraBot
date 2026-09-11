@@ -11,6 +11,7 @@ import { tmpdir } from 'node:os';
 import { join } from 'node:path';
 import SettingsWindow from '../../../src/features/settings/SettingsWindow.vue';
 import { DesktopConfigStore } from '../../../src/main/desktopConfigStore';
+import { t } from '../../../src/i18n';
 let dispose:()=>void=()=>{};
 afterEach(()=>{dispose();vi.unstubAllGlobals();});
 it('preserves untouched keys and lets password inputs replace or delete every saved key',async()=>{
@@ -86,6 +87,8 @@ it('keeps advanced fields collapsed until invalid or a save failure needs attent
  expect(navigation[2]!.textContent).toBe('桌宠状态');expect(host.textContent).toContain('运行提示');expect(host.textContent).not.toContain('服务已连接');expect(host.textContent).toContain('桌宠鼠标穿透');expect(host.textContent).toContain('服务未连接');
  const language=host.querySelector('select')!;language.value='en';language.dispatchEvent(new Event('change',{bubbles:true}));await nextTick();
  expect(host.querySelector('.settings-v2-sidebar-brand')?.textContent).toBe('Settings');expect(host.querySelector('.settings-save-bar [role=status]')?.textContent).toBe('Unsaved');
+ expect(host.textContent).toContain(t('en','displayLanguage'));expect(host.textContent).toContain(t('en','clickThroughPet'));
  language.value='ja';language.dispatchEvent(new Event('change',{bubbles:true}));await nextTick();expect(host.querySelector('.settings-v2-sidebar-brand')?.textContent).toBe('設定');
+ expect(host.textContent).toContain(t('ja','displayLanguage'));expect(host.textContent).toContain(t('ja','clickThroughPet'));
 
 });

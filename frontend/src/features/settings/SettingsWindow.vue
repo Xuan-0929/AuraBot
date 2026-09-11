@@ -23,12 +23,12 @@
             <form ref="settingsForm" @submit.prevent="save" @invalid.capture="revealInvalid">
               <section v-if="page==='model'" class="settings-page-section">
                 <article v-for="(model,index) in [draft.backend.chat_model,draft.backend.task.model]" :key="index" class="settings-model-card">
-                  <h2>{{ index===0?'对话模型':'任务模型' }}</h2>
+                  <h2>{{ t(displayLanguage, index===0?'chatModel':'taskModel') }}</h2>
 
-                  <label class="settings-page-field"><span>API 地址</span><input v-model="model.base_url" placeholder="https://…/v1" autocomplete="off" /></label>
-                  <label class="settings-page-field"><span>模型名称</span><input v-model="model.model_name" autocomplete="off" /></label>
-                  <label class="settings-page-field"><span>API Key</span><SecretInput v-model="model.api_key" :preview="state.secretPreviews?.[index===0?'chat_model.api_key':'task.model.api_key']" :cleared="clearSecrets.includes(index===0?'chat_model.api_key':'task.model.api_key')" @update:model-value="updateSecretIntent(index===0?'chat_model.api_key':'task.model.api_key', $event)" /></label>
-                  <details class="settings-advanced"><summary>高级连接设置</summary><label class="settings-page-field"><span>请求超时（秒）</span><input v-model.number="model.timeout_seconds" type="number" min="1" max="600" /></label></details>
+                  <label class="settings-page-field"><span>{{ t(displayLanguage, 'apiAddress') }}</span><input v-model="model.base_url" placeholder="https://…/v1" autocomplete="off" /></label>
+                  <label class="settings-page-field"><span>{{ t(displayLanguage, 'modelName') }}</span><input v-model="model.model_name" autocomplete="off" /></label>
+                  <label class="settings-page-field"><span>{{ t(displayLanguage, 'apiKey') }}</span><SecretInput v-model="model.api_key" :display-language="displayLanguage" :preview="state.secretPreviews?.[index===0?'chat_model.api_key':'task.model.api_key']" :cleared="clearSecrets.includes(index===0?'chat_model.api_key':'task.model.api_key')" @update:model-value="updateSecretIntent(index===0?'chat_model.api_key':'task.model.api_key', $event)" /></label>
+                  <details class="settings-advanced"><summary>{{ t(displayLanguage, 'advancedConnectionSettings') }}</summary><label class="settings-page-field"><span>{{ t(displayLanguage, 'requestTimeoutSeconds') }}</span><input v-model.number="model.timeout_seconds" type="number" min="1" max="600" /></label></details>
                 </article>
                 <article class="settings-model-card">
                   <h2>{{ t(displayLanguage, 'searchInterface') }}</h2>
@@ -39,23 +39,23 @@
                       <option value="infoquest" disabled>InfoQuest（{{ t(displayLanguage, 'providerUnavailable') }}）</option>
                     </select>
                   </label>
-                  <label class="settings-page-field"><span>API Key</span><SecretInput v-model="draft.backend.main_agent.web.api_key" :preview="state.secretPreviews?.['main_agent.web.api_key']" :cleared="clearSecrets.includes('main_agent.web.api_key')" @update:model-value="updateSecretIntent('main_agent.web.api_key', $event)" /></label>
+                  <label class="settings-page-field"><span>{{ t(displayLanguage, 'apiKey') }}</span><SecretInput v-model="draft.backend.main_agent.web.api_key" :display-language="displayLanguage" :preview="state.secretPreviews?.['main_agent.web.api_key']" :cleared="clearSecrets.includes('main_agent.web.api_key')" @update:model-value="updateSecretIntent('main_agent.web.api_key', $event)" /></label>
                   <p class="settings-hint">{{ t(displayLanguage, 'searchKeyHint') }}</p>
                 </article>
               </section>
               <section v-else-if="page==='voice'" class="settings-page-section">
-                <label class="settings-page-toggle"><input v-model="draft.backend.main_agent.speech.enabled" type="checkbox" /> 启用语音能力</label>
-                <p class="settings-hint">仅在开启桌宠麦克风后采集声音。</p>
-                <label class="settings-page-field"><span>DashScope Key</span><SecretInput v-model="draft.backend.main_agent.speech.api_key" :preview="state.secretPreviews?.['main_agent.speech.api_key']" :cleared="clearSecrets.includes('main_agent.speech.api_key')" @update:model-value="updateSecretIntent('main_agent.speech.api_key', $event)" /></label>
-                <label class="settings-page-field"><span>音色</span><input v-model="draft.backend.main_agent.speech.tts_voice" /></label>
-                <details class="settings-advanced"><summary>语音模型与资源</summary><label v-for="field in speechFields" :key="field.key" class="settings-page-field"><span>{{ field.label }}</span><input v-model="draft.backend.main_agent.speech[field.key]" /></label></details>
+                <label class="settings-page-toggle"><input v-model="draft.backend.main_agent.speech.enabled" type="checkbox" /> {{ t(displayLanguage, 'enableVoiceCapability') }}</label>
+                <p class="settings-hint">{{ t(displayLanguage, 'voiceCaptureHint') }}</p>
+                <label class="settings-page-field"><span>DashScope Key</span><SecretInput v-model="draft.backend.main_agent.speech.api_key" :display-language="displayLanguage" :preview="state.secretPreviews?.['main_agent.speech.api_key']" :cleared="clearSecrets.includes('main_agent.speech.api_key')" @update:model-value="updateSecretIntent('main_agent.speech.api_key', $event)" /></label>
+                <label class="settings-page-field"><span>{{ t(displayLanguage, 'voiceTone') }}</span><input v-model="draft.backend.main_agent.speech.tts_voice" /></label>
+                <details class="settings-advanced"><summary>{{ t(displayLanguage, 'voiceModelsAndResources') }}</summary><label v-for="field in speechFields" :key="field.key" class="settings-page-field"><span>{{ t(displayLanguage, field.labelKey) }}</span><input v-model="draft.backend.main_agent.speech[field.key]" /></label></details>
               </section>
               <section v-else-if="page==='general'" class="settings-page-section">
-                <article class="settings-model-card"><h2>桌宠</h2>
-                <label class="settings-page-field"><span>显示语言</span><select v-model="draft.desktop.pet.displayLanguage"><option value="zh">中文</option><option value="en">English</option><option value="ja">日本語</option></select></label>
-                <label class="settings-page-toggle"><input v-model="draft.desktop.pet.clickThroughPet" type="checkbox" /> 桌宠鼠标穿透</label>
+                <article class="settings-model-card"><h2>{{ t(displayLanguage, 'desktopPet') }}</h2>
+                <label class="settings-page-field"><span>{{ t(displayLanguage, 'displayLanguage') }}</span><select v-model="draft.desktop.pet.displayLanguage"><option value="zh">中文</option><option value="en">English</option><option value="ja">日本語</option></select></label>
+                <label class="settings-page-toggle"><input v-model="draft.desktop.pet.clickThroughPet" type="checkbox" /> {{ t(displayLanguage, 'clickThroughPet') }}</label>
 
-                <label class="settings-page-toggle"><input v-model="draft.desktop.systemNotificationsEnabled" type="checkbox" /> 系统通知</label>
+                <label class="settings-page-toggle"><input v-model="draft.desktop.systemNotificationsEnabled" type="checkbox" /> {{ t(displayLanguage, 'systemNotifications') }}</label>
                 </article>
                 <article v-if="runtimeHints.length || state.error" class="settings-model-card">
                   <h2>{{ t(displayLanguage, 'runtimeHints') }}</h2>
@@ -64,22 +64,22 @@
                 </article>
               </section>
               <section v-else-if="page==='workspace'" class="settings-page-section">
-                <p class="settings-hint">向 Main Agent 提供你希望它了解的目录，帮助选择任务的起始位置。</p>
-                <label class="settings-page-field"><span>安装目录</span><input :value="draft.backend.app.data_dir" readonly /></label>
-                <p class="settings-hint">安装目录存放运行依赖、角色和历史数据。</p>
+                <p class="settings-hint">{{ t(displayLanguage, 'workspaceHint') }}</p>
+                <label class="settings-page-field"><span>{{ t(displayLanguage, 'dataDirectory') }}</span><input :value="draft.backend.app.data_dir" readonly /></label>
+                <p class="settings-hint">{{ t(displayLanguage, 'dataDirectoryHint') }}</p>
                 <div v-for="(workspace,index) in draft.backend.app.workspaces" :key="index" class="settings-model-card">
-                  <label class="settings-page-field"><span>工作区名称</span><input v-model="workspace.id" required /></label>
-                  <label class="settings-page-field"><span>目录绝对路径</span><input v-model="workspace.path" required /></label>
-                  <button type="button" @click="draft.backend.app.workspaces.splice(index,1)">移除登记</button>
+                  <label class="settings-page-field"><span>{{ t(displayLanguage, 'workspaceName') }}</span><input v-model="workspace.id" required /></label>
+                  <label class="settings-page-field"><span>{{ t(displayLanguage, 'workspacePath') }}</span><input v-model="workspace.path" required /></label>
+                  <button type="button" @click="draft.backend.app.workspaces.splice(index,1)">{{ t(displayLanguage, 'removeWorkspace') }}</button>
                 </div>
-                <button type="button" class="settings-workspace-add" @click="draft.backend.app.workspaces.push({id:'workspace-'+(draft.backend.app.workspaces.length+1),path:''})">添加工作区</button>
-                <details class="settings-advanced"><summary>任务运行设置</summary><label class="settings-page-field"><span>执行超时（秒）</span><input v-model.number="draft.backend.task.default_timeout_seconds" type="number" min="1" max="86400" /></label>
-                <label class="settings-page-field"><span>Node 可执行文件</span><input v-model="draft.backend.task.node_executable" /></label></details>
+                <button type="button" class="settings-workspace-add" @click="draft.backend.app.workspaces.push({id:'workspace-'+(draft.backend.app.workspaces.length+1),path:''})">{{ t(displayLanguage, 'addWorkspace') }}</button>
+                <details class="settings-advanced"><summary>{{ t(displayLanguage, 'taskRuntimeSettings') }}</summary><label class="settings-page-field"><span>{{ t(displayLanguage, 'executionTimeoutSeconds') }}</span><input v-model.number="draft.backend.task.default_timeout_seconds" type="number" min="1" max="86400" /></label>
+                <label class="settings-page-field"><span>{{ t(displayLanguage, 'nodeExecutable') }}</span><input v-model="draft.backend.task.node_executable" /></label></details>
               </section>
               <footer class="settings-save-bar">
                 <span role="status">{{ configStatus }}</span>
-                <button type="submit" :class="{primary:dirty}" :disabled="working || !dirty">保存</button>
-                <button ref="applyButton" type="button" :class="{primary:!dirty && (state.pending || !state.online)}" :disabled="working || dirty || (!state.pending && state.online)" @click="apply(false)">{{ working?'处理中…':'应用' }}</button>
+                <button type="submit" :class="{primary:dirty}" :disabled="working || !dirty">{{ t(displayLanguage, 'save') }}</button>
+                <button ref="applyButton" type="button" :class="{primary:!dirty && (state.pending || !state.online)}" :disabled="working || dirty || (!state.pending && state.online)" @click="apply(false)">{{ t(displayLanguage, working?'processing':'apply') }}</button>
               </footer>
             </form>
           </template>
@@ -88,10 +88,10 @@
     </div>
     <div v-if="busy" class="settings-dialog-backdrop">
       <section @keydown.esc="busy=undefined" @keydown.tab.prevent="cycleDialogFocus" role="alertdialog" aria-modal="true" aria-labelledby="restart-warning" class="settings-dialog">
-        <h2 id="restart-warning">应用配置会中断正在进行的工作</h2>
-        <ul><li v-if="busy.tasks">{{ busy.tasks }} 个 Task 正在运行，重启后会暂停，不会自动恢复。</li><li v-if="busy.memoryWriting">Memory 正在写入，本次写入会中断。</li><li v-if="busy.mainAgent">Aura 正在处理对话或播放回复，本轮会中断。</li></ul>
-        <button ref="cancelButton" type="button" @click="busy=undefined">取消</button>
-        <button type="button" :disabled="working" @click="apply(true)">仍然应用</button>
+        <h2 id="restart-warning">{{ t(displayLanguage, 'restartWarningTitle') }}</h2>
+        <ul><li v-if="busy.tasks">{{ interpolate(t(displayLanguage, 'taskRestartWarning'), {count: busy.tasks}) }}</li><li v-if="busy.memoryWriting">{{ t(displayLanguage, 'memoryRestartWarning') }}</li><li v-if="busy.mainAgent">{{ t(displayLanguage, 'agentRestartWarning') }}</li></ul>
+        <button ref="cancelButton" type="button" @click="busy=undefined">{{ t(displayLanguage, 'cancel') }}</button>
+        <button type="button" :disabled="working" @click="apply(true)">{{ t(displayLanguage, 'applyAnyway') }}</button>
       </section>
     </div>
   </main>
@@ -106,7 +106,7 @@ const backIcon={...solarIcons.icons['arrow-left-linear'],width:24,height:24};
 const editingName=ref<string|null>(null);
 import ProfilesPage from '../profiles/ProfilesPage.vue';
 import SecretInput from './SecretInput.vue';
-import { t } from '../../i18n';
+import { interpolate, t, type UiTextKey } from '../../i18n';
 import SettingsNavIcon, {type SettingsNavIconName} from './SettingsNavIcon.vue';
 const store=useAuraBotStore();
 const sections=computed<Array<{key:SettingsNavIconName;label:string}>>(()=>[{key:'model',label:t(displayLanguage.value,'modelConnections')},{key:'voice',label:t(displayLanguage.value,'pVoice')},{key:'general',label:t(displayLanguage.value,'petStatus')},{key:'workspace',label:t(displayLanguage.value,'pWorkspaces')},{key:'profiles',label:t(displayLanguage.value,'pTitle')}]);
@@ -130,10 +130,10 @@ const runtimeHints=computed(()=>{
   if(!capabilities.tasks)hints.push(t(displayLanguage.value,'tasksNotConfigured'));
   return hints;
 });
-const speechFields:Array<{key:'stt_model_name'|'tts_model_name'|'tts_voice'|'silero_model_path'|'silero_license_path'|'smart_turn_model_path'|'smart_turn_license_path';label:string}>=[
- {key:'stt_model_name',label:'STT 模型'},{key:'tts_model_name',label:'TTS 模型'},
- {key:'silero_model_path',label:'VAD 模型文件'},{key:'silero_license_path',label:'VAD 许可证文件'},
- {key:'smart_turn_model_path',label:'断句模型文件'},{key:'smart_turn_license_path',label:'断句许可证文件'}
+const speechFields:Array<{key:'stt_model_name'|'tts_model_name'|'tts_voice'|'silero_model_path'|'silero_license_path'|'smart_turn_model_path'|'smart_turn_license_path';labelKey:UiTextKey}>=[
+ {key:'stt_model_name',labelKey:'sttModel'},{key:'tts_model_name',labelKey:'ttsModel'},
+ {key:'silero_model_path',labelKey:'vadModelFile'},{key:'silero_license_path',labelKey:'vadLicenseFile'},
+ {key:'smart_turn_model_path',labelKey:'turnModelFile'},{key:'smart_turn_license_path',labelKey:'turnLicenseFile'}
 ];
 const settingsForm=ref<HTMLFormElement>();
 const applyButton=ref<HTMLButtonElement>();
@@ -144,8 +144,8 @@ function revealAdvanced(){settingsForm.value?.querySelectorAll('details').forEac
 function cycleDialogFocus(){const next=cancelButton.value?.nextElementSibling as HTMLButtonElement|undefined;if(document.activeElement===cancelButton.value)next?.focus();else cancelButton.value?.focus();}
 function updateSecretIntent(path:string,value:string){clearSecrets.value=clearSecrets.value.filter(item=>item!==path);if(!value && state.value?.secrets[path])clearSecrets.value.push(path);}
 function load(value:SettingsState){state.value=value;draft.value=JSON.parse(JSON.stringify(value.config));baseline.value=JSON.stringify(draft.value);clearSecrets.value=[];}
-async function save(){if(!draft.value)return;working.value=true;error.value='';try{load(await window.aurabot.saveSettings(JSON.parse(JSON.stringify(draft.value)),[...clearSecrets.value]));}catch(e){error.value=e instanceof Error?e.message:'保存失败';revealAdvanced();}finally{working.value=false;}}
-async function apply(force:boolean){if(dirty.value)return;working.value=true;error.value='';try{const result=await window.aurabot.applySettings(force);state.value=result.state;busy.value=result.busy;if(busy.value){await nextTick();cancelButton.value?.focus();}else await store.loadInitialState();}catch(e){error.value=e instanceof Error?e.message:'应用失败';busy.value=undefined;}finally{working.value=false;}}
+async function save(){if(!draft.value)return;working.value=true;error.value='';try{load(await window.aurabot.saveSettings(JSON.parse(JSON.stringify(draft.value)),[...clearSecrets.value]));}catch(e){error.value=e instanceof Error?e.message:t(displayLanguage.value,'saveFailed');revealAdvanced();}finally{working.value=false;}}
+async function apply(force:boolean){if(dirty.value)return;working.value=true;error.value='';try{const result=await window.aurabot.applySettings(force);state.value=result.state;busy.value=result.busy;if(busy.value){await nextTick();cancelButton.value?.focus();}else await store.loadInitialState();}catch(e){error.value=e instanceof Error?e.message:t(displayLanguage.value,'applyFailed');busy.value=undefined;}finally{working.value=false;}}
 let unsubscribe:(()=>void)|undefined;
 onMounted(async()=>{try{load(await window.aurabot.getSettings());unsubscribe=window.aurabot.onSettingsChanged(value=>{state.value=value;if(!dirty.value)load(value);});}catch(e){error.value=String(e);}});
 onBeforeUnmount(()=>unsubscribe?.());

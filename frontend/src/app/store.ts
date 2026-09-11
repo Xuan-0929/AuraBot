@@ -21,6 +21,7 @@ import {
   type PetSettings
 } from "@shared/schemas/petSettings";
 import type { Profile } from "@shared/schemas/profile";
+import { t } from "../i18n";
 
 const PET_ACTIVITY_TIMEOUT_MS = 7000;
 type Unsubscribe = () => void;
@@ -178,7 +179,7 @@ export const useAuraBotStore = defineStore("auraBot", {
         if(this.profile?.id!==pending.profileId||generation!==this.profileRuntime?.generation)return;
         this.messages = this.messages.filter((message) => message.id !== pending.id);
         this.agentStatus = "idle";
-        this.chatError=error instanceof Error?error.message:"发送失败";
+        this.chatError=error instanceof Error?error.message:t(this.displayLanguage,"sendFailed");
         throw error;
       }
     },

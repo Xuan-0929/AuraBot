@@ -199,7 +199,14 @@ const UI_TEXT = {
     lastRecall: "Last Recall",
     seeds: "Seeds",
     expanded: "Expanded",
-    returned: "Returned"
+    returned: "Returned",
+    taskSidebarExpand: "Expand task list", taskSidebarCollapse: "Collapse task list", taskList: "Tasks", closeTaskList: "Close task list", noTasks: "No tasks yet", loadEarlierHistory: "Load earlier history",
+    taskQueued: "Queued", taskRunning: "Running", taskWaiting: "Waiting for input", taskPaused: "Paused", taskCompleted: "Completed", taskFailed: "Failed", taskCancelled: "Cancelled",
+    taskModel: "Task model", apiAddress: "API URL", modelName: "Model name", advancedConnectionSettings: "Advanced connection settings", requestTimeoutSeconds: "Request timeout (seconds)",
+    enableVoiceCapability: "Enable voice", voiceCaptureHint: "Audio is captured only while the pet microphone is on.", voiceTone: "Voice", voiceModelsAndResources: "Voice models and resources",
+    desktopPet: "Desktop pet", displayLanguage: "Display language", clickThroughPet: "Allow clicks through the pet", workspaceHint: "Provide directories the Main Agent can use when choosing where a task starts.", dataDirectory: "Data directory", dataDirectoryHint: "The data directory stores runtime dependencies, Profiles, and history.", workspaceName: "Workspace name", workspacePath: "Absolute directory path", removeWorkspace: "Remove workspace", addWorkspace: "Add workspace", taskRuntimeSettings: "Task runtime settings", executionTimeoutSeconds: "Execution timeout (seconds)", nodeExecutable: "Node executable",
+    save: "Save", apply: "Apply", processing: "Processing…", saveFailed: "Could not save settings", applyFailed: "Could not apply settings", restartWarningTitle: "Applying configuration interrupts work in progress", taskRestartWarning: "{count} task(s) are running. They will pause after restart and will not resume automatically.", memoryRestartWarning: "Memory is writing. This write will be interrupted.", agentRestartWarning: "Aura is handling a conversation or playing a reply. This turn will be interrupted.", cancel: "Cancel", applyAnyway: "Apply anyway",
+    secretSavedTooltip: "Saved. Type a new key to replace it, or delete it and save to clear it.", secretEmptyTooltip: "Enter a key. Leave it empty and save to clear it.", visualUnavailable: "Visual unavailable", microphoneConnecting: "Connecting microphone", microphoneErrorRetry: "Microphone error — retry", stopVoiceInput: "Stop voice input", connectionFailed: "Connection failed", voiceUnavailable: "Voice unavailable", sendFailed: "Send failed", startupFailedTitle: "AuraBot failed to start", startupFailedMessage: "Could not initialize application data.", quitFailedTitle: "AuraBot is still running", quitFailedMessage: "Backend cleanup has not finished. Please try again shortly.", sttModel: "STT model", ttsModel: "TTS model", vadModelFile: "VAD model file", vadLicenseFile: "VAD license file", turnModelFile: "Turn-detection model file", turnLicenseFile: "Turn-detection license file"
   },
   zh: {
     ...PROFILE_TEXT.zh,
@@ -386,7 +393,14 @@ const UI_TEXT = {
     lastRecall: "最近召回",
     seeds: "种子",
     expanded: "扩展",
-    returned: "返回"
+    returned: "返回",
+    taskSidebarExpand: "展开任务列表", taskSidebarCollapse: "收起任务列表", taskList: "任务", closeTaskList: "关闭任务列表", noTasks: "暂无任务", loadEarlierHistory: "加载更早记录",
+    taskQueued: "排队中", taskRunning: "执行中", taskWaiting: "等待回答", taskPaused: "已暂停", taskCompleted: "已完成", taskFailed: "失败", taskCancelled: "已取消",
+    taskModel: "任务模型", apiAddress: "API 地址", modelName: "模型名称", advancedConnectionSettings: "高级连接设置", requestTimeoutSeconds: "请求超时（秒）",
+    enableVoiceCapability: "启用语音能力", voiceCaptureHint: "仅在开启桌宠麦克风后采集声音。", voiceTone: "音色", voiceModelsAndResources: "语音模型与资源",
+    desktopPet: "桌宠", displayLanguage: "显示语言", clickThroughPet: "桌宠鼠标穿透", workspaceHint: "向 Main Agent 提供你希望它了解的目录，帮助选择任务的起始位置。", dataDirectory: "安装目录", dataDirectoryHint: "安装目录存放运行依赖、角色和历史数据。", workspaceName: "工作区名称", workspacePath: "目录绝对路径", removeWorkspace: "移除登记", addWorkspace: "添加工作区", taskRuntimeSettings: "任务运行设置", executionTimeoutSeconds: "执行超时（秒）", nodeExecutable: "Node 可执行文件",
+    save: "保存", apply: "应用", processing: "处理中…", saveFailed: "保存失败", applyFailed: "应用失败", restartWarningTitle: "应用配置会中断正在进行的工作", taskRestartWarning: "{count} 个 Task 正在运行，重启后会暂停，不会自动恢复。", memoryRestartWarning: "Memory 正在写入，本次写入会中断。", agentRestartWarning: "Aura 正在处理对话或播放回复，本轮会中断。", cancel: "取消", applyAnyway: "仍然应用",
+    secretSavedTooltip: "已保存；输入新密钥替换，删除后保存清除", secretEmptyTooltip: "输入密钥，留空后保存清除", visualUnavailable: "视觉不可用", microphoneConnecting: "正在连接麦克风", microphoneErrorRetry: "麦克风异常，点击重试", stopVoiceInput: "停止语音输入", connectionFailed: "连接失败", voiceUnavailable: "语音不可用", sendFailed: "发送失败", startupFailedTitle: "AuraBot 启动失败", startupFailedMessage: "无法初始化应用数据。", quitFailedTitle: "AuraBot 尚未退出", quitFailedMessage: "Backend 清理尚未完成，请稍后重试。", sttModel: "STT 模型", ttsModel: "TTS 模型", vadModelFile: "VAD 模型文件", vadLicenseFile: "VAD 许可证文件", turnModelFile: "断句模型文件", turnLicenseFile: "断句许可证文件"
   }
 } as const;
 
@@ -394,7 +408,6 @@ export type UiTextKey = keyof typeof UI_TEXT.en;
 
 const JAPANESE_UI_TEXT: Record<UiTextKey, string> = {
   ...PROFILE_TEXT.ja,
-  ...UI_TEXT.en,
   modelConnections: "モデル接続",
   searchInterface: "検索連携",
   searchProvider: "検索プロバイダー",
@@ -577,7 +590,14 @@ const JAPANESE_UI_TEXT: Record<UiTextKey, string> = {
   lastRecall: "直近の想起",
   seeds: "シード",
   expanded: "展開",
-  returned: "返却"
+  returned: "返却",
+  taskSidebarExpand: "タスクリストを開く", taskSidebarCollapse: "タスクリストを閉じる", taskList: "タスク", closeTaskList: "タスクリストを閉じる", noTasks: "タスクはまだありません", loadEarlierHistory: "以前の履歴を読み込む",
+  taskQueued: "待機中", taskRunning: "実行中", taskWaiting: "回答待ち", taskPaused: "一時停止中", taskCompleted: "完了", taskFailed: "失敗", taskCancelled: "キャンセル済み",
+  taskModel: "タスクモデル", apiAddress: "API URL", modelName: "モデル名", advancedConnectionSettings: "詳細な接続設定", requestTimeoutSeconds: "リクエストのタイムアウト（秒）",
+  enableVoiceCapability: "音声機能を有効化", voiceCaptureHint: "音声はデスクトップペットのマイクが有効な間だけ取得されます。", voiceTone: "声", voiceModelsAndResources: "音声モデルとリソース",
+  desktopPet: "デスクトップペット", displayLanguage: "表示言語", clickThroughPet: "ペットをクリックで透過", workspaceHint: "タスクの開始場所を選ぶために、Main Agent が参照できるディレクトリを指定します。", dataDirectory: "データディレクトリ", dataDirectoryHint: "データディレクトリには実行時依存関係、Profile、履歴が保存されます。", workspaceName: "ワークスペース名", workspacePath: "絶対ディレクトリパス", removeWorkspace: "登録を削除", addWorkspace: "ワークスペースを追加", taskRuntimeSettings: "タスク実行設定", executionTimeoutSeconds: "実行タイムアウト（秒）", nodeExecutable: "Node 実行ファイル",
+  save: "保存", apply: "適用", processing: "処理中…", saveFailed: "設定を保存できませんでした", applyFailed: "設定を適用できませんでした", restartWarningTitle: "設定を適用すると進行中の作業が中断されます", taskRestartWarning: "{count} 件のタスクが実行中です。再起動後に一時停止し、自動では再開されません。", memoryRestartWarning: "メモリを書き込み中です。この書き込みは中断されます。", agentRestartWarning: "Aura は会話の処理または返信の再生中です。このターンは中断されます。", cancel: "キャンセル", applyAnyway: "それでも適用",
+  secretSavedTooltip: "保存済みです。新しいキーを入力して置き換えるか、削除して保存すると消去されます。", secretEmptyTooltip: "キーを入力してください。空のまま保存すると消去されます。", visualUnavailable: "ビジュアルを利用できません", microphoneConnecting: "マイクに接続中", microphoneErrorRetry: "マイクエラー：再試行", stopVoiceInput: "音声入力を停止", connectionFailed: "接続に失敗しました", voiceUnavailable: "音声を利用できません", sendFailed: "送信に失敗しました", startupFailedTitle: "AuraBot を起動できませんでした", startupFailedMessage: "アプリケーションデータを初期化できませんでした。", quitFailedTitle: "AuraBot はまだ終了していません", quitFailedMessage: "Backend のクリーンアップが完了していません。しばらくしてから再試行してください。", sttModel: "STT モデル", ttsModel: "TTS モデル", vadModelFile: "VAD モデルファイル", vadLicenseFile: "VAD ライセンスファイル", turnModelFile: "区切り検出モデルファイル", turnLicenseFile: "区切り検出ライセンスファイル"
 };
 
 const UI_TEXT_BY_LANGUAGE: Record<DisplayLanguage, Record<UiTextKey, string>> = {
@@ -585,6 +605,9 @@ const UI_TEXT_BY_LANGUAGE: Record<DisplayLanguage, Record<UiTextKey, string>> = 
   zh: UI_TEXT.zh,
   ja: JAPANESE_UI_TEXT
 };
+
+/** Exposes the complete fixed UI vocabulary for translation coverage checks. */
+export const UI_TEXT_KEYS = Object.keys(UI_TEXT.en) as UiTextKey[];
 
 const AGENT_STATUS_LABELS: Record<DisplayLanguage, Record<AgentStatus, string>> = {
   en: {
@@ -608,9 +631,14 @@ const AGENT_STATUS_LABELS: Record<DisplayLanguage, Record<AgentStatus, string>> 
 };
 
 export function t(displayLanguage: DisplayLanguage | undefined, key: UiTextKey): string {
-  return UI_TEXT_BY_LANGUAGE[displayLanguage ?? "en"][key];
+  return UI_TEXT_BY_LANGUAGE[displayLanguage ?? "zh"][key];
 }
 
 export function agentStatusLabel(displayLanguage: DisplayLanguage | undefined, status: AgentStatus): string {
-  return AGENT_STATUS_LABELS[displayLanguage ?? "en"][status];
+  return AGENT_STATUS_LABELS[displayLanguage ?? "zh"][status];
+}
+
+/** Replaces named placeholders in already-localized UI text without adding formatting dependencies. */
+export function interpolate(template: string, values: Record<string, string | number>): string {
+  return template.replace(/\{(\w+)\}/gu, (_, key: string) => String(values[key] ?? ""));
 }

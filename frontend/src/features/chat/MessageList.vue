@@ -43,7 +43,7 @@ const props = withDefaults(
     messages: Message[];
     displayLanguage?: PetSettings["displayLanguage"];
   }>(),
-  { displayLanguage: "en" }
+  { displayLanguage: "zh" }
 );
 
 const listRef = ref<HTMLDivElement | null>(null);

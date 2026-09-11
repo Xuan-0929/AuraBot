@@ -50,7 +50,7 @@ const props = withDefaults(
     agentStatus?: AgentStatus;
     onSend(content: string): Promise<void>;
   }>(),
-  { displayLanguage: "en", agentStatus: "idle" }
+  { displayLanguage: "zh", agentStatus: "idle" }
 );
 
 const content = ref("");

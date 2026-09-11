@@ -8,7 +8,7 @@
     spellcheck="false"
     autocomplete="new-password"
     :value="masked ? preview : modelValue"
-    :title="masked ? '已保存；输入新密钥替换，删除后保存清除' : '输入密钥，留空后保存清除'"
+    :title="t(displayLanguage, masked ? 'secretSavedTooltip' : 'secretEmptyTooltip')"
     @focus="($event.target as HTMLInputElement).select()"
     @beforeinput="prepareEdit"
     @input="update"
@@ -16,7 +16,9 @@
 </template>
 <script setup lang="ts">
 import { computed } from 'vue';
-const props = defineProps<{ modelValue: string; preview?: string; cleared?: boolean }>();
+import { t, type DisplayLanguage } from '../../i18n';
+const props = defineProps<{ modelValue: string; preview?: string; cleared?: boolean; displayLanguage?: DisplayLanguage }>();
+const displayLanguage = computed(() => props.displayLanguage ?? 'zh');
 const emit = defineEmits<{ 'update:modelValue': [value: string] }>();
 const masked = computed(() => props.preview && !props.cleared && !props.modelValue);
 function prepareEdit(event: Event) {

@@ -1,8 +1,9 @@
+/** Defines persisted pet display preferences and makes Chinese the application-wide first-run default. */
 import { z } from "zod";
 
 export const DEFAULT_PET_SETTINGS = {
   clickThroughPet: false,
-  displayLanguage: "en"
+  displayLanguage: "zh"
 } as const;
 
 const displayLanguageSchema = z.enum(["en", "zh", "ja"]);
