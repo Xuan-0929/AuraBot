@@ -1,5 +1,5 @@
 /** Exercises the real chat shell with IPC task events. Checks responsive navigation,
- * focus restoration and subscription cleanup without encoding CSS implementation. */
+ * top-bar dismissal, keyboard focus restoration and subscription cleanup through Vue and Pinia. */
 // @vitest-environment jsdom
 import {createApp, nextTick} from 'vue';
 import {createPinia} from 'pinia';
@@ -27,6 +27,25 @@ it('opens a narrow task panel, traps focus and restores the trigger on Escape',a
   expect(panel!.contains(document.activeElement)).toBe(true);
   panel!.dispatchEvent(new KeyboardEvent('keydown',{key:'Escape',bubbles:true}));await nextTick();
   expect(toggle!.getAttribute('aria-expanded')).toBe('false');expect(document.activeElement).toBe(toggle);
+});
+it('keeps the top toggle interactive and keyboard reachable while the narrow panel is open',async()=>{
+  const {host}=await mount(true);
+  const toggle=host.querySelector<HTMLButtonElement>('[aria-controls="console-tasks"]')!;
+  toggle.click();await nextTick();
+  expect(toggle.closest('[inert]')).toBeNull();
+  const close=host.querySelector<HTMLButtonElement>('[role="dialog"] button')!;
+  close.dispatchEvent(new KeyboardEvent('keydown',{key:'Tab',bubbles:true}));
+  expect(document.activeElement).toBe(toggle);
+  toggle.dispatchEvent(new KeyboardEvent('keydown',{key:'Tab',shiftKey:true,bubbles:true}));
+  expect(document.activeElement).toBe(close);
+  toggle.click();await nextTick();
+  expect(toggle.getAttribute('aria-expanded')).toBe('false');
+  expect(host.querySelector('.console-chat')!.hasAttribute('inert')).toBe(false);
+  toggle.click();await nextTick();
+  toggle.focus();
+  toggle.dispatchEvent(new KeyboardEvent('keydown',{key:'Escape',bubbles:true}));await nextTick();
+  expect(toggle.getAttribute('aria-expanded')).toBe('false');
+  expect(document.activeElement).toBe(toggle);
 });
 it('shows task updates in wide mode and closes the overlay when crossing to narrow',async()=>{
   const {host,change,tasksChanged,unsubscribe}=await mount(false);

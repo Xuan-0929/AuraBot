@@ -2,18 +2,19 @@
   主聊天窗口：以稳定的标题栏、可收起任务列表和连续对话组织现有聊天功能。
   Pinia 负责消息与设置入口，任务由既有 IPC 推送；侧栏显隐仅属于窗口内的展示状态，
   标题复用 i18n 三语文案，任务状态使用无外圈 SVG；Vue Transition 配合共享 CSS 横向收展任务面板。
-  窄窗口使用带焦点管理的覆盖面板，不改变任务订阅或执行生命周期。
+  窄窗口使用带焦点管理的覆盖面板，顶部开关保持可用，并与面板关闭按钮构成键盘焦点循环；
+  聊天与设置在覆盖期间暂停交互，不改变任务订阅或执行生命周期。
 -->
 <template>
-  <main class="console-window" :aria-label="t(store.displayLanguage, 'consoleTitle')">
-    <header class="console-header" :inert="overlayOpen ? true : undefined">
+  <main class="console-window" :aria-label="t(store.displayLanguage, 'consoleTitle')" @keydown="handleSidebarKeydown">
+    <header class="console-header">
       <div class="console-brand">
         <button ref="sidebarToggle" type="button" class="icon-button" aria-controls="console-tasks" :aria-expanded="sidebarOpen" :aria-label="t(store.displayLanguage, sidebarOpen ? 'taskSidebarCollapse' : 'taskSidebarExpand')" :title="t(store.displayLanguage, sidebarOpen ? 'taskSidebarCollapse' : 'taskSidebarExpand')" @click="toggleSidebar">
           <Icon icon="solar:sidebar-minimalistic-linear" aria-hidden="true" />
         </button>
         <span class="aura-wordmark">{{ t(store.displayLanguage, 'chat') }}</span>
       </div>
-      <button type="button" class="icon-button console-settings-button" :aria-label="t(store.displayLanguage, 'openAuraBotSettings')" :title="t(store.displayLanguage, 'settings')" @click="void store.openSettingsWindow()">
+      <button type="button" class="icon-button console-settings-button" :inert="overlayOpen ? true : undefined" :aria-label="t(store.displayLanguage, 'openAuraBotSettings')" :title="t(store.displayLanguage, 'settings')" @click="void store.openSettingsWindow()">
         <Icon icon="solar:settings-linear" aria-hidden="true" />
       </button>
     </header>
@@ -22,7 +23,7 @@
         <div v-if="overlayOpen" class="console-sidebar-scrim" aria-hidden="true" @click="closeSidebar" />
       </Transition>
       <Transition name="console-sidebar">
-      <aside v-show="sidebarOpen" id="console-tasks" ref="sidebar" class="console-tasks" :class="{'console-tasks-overlay': narrow}" :inert="!sidebarOpen ? true : undefined" :aria-hidden="!sidebarOpen ? true : undefined" :role="overlayOpen ? 'dialog' : undefined" :aria-modal="overlayOpen ? true : undefined" aria-labelledby="tasks-heading" tabindex="-1" @keydown="handleSidebarKeydown">
+      <aside v-show="sidebarOpen" id="console-tasks" ref="sidebar" class="console-tasks" :class="{'console-tasks-overlay': narrow}" :inert="!sidebarOpen ? true : undefined" :aria-hidden="!sidebarOpen ? true : undefined" :role="overlayOpen ? 'dialog' : undefined" aria-labelledby="tasks-heading" tabindex="-1">
         <div class="console-tasks-heading"><h2 id="tasks-heading">{{ t(store.displayLanguage, 'taskList') }}</h2><button v-if="narrow" type="button" class="icon-button" :aria-label="t(store.displayLanguage, 'closeTaskList')" :title="t(store.displayLanguage, 'closeTaskList')" @click="closeSidebar"><Icon icon="solar:close-circle-linear" aria-hidden="true" /></button></div>
         <p v-if="taskError" role="status" class="inline-error">{{ taskError }}</p>
         <p v-else-if="!tasks.length" class="task-empty">{{ t(store.displayLanguage, 'noTasks') }}</p>
@@ -92,9 +93,13 @@ function handleSidebarKeydown(event: KeyboardEvent) {
   if (!overlayOpen.value) return;
   if (event.key === 'Escape') { event.preventDefault(); void closeSidebar(); }
   if (event.key === 'Tab') {
-    // The task list is read-only; its close button is the sole focusable control.
+    // Keep both dismissal controls reachable while the chat and settings are inert.
     event.preventDefault();
-    sidebar.value?.querySelector<HTMLButtonElement>('button')?.focus();
+    if (document.activeElement === sidebarToggle.value) {
+      sidebar.value?.querySelector<HTMLButtonElement>('button')?.focus();
+    } else {
+      sidebarToggle.value?.focus();
+    }
   }
 }
 function resizeSidebar(event: MediaQueryListEvent) {
