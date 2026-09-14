@@ -1,6 +1,6 @@
 """Own the single profile-bound text/voice WebSocket, capability tokens and renderer delivery.
 
-Sessions begin in text mode; explicit commands activate speech or submit text. Only accepted user segments
+Controlled speech preparation errors reach the renderer without provider details. Sessions begin in text mode; explicit commands activate speech or submit text. Only accepted user segments
 and say_to_user clauses cross into desktop history. Text ACKs commit draft delivery, while voice ACKs
 require completed audio; binary PCM and playback gates remain confined to voice mode. Typed input remains
 available during voice mode, resetting microphone input while preserving spoken delivery. ProfileResources
@@ -469,8 +469,10 @@ class RealtimeHub:
                         if self.speech is None:
                             try:
                                 await self.profile.start_speech()
-                            except Exception:
-                                raise ProtocolError("speech_unavailable") from None
+                            except Exception as exc:
+                                from .speech import SPEECH_PREPARATION_ERRORS
+                                code = str(exc)
+                                raise ProtocolError(code if code in SPEECH_PREPARATION_ERRORS else "speech_unavailable") from None
                         session.mode = "voice"
                         await self.agent_state("listening")
                     else:

@@ -1,3 +1,6 @@
 # TODO
 
-- [ ] 修复 `backend/task` 对 `backend/main_agent` 的反向依赖：将 `WorkspaceRegistry` 移到中立的共享模块，使 Task 与 Main Agent 仅依赖共享层。
+
+## 发行-安装脚本
+
+- [ ] 后续项目发行时，在安装脚本中自动安装语音模型及对应许可证，复用资源清单与校验逻辑，避免首次运行手工准备。

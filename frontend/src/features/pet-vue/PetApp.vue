@@ -1,3 +1,4 @@
+<!-- Gates token and microphone access on the active Profile snapshot; Main reconnect commands complete activation. -->
 <!--
   桌宠窗口：组合 Live2D 舞台、唯一的 Main Agent 文字／语音连接、已交付消息气泡与窗口控制。
   语音 clause 经 AudioWorklet 确认播放完成后，由 Electron 持久化再显示并 ACK；文字无需麦克风。
@@ -49,6 +50,8 @@
         :display-language="petStore.displayLanguage"
         :voice-input-active="isVoiceInputActive"
         :voice-input-state="microphoneState"
+        :voice-unavailable="!profileReady"
+        :voice-unavailable-reason="petStore.profileRuntime?.error || t(petStore.displayLanguage,'profilePreparing')"
         @hovering-change="(value) => (isControlsHovering = value)"
         @focus-change="(value) => (isControlsFocused = value)"
         @dragging-change="(value) => (isControlDragging = value)"
@@ -107,6 +110,7 @@ const isPointerInside = ref(false);
 const isControlsFocused = ref(false);
 const isControlDragging = ref(false);
 const isVoiceConnecting = ref(false);
+const profileReady=computed(()=>Boolean(petStore.profileRuntime?.online&&!petStore.profileRuntime.activating&&petStore.profileRuntime.activeId===petStore.profile?.id&&petStore.profileRuntime.revision));
 const mainAgentClauseText = ref<string | null>(null);
 const voiceEnabled=ref(false);
 const voiceError=ref("");
@@ -126,6 +130,7 @@ const live2dViewTransform = ref(readStoredLive2DViewTransform(window.localStorag
 const live2dZoomRequest = ref<{ id: number; deltaY: number; focalPoint: { x: number; y: number } } | undefined>(undefined);
 
 const mainAgentRealtime = new MainAgentRealtimeClient({
+  displayLanguage:()=>petStore.displayLanguage,
   getToken:async()=>{const token=await window.aurabot.getRealtimeToken();transportGeneration.value=token.generation;await nextTick();return token;},
   onPerformance:event=>scene.value?.accept(event),
   onState: (state,detail) => {
@@ -145,7 +150,7 @@ const mainAgentRealtime = new MainAgentRealtimeClient({
 let unsubscribeCommand:(()=>void)|undefined;
 async function connect(){
   await petStore.loadInitialState();
-  const profile=petStore.profile;if(!profile)throw new Error("Profile 尚未就绪");
+  const profile=petStore.profile;if(!profile||!profileReady.value)throw new Error(petStore.profileRuntime?.error||t(petStore.displayLanguage,"profilePreparing"));
   await nextTick();
   const visual=await scene.value?.ready()??{available:false,error:'未配置模型'};visualError.value=visual.error??'';
   await mainAgentRealtime.start({profileId:profile.id,revision:petStore.profileRuntime?.revision});
@@ -163,7 +168,8 @@ onMounted(async()=>{
   });
   await window.aurabot.petReady();
   const settings=await window.aurabot.getSettings();
-  if(settings.online)try{await connect();}catch(error){voiceError.value=String(error);}
+  await petStore.loadInitialState();
+  if(settings.online&&profileReady.value)try{await connect();}catch(error){voiceError.value=String(error);}
 });
 onBeforeUnmount(()=>{unsubscribeCommand?.();void mainAgentRealtime.stop();});
 
@@ -207,6 +213,7 @@ watch(()=>petStore.profile?.id,id=>{live2dViewTransform.value=readStoredLive2DVi
 async function handleVoiceToggle() {
   const profile=petStore.profile;if(!profile)return;
   if (isVoiceConnecting.value) return;
+  if(!profileReady.value){voiceError.value=petStore.profileRuntime?.error||t(petStore.displayLanguage,"profilePreparing");return;}
   voiceError.value="";
   microphoneError.value = false;
   isVoiceConnecting.value = true;

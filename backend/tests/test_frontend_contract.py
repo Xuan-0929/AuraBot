@@ -1,6 +1,6 @@
 """Exercise desktop realtime delivery, restart admission and owner-scoped Task management.
 
-Real Runtime/Context/TaskStore owners run against temporary databases. Controlled model output proves
+Controlled speech failures preserve text sessions and redact unknown errors. Real Runtime/Context/TaskStore owners run against temporary databases. Controlled model output proves
 that desktop history receives accepted inputs and say_to_user only, while restart fences all admissions.
 """
 from __future__ import annotations
@@ -314,3 +314,21 @@ class DesktopContractTests(unittest.IsolatedAsyncioTestCase):
         self.assertTrue(deleted['deleted'])
         self.assertEqual(deleted['version'], cancelled.version + 1)
         self.assertNotIn('private prompt', str(deleted))
+
+    async def test_known_voice_failure_keeps_text_session(self):
+        def fail():
+            raise RuntimeError('speech_vad_model_asset_missing')
+        self.profile.speech_factory = fail
+        await self.hub.command(self.session, {'type':'voice.start','command_id':'voice-failure'})
+        self.assertEqual(self.socket.sent[-1]['code'], 'speech_vad_model_asset_missing')
+        self.assertEqual(self.session.mode, 'text')
+        self.assertIsNone(self.profile.speech)
+        await self.hub.command(self.session, {'type':'text.submit','command_id':'after-voice','text':'hello'})
+        self.assertTrue(any(e.get('command_id')=='after-voice' and e.get('status')=='accepted' for e in self.socket.sent))
+
+    async def test_unknown_voice_failure_does_not_expose_details(self):
+        def fail():
+            raise RuntimeError('sensitive provider detail')
+        self.profile.speech_factory = fail
+        await self.hub.command(self.session, {'type':'voice.start','command_id':'voice-failure'})
+        self.assertEqual(self.socket.sent[-1]['code'], 'speech_unavailable')

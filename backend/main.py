@@ -1,7 +1,7 @@
 """Compose Backend Task ownership and the single active Profile for Electron realtime sessions.
 
 Startup tolerates absent chat, Pi and speech capabilities. Explicit Profile activation opens Context/Memory
-and text runtime; voice.start alone prepares speech assets and providers. Shutdown fences realtime before
+and text runtime; voice.start alone validates model inference, speech assets and providers. Shutdown fences realtime before
 closing Profile workers and the durable Task control plane. ProfileResources owns lazy speech; Runtime
 keeps Hub.render as its renderer for the entire Profile lifetime. Applied workspaces enter the model
 snapshot as user-provided names and paths without scanning directories. WebTools uses the configured search adapter for search and read."""
@@ -265,13 +265,23 @@ def _prepare_speech(settings: Any) -> tuple[SileroVadDetector, SmartTurnDetector
         raise RuntimeError("speech_api_key_missing")
     vad = SileroVadDetector(settings.silero_model_path, settings.silero_license_path)
     eou = SmartTurnDetector(settings.smart_turn_model_path, settings.smart_turn_license_path)
-    if vad.status().reason != "ready_to_load" or eou.status().reason != "ready_to_load":
-        raise RuntimeError("speech_assets_unavailable")
+    for name, detector in (("vad", vad), ("eou", eou)):
+        reason = detector.status().reason
+        if reason != "ready_to_load":
+            raise RuntimeError(f"speech_{name}_{reason}")
     for module_name in (
         "dashscope.audio.asr", "dashscope.audio.tts_v2", "onnxruntime", "numpy", "transformers",
     ):
-        if importlib.util.find_spec(module_name) is None:
+        try:
+            available = importlib.util.find_spec(module_name) is not None
+        except (ImportError, ValueError):
+            available = False
+        if not available:
             raise RuntimeError("speech_optional_dependency_missing")
+    for name, detector, probe in (("vad", vad, vad.speech_probability), ("eou", eou, eou.completion_probability)):
+        if probe(bytes(1024)) is None:
+            raise RuntimeError(f"speech_{name}_{detector.status().reason}")
+    vad.reset()
     return vad, eou
 
 

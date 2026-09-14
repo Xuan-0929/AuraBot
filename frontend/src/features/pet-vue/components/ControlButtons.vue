@@ -1,3 +1,4 @@
+<!-- Renders accessible Pet actions; the parent supplies Profile readiness and the reason voice is disabled. -->
 <!--
   桌宠悬浮控制组：提供 Console、正式 Main Agent 麦克风和窗口拖动入口。
   使用透明 SVG 按钮显示真实麦克风状态，悬停、聚焦和拖动保持可操作；语音连接、媒体资源与
@@ -24,7 +25,7 @@
       :data-active="voiceInputActive ? 'true' : 'false'" :data-state="voiceInputState"
       :data-persistent="voiceInputActive || voiceInputState === 'connecting' || voiceInputState === 'error' ? 'true' : 'false'"
       :aria-pressed="voiceInputActive" :aria-busy="voiceInputState === 'connecting'"
-      :aria-label="voiceLabel" :title="voiceLabel" @click="emit('voiceToggle')">
+      :disabled="voiceUnavailable || voiceInputState==='connecting'" :aria-label="voiceLabel" :title="voiceLabel" @click="emit('voiceToggle')">
       <svg class="pet-vue-control-icon" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.8" stroke-linecap="round" stroke-linejoin="round" aria-hidden="true">
         <rect x="9" y="2" width="6" height="12" rx="3" />
         <path d="M5 10v2a7 7 0 0 0 14 0v-2M12 19v3m-4 0h8" />
@@ -55,6 +56,8 @@ const props = withDefaults(
     displayLanguage: DisplayLanguage;
     /** True only while the Main Agent microphone is capturing audio. */
     voiceInputActive?: boolean;
+    voiceUnavailable?:boolean;
+    voiceUnavailableReason?:string;
     /** Microphone operation state; a text-only realtime connection is off here. */
     voiceInputState?: "off" | "connecting" | "active" | "error";
   }>(),
@@ -70,6 +73,7 @@ const emit = defineEmits<{
 }>();
 
 const voiceLabel = computed(() => {
+  if(props.voiceUnavailable)return props.voiceUnavailableReason||t(props.displayLanguage,"profilePreparing");
   if (props.voiceInputState === "connecting") return t(props.displayLanguage, "microphoneConnecting");
   if (props.voiceInputState === "error") return t(props.displayLanguage, "microphoneErrorRetry");
   return props.voiceInputActive ? t(props.displayLanguage, "stopVoiceInput") : t(props.displayLanguage, "startVoiceInput");

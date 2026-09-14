@@ -68,7 +68,7 @@ vi.mock('../../../src/main-agent-realtime/client', () => ({ MainAgentRealtimeCli
   voiceEnabled = false;
   constructor(public options: { onState: (state: string, detail?: string) => void }) { realtimeCallbacks = options; }
   async toggle() { if (toggleError) throw toggleError; this.voiceEnabled = !this.voiceEnabled; this.options.onState('active'); }
-  async start() { this.options.onState('active'); }
+  async start() { starts++;this.options.onState('active'); }
   async stop() {}
 } }));
 vi.mock('../../../src/features/pet-vue/live2d/Scene.vue', () => ({ default: defineComponent({ setup(_, { expose }) {
@@ -76,12 +76,15 @@ vi.mock('../../../src/features/pet-vue/live2d/Scene.vue', () => ({ default: defi
   return () => h('canvas');
 } }) }));
 import PetApp from '../../../src/features/pet-vue/PetApp.vue';
+let starts=0;
 const petStore = reactive({
   agentStatus: 'idle', displayLanguage: 'en', petSettings: { clickThroughPet: true }, profile: { id: 'a' },
+  profileRuntime:{activating:false,online:true,activeId:'a' as string|null,revision:1,error:undefined as string|undefined},
   petCursorPosition: undefined as undefined | { localX: number; localY: number },
   loadInitialState: async () => {}, armPetActivityAutoClear: () => {}, openConsoleWindow: vi.fn()
 });
-function mountPet() {
+function mountPet(ready=true) {
+  petStore.profileRuntime={activating:false,online:ready,activeId:ready?'a':null,revision:1,error:undefined};
   toggleError = undefined;
   petStore.petCursorPosition = undefined;
   Object.assign(window, { aurabot: {
@@ -170,4 +173,15 @@ it('keeps microphone failures visible until a successful retry', async () => {
   await nextTick();
   expect(mic.getAttribute('data-state')).toBe('error');
   expect(mic.getAttribute('data-persistent')).toBe('true');
+});
+
+it('waits for Profile activation even when Backend is already online',async()=>{
+ starts=0;const host=mountPet(false);await new Promise(r=>setTimeout(r,0));
+ const mic=host.querySelector('.pet-action-voice') as HTMLButtonElement;
+ expect(starts).toBe(0);expect(mic.disabled).toBe(true);expect(mic.title).toContain('Preparing character');
+ petStore.profileRuntime={activating:false,online:true,activeId:'a',revision:1,error:undefined};await nextTick();
+ expect(mic.disabled).toBe(false);
+ petStore.profileRuntime.activating=true;await nextTick();expect(mic.disabled).toBe(true);
+ petStore.profileRuntime={activating:false,online:false,activeId:null,revision:1,error:'Activation failed'};await nextTick();
+ expect(mic.disabled).toBe(true);expect(mic.title).toBe('Activation failed');
 });

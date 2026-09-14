@@ -7,6 +7,7 @@
  * runner 文案和旧执行专属状态不再属于运行时类型。
  */
 
+import {SPEECH_TEXT} from "./features/settings/speechText";
 import { PROFILE_TEXT } from "./features/profiles/profileText";
 import type { AgentStatus } from "@shared/contracts/chat";
 import type { PetSettings } from "@shared/schemas/petSettings";
@@ -16,6 +17,7 @@ export type DisplayLanguage = PetSettings["displayLanguage"];
 const UI_TEXT = {
   en: {
     ...PROFILE_TEXT.en,
+    ...SPEECH_TEXT.en,
     modelConnections: "Model connections",
     searchInterface: "Search interface",
     searchProvider: "Search provider",
@@ -210,6 +212,7 @@ const UI_TEXT = {
   },
   zh: {
     ...PROFILE_TEXT.zh,
+    ...SPEECH_TEXT.zh,
     modelConnections: "模型接入",
     searchInterface: "搜索接口",
     searchProvider: "搜索服务商",
@@ -408,6 +411,7 @@ export type UiTextKey = keyof typeof UI_TEXT.en;
 
 const JAPANESE_UI_TEXT: Record<UiTextKey, string> = {
   ...PROFILE_TEXT.ja,
+    ...SPEECH_TEXT.ja,
   modelConnections: "モデル接続",
   searchInterface: "検索連携",
   searchProvider: "検索プロバイダー",

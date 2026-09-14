@@ -1,3 +1,4 @@
+/** Bridges resource preparation and progress as typed IPC; Main owns all download paths and state. */
 /** Exposes only typed desktop IPC; Pet delivery and command methods are checked by Main against its webContents.
  * SOUL opening carries only a Profile identity. Renderer has no filesystem or Memory API access. Every subscription has an explicit disposer.
  */
@@ -17,6 +18,10 @@ const api:AuraBotApi={
  getInitialState:()=>ipcRenderer.invoke(IPC_CHANNELS.getInitialState),
  openConsoleWindow:()=>ipcRenderer.invoke(IPC_CHANNELS.openConsoleWindow),
  openSettingsWindow:()=>ipcRenderer.invoke(IPC_CHANNELS.openSettingsWindow),
+ getSpeechAssets:()=>ipcRenderer.invoke(IPC_CHANNELS.getSpeechAssets),
+ prepareSpeechAssets:()=>ipcRenderer.invoke(IPC_CHANNELS.prepareSpeechAssets),
+ cancelSpeechAssets:()=>ipcRenderer.invoke(IPC_CHANNELS.cancelSpeechAssets),
+ onSpeechAssetsChanged:listener=>subscribe(IPC_CHANNELS.speechAssetsChanged,listener),
  getSettings:()=>ipcRenderer.invoke(IPC_CHANNELS.getSettings),
  saveSettings:(config, clearSecrets)=>ipcRenderer.invoke(IPC_CHANNELS.saveSettings, config, clearSecrets),
  applySettings:(force)=>ipcRenderer.invoke(IPC_CHANNELS.applySettings, force),

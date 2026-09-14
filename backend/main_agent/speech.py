@@ -30,6 +30,15 @@ from pathlib import Path
 from threading import Lock
 from typing import Any, Protocol, runtime_checkable
 
+# Only these local preparation codes may cross the realtime transport.
+SPEECH_PREPARATION_ERRORS = frozenset({
+    "speech_disabled", "speech_api_key_missing", "speech_optional_dependency_missing",
+    *(f"speech_{name}_{reason}" for name in ("vad", "eou") for reason in (
+        "model_asset_missing", "license_asset_missing", "license_unverified",
+        "optional_dependency_missing", "model_load_failed", "inference_failed",
+    )),
+})
+
 
 TranscriptSink = Callable[["TranscriptUpdate"], Awaitable[None]]
 _CLEANUP_TIMEOUT_SECONDS = 0.25
@@ -365,9 +374,10 @@ class DashScopeSpeechOutputProvider:
                 else:
                     raise SpeechProviderUnavailable("DashScope TTS streaming failed") from value
         finally:
-            if not worker.done():
+            if not worker.done() and not terminal:
                 await asyncio.to_thread(transport.cancel)
             await asyncio.gather(worker, return_exceptions=True)
+
 
 @dataclass(frozen=True, slots=True)
 class SpeechCapabilityStatus:
@@ -1311,13 +1321,15 @@ class _DashScopeTtsTransport:
 
 
 def _dashscope_tts_transport(**kwargs: Any) -> _DashScopeTtsTransport:
+    dashscope = importlib.import_module("dashscope")
     tts = importlib.import_module("dashscope.audio.tts_v2")
+    if kwargs.get("api_key"):
+        dashscope.api_key = kwargs["api_key"]
     audio_format = tts.AudioFormat.PCM_24000HZ_MONO_16BIT
     return _DashScopeTtsTransport(tts, {
         "model": kwargs["model_name"],
         "voice": kwargs["voice"],
         "format": audio_format,
-        **({"api_key": kwargs["api_key"]} if kwargs.get("api_key") else {}),
     })
 
 

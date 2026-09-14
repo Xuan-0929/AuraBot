@@ -1,5 +1,5 @@
 <!-- Presents the existing settings window with one saved draft and explicit application.
-     Electron owns validation/persistence and Backend restart; busy confirmation never changes a draft
+     SpeechResources prepares assets into the draft; apply retries inactive Profiles. Electron owns validation/persistence and Backend restart; busy confirmation never changes a draft
      or exposes Memory. SecretInput presents length-matched first/last-four previews; deleting a mask records clear intent through
      the existing save IPC, while unchanged keys remain write-only. Native disclosures reveal invalid fields; shared tokens
      provide compact navigation and responsive forms. Pet status groups desktop preferences with actionable runtime reminders only; a separate workspace page describes user-provided task locations;
@@ -48,6 +48,7 @@
                 <p class="settings-hint">{{ t(displayLanguage, 'voiceCaptureHint') }}</p>
                 <label class="settings-page-field"><span>DashScope Key</span><SecretInput v-model="draft.backend.main_agent.speech.api_key" :display-language="displayLanguage" :preview="state.secretPreviews?.['main_agent.speech.api_key']" :cleared="clearSecrets.includes('main_agent.speech.api_key')" @update:model-value="updateSecretIntent('main_agent.speech.api_key', $event)" /></label>
                 <label class="settings-page-field"><span>{{ t(displayLanguage, 'voiceTone') }}</span><input v-model="draft.backend.main_agent.speech.tts_voice" /></label>
+                <SpeechResources :display-language="displayLanguage" :applied="!dirty && !state.backendPending && state.online" @prepared="Object.assign(draft.backend.main_agent.speech,$event)" />
                 <details class="settings-advanced"><summary>{{ t(displayLanguage, 'voiceModelsAndResources') }}</summary><label v-for="field in speechFields" :key="field.key" class="settings-page-field"><span>{{ t(displayLanguage, field.labelKey) }}</span><input v-model="draft.backend.main_agent.speech[field.key]" /></label></details>
               </section>
               <section v-else-if="page==='general'" class="settings-page-section">
@@ -79,7 +80,7 @@
               <footer class="settings-save-bar">
                 <span role="status">{{ configStatus }}</span>
                 <button type="submit" :class="{primary:dirty}" :disabled="working || !dirty">{{ t(displayLanguage, 'save') }}</button>
-                <button ref="applyButton" type="button" :class="{primary:!dirty && (state.pending || !state.online)}" :disabled="working || dirty || (!state.pending && state.online)" @click="apply(false)">{{ t(displayLanguage, working?'processing':'apply') }}</button>
+                <button ref="applyButton" type="button" :class="{primary:!dirty && (state.pending || !state.online || !store.profileRuntime?.online)}" :disabled="working || dirty || (!state.pending && state.online && store.profileRuntime?.online)" @click="apply(false)">{{ t(displayLanguage, working?'processing':'apply') }}</button>
               </footer>
             </form>
           </template>
@@ -105,6 +106,7 @@ import solarIcons from '@iconify-json/solar/icons.json';
 const backIcon={...solarIcons.icons['arrow-left-linear'],width:24,height:24};
 const editingName=ref<string|null>(null);
 import ProfilesPage from '../profiles/ProfilesPage.vue';
+import SpeechResources from './SpeechResources.vue';
 import SecretInput from './SecretInput.vue';
 import { interpolate, t, type UiTextKey } from '../../i18n';
 import SettingsNavIcon, {type SettingsNavIconName} from './SettingsNavIcon.vue';
@@ -126,7 +128,7 @@ const runtimeHints=computed(()=>{
   if(!capabilities)return [];
   const hints=[];
   if(!capabilities.text)hints.push(t(displayLanguage.value,'chatNotConfigured'));
-  if(!capabilities.voice)hints.push(t(displayLanguage.value,'voiceNotConfigured'));
+
   if(!capabilities.tasks)hints.push(t(displayLanguage.value,'tasksNotConfigured'));
   return hints;
 });

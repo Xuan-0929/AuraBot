@@ -47,6 +47,70 @@ class CallbackTransport:
 
 
 class DashScopeTtsTests(unittest.IsolatedAsyncioTestCase):
+    async def test_default_transport_configures_sdk_key_before_synthesizer_creation(self) -> None:
+        class FakeDashScope:
+            api_key: str | None = None
+
+        dashscope = FakeDashScope()
+
+        class FakeTts:
+            class AudioFormat:
+                PCM_24000HZ_MONO_16BIT = object()
+
+            class ResultCallback:
+                pass
+
+            class SpeechSynthesizer:
+                def __init__(self, model: str, voice: str, format: object, callback: Any) -> None:
+                    if dashscope.api_key != "speech-key":
+                        raise RuntimeError("DashScope API key was not configured")
+                    self.callback = callback
+
+                def streaming_call(self, _text: str) -> None:
+                    self.callback.on_data(b"audio")
+
+                def streaming_complete(self) -> None:
+                    self.callback.on_complete()
+
+                def streaming_cancel(self) -> None:
+                    return None
+
+        def load_module(name: str) -> Any:
+            if name == "dashscope":
+                return dashscope
+            if name == "dashscope.audio.tts_v2":
+                return FakeTts
+            raise ModuleNotFoundError(name)
+
+        with patch("backend.main_agent.speech.importlib.import_module", side_effect=load_module):
+            chunks = [chunk async for chunk in DashScopeSpeechOutputProvider(
+                "cosyvoice", voice="Aura", api_key="speech-key",
+            ).synthesize("hello")]
+
+        self.assertEqual(chunks, [b"audio"])
+
+    async def test_completed_callback_does_not_cancel_closed_transport(self) -> None:
+        class CompletedTransport:
+            def __init__(self) -> None:
+                self.cancelled = False
+
+            def stream(self, _text: str, on_data: Any, on_complete: Any, _on_error: Any) -> None:
+                on_data(b"audio")
+                on_complete()
+                threading.Event().wait(0.05)
+
+            def cancel(self) -> None:
+                self.cancelled = True
+                raise ConnectionError("transport already closed")
+
+        transport = CompletedTransport()
+        chunks = [chunk async for chunk in DashScopeSpeechOutputProvider(
+            "cosyvoice", voice="Aura", transport_factory=lambda **_kwargs: transport,
+        ).synthesize("hello")]
+
+        self.assertEqual(chunks, [b"audio"])
+        self.assertFalse(transport.cancelled)
+
     async def test_first_callback_chunk_is_yielded_before_stream_completion(self) -> None:
         transport = CallbackTransport()
         provider = DashScopeSpeechOutputProvider(

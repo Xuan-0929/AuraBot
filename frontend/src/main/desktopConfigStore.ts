@@ -1,9 +1,10 @@
 /** Owns the one application JSON file and saved/applied snapshots.
- * Forms send redacted configuration with write-only secret replacements; saves are atomic and never
+ * New installations use app-owned speech assets; existing paths remain authoritative. Forms send redacted configuration with write-only secret replacements; saves are atomic and never
  * change live state. Settings previews expose only the first/last four code points and length-matched
  * bullets; first-run defaults register the installation root and user home, and keep Pi dependencies
  * under that root independently of the source checkout. Legacy search credentials normalize on read and persist under provider/api_key on the next write. Existing configuration remains authoritative. The middle of a saved key never leaves Main. Backend and Pi consume saved configuration only during explicit application/start.
  */
+import {speechAssetPaths} from './speechAssetManifest';
 import { existsSync, mkdirSync, realpathSync, readFileSync, writeFileSync, renameSync, chmodSync } from 'node:fs';
 import { join, isAbsolute, resolve } from 'node:path';
 import { homedir } from 'node:os';
@@ -34,8 +35,7 @@ export class DesktopConfigStore {
     const defaults:DesktopConfig={version:2,revision:0,backend:{
       app:{data_dir:root,workspaces:[{id:'default',path:root},{id:'home',path:homedir()}]},chat_model:{...blankModel},
       main_agent:{profile_dir:'profiles',web:{provider:'tavily',api_key:''},speech:{enabled:false,api_key:'',stt_model_name:'fun-asr-realtime',tts_model_name:'cosyvoice-v3-flash',tts_voice:'longanyang',
-        silero_model_path:join(projectRoot,'assets/models/silero-vad.onnx'),silero_license_path:join(projectRoot,'assets/licenses/silero-vad.txt'),
-        smart_turn_model_path:join(projectRoot,'assets/models/smart-turn-v3.2.onnx'),smart_turn_license_path:join(projectRoot,'assets/licenses/smart-turn-v3.2.txt')}},
+        ...speechAssetPaths(root)}},
       memory:{embedding:{provider:'hash',dimension:384}},task:{user_data_dir:root,pi_runtime_dir:join(root,'pi-runtime'),node_executable:process.execPath.includes('Electron')?'node':process.execPath,default_timeout_seconds:1800,model:{...blankModel}}
     },desktop:{pet:{clickThroughPet:false,displayLanguage:'zh'},systemNotificationsEnabled:true}};
     const existing=existsSync(this.path)?JSON.parse(readFileSync(this.path,'utf8')):null;

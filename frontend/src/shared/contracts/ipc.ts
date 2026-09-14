@@ -1,6 +1,7 @@
 /** Defines typed IPC for desktop settings, visible history and Pet-owned realtime.
- * Profile SOUL opening accepts an identity only, never an arbitrary path. Electron validates callers and payloads; Task is read-only and Memory has no renderer surface.
+ * Speech asset IPC accepts no caller-controlled URLs or destinations. Profile SOUL opening accepts an identity only, never an arbitrary path. Electron validates callers and payloads; Task is read-only and Memory has no renderer surface.
  */
+import type {SpeechAssetsState} from './speechAssets';
 import type { AppInitialState, SendChatMessageInput, SendChatMessageResult, AgentStatus } from './chat';
 import type { Live2DModelState } from './live2dModel';
 import type { PetActivity } from './pet';
@@ -10,6 +11,7 @@ import type { ProfileDetail, ProfileSummary, ProfileSaveInput } from './profiles
 import type { ProfileRuntimeState, RealtimeToken, PetCommandResult } from './desktop';
 import type { DesktopConfig, SettingsState, ApplyResult, HistoryPage, HistoryEntry, TaskSummary, PetCommand } from './desktop';
 export const IPC_CHANNELS = {
+ getSpeechAssets:'speech-assets:get',prepareSpeechAssets:'speech-assets:prepare',cancelSpeechAssets:'speech-assets:cancel',speechAssetsChanged:'speech-assets:changed',
  openProfileSoul:'profiles:open-soul',listProfiles:'profiles:list',getProfile:'profiles:get',createProfile:'profiles:create',saveProfile:'profiles:save',activateProfile:'profiles:activate',deleteProfile:'profiles:delete',importProfileModel:'profiles:import-model',verifyProfileResources:'profiles:verify-resources',profilesChanged:'profiles:changed',getRealtimeToken:'profiles:realtime-token',
  getInitialState:'app:get-initial-state',openConsoleWindow:'window:open-console',openSettingsWindow:'window:open-settings',
  getSettings:'settings:get',saveSettings:'settings:save',applySettings:'settings:apply',settingsChanged:'settings:changed',
@@ -40,6 +42,7 @@ export interface AuraBotApi {
  verifyProfileResources(id:string,modelVersion:string,files:string[]):Promise<ProfileDetail>;
  onProfilesChanged(listener:(value:ProfileRuntimeState)=>void):()=>void; getRealtimeToken():Promise<RealtimeToken>;
  openConsoleWindow():Promise<void>; openSettingsWindow():Promise<void>;
+ getSpeechAssets():Promise<SpeechAssetsState>; prepareSpeechAssets():Promise<SpeechAssetsState>; cancelSpeechAssets():Promise<SpeechAssetsState>; onSpeechAssetsChanged(listener:(value:SpeechAssetsState)=>void):()=>void;
  getSettings():Promise<SettingsState>; saveSettings(config:DesktopConfig,clearSecrets?:string[]):Promise<SettingsState>;
  applySettings(force?:boolean):Promise<ApplyResult>; onSettingsChanged(listener:(value:SettingsState)=>void):()=>void;
  getHistory(before?:number,profileId?:string):Promise<HistoryPage>; recordDelivery(entry:HistoryEntry):Promise<Message>;

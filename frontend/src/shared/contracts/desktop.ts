@@ -1,5 +1,5 @@
 /** Defines desktop-owned configuration, delivered history and the read-only Task projection.
- * Main validates and persists these DTOs; renderer forms never own runtime configuration or saved secrets. Legacy Tavily fields normalize into provider/api_key before validation; SettingsState carries masked
+ * ProfileRuntimeState exposes activation in progress to fence Pet media controls. Main validates and persists these DTOs; renderer forms never own runtime configuration or saved secrets. Legacy Tavily fields normalize into provider/api_key before validation; SettingsState carries masked
  * first/last-four previews separately from redacted configuration for editable key fields.
  */
 import { z } from 'zod';
@@ -35,7 +35,7 @@ export interface HistoryPage { messages:Message[]; nextCursor?:number; }
 export interface TaskSummary { id:string; title:string; status:string; }
 export interface PetCommand { id:string; type:'text'|'reconnect'|'disconnect'; text?:string; }
 
-export interface ProfileRuntimeState { selectedId:string; activeId:string|null; revision:number|null; generation:number; online:boolean; error?:string; visualStatus?:'unconfigured'|'degraded'|'ready'|'unavailable'; visualError?:string; capabilityNames?:{motions:string[];expressions:string[]} }
+export interface ProfileRuntimeState { activating?:boolean; selectedId:string; activeId:string|null; revision:number|null; generation:number; online:boolean; error?:string; visualStatus?:'unconfigured'|'degraded'|'ready'|'unavailable'; visualError?:string; capabilityNames?:{motions:string[];expressions:string[]} }
 export interface RealtimeToken { token:string; expiresInMs:number; subprotocol:string; profile_id:string; revision:number; generation:number }
 
 export interface PetCommandResult { id:string; error?:string; visual?:{available:boolean;error?:string} }

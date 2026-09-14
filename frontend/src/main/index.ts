@@ -1,9 +1,10 @@
 /** Composes the desktop shell and one Backend process around a controlled Profile repository.
  * AURABOT_USER_DATA_DIR selects the installation/data root independently of source code.
- * Main migrates configuration, serves owned model packages, serializes selection/application and
+ * Main owns sequential speech downloads and profile readiness; migrates configuration, serves owned model packages, serializes selection/application and
  * opens only a repository-owned Profile SOUL path through shell; fences history receipts by their original Profile/generation. Pet alone owns realtime media;
  * Backend exclusively owns Context, Memory, task state and the active business lifecycle. */
-import { app, BrowserWindow, ipcMain, Notification, dialog, shell } from 'electron';
+import {SpeechAssets} from './speechAssets';
+import { app, net, BrowserWindow, ipcMain, Notification, dialog, shell } from 'electron';
 import { join, resolve, dirname } from 'node:path';
 import { randomUUID } from 'node:crypto';
 import { existsSync,readFileSync } from 'node:fs';
@@ -33,6 +34,7 @@ let backend:BackendProcess|undefined;
 let history:ConversationHistory|undefined;
 let desktopConfig:DesktopConfigStore|undefined;
 
+let speechAssets:SpeechAssets|undefined;
 let quitting=false;
 let tasks:TaskStatusFeed|undefined;
 const broadcast=(channel:string,value:unknown)=>BrowserWindow.getAllWindows().forEach(window=>window.webContents.send(channel,value));
@@ -42,6 +44,7 @@ async function bootstrap(){
  const settingsPath=join(root,'settings.json');
  const legacySettings=existsSync(settingsPath)?JSON.parse(readFileSync(settingsPath,'utf8')):null;
  const config=desktopConfig=new DesktopConfigStore(root,projectRoot);
+ speechAssets=new SpeechAssets(root,state=>broadcast(C.speechAssetsChanged,state),undefined,net.fetch.bind(net));
  history=new ConversationHistory(root);
  const shared=config.snapshot().backend;
  const dataRoot=resolve(dirname(config.path),shared.app.data_dir);
@@ -52,7 +55,7 @@ async function bootstrap(){
  const seedModel=(id:string,modelId='hiyori')=>{const model=bundled.listAvailableModels().find(m=>m.id===modelId);if(model)return profileStore.importModel(id,join(bundledRoot,model.folderName),model.manifestFileName);return profileStore.get(id);};
  if(!legacySettings||legacySettings.version===1){const id=profileStore.selectedId();if(!profileStore.get(id).saved.adaptor.model){try{seedModel(id,legacySettings?.desktop?.currentModelId??'hiyori');profileStore.adoptMigratedModel(id);}catch{/* A failed optional initial visual import leaves Soul and all existing data intact. */}}}
  config.completeProfileMigration();
- let runtime:ProfileRuntimeState={selectedId:profileStore.selectedId(),activeId:null,revision:null,generation:0,online:false};
+ let runtime:ProfileRuntimeState={activating:false,selectedId:profileStore.selectedId(),activeId:null,revision:null,generation:0,online:false};
  let applied:ProfileConfig|null=profileStore.applied(runtime.selectedId);
  let switching=false;
  const modelState=():Live2DModelState=>{
@@ -81,13 +84,16 @@ async function bootstrap(){
  handle(C.openConsoleWindow,()=>{openConsoleWindow();});
  handle(C.openSettingsWindow,()=>{openSettingsWindow();});
  handle(C.getSettings,()=>config.status());
+ handle(C.getSpeechAssets,()=>speechAssets!.status());
+ handle(C.prepareSpeechAssets,()=>speechAssets!.prepare());
+ handle(C.cancelSpeechAssets,()=>speechAssets!.cancel());
  handle(C.saveSettings,(_event,value,clear=[])=>{if(backend!.busy||switching)throw new Error('正在启动或应用配置，请完成后再保存。');if(!Array.isArray(clear)||!clear.every(k=>typeof k==='string'))throw new Error('无效密钥操作');const result=config.save(value,clear);changed();return result;});
  handle(C.applySettings,async(_event,force=false)=>{
    if(typeof force!=='boolean')throw new Error('无效应用请求');
    if(switching)throw new Error('activation_in_progress');
    const previous=config.status();
    const result=await backend!.apply(force);
-   if(!result.busy){applyPetSettings(config.current().desktop.pet);if(previous.backendPending||!previous.online)await activate(runtime.selectedId,true,false,true);}
+   if(!result.busy){applyPetSettings(config.current().desktop.pet);if(previous.backendPending||!previous.online||!runtime.online||!runtime.activeId)await activate(runtime.selectedId,true,false,true);}
    return result;
  });
  handle(C.getHistory,(_event,before,profileId)=>{if(profileId!==undefined&&profileId!==runtime.selectedId)throw new Error('历史 Profile 已切换');return history!.list(runtime.selectedId,before);});
@@ -132,21 +138,22 @@ async function bootstrap(){
    if(!force&&runtime.online&&agentState!=='idle')return {runtime,busy:true};
    switching=true;const beforeRuntime={...runtime};let revoked=false;
    try {
-     if(!config.online){profileStore.select(id);applied=detail.applied;runtime={selectedId:id,activeId:null,revision:applied?.revision??null,generation:runtime.generation+1,online:false,error:'已选中；Backend 离线，配置尚未激活'};broadcastLive2DModelState(modelState());profilesChanged();return {runtime};}
+     if(!config.online){profileStore.select(id);applied=detail.applied;runtime={activating:false,selectedId:id,activeId:null,revision:applied?.revision??null,generation:runtime.generation+1,online:false,error:'已选中；Backend 离线，配置尚未激活'};broadcastLive2DModelState(modelState());profilesChanged();return {runtime};}
      if(!force){const check=await backendJson('/api/v1/main-agent/profile/activation-check');if(check.busy)return {runtime,busy:true};}
+     runtime={...runtime,activating:true};profilesChanged();
      await petRequest('disconnect');revoked=true;
      runtime={...runtime,activeId:null,online:false,generation:runtime.generation+1};
-     tasks?.stop();
+     profilesChanged();tasks?.stop();
      const result=await backendJson('/api/v1/main-agent/profile/activate',{method:'POST',body:JSON.stringify({profile_id:id,revision:target.revision,soul:target.soulText,display_name:target.profile.displayName,adaptor:target.adaptor,model_version:target.modelVersion,force}),signal:AbortSignal.timeout(40000)});
      profileStore.select(id);applied=target;
-     runtime={selectedId:id,activeId:id,revision:target.revision,generation:result.generation,online:result.runtime_active===true,visualStatus:result.visual_status,capabilityNames:result.capability_names};
+     runtime={activating:false,selectedId:id,activeId:id,revision:target.revision,generation:result.generation,online:result.runtime_active===true,visualStatus:result.visual_status,capabilityNames:result.capability_names};
      realtimeError='';agentState='idle';broadcastAgentStatus(agentState);
      const savedBounds=bounds.getBounds(id);if(savedBounds)restorePetWindowBounds(pet,savedBounds);
      broadcastLive2DModelState(modelState());profilesChanged();tasks?.start();
      if(petReady){const ack=await petRequest('reconnect');if(ack?.visual){runtime={...runtime,visualStatus:ack.visual.available?(runtime.visualStatus==='degraded'?'degraded':'ready'):'unavailable',visualError:ack.visual.error};}}
      if(!restore||!detail.applied)profileStore.markApplied(id,target.revision);
      profilesChanged();return {runtime};
-   }catch(error){const message=error instanceof Error?error.message:'Profile 激活失败';if(revoked){await petRequest('disconnect').catch(()=>undefined);runtime={...runtime,activeId:null,online:false,error:message};}else runtime={...beforeRuntime,error:message};profilesChanged();throw error;}
+   }catch(error){const message=error instanceof Error?error.message:'Profile 激活失败';if(revoked){await petRequest('disconnect').catch(()=>undefined);runtime={...runtime,activating:false,activeId:null,online:false,error:message};}else runtime={...beforeRuntime,error:message};profilesChanged();throw error;}
    finally{switching=false;}
  };
  handle(C.listProfiles,()=>({profiles:profileStore.list(),runtime}));
@@ -176,7 +183,7 @@ async function bootstrap(){
    }finally{switching=false;}
  });
  handle(C.verifyProfileResources,(_event,id,version,files)=>{if(switching)throw new Error('activation_in_progress');const result=profileStore.verifyResources(id,version,files);profilesChanged();return result;});
- handle(C.getRealtimeToken,async event=>{assertPet(event);if(!runtime.online||!runtime.activeId)throw new Error('Profile 尚未激活');const owner=runtime.activeId,generation=runtime.generation,revision=runtime.revision;const token=await backendJson('/api/v1/main-agent/realtime-token',{method:'POST',body:JSON.stringify({profileId:owner,revision})});if(owner!==runtime.activeId||generation!==runtime.generation||revision!==runtime.revision)throw new Error('Profile 已切换');runtime={...runtime,generation:token.generation};profilesChanged();return token;});
+ handle(C.getRealtimeToken,async event=>{assertPet(event);if(runtime.activating||!runtime.online||!runtime.activeId)throw new Error('Profile 尚未激活');const owner=runtime.activeId,generation=runtime.generation,revision=runtime.revision;const token=await backendJson('/api/v1/main-agent/realtime-token',{method:'POST',body:JSON.stringify({profileId:owner,revision})});if(owner!==runtime.activeId||generation!==runtime.generation||revision!==runtime.revision)throw new Error('Profile 已切换');runtime={...runtime,generation:token.generation};profilesChanged();return token;});
  handle(C.getLive2DModelState,()=>modelState());
  handle(C.setPetMousePassthrough,(event,enabled)=>{assertPet(event);if(typeof enabled==='boolean')setPetMousePassthrough(enabled);});
  const movement=(value:any)=>{if(!value||![value.x,value.y].every(v=>typeof v==='number'&&Number.isFinite(v)&&Math.abs(v)<=10000))throw new Error('无效窗口位移');return value;};
@@ -190,5 +197,5 @@ app.whenReady().then(bootstrap).catch(error=>{const language=desktopConfig?.curr
 app.on('window-all-closed',()=>app.quit());
 app.on('before-quit',event=>{
  if(quitting)return;event.preventDefault();quitting=true;tasks?.stop();
- void (async()=>{try{await backend?.stop();history?.close();app.quit();}catch(error){quitting=false;const language=desktopConfig?.current().desktop.pet.displayLanguage??'zh';dialog.showErrorBox(t(language,'quitFailedTitle'),error instanceof Error?error.message:t(language,'quitFailedMessage'));}})();
+ void (async()=>{try{await speechAssets?.cancel();await backend?.stop();history?.close();app.quit();}catch(error){quitting=false;const language=desktopConfig?.current().desktop.pet.displayLanguage??'zh';dialog.showErrorBox(t(language,'quitFailedTitle'),error instanceof Error?error.message:t(language,'quitFailedMessage'));}})();
 });

@@ -1,12 +1,14 @@
 /**
  * Owns the Pet window's single profile-bound Main Agent text/voice session. It acquires a one-shot token,
- * opens the minimal WebSocket protocol, captures raw 16 kHz PCM, plays the current raw TTS clause in
+ * Localized preparation codes preserve actionable failures. It opens the minimal WebSocket protocol, captures raw 16 kHz PCM, plays the current raw TTS clause in
  * the same AudioContext, and ACKs voice only after physical completion and durable Electron history. Text delivery never requires microphone resources. Local RMS and server VAD gates
  * pause without dropping audio; cancel, overrun, replacement, and teardown share one cleanup path.
  * Visual SAY scopes carry the frozen server identity; bounded device-clock timers deliver start and output
  * envelope events to the independent player. Visual failures never participate in the durable ACK fence.
  */
 
+import {SPEECH_TEXT} from "../features/settings/speechText";
+import type {DisplayLanguage} from "../i18n";
 import type { AvatarCue } from "../shared/contracts/avatar";
 import type { PerformanceEvent } from "../features/live2d/performance";
 
@@ -19,6 +21,7 @@ export interface VoiceProfile { profileId: string; revision?: number; }
 export interface RealtimeToken {token:string;profile_id:string;revision:number;generation:number;}
 export interface MainAgentRealtimeClientOptions {
   gatewayUrl?: string;
+  displayLanguage?:()=>DisplayLanguage;
   getToken?: () => Promise<RealtimeToken>;
   onPerformance?: (event: PerformanceEvent) => void;
   onState?: (state: MainAgentRealtimeState, detail?: string) => void;
@@ -237,7 +240,7 @@ export class MainAgentRealtimeClient {
       }
       case "command.ack": {
         const id=String(event.command_id??"");const item=this.pending.get(id);
-        if(item){clearTimeout(item.timer);this.pending.delete(id);event.status==="accepted"?item.resolve():item.reject(new Error(publicError(String(event.code??"请求被拒绝"))));}
+        if(item){clearTimeout(item.timer);this.pending.delete(id);event.status==="accepted"?item.resolve():item.reject(new Error(publicError(String(event.code??"请求被拒绝"),this.options.displayLanguage?.())));}
         break;
       }
       case "user.message":
@@ -247,7 +250,7 @@ export class MainAgentRealtimeClient {
         if(["idle","listening","thinking","speaking"].includes(String(event.state)))this.options.onAgentState?.(event.state as "idle"|"listening"|"thinking"|"speaking");
         break;
       case "session.error":
-        await this.fail(publicError(String(event.code ?? "session error")));
+        await this.fail(publicError(String(event.code ?? "session error"),this.options.displayLanguage?.()));
         break;
       default:
         break;
@@ -487,10 +490,12 @@ export class MainAgentRealtimeClient {
   }
 }
 
-function publicError(code:string):string {
+export function publicError(code:string,language:DisplayLanguage="zh"):string {
+  if(code.endsWith("_optional_dependency_missing"))code="speech_optional_dependency_missing";
+  const speech=SPEECH_TEXT[language];
+  if(Object.prototype.hasOwnProperty.call(speech,code))return speech[code as keyof typeof speech];
   const messages:Record<string,string>={
     text_model_unavailable:"Main Agent 模型尚未配置，请在设置中保存并应用。",
-    speech_unavailable:"语音不可用，请检查语音开关、密钥、SDK、模型和许可证文件。",
     main_model_error:"Main Agent 请求失败，请检查模型配置和网络后重试。",
     runtime_unavailable:"Backend 尚未就绪，请稍后重试。",
     backend_restarting:"正在应用配置，请等待 Backend 重新就绪。"

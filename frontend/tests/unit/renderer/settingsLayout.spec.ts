@@ -18,7 +18,7 @@ it('preserves untouched keys and lets password inputs replace or delete every sa
  const root=mkdtempSync(join(tmpdir(),'aura-secrets-'));const config=new DesktopConfigStore(root,root);
  const seed=config.snapshot();seed.backend.chat_model.api_key='chat-fixture';seed.backend.task.model.api_key='task-fixture';seed.backend.main_agent.web.api_key='search-fixture';seed.backend.main_agent.speech.api_key='speech-fixture';config.save(seed);
  const saveSettings=vi.fn(async(value,clear)=>config.save(structuredClone(value),structuredClone(clear)));
- Object.assign(window,{aurabot:{getSettings:async()=>config.status(),saveSettings,onSettingsChanged:()=>()=>{}}});
+ Object.assign(window,{aurabot:{onSpeechAssetsChanged:()=>()=>{},getSpeechAssets:async()=>({phase:'idle',assets:[],paths:{},received:0,total:1}),getSettings:async()=>config.status(),saveSettings,onSettingsChanged:()=>()=>{}}});
  const host=document.createElement('div');document.body.append(host);const app=createApp(SettingsWindow);app.use(createPinia());app.mount(host);
  dispose=()=>{app.unmount();host.remove();rmSync(root,{recursive:true,force:true});};
  await vi.waitFor(()=>expect(host.querySelectorAll('input[data-secret-input]')).toHaveLength(3));
@@ -47,7 +47,7 @@ it('requires save before apply and defaults the busy dialog to cancel',async()=>
  const root=mkdtempSync(join(tmpdir(),'aura-form-'));const config=new DesktopConfigStore(root,root);config.markApplied(config.snapshot());config.online=true;
  const saveSettings=vi.fn(async(value,clear)=>config.save(structuredClone(value),structuredClone(clear)));
  const applySettings=vi.fn(async()=>({state:config.status(),busy:{tasks:1,memoryWriting:false,mainAgent:false}}));
- Object.assign(window,{aurabot:{getSettings:async()=>config.status(),saveSettings,applySettings,onSettingsChanged:()=>()=>{}}});
+ Object.assign(window,{aurabot:{onSpeechAssetsChanged:()=>()=>{},getSpeechAssets:async()=>({phase:'idle',assets:[],paths:{},received:0,total:1}),getSettings:async()=>config.status(),saveSettings,applySettings,onSettingsChanged:()=>()=>{}}});
  const host=document.createElement('div');document.body.append(host);const app=createApp(SettingsWindow);app.use(createPinia());app.mount(host);
  dispose=()=>{app.unmount();host.remove();rmSync(root,{recursive:true,force:true});};
  await vi.waitFor(()=>expect(host.querySelector('input')).not.toBeNull());
@@ -64,7 +64,7 @@ it('requires save before apply and defaults the busy dialog to cancel',async()=>
 it('keeps advanced fields collapsed until invalid or a save failure needs attention',async()=>{
  const root=mkdtempSync(join(tmpdir(),'aura-advanced-'));const config=new DesktopConfigStore(root,root);
  const saveSettings=vi.fn(async()=>{throw new Error('配置校验失败：请检查请求超时');});
- Object.assign(window,{aurabot:{getSettings:async()=>config.status(),saveSettings,onSettingsChanged:()=>()=>{}}});
+ Object.assign(window,{aurabot:{onSpeechAssetsChanged:()=>()=>{},getSpeechAssets:async()=>({phase:'idle',assets:[],paths:{},received:0,total:1}),getSettings:async()=>config.status(),saveSettings,onSettingsChanged:()=>()=>{}}});
  const host=document.createElement('div');document.body.append(host);const app=createApp(SettingsWindow);app.use(createPinia());app.mount(host);
  dispose=()=>{app.unmount();host.remove();rmSync(root,{recursive:true,force:true});};
  await vi.waitFor(()=>expect(host.querySelector('input')).not.toBeNull());
