@@ -1,10 +1,14 @@
+/** Carries Backend acoustic no_audio/listening state through the existing desktop status flow. */
 /**
  * Owns the Pet window's single profile-bound Main Agent text/voice session. It acquires a one-shot token,
  * Localized preparation codes preserve actionable failures. It opens the minimal WebSocket protocol, captures raw 16 kHz PCM, plays the current raw TTS clause in
- * the same AudioContext, and ACKs voice only after physical completion and durable Electron history. Text delivery never requires microphone resources. Local RMS and server VAD gates
- * pause without dropping audio; cancel, overrun, replacement, and teardown share one cleanup path.
+ * the same AudioContext, and ACKs voice only after physical completion and durable Electron history. Text delivery never requires microphone resources. Backend-confirmed speech controls interruption; cancel, overrun, replacement, and teardown share one cleanup path.
  * Visual SAY scopes carry the frozen server identity; bounded device-clock timers deliver start and output
  * envelope events to the independent player. Visual failures never participate in the durable ACK fence.
+ * Source-consumption progress releases backend PCM credit; cancelled in-flight audio is drained until
+ * the next ordered offer so a local clause failure cannot tear down an otherwise healthy session.
+ * Capture requests echo cancellation/noise suppression without automatic gain and reports only actual
+ * numeric/boolean audio settings to backend diagnostics; device identifiers remain local.
  */
 
 import {SPEECH_TEXT} from "../features/settings/speechText";
@@ -27,38 +31,18 @@ export interface MainAgentRealtimeClientOptions {
   onState?: (state: MainAgentRealtimeState, detail?: string) => void;
   onClause?: (text: string | null) => void;
   onMessage?: (entry: {profileId:string;generation:number;id:string;role:"user"|"assistant";content:string}) => Promise<void>;
-  onAgentState?: (state: "idle"|"listening"|"thinking"|"speaking")=>void;
-}
-
-export class PlaybackGate {
-  private localPaused = false;
-  private serverPaused = true;
-
-  setLocalCandidate(value: boolean): "pause" | "resume" | null {
-    return this.change(() => { this.localPaused = value; });
-  }
-
-  setServerBlocked(value: boolean): "pause" | "resume" | null {
-    return this.change(() => { this.serverPaused = value; });
-  }
-
-  get blocked(): boolean { return this.localPaused || this.serverPaused; }
-
-  private change(update: () => void): "pause" | "resume" | null {
-    const before = this.blocked;
-    update();
-    return before === this.blocked ? null : this.blocked ? "pause" : "resume";
-  }
+  onAgentState?: (state: "idle"|"no_audio"|"listening"|"thinking"|"speaking")=>void;
 }
 
 interface CurrentClause { id: string; text:string; settled: boolean; cancelled: boolean; draining?:boolean; cue?:AvatarCue; mode:"text"|"voice"; profileId:string; serverGeneration:number; started:boolean; startContextTime?:number; startDeadline?:number; }
 interface WorkletMessage {
-  type: "frame" | "candidate" | "released" | "clause-complete" | "clause-start" | "playback-level" | "overrun";
+  type: "frame" | "clause-complete" | "clause-start" | "playback-level" | "playback-progress" | "overrun";
   samples?: Int16Array;
   clauseId?: string;
   endContextTime?: number;
   contextTime?: number;
   level?:number;
+  consumedSamples?:number;
 }
 
 export class MainAgentRealtimeClient {
@@ -69,6 +53,7 @@ export class MainAgentRealtimeClient {
   private socket: WebSocket | null = null;
   private context: AudioContext | null = null;
   private stream: MediaStream | null = null;
+  private microphoneSettings: Record<string, number | boolean> = {};
   private playback: AudioWorkletNode | null = null;
   private generation = 0;
   private serverGeneration = 0;
@@ -77,8 +62,9 @@ export class MainAgentRealtimeClient {
   private levelTimer:ReturnType<typeof setTimeout>|null=null;
   private levels:Array<{contextTime:number;level:number}>=[];
   readonly visualDiagnostics={dropped:0,failures:0,starts:0,clockSkewMs:0};
-  private gate = new PlaybackGate();
+  private playbackBlocked = true;
   private clause: CurrentClause | null = null;
+  private discardAudio = false;
   private voice = false;
   private toggling = false;
   private profile:VoiceProfile|null=null;
@@ -105,7 +91,7 @@ export class MainAgentRealtimeClient {
     this.profile={...profile};
     this.serverGeneration=0;this.configRevision=profile.revision??0;
     this.controls=Promise.resolve();
-    this.gate=new PlaybackGate();
+    this.playbackBlocked=true;
     const generation=++this.generation;
     this.setState("connecting");
     this.ready=new Promise<void>((resolve,reject)=>{this.readyResolve=resolve;this.readyReject=reject;});
@@ -151,7 +137,7 @@ export class MainAgentRealtimeClient {
         try {
           await this.startAudio(generation);
           if(generation!==this.generation)return;
-          await this.command("voice.start");
+          await this.command("voice.start", {audio_settings:this.microphoneSettings});
           if(generation===this.generation)this.voice=true;
         } catch(error){await this.stopAudio();throw error;}
       }
@@ -197,14 +183,15 @@ export class MainAgentRealtimeClient {
         this.setState("active");this.readyResolve?.();this.readyResolve=null;this.readyReject=null;
         break;
       case "playback.pause":
-        this.applyGate(this.gate.setServerBlocked(true));
+        this.applyGate(true);
         break;
       case "playback.resume":
-        this.applyGate(this.gate.setServerBlocked(false));
+        this.applyGate(false);
         break;
       case "clause.offer": {
         const id = String(event.clause_id ?? "");
         if (!id || this.clause) throw new Error("invalid clause offer");
+        this.discardAudio = false;
         const cue=this.cueFrom(event);
         this.clause = { id, text:String(event.text??""), settled: false, cancelled: false, cue,
           mode:event.mode==="text"?"text":"voice",profileId:this.profile!.profileId,serverGeneration:this.serverGeneration,started:false };
@@ -225,6 +212,7 @@ export class MainAgentRealtimeClient {
       }
       case "clause.audio_end": {
         const clause = this.clause;
+        if (!clause && this.discardAudio) break;
         if (!clause || clause.id !== event.clause_id) throw new Error("audio_end has no current clause");
         this.playback?.port.postMessage({ type: "finish", clauseId: clause.id });
         break;
@@ -247,7 +235,7 @@ export class MainAgentRealtimeClient {
         await this.options.onMessage?.({id:String(event.message_id),role:"user",content:String(event.text),profileId:this.profile!.profileId,generation:this.serverGeneration});
         break;
       case "agent.state":
-        if(["idle","listening","thinking","speaking"].includes(String(event.state)))this.options.onAgentState?.(event.state as "idle"|"listening"|"thinking"|"speaking");
+        if(["idle","no_audio","listening","thinking","speaking"].includes(String(event.state)))this.options.onAgentState?.(event.state as "idle"|"no_audio"|"listening"|"thinking"|"speaking");
         break;
       case "session.error":
         await this.fail(publicError(String(event.code ?? "session error"),this.options.displayLanguage?.()));
@@ -261,13 +249,19 @@ export class MainAgentRealtimeClient {
     if (this.context || generation !== this.generation) return;
     try {
       const stream = await navigator.mediaDevices.getUserMedia({
-        audio: { channelCount: 1, echoCancellation: true },
+        audio: { channelCount: 1, echoCancellation: true, noiseSuppression: true, autoGainControl: false },
       });
       if (generation !== this.generation) {
         stream.getTracks().forEach((track) => track.stop());
         return;
       }
       this.stream=stream;
+      const settings = stream.getTracks()[0]?.getSettings?.();
+      this.microphoneSettings = {};
+      for(const key of ["sampleRate", "channelCount", "echoCancellation", "noiseSuppression", "autoGainControl"] as const){
+        const value = settings?.[key];
+        if(typeof value === "boolean" || (typeof value === "number" && Number.isFinite(value)))this.microphoneSettings[key]=value;
+      }
       for(const track of stream.getTracks())track.addEventListener("ended",()=>{
         if(generation===this.generation&&this.stream===stream)void this.fail("麦克风已断开，请检查设备后重新开启语音。");
       },{once:true});
@@ -293,7 +287,7 @@ export class MainAgentRealtimeClient {
       this.stream = stream;
       this.context = context;
       this.playback = playback;
-      this.applyGate(this.gate.setServerBlocked(false));
+      this.applyGate(false);
       this.setState("active");
     } catch (error) {
       if(generation===this.generation)await this.stopAudio();
@@ -303,9 +297,7 @@ export class MainAgentRealtimeClient {
 
   private handleMic(message: WorkletMessage, generation: number): void {
     if (generation !== this.generation || !this.voice) return;
-    if (message.type === "candidate") this.applyGate(this.gate.setLocalCandidate(true));
-    else if (message.type === "released") this.applyGate(this.gate.setLocalCandidate(false));
-    else if (message.type === "frame" && message.samples) {
+    if (message.type === "frame" && message.samples) {
       const socket = this.socket;
       if (socket?.readyState === WebSocket.OPEN && socket.bufferedAmount <= MAX_SOCKET_BACKLOG) {
         const bytes = new Uint8Array(new ArrayBuffer(message.samples.byteLength));
@@ -318,6 +310,7 @@ export class MainAgentRealtimeClient {
   }
 
   private appendTts(encoded: ArrayBuffer): void {
+    if (this.discardAudio) return;
     if (!this.clause || this.clause.settled || encoded.byteLength === 0 || encoded.byteLength % 2 !== 0) {
       void this.fail("TTS PCM has no active clause or is malformed");
       return;
@@ -328,12 +321,17 @@ export class MainAgentRealtimeClient {
 
   private handlePlayback(message: WorkletMessage): void {
     const clause=this.clause;
+    if(message.type==="playback-progress"){
+      if(clause&&!clause.settled&&message.clauseId===clause.id&&Number.isSafeInteger(message.consumedSamples)&&message.consumedSamples!>=0)
+        this.send({type:"renderer.progress",clause_id:clause.id,consumed_samples:message.consumedSamples});
+      return;
+    }
     if(message.type==="clause-start"&&clause&&message.clauseId===clause.id&&!clause.started&&!clause.settled){
       if(!Number.isFinite(message.contextTime)){this.visualDiagnostics.dropped++;return;}
       if(clause.startContextTime===undefined){clause.startContextTime=message.contextTime;clause.startDeadline=Date.now()+1500;this.scheduleStart(clause);}return;
     }
     if(message.type==="playback-level"){
-      if(clause&&message.clauseId===clause.id&&!clause.settled&&!this.gate.blocked&&Number.isFinite(message.level)&&Number.isFinite(message.contextTime)){
+      if(clause&&message.clauseId===clause.id&&!clause.settled&&!this.playbackBlocked&&Number.isFinite(message.level)&&Number.isFinite(message.contextTime)){
         this.levels.push({contextTime:message.contextTime!,level:Math.max(0,Math.min(1,message.level!))});
         if(this.levels.length>8){this.levels.shift();this.visualDiagnostics.dropped++;}
         if(this.levelTimer===null)this.scheduleLevel(clause);
@@ -345,7 +343,7 @@ export class MainAgentRealtimeClient {
       if(message.endContextTime===undefined){void this.fail("音频输出时钟不可用");return;}
       void this.completeClause(message.clauseId,message.endContextTime).catch(error=>{if(generation===this.generation)return this.fail(error);});
     }
-    else if (message.type === "overrun") this.interruptClause();
+    else if (message.type === "overrun" && clause && message.clauseId === clause.id) this.interruptClause();
   }
 
   private async completeClause(clauseId: string, endContextTime?:number): Promise<void> {
@@ -384,14 +382,17 @@ export class MainAgentRealtimeClient {
   }
 
   private flushClause(flush = true): void {
+    this.discardAudio = true;
     this.clearCueTimer();this.clearLevels();if(this.clause?.cue)this.performance({type:"cancel",cue:this.clause.cue,clauseId:this.clause.id});this.performance({type:"level",level:0});
     if (flush) this.playback?.port.postMessage({ type: "flush" });
     this.clause = null;
     this.onClause(null);
   }
 
-  private applyGate(transition: "pause" | "resume" | null): void {
-    if (transition) {
+  private applyGate(blocked: boolean): void {
+    if (blocked !== this.playbackBlocked) {
+      this.playbackBlocked = blocked;
+      const transition = blocked ? "pause" : "resume";
       this.playback?.port.postMessage({ type: transition });this.performance({type:transition});
       if(transition==="pause"){this.clearCueTimer();this.clearLevels();}else if(this.clause&&!this.clause.started)this.scheduleStart(this.clause);
     }
@@ -429,10 +430,12 @@ export class MainAgentRealtimeClient {
     this.voice=false;this.clearCueTimer();this.clearLevels();this.performance({type:"reset"});
     this.options.onAgentState?.("idle");
     this.clause=null;
+    this.discardAudio=false;
     this.onClause(null);
     await this.stopAudio();
   }
   private async stopAudio():Promise<void>{
+    this.microphoneSettings = {};
     this.clearCueTimer();this.clearLevels();this.performance({type:"level",level:0});
     const stream=this.stream;this.stream=null;stream?.getTracks().forEach(track=>track.stop());
     this.playback?.port.postMessage({type:"flush"});this.playback=null;
@@ -457,7 +460,7 @@ export class MainAgentRealtimeClient {
     const generation=this.generation;const deadline=Date.now()+1500;
     const check=()=>{
       this.levelTimer=null;
-      if(generation!==this.generation||this.clause!==clause||clause.settled||this.gate.blocked||!this.context){this.clearLevels();return;}
+      if(generation!==this.generation||this.clause!==clause||clause.settled||this.playbackBlocked||!this.context){this.clearLevels();return;}
       const outputTime=this.context.getOutputTimestamp().contextTime;
       if(typeof outputTime!=='number'||!Number.isFinite(outputTime)||Date.now()>deadline){this.clearLevels();this.performance({type:"level",level:0});return;}
       let latest:number|undefined;
@@ -469,11 +472,11 @@ export class MainAgentRealtimeClient {
   }
   private scheduleStart(clause:CurrentClause):void {
     this.clearCueTimer();
-    if(clause.startContextTime===undefined||clause.started||clause.settled||this.gate.blocked||!this.context)return;
+    if(clause.startContextTime===undefined||clause.started||clause.settled||this.playbackBlocked||!this.context)return;
     const generation=this.generation;
     const check=()=>{
       this.cueTimer=null;
-      if(generation!==this.generation||this.clause!==clause||clause.started||clause.settled||this.gate.blocked||!this.context)return;
+      if(generation!==this.generation||this.clause!==clause||clause.started||clause.settled||this.playbackBlocked||!this.context)return;
       const outputTime=this.context.getOutputTimestamp().contextTime;
       if(typeof outputTime!=='number'||!Number.isFinite(outputTime)||Date.now()>(clause.startDeadline??0)){this.visualDiagnostics.dropped++;return;}
       const remaining=clause.startContextTime!-outputTime;

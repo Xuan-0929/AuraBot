@@ -1,3 +1,4 @@
+/** Localizes desktop controls and Backend activity states, including acoustic silence, for all windows. */
 /** Localizes the complete Profile workflow and desktop shell and simplified Backend-projected agent states. Includes model connections, search configuration and actionable pet runtime reminders. No runtime state is derived here. */
 /**
  * 提供 Renderer 当前保留界面的英中日文案与 Agent 状态标签。
@@ -615,19 +616,19 @@ export const UI_TEXT_KEYS = Object.keys(UI_TEXT.en) as UiTextKey[];
 
 const AGENT_STATUS_LABELS: Record<DisplayLanguage, Record<AgentStatus, string>> = {
   en: {
-    idle: "idle",
+    idle: "idle", no_audio: "No speech detected",
     listening: "listening",
     thinking: "thinking",
     typing: "typing", speaking:"speaking"
   },
   zh: {
-    idle: "空闲中",
+    idle: "空闲中", no_audio: "无音频",
     listening: "倾听中",
     thinking: "判断中",
     typing: "对方正在输入中", speaking:"正在说话"
   },
   ja: {
-    idle: "待機中",
+    idle: "待機中", no_audio: "音声未検出",
     listening: "聞き取り中",
     thinking: "考え中",
     typing: "入力中", speaking:"話しています"

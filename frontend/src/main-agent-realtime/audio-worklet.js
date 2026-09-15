@@ -1,8 +1,9 @@
 /**
  * Registers the Pet's microphone capture and TTS playback processors in one AudioWorklet module. Capture
- * continuously resamples browser audio to raw 16 kHz/20 ms PCM and emits local RMS speech hints; playback
+ * continuously resamples browser audio to raw 16 kHz/20 ms PCM without making interruption decisions; playback
  * keeps one clause's 24 kHz PCM queued across pauses and reports completion only after audio_end and the
- * render cursor consumes the final source sample. Playback emits a single consumption start and a 30 Hz
+ * render cursor consumes the final source sample. Cumulative consumption every 200 ms releases backend
+ * send credit without acknowledging physical delivery. Playback emits a single consumption start and a 30 Hz
  * output-sample RMS envelope, including silence on pause/gaps, for the avatar without consulting mic RMS. The renderer additionally waits for the device output clock. Pure helpers are exported for deterministic tests.
  */
 
@@ -39,40 +40,6 @@ export class ContinuousPcm16Resampler {
   }
 }
 
-export class LocalSpeechGate {
-  constructor({ noiseFloor = 0.005, alpha = 0.05, releaseFrames = 10 } = {}) {
-    this.noiseFloor = noiseFloor;
-    this.alpha = alpha;
-    this.releaseFrames = releaseFrames;
-    this.candidate = false;
-    this.quietFrames = 0;
-  }
-
-  accept(samples) {
-    let energy = 0;
-    for (const sample of samples) energy += (sample / 32768) ** 2;
-    const rms = Math.sqrt(energy / Math.max(1, samples.length));
-    if (!this.candidate) {
-      if (rms >= Math.max(0.020, this.noiseFloor * 3)) {
-        this.candidate = true;
-        this.quietFrames = 0;
-        return "candidate";
-      }
-      this.noiseFloor += this.alpha * (rms - this.noiseFloor);
-      return null;
-    }
-    if (rms < Math.max(0.012, this.noiseFloor * 1.8)) {
-      this.quietFrames += 1;
-      if (this.quietFrames >= this.releaseFrames) {
-        this.candidate = false;
-        this.quietFrames = 0;
-        return "released";
-      }
-    } else this.quietFrames = 0;
-    return null;
-  }
-}
-
 export class ClausePlaybackQueue {
   constructor({ outputSampleRate, maxQueuedSamples = 48_000 }) {
     this.maxQueuedSamples = maxQueuedSamples;
@@ -88,6 +55,8 @@ export class ClausePlaybackQueue {
     this.clauseId = null;
     this.finished = false;
     this.completed = false;
+    this.consumedSamples = 0;
+    this.reportedSamples = 0;
   }
 
   get queuedSamples() { return this.samples.length - this.offset; }
@@ -127,6 +96,8 @@ export class ClausePlaybackQueue {
     this.completed = false;
     this.started=false;
     this.levelFrames=this.outputSampleRate;
+    this.consumedSamples = 0;
+    this.reportedSamples = 0;
   }
 
   render(channel) {
@@ -147,6 +118,7 @@ export class ClausePlaybackQueue {
       energy+=channel[index]*channel[index];
       this.position += this.step;
       const consumed = Math.floor(this.position);
+      this.consumedSamples += Math.min(consumed, this.samples.length - this.offset);
       this.offset = Math.min(this.samples.length, this.offset + consumed);
       this.position -= consumed;
       if (this.offset > 4096 && this.offset * 2 > this.samples.length) {
@@ -155,6 +127,10 @@ export class ClausePlaybackQueue {
       }
     }
     if(rendered&&!this.started){this.started=true;events.push({type:"clause-start",clauseId:this.clauseId,frameOffset:0});}
+    if(this.consumedSamples - this.reportedSamples >= 4_800){
+      this.reportedSamples=this.consumedSamples;
+      events.push({type:"playback-progress",clauseId:this.clauseId,consumedSamples:this.consumedSamples});
+    }
     const level=Math.sqrt(energy/Math.max(1,channel.length));
     if((rendered&&this.levelFrames>=this.outputSampleRate/30)||(level===0&&this.lastLevel!==0)){
       this.levelFrames=0;this.lastLevel=level;events.push({type:"playback-level",clauseId:this.clauseId,level,frameOffset:channel.length});
@@ -175,7 +151,6 @@ if (Processor && typeof globalThis.registerProcessor === "function") {
     constructor() {
       super();
       this.resampler = new ContinuousPcm16Resampler(globalThis.sampleRate, 16_000);
-      this.gate = new LocalSpeechGate();
       this.pending = [];
     }
 
@@ -185,8 +160,6 @@ if (Processor && typeof globalThis.registerProcessor === "function") {
       this.pending.push(...this.resampler.push(channel));
       while (this.pending.length >= 320) {
         const frame = Int16Array.from(this.pending.splice(0, 320));
-        const gate = this.gate.accept(frame);
-        if (gate) this.port.postMessage({ type: gate });
         this.port.postMessage({ type: "frame", samples: frame }, [frame.buffer]);
       }
       return true;

@@ -3,8 +3,11 @@
 The tests protect mutable-only DashScope partials through the real coordinator and Runtime admission limit,
 stable segment identity, authoritative playback events, first-chunk TTS streaming, Speech Ledger phases,
 ACK serialization, cancellation, and SpeechService ownership without real providers or microphones.
+Near-field qualification, lossless burst spooling, log rotation and cancellation while awaiting playback
+credit exercise the real coordinators with controlled provider callbacks and PCM fixtures.
 """
 
+# Acoustic edge tests drive the real coordinator with fake detectors, without cloud or hardware.
 from __future__ import annotations
 
 import asyncio
@@ -29,6 +32,9 @@ from backend.main_agent.speech import (
 from backend.main_agent.tool_runtime import InvokeMode, ToolSurfacePolicy
 
 
+NEAR_PCM = b"\x00\x08" * 320
+
+
 class CallbackTransport:
     def __init__(self) -> None:
         self.release = threading.Event()
@@ -47,6 +53,50 @@ class CallbackTransport:
 
 
 class DashScopeTtsTests(unittest.IsolatedAsyncioTestCase):
+    async def test_spool_limit_cancels_provider_and_closes_temporary_audio(self):
+        transport = CallbackTransport()
+        spool = tempfile.TemporaryFile()
+        with patch("backend.main_agent.speech.MAX_TTS_SPOOL_BYTES", 2), patch("backend.main_agent.speech.tempfile.TemporaryFile", return_value=spool):
+            with self.assertRaisesRegex(RuntimeError, "streaming failed"):
+                _ = [chunk async for chunk in DashScopeSpeechOutputProvider(
+                    "test", voice="test", transport_factory=lambda **_: transport).synthesize("hello")]
+        self.assertTrue(transport.cancelled)
+        self.assertTrue(spool.closed)
+
+    async def test_diagnostic_log_has_a_bounded_lifetime(self):
+        from backend.main_agent import metrics
+        with tempfile.TemporaryDirectory() as directory:
+            with metrics.speech_diagnostics(Path(directory)):
+                for _ in range(150):
+                    metrics.speech_logger.info("diagnostic test record %s", "0" * 8000)
+                metrics.speech_logger.info("playback_cancelled reason=test")
+                handler = metrics.speech_logger.handlers[-1]
+            self.assertIsNone(handler.stream)
+            files = list(Path(directory).glob("speech-diagnostics.log*"))
+            self.assertEqual(len(files), 2)
+            self.assertTrue(all(path.stat().st_size <= 512_000 for path in files))
+            self.assertIn("playback_cancelled reason=test", (Path(directory) / "speech-diagnostics.log").read_text())
+    async def test_fast_callbacks_survive_a_slow_playback_consumer(self):
+        completed = threading.Event()
+        class BurstTransport:
+            def stream(self, _text, on_data, on_complete, _on_error):
+                for index in range(80):
+                    on_data(index.to_bytes(2, "little") * 4800)
+                on_complete()
+                completed.set()
+            def cancel(self):
+                pass
+        provider = DashScopeSpeechOutputProvider("test", voice="test", transport_factory=lambda **_: BurstTransport())
+        stream = provider.synthesize("burst")
+        try:
+            first = await anext(stream)
+            await asyncio.to_thread(completed.wait, 1)
+            await asyncio.sleep(.01)
+            chunks = [first] + [chunk async for chunk in stream]
+            self.assertEqual(b"".join(chunks), b"".join(i.to_bytes(2, "little") * 4800 for i in range(80)))
+            self.assertLessEqual(max(map(len, chunks)), 9600)
+        finally:
+            await stream.aclose()
     async def test_default_transport_configures_sdk_key_before_synthesizer_creation(self) -> None:
         class FakeDashScope:
             api_key: str | None = None
@@ -212,6 +262,118 @@ class FakePlayback:
 
 
 class SpeechInputTests(unittest.IsolatedAsyncioTestCase):
+    async def test_short_continuation_does_not_reject_an_already_confirmed_turn(self):
+        class Runtime(FakeInputRuntime):
+            def __init__(self):
+                super().__init__()
+                self.rejected = False
+                self.completed = False
+            async def reject_speech_candidate(self):
+                self.rejected = True
+            async def endpoint_fallback(self):
+                self.completed = True
+        runtime, stt = Runtime(), FakeStt()
+        coordinator = SpeechInputCoordinator(runtime, stt_provider=stt,
+            vad=FakeVad([1.0] * 15 + [0.0, 1.0, 0.0]), vad_stop_ms=20, unavailable_fallback_seconds=.1)
+        try:
+            for _ in range(15):
+                await coordinator.accept_mic_frame(NEAR_PCM)
+            await stt.sessions[0].sink(TranscriptUpdate("a complete thought", "", "a complete thought", "partial"))
+            await coordinator.accept_mic_frame(b"\0" * 640)
+            await coordinator.accept_mic_frame(NEAR_PCM)
+            await coordinator.accept_mic_frame(b"\0" * 640)
+            await coordinator.wait_for_endpoint()
+            self.assertFalse(runtime.rejected)
+            self.assertTrue(runtime.completed)
+        finally:
+            await coordinator.close()
+    async def test_default_gate_ignores_distant_and_intermittent_voice_then_keeps_near_preroll(self):
+        runtime, playback, stt = AsyncMock(), FakePlayback(), FakeStt()
+        values = [1.0] * 30 + [1.0, 0.0] * 20 + [1.0] * 15
+        coordinator = SpeechInputCoordinator(runtime, vad=FakeVad(values), stt_provider=stt, playback_lifecycle=playback)
+        quiet_voice = b"\x40\x00" * 320
+        near_voice = b"\x00\x08" * 320
+        try:
+            for _ in range(30):
+                await coordinator.accept_mic_frame(quiet_voice)
+            self.assertEqual(playback.events, [])
+            self.assertEqual(stt.sessions, [])
+            for index in range(40):
+                await coordinator.accept_mic_frame(near_voice if index % 2 == 0 else b"\0" * 640)
+            self.assertEqual(playback.events, [])
+            for _ in range(14):
+                await coordinator.accept_mic_frame(near_voice)
+            self.assertEqual(playback.events, [])
+            self.assertEqual(runtime.mock_calls, [])
+            await coordinator.accept_mic_frame(near_voice)
+            self.assertEqual(playback.events, ["candidate", "confirmed"])
+            self.assertEqual(len(stt.sessions), 1)
+            self.assertGreaterEqual(len(stt.sessions[0].frames), 15)
+            self.assertEqual(stt.sessions[0].frames[-15:], [near_voice] * 15)
+            self.assertEqual(runtime.confirm_speech.await_count, 1)
+            await stt.sessions[0].sink(TranscriptUpdate("hello", "", "hello", "partial"))
+            self.assertEqual(runtime.confirm_speech.await_count, 1)
+        finally:
+            await coordinator.close()
+
+    async def test_background_calibration_rejects_marginal_voice_and_resets_for_new_capture(self):
+        runtime, stt = AsyncMock(), FakeStt()
+        coordinator = SpeechInputCoordinator(runtime, vad=FakeVad([0.0] * 100 + [1.0] * 30), stt_provider=stt)
+        try:
+            for _ in range(100):
+                await coordinator.accept_mic_frame(b"\x00\x02" * 320)
+            for _ in range(15):
+                await coordinator.accept_mic_frame(b"\x00\x04" * 320)
+            self.assertEqual(stt.sessions, [])
+            await coordinator.reset_input()
+            for _ in range(15):
+                await coordinator.accept_mic_frame(b"\x00\x04" * 320)
+            self.assertEqual(len(stt.sessions), 1)
+        finally:
+            await coordinator.close()
+    async def test_acoustic_edges_cover_pause_resume_and_reset_without_transcripts(self) -> None:
+        class Playback(FakePlayback):
+            async def speech_activity(self, *, active):
+                self.events.append("start" if active else "stop")
+            async def speech_candidate_rejected(self):
+                self.events.append("rejected")
+        playback = Playback()
+        coordinator = SpeechInputCoordinator(FakeInputRuntime(), vad=FakeVad([0, 1, 0, 1]),
+            playback_lifecycle=playback, vad_stop_ms=20, speech_confirm_ms=20)
+        frame = NEAR_PCM
+        await coordinator.accept_mic_frame(frame)
+        self.assertEqual(playback.events, [])
+        await coordinator.accept_mic_frame(frame)
+        self.assertEqual(playback.events, ["candidate", "confirmed"])
+        await coordinator.accept_mic_frame(frame)
+        self.assertIn("stop", playback.events)
+        await coordinator.wait_for_endpoint()
+        self.assertIn("rejected", playback.events)
+        await coordinator.accept_mic_frame(frame)
+        self.assertEqual(playback.events[-2:], ["candidate", "confirmed"])
+        await coordinator.reset_input()
+        self.assertEqual(playback.events[-1], "stop")
+
+    async def test_acoustic_restart_during_pending_endpoint(self) -> None:
+        class Playback(FakePlayback):
+            async def speech_activity(self, *, active):
+                self.events.append("start" if active else "stop")
+        class Coordinator(SpeechInputCoordinator):
+            async def _eou_probability(self):
+                await asyncio.Event().wait()
+        playback = Playback()
+        coordinator = Coordinator(FakeInputRuntime(), vad=FakeVad([1, 1, 0, 1]),
+            playback_lifecycle=playback, vad_stop_ms=20, speech_confirm_ms=20)
+        try:
+            for _ in range(3):
+                await coordinator.accept_mic_frame(NEAR_PCM)
+            self.assertEqual(playback.events, ["candidate", "confirmed", "stop"])
+            await coordinator.accept_mic_frame(NEAR_PCM)
+            self.assertEqual(playback.events[-1], "start")
+            self.assertEqual(playback.events.count("confirmed"), 1)
+        finally:
+            await coordinator.close()
+
     async def test_cancelled_dashscope_close_keeps_transport_cleanup_owned(self) -> None:
         entered, cleaning, release = asyncio.Event(), asyncio.Event(), asyncio.Event()
         transports = []
@@ -255,16 +417,15 @@ class SpeechInputTests(unittest.IsolatedAsyncioTestCase):
         hub = RealtimeHub()
         coordinator = SpeechInputCoordinator(FakeInputRuntime(),
             stt_provider=DashScopeStreamingSttProvider("test", transport_factory=factory),
-            vad=FakeVad([1.0, 0.0]), vad_stop_ms=20)
+            vad=FakeVad([1.0, 0.0]), vad_stop_ms=20, speech_confirm_ms=20)
         service = SpeechService(hub, coordinator, SimpleNamespace(startup=AsyncMock(), shutdown=AsyncMock()))
         await service.startup()
         mic = service._mic_task
         closing = None
         try:
-            hub.mic_queue.put(b"\0" * 640)
-            hub.mic_queue.put(b"\0" * 640)
-            self.assertTrue(await asyncio.to_thread(entered.wait, 1))
+            await coordinator.accept_mic_frame(NEAR_PCM)
             closing = asyncio.create_task(service.shutdown())
+            self.assertTrue(await asyncio.to_thread(entered.wait, 1))
             await asyncio.sleep(.01)
             self.assertFalse(closing.done())
             release.set()
@@ -279,21 +440,23 @@ class SpeechInputTests(unittest.IsolatedAsyncioTestCase):
 
     async def test_dashscope_callbacks_keep_arrival_order_across_confirmation_await(self) -> None:
         entered, release = asyncio.Event(), asyncio.Event()
-        class BlockedPlayback(FakePlayback):
-            async def speech_confirmed(self):
-                entered.set()
-                await release.wait()
+        class BlockedRuntime(FakeInputRuntime):
+            async def update_transcript(self, text, **kwargs):
+                if not self.updates:
+                    entered.set()
+                    await release.wait()
+                await super().update_transcript(text, **kwargs)
         transports = []
         def factory(**kwargs):
             transport = FakeDashScopeSttTransport(kwargs["on_event"])
             transports.append(transport)
             return transport
-        runtime = FakeInputRuntime()
+        runtime = BlockedRuntime()
         coordinator = SpeechInputCoordinator(runtime,
             stt_provider=DashScopeStreamingSttProvider("test", transport_factory=factory),
-            vad=FakeVad([1.0]), playback_lifecycle=BlockedPlayback())
+            vad=FakeVad([1.0]), speech_confirm_ms=20, playback_lifecycle=FakePlayback())
         try:
-            await coordinator.accept_mic_frame(b"\0" * 640)
+            await coordinator.accept_mic_frame(NEAR_PCM)
             transports[0].emit_partial("old partial")
             await entered.wait()
             transports[0].on_event({"sentence": {"text": "complete final words", "sentence_end": True}})
@@ -349,10 +512,10 @@ class SpeechInputTests(unittest.IsolatedAsyncioTestCase):
                     transport_factory=transport_factory,
                 ),
                 vad=FakeVad([1.0]),
-                speech_confirm_ms=160,
+                speech_confirm_ms=20,
             )
             try:
-                await coordinator.accept_mic_frame(b"\0" * 640)
+                await coordinator.accept_mic_frame(NEAR_PCM)
                 for partial in ("我", "我想", "我想查", "我想查天气"):
                     transports[0].emit_partial(partial)
                     await asyncio.sleep(0)
@@ -379,9 +542,9 @@ class SpeechInputTests(unittest.IsolatedAsyncioTestCase):
             stt_provider=stt,
             vad=FakeVad([1.0]),
             playback_lifecycle=playback,
-            speech_confirm_ms=160,
+            speech_confirm_ms=20,
         )
-        await coordinator.accept_mic_frame(b"\0" * 640)
+        await coordinator.accept_mic_frame(NEAR_PCM)
         sink = stt.sessions[0].sink
         await sink(TranscriptUpdate("你", "你", "", "partial"))
         await sink(TranscriptUpdate("你好", "你好", "", "partial"))
@@ -441,6 +604,33 @@ class FakeLedgerRuntime:
 
 
 class DeliveryTests(unittest.IsolatedAsyncioTestCase):
+    async def test_cancellation_joins_synthesis_while_waiting_for_playback_credit(self):
+        entered, closed = asyncio.Event(), asyncio.Event()
+        class Output:
+            def synthesize(self, _text):
+                async def generate():
+                    try:
+                        yield b"\0\0" * 4800
+                    finally:
+                        closed.set()
+                self.stream = generate()
+                return self.stream
+        class BlockedPort(FakePort):
+            async def send_audio(self, pcm):
+                entered.set()
+                await asyncio.Event().wait()
+        output, port = Output(), BlockedPort()
+        async def acquire():
+            return port
+        delivery = ClauseSpeechDelivery(output, acquire, FakeLedgerRuntime())
+        try:
+            await delivery(RendererClause("blocked", "hello", "invoke", "input", 1))
+            await entered.wait()
+            await delivery.cancel_current()
+            self.assertTrue(closed.is_set(), "cancellation must close the paused synthesis generator before returning")
+        finally:
+            await delivery.shutdown()
+            await output.stream.aclose()
     async def test_queue_first_pcm_and_ack_are_distinct_and_serialize_clauses(self) -> None:
         output = FakeOutput()
         port = FakePort()
@@ -503,15 +693,15 @@ class SpeechServiceTests(unittest.IsolatedAsyncioTestCase):
                 raise ValueError("optional inference failed")
         stt, hub = FakeStt(), FakeHub()
         coordinator = SpeechInputCoordinator(Runtime(), stt_provider=stt, vad=FakeVad([1.0, 0.0]),
-            eou=Eou(), vad_stop_ms=20, eou_inference_timeout_seconds=.01,
+            eou=Eou(), vad_stop_ms=20, speech_confirm_ms=20, eou_inference_timeout_seconds=.01,
             unavailable_fallback_seconds=.03)
         service = SpeechService(hub, coordinator, AsyncMock())
         await service.startup()
         resetting = None
         try:
-            await coordinator.accept_mic_frame(b"\0" * 640)
+            await coordinator.accept_mic_frame(NEAR_PCM)
             await stt.sessions[0].sink(TranscriptUpdate("input", "", "input", "partial"))
-            await coordinator.accept_mic_frame(b"\0" * 640)
+            await coordinator.accept_mic_frame(NEAR_PCM)
             await asyncio.wait_for(fallback.wait(), .5)
             self.assertTrue(entered.is_set())
             resetting = asyncio.create_task(service.reset_input())
@@ -529,17 +719,17 @@ class SpeechServiceTests(unittest.IsolatedAsyncioTestCase):
         runtime = FakeInputRuntime()
         stt = FakeStt()
         hub = FakeHub()
-        coordinator = SpeechInputCoordinator(runtime, stt_provider=stt, vad=FakeVad([1.0, 1.0]))
+        coordinator = SpeechInputCoordinator(runtime, stt_provider=stt, vad=FakeVad([1.0, 1.0]), speech_confirm_ms=20)
         delivery = AsyncMock()
         service = SpeechService(hub, coordinator, delivery)
         await service.startup()
         mic_worker = service._mic_task
         try:
-            await coordinator.accept_mic_frame(b"\0" * 640)
+            await coordinator.accept_mic_frame(NEAR_PCM)
             old_sink = stt.sessions[0].sink
             await old_sink(TranscriptUpdate("old input", "", "old input", "partial"))
             await service.reset_input()
-            await coordinator.accept_mic_frame(b"\0" * 640)
+            await coordinator.accept_mic_frame(NEAR_PCM)
             await old_sink(TranscriptUpdate("late old input", "", "late old input", "partial"))
             await stt.sessions[1].sink(TranscriptUpdate("new input", "", "new input", "partial"))
             self.assertEqual([text for text, _, _ in runtime.updates], ["old input", "new input"])
@@ -572,7 +762,7 @@ class SpeechServiceTests(unittest.IsolatedAsyncioTestCase):
         await service.startup()
         resetting = None
         try:
-            hub.mic_queue.put(b"\0" * 640)
+            hub.mic_queue.put(NEAR_PCM)
             self.assertTrue(await asyncio.to_thread(entered.wait, 1))
             hub.mic_queue.put(b"\1" * 640)
             resetting = asyncio.create_task(service.reset_input())
@@ -582,7 +772,7 @@ class SpeechServiceTests(unittest.IsolatedAsyncioTestCase):
             await resetting
             await asyncio.sleep(.01)
             self.assertFalse(coordinator.audio or coordinator.pre_roll)
-            self.assertEqual(coordinator.vad.frames, [b"\0" * 640])
+            self.assertEqual(coordinator.vad.frames, [NEAR_PCM])
         finally:
             release.set()
             if resetting is not None:
@@ -596,10 +786,10 @@ class SpeechServiceTests(unittest.IsolatedAsyncioTestCase):
         runtime = FakeLedgerRuntime()
         service = SpeechService(hub, coordinator, delivery)
         await service.startup()
-        hub.mic_queue.put(b"\0" * 640)
+        hub.mic_queue.put(NEAR_PCM)
         await asyncio.sleep(0)
         await service.shutdown()
-        self.assertEqual(coordinator.frames, [b"\0" * 640])
+        self.assertEqual(coordinator.frames, [NEAR_PCM])
         self.assertTrue(coordinator.closed)
         self.assertEqual(runtime.shutdown_calls, 0)
 

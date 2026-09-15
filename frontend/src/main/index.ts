@@ -1,3 +1,4 @@
+/** Carries Backend acoustic no_audio/listening state through the existing desktop status flow. */
 /** Composes the desktop shell and one Backend process around a controlled Profile repository.
  * AURABOT_USER_DATA_DIR selects the installation/data root independently of source code.
  * Main owns sequential speech downloads and profile readiness; migrates configuration, serves owned model packages, serializes selection/application and
@@ -105,7 +106,7 @@ async function bootstrap(){
  handle(C.petReady,event=>{assertPet(event);petReady=true;});
  handle(C.petCommandResult,(event,result)=>{assertPet(event);const waiting=pending.get(result.id);if(!waiting)return;clearTimeout(waiting.timer);pending.delete(result.id);result.error?waiting.reject(new Error(result.error)):waiting.resolve(result);});
  handle(C.realtimeError,(event,error)=>{assertPet(event);if(typeof error!=='string'||error.length>1024)throw new Error('无效错误状态');realtimeError=error;broadcast(C.realtimeError,error);});
- handle(C.realtimeStatus,(event,state)=>{assertPet(event);if(!['idle','listening','thinking','typing','speaking'].includes(state))throw new Error('无效状态');agentState=state;broadcastAgentStatus(state);});
+ handle(C.realtimeStatus,(event,state)=>{assertPet(event);if(!['idle','no_audio','listening','thinking','typing','speaking'].includes(state))throw new Error('无效状态');agentState=state;broadcastAgentStatus(state);});
  handle(C.sendChatMessage,async(_event,input)=>{
    if(!config.online||!runtime.online||switching)throw new Error('Backend 未就绪，请先在设置中应用配置。');
    if(typeof input?.content!=='string'||!input.content.trim()||input.content.length>8000)throw new Error('请输入有效消息（最多 8000 字符）');

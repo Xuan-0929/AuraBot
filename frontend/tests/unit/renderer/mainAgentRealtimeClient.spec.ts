@@ -1,7 +1,8 @@
 /**
  * Verifies the Pet's minimal voice-session contract at browser boundaries. The suite covers profile-bound
- * token acquisition, one shared AudioContext, raw microphone/TTS PCM, server/local playback gates, physical
- * cursor ACK, and one teardown path without relying on the removed diagnostic protocol or real hardware.
+ * token acquisition, one shared AudioContext, raw microphone/TTS PCM, server playback gates, consumption
+ * credit, redacted device settings, and physical cursor ACK. Cancellation drains old PCM without ending
+ * the session; hardware/browser boundaries are controlled while the production client runs unchanged.
  */
 
 import { afterEach, describe, expect, it, vi } from "vitest";
@@ -104,7 +105,47 @@ async function voice(client:MainAgentRealtimeClient,socket:FakeWebSocket){
  socket.message(JSON.stringify({type:'command.ack',command_id:command.command_id,status:'accepted'}));await enabling;
 }
 describe('formal Pet unified realtime client',()=>{
+ it('does not pause playback for a local loud frame and requests stable microphone gain',async()=>{
+   const {client,socket}=await connected();
+   vi.mocked(navigator.mediaDevices.getUserMedia).mockResolvedValue({getTracks:()=>[{
+     addEventListener:vi.fn(),stop:vi.fn(),getSettings:()=>({sampleRate:48000,echoCancellation:true,noiseSuppression:true,autoGainControl:false,deviceId:'private-device'})
+   }]} as unknown as MediaStream);
+   await voice(client,socket);
+   const mic=FakeAudioWorkletNode.instances.find(n=>n.processorName==='aurabot-mic-capture')!;
+   const playback=FakeAudioWorkletNode.instances.find(n=>n.processorName==='aurabot-tts-playback')!;
+   mic.port.onmessage?.({data:{type:'candidate'}} as MessageEvent);
+   expect(playback.port.sent).not.toContainEqual({type:'pause'});
+   expect(navigator.mediaDevices.getUserMedia).toHaveBeenCalledWith({audio:{channelCount:1,echoCancellation:true,noiseSuppression:true,autoGainControl:false}});
+   expect(sentControls(socket).find(e=>e.type==='voice.start')?.audio_settings).toEqual({sampleRate:48000,echoCancellation:true,noiseSuppression:true,autoGainControl:false});
+   await client.stop();
+ });
+ it('keeps overrun recovery local and discards in-flight PCM until the next offer',async()=>{
+   const {client,socket}=await connected();await voice(client,socket);
+   socket.message(JSON.stringify({type:'clause.offer',clause_id:'old',text:'hello',mode:'voice'}));
+   const playback=FakeAudioWorkletNode.instances.find(n=>n.processorName==='aurabot-tts-playback')!;
+   await vi.waitFor(()=>expect(playback.port.sent).toContainEqual({type:'offer',clauseId:'old'}));
+   playback.port.onmessage?.({data:{type:'overrun',clauseId:'old'}} as MessageEvent);
+   socket.message(new Int16Array([1,2]).buffer);
+   socket.message(JSON.stringify({type:'clause.audio_end',clause_id:'old'}));
+   socket.message(JSON.stringify({type:'clause.cancel',clause_id:'old'}));
+   socket.message(JSON.stringify({type:'clause.offer',clause_id:'next',text:'next',mode:'voice'}));
+   socket.message(new Int16Array([3,4]).buffer);
+   await vi.waitFor(()=>expect(playback.port.sent).toContainEqual({type:'append',samples:new Int16Array([3,4])}));
+   playback.port.onmessage?.({data:{type:'overrun',clauseId:'old'}} as MessageEvent);
+   playback.port.onmessage?.({data:{type:'playback-progress',clauseId:'next',consumedSamples:2}} as MessageEvent);
+   expect(sentControls(socket)).toContainEqual({type:'renderer.progress',clause_id:'next',consumed_samples:2});
+   expect(sentControls(socket).filter(e=>e.type==='renderer.ack')).toEqual([{type:'renderer.ack',clause_id:'old',complete:false}]);
+   expect(client.currentState).toBe('active');await client.stop();
+ });
  afterEach(()=>{vi.unstubAllGlobals();FakeWebSocket.instances.length=0;FakeAudioWorkletNode.instances.length=0;FakeAudioContext.instances.length=0;});
+ it('projects only Backend acoustic states and localizes silence',async()=>{
+   const onAgentState=vi.fn();const {client,socket}=await connected({onAgentState});
+   for(const state of ['no_audio','listening','no_audio'])socket.message(JSON.stringify({type:'agent.state',state}));
+   await vi.waitFor(()=>expect(onAgentState.mock.calls.map(args=>args[0])).toEqual(['no_audio','listening','no_audio']));
+   const {agentStatusLabel}=await import('../../../src/i18n');
+   expect(['zh','en','ja'].map(lang=>agentStatusLabel(lang as any,'no_audio'))).toEqual(['无音频','No speech detected','音声未検出']);
+   await client.stop();
+ });
  it('connects text without microphone and awaits durable delivery before ACK',async()=>{
    let finish!:()=>void;const stored=new Promise<void>(resolve=>finish=resolve);const persist=vi.fn(()=>stored);
    const {client,socket}=await connected({onMessage:persist});expect(FakeAudioContext.instances).toHaveLength(0);

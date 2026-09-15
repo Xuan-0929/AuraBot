@@ -1,4 +1,5 @@
 /** Owns a resident Live2D instance's SDK sampling, composition and resource lifetime.
+ * Audio candidate gates pause SAY through PerformanceDirector; unowned resident actions keep responding to VAD state.
  * One Pixi ticker advances random resident rounds, body, expression, output-lip envelope and physics.
  * Loaded resident snapshots are adopted atomically; SAY temporarily owns the expression override. Preview and Pet create
  * separate players; only versioned delivery events reach PerformanceDirector. Framework's high-level
@@ -35,8 +36,8 @@ export class AvatarPlayer {
  private residentStates=emptyAvatarAdaptor().states;
  private idleBaseline?:SampledClip;
  private sayActive=false;
+ private playbackPaused=false;
  private previewActive=false;
- private candidatePaused=false;
  private expressionOwnedIds=new Set<string>();
  private expressionSettling=false;
  private previewEpoch=0;
@@ -68,13 +69,13 @@ export class AvatarPlayer {
   const fingerprint=JSON.stringify(config.adaptor??emptyAvatarAdaptor());
   if(this.config.revision===config.revision&&this.configFingerprint===fingerprint){this.setGeneration(config.generation??this.generation);return;}
   this.configFingerprint=fingerprint;this.stateEpoch++;this.failedResources.clear();
-  this.director.clear();this.candidatePaused=false;this.syncResidentPause();this.config=config;this.adaptor=config.adaptor??emptyAvatarAdaptor();this.generation=config.generation??this.generation;this.director=this.makeDirector();
+  this.director.clear();this.playbackPaused=false;this.syncResidentPause();this.config=config;this.adaptor=config.adaptor??emptyAvatarAdaptor();this.generation=config.generation??this.generation;this.director=this.makeDirector();
   await this.prepare();
  }
- private makeDirector(){return new PerformanceDirector({profile_id:this.config.profileId??'',generation:this.generation,config_revision:this.config.revision??0},{start:avatar=>{this.sayActive=true;this.syncResidentPause();this.perform(avatar);},finish:()=>{this.channel.cancel();this.sayActive=false;this.candidatePaused=false;this.syncResidentPause();this.setExpression(this.residentExpression,this.residentFade(this.residentExpression));},level:value=>{this.mouthTarget=value;},voice:owned=>{this.voiceOwned=owned;}});}
- setGeneration(generation:number){if(this.generation===generation)return;this.director.clear();this.candidatePaused=false;this.generation=generation;this.director=this.makeDirector();this.syncResidentPause();}
- accept(event:PerformanceEvent){if(this.disposed)return;try{if(event.type==='pause')this.candidatePaused=true;else if(event.type==='resume'||event.type==='reset')this.candidatePaused=false;this.syncResidentPause();this.director.accept(event);}catch{this.diagnostics.dropped++;}}
- private syncResidentPause(){this.resident.pause(this.sayActive||this.previewActive||this.candidatePaused);}
+ private makeDirector(){return new PerformanceDirector({profile_id:this.config.profileId??'',generation:this.generation,config_revision:this.config.revision??0},{start:avatar=>{this.sayActive=true;this.syncResidentPause();this.perform(avatar);},finish:()=>{this.channel.cancel();this.sayActive=false;this.syncResidentPause();this.setExpression(this.residentExpression,this.residentFade(this.residentExpression));},level:value=>{this.mouthTarget=value;},voice:owned=>{this.voiceOwned=owned;}});}
+ setGeneration(generation:number){if(this.generation===generation)return;this.director.clear();this.playbackPaused=false;this.generation=generation;this.director=this.makeDirector();this.syncResidentPause();}
+ accept(event:PerformanceEvent){if(this.disposed)return;try{if(event.type==='pause')this.playbackPaused=true;else if(event.type==='resume'||event.type==='reset')this.playbackPaused=false;this.syncResidentPause();this.director.accept(event);}catch{this.diagnostics.dropped++;}}
+ private syncResidentPause(){this.resident.pause(this.sayActive||this.previewActive);}
  async prepare(){
   const epoch=++this.stateEpoch;const adaptor=JSON.parse(JSON.stringify(this.adaptor)) as AvatarAdaptor;
   const names=[...Object.values(adaptor.states).flat(),...Object.entries(adaptor.entries).filter(([,entry])=>entry.agent_enabled).map(([name])=>name)];
@@ -179,6 +180,11 @@ export class AvatarPlayer {
  }
  private advanceStep(deltaMs:number){
   try{
+   if(this.playbackPaused&&this.sayActive){
+    this.mouth=0;const mouth=this.sampler.index('ParamMouthOpenY');
+    if(mouth>=0)this.sampler.core.setParameterValueByIndex(mouth,0);
+    this.sampler.core.update();return;
+   }
    this.director.advance(deltaMs);
    const dt=this.channel.advance(deltaMs);if(!dt)return;
    const core=this.sampler.core;const internal=this.model.internalModel;
@@ -214,7 +220,7 @@ export class AvatarPlayer {
   }catch(error){this.report(error);this.channel.cancel();this.setExpression(undefined);}
  }
  private report(error:unknown){this.diagnostics.resourceErrors++;if(this.diagnostics.resourceErrors<=5)this.onError(error instanceof Error?error.message:'动画不可用');}
- dispose(){if(this.disposed)return;this.disposed=true;this.abort.abort();this.director.clear();this.previewEpoch++;this.stateEpoch++;this.app.ticker.remove(this.tick,this);this.clips.clear();this.residentClips.clear();this.pending.clear();removeAndDestroyLive2DModel(this.app,this.model);avatarInstances.destroyed++;avatarInstances.active--;}
+ dispose(){if(this.disposed)return;this.disposed=true;this.abort.abort();this.director.clear();this.playbackPaused=false;this.previewEpoch++;this.stateEpoch++;this.app.ticker.remove(this.tick,this);this.clips.clear();this.residentClips.clear();this.pending.clear();removeAndDestroyLive2DModel(this.app,this.model);avatarInstances.destroyed++;avatarInstances.active--;}
 }
 export async function createAvatarPlayer(app:Application,config:PlayerConfig,onError?:(message:string)=>void):Promise<AvatarPlayer>{
  const model=await loadLive2DModel(config.modelPath);

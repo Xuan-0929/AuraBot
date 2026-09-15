@@ -1,3 +1,4 @@
+/** Carries Backend acoustic no_audio/listening state through the existing desktop status flow. */
 /**
  * 定义普通主聊天在 Main、Preload 与 Renderer 之间共享的公共契约。
  *
@@ -10,7 +11,7 @@ import type { NotificationSettings } from "./notificationSettings";
 import type { PetSettings } from "../schemas/petSettings";
 import type { Profile } from "../schemas/profile";
 
-export type AgentStatus = "idle" | "listening" | "thinking" | "typing" | "speaking";
+export type AgentStatus = "idle" | "no_audio" | "listening" | "thinking" | "typing" | "speaking";
 export interface SendChatMessageInput {
   content: string;
   source?: "console" | "pet_voice" | "pet_text";

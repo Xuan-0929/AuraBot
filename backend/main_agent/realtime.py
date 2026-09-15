@@ -1,10 +1,13 @@
 """Own the single profile-bound text/voice WebSocket, capability tokens and renderer delivery.
 
+Acoustic activity overlays the session work state; silent voice sessions report no_audio.
 Controlled speech preparation errors reach the renderer without provider details. Sessions begin in text mode; explicit commands activate speech or submit text. Only accepted user segments
 and say_to_user clauses cross into desktop history. Text ACKs commit draft delivery, while voice ACKs
 require completed audio; binary PCM and playback gates remain confined to voice mode. Typed input remains
 available during voice mode, resetting microphone input while preserving spoken delivery. ProfileResources
 is the sole Speech owner; this transport reads it and retires Runtime session state exactly once."""
+
+# Cumulative source-consumption receipts bound PCM in flight to two seconds; they never commit history.
 
 # Activation validates the whole UTF-8 SOUL document and adds only controlled name metadata.
 from __future__ import annotations
@@ -15,7 +18,7 @@ import secrets
 import sqlite3
 import time
 from collections import OrderedDict
-from dataclasses import dataclass
+from dataclasses import dataclass, field
 from typing import Any, Awaitable, Callable
 from urllib.parse import urlsplit, urlunsplit
 
@@ -24,10 +27,13 @@ from pydantic import BaseModel, ConfigDict, Field, field_validator
 from starlette.websockets import WebSocketDisconnect
 
 from .lifecycle import ActiveProfileManager, ProfileResources
+from .metrics import speech_logger
 from ..task.models import TaskStatus
 
 
 SUBPROTOCOL = "aurabot.main-agent.v1"
+PLAYBACK_WINDOW_SAMPLES = 48_000
+PLAYBACK_CHUNK_SAMPLES = 4_800
 
 
 class ProtocolError(ValueError):
@@ -128,11 +134,20 @@ class VoiceSession:
     clause_mode: str = "text"
     clause_done: asyncio.Event | None = None
     audio_finished: bool = False
+    audio_cancelled: bool = False
+    input_active: bool = False
+    work_state: str = "idle"
+    sent_samples: int = 0
+    consumed_samples: int = 0
+    playback_progress: asyncio.Event = field(default_factory=asyncio.Event)
+    retired_clauses: OrderedDict[str, None] = field(default_factory=OrderedDict)
 
-    async def send(self, value: dict[str, Any] | bytes) -> None:
+    async def send(self, value: dict[str, Any] | bytes, *, clause_id: str | None = None) -> None:
         async with self.send_lock:
             if self.closed or self.hub.session is not self:
                 raise ProtocolError("session_replaced")
+            if clause_id is not None and (self.current_clause != clause_id or self.audio_cancelled):
+                raise ProtocolError("unknown_clause")
             if isinstance(value, bytes):
                 await self.socket.send_bytes(value)
             else:
@@ -322,6 +337,9 @@ class RealtimeHub:
         session.clause_mode = session.mode
         session.clause_done = asyncio.Event()
         session.audio_finished = False
+        session.audio_cancelled = False
+        session.sent_samples = session.consumed_samples = 0
+        session.playback_progress.clear()
         try:
             await session.send({"type": "clause.offer", "clause_id": session.current_clause, "text": str(clause.text), "mode": session.clause_mode,
                 "profile_id": session.profile_id, "generation": session.generation,
@@ -342,8 +360,42 @@ class RealtimeHub:
             return "unknown_clause"
         if not isinstance(pcm, bytes) or not pcm or len(pcm) % 2:
             raise ValueError("TTS PCM must contain complete 16-bit samples")
-        await session.send(pcm)
+        clause_id = session.current_clause
+        offset = 0
+        while offset < len(pcm):
+            if self._current(port) is None:
+                return "session_replaced"
+            if session.current_clause != clause_id or session.audio_cancelled:
+                return "unknown_clause"
+            available = PLAYBACK_WINDOW_SAMPLES - (session.sent_samples - session.consumed_samples)
+            if available <= 0:
+                session.playback_progress.clear()
+                try:
+                    await asyncio.wait_for(session.playback_progress.wait(), 10)
+                except TimeoutError:
+                    speech_logger.warning("playback_stalled clause=%s sent=%d consumed=%d", clause_id, session.sent_samples, session.consumed_samples)
+                    return "playback_stalled"
+                continue
+            size = min(len(pcm) - offset, available * 2, PLAYBACK_CHUNK_SAMPLES * 2)
+            session.sent_samples += size // 2
+            try:
+                await session.send(pcm[offset:offset + size], clause_id=clause_id)
+            except ProtocolError as exc:
+                return str(exc)
+            offset += size
         return None
+
+    async def renderer_progress(self, session: VoiceSession, clause_id: str, consumed_samples: int) -> None:
+        """Release source PCM credit, independently of the physical-delivery ACK."""
+        if self.session is not session or clause_id in session.retired_clauses:
+            return
+        if session.current_clause != clause_id or session.clause_mode != "voice":
+            raise ProtocolError("unknown_clause")
+        if type(consumed_samples) is not int or not 0 <= consumed_samples <= session.sent_samples:
+            raise ProtocolError("invalid_playback_progress")
+        if consumed_samples > session.consumed_samples:
+            session.consumed_samples = consumed_samples
+            session.playback_progress.set()
 
     async def finish_audio(self, port: RendererPort, clause_id: str) -> str | None:
         session = self._current(port)
@@ -352,21 +404,30 @@ class RealtimeHub:
         if session.current_clause != clause_id:
             return "unknown_clause"
         session.audio_finished = True
-        await session.send({"type": "clause.audio_end", "clause_id": clause_id})
+        try:
+            await session.send({"type": "clause.audio_end", "clause_id": clause_id}, clause_id=clause_id)
+        except ProtocolError as exc:
+            return str(exc)
         return None
 
     async def cancel_clause(self, port: RendererPort, clause_id: str, reason: str) -> str | None:
-        session = self._current(port)
-        if session is None:
-            return "session_replaced"
-        if session.current_clause != clause_id:
-            return "unknown_clause"
-        await session.send({"type": "clause.cancel", "clause_id": clause_id, "reason": reason})
-        await self._settle_locked(session, clause_id, complete=False)
+        async with self._lock:
+            session = self._current(port)
+            if session is None:
+                return "session_replaced"
+            if session.current_clause != clause_id:
+                return "unknown_clause"
+            session.audio_cancelled = True
+            speech_logger.info("playback_cancelled clause=%s reason=%s sent=%d consumed=%d", clause_id, reason, session.sent_samples, session.consumed_samples)
+            session.playback_progress.set()
+            await session.send({"type": "clause.cancel", "clause_id": clause_id, "reason": reason})
+            await self._settle_locked(session, clause_id, complete=False)
         return None
 
     async def renderer_ack(self, session: VoiceSession, clause_id: str, *, complete: bool) -> bool:
         async with self._lock:
+            if clause_id in session.retired_clauses:
+                return False
             if self.session is not session or session.current_clause != clause_id:
                 raise ProtocolError("unknown_clause")
             return await self._settle_locked(session, clause_id, complete=complete)
@@ -376,7 +437,12 @@ class RealtimeHub:
             raise ProtocolError("audio_incomplete")
         kwargs = {"mode": "text"} if session.clause_mode == "text" else {}
         accepted = bool(await self.runtime.renderer_ack(clause_id, complete=complete, **kwargs)) if self.runtime else False
+        speech_logger.info("playback_settled clause=%s complete=%s accepted=%s sent=%d consumed=%d", clause_id, complete, accepted, session.sent_samples, session.consumed_samples)
+        session.retired_clauses[clause_id] = None
+        if len(session.retired_clauses) > 32:
+            session.retired_clauses.popitem(last=False)
         session.current_clause = None
+        session.playback_progress.set()
         session.current_say_id = None
         if session.clause_done is not None:
             session.clause_done.set()
@@ -385,14 +451,28 @@ class RealtimeHub:
         await self.agent_state("idle")
         return bool(complete and accepted)
 
-    async def agent_state(self, state: str) -> None:
-        if self.session is not None and not self.session.closed:
-            if state == "idle":
-                state = "speaking" if self.session.current_clause else ("listening" if self.session.mode == "voice" else "idle")
+    async def agent_state(self, state: str | None = None) -> None:
+        session = self.session
+        if session is not None and not session.closed:
+            if state is not None:
+                session.work_state = state
+            state = "speaking" if session.current_clause else session.work_state
+            if session.mode == "voice":
+                if session.input_active:
+                    state = "listening"
+                elif state == "idle":
+                    state = "no_audio"
             try:
-                await self.session.send({"type": "agent.state", "state": state})
+                await session.send({"type": "agent.state", "state": state})
             except Exception:
                 pass
+
+    async def speech_activity(self, *, active: bool) -> None:
+        """Project acoustic edges only; STT confirmation never starts listening."""
+        session = self.session
+        if session is not None and session.mode == "voice" and session.input_active != active:
+            session.input_active = active
+            await self.agent_state()
 
     async def session_error(self, code: str) -> None:
         if self.session is not None:
@@ -458,7 +538,15 @@ class RealtimeHub:
                         await self.cancel_clause(RendererPort(self, session), session.current_clause, "text_superseded")
                     await self.runtime.submit_text(event["text"], segment_id=command_id)
             elif kind in {"voice.start", "voice.stop"}:
-                if set(event) != {"type", "command_id"}:
+                allowed = {"type", "command_id", "audio_settings"} if kind == "voice.start" else {"type", "command_id"}
+                if set(event) - allowed:
+                    raise ProtocolError("invalid_control")
+                settings = event.get("audio_settings", {})
+                if not isinstance(settings, dict) or any(
+                    not ((key in {"sampleRate", "channelCount"} and type(value) is int and 0 < value <= 384000)
+                         or (key in {"echoCancellation", "noiseSuppression", "autoGainControl"} and type(value) is bool))
+                    for key, value in settings.items()
+                ):
                     raise ProtocolError("invalid_control")
                 async with self.activation_lock, self._session_lock:
                     if not self.accepting or self.session is not session:
@@ -474,7 +562,9 @@ class RealtimeHub:
                                 code = str(exc)
                                 raise ProtocolError(code if code in SPEECH_PREPARATION_ERRORS else "speech_unavailable") from None
                         session.mode = "voice"
-                        await self.agent_state("listening")
+                        speech_logger.info("voice_started audio_settings=%s", settings)
+                        session.input_active = False
+                        await self.agent_state()
                     else:
                         if session.current_clause is not None:
                             await self.cancel_clause(RendererPort(self, session), session.current_clause, "voice_stopped")
@@ -482,6 +572,7 @@ class RealtimeHub:
                         await self.runtime.renderer_disconnected()
                         self.mic_queue.clear()
                         session.mode = "text"
+                        session.input_active = False
                         await self.agent_state("idle")
             else:
                 raise ProtocolError("invalid_control")
@@ -495,24 +586,24 @@ class RealtimeHub:
     async def speech_candidate_started(self) -> None:
         session = self.session
         if session is not None:
-            await session.send({"type": "playback.pause"})
+            await self.speech_activity(active=True)
 
     async def speech_candidate_rejected(self) -> None:
         session = self.session
         if session is not None:
             await session.send({"type": "playback.resume"})
+            await self.speech_activity(active=False)
 
     async def speech_confirmed(self) -> None:
-        async with self._lock:
-            session = self.session
-            if session is None:
-                return
-            clause_id = session.current_clause
-            if self.speech is not None:
-                await self.speech.cancel_current("confirmed_barge_in")
-            if clause_id is not None and session.current_clause == clause_id:
-                await session.send({"type": "clause.cancel", "clause_id": clause_id, "reason": "confirmed_barge_in"})
-                await self._settle_locked(session, clause_id, complete=False)
+        session = self.session
+        if session is None:
+            return
+        clause_id = session.current_clause
+        # Provider cleanup calls back into cancel_clause; never hold the ACK lock while joining it.
+        if self.speech is not None:
+            await self.speech.cancel_current("confirmed_barge_in")
+        if clause_id is not None:
+            await self.cancel_clause(RendererPort(self, session), clause_id, "confirmed_barge_in")
 
     async def speech_endpoint(self, *, complete: bool) -> None:
         if complete and self.session is not None:
@@ -715,6 +806,11 @@ async def main_agent_realtime(websocket: WebSocket) -> None:
                 event = json.loads(raw) if isinstance(raw, str) and len(raw) <= 32768 else None
                 if isinstance(event, dict) and event.get("type") in {"text.submit", "voice.start", "voice.stop"}:
                     await hub.command(session, event)
+                    continue
+                if isinstance(event, dict) and event.get("type") == "renderer.progress":
+                    if set(event) != {"type", "clause_id", "consumed_samples"} or not isinstance(event.get("clause_id"), str):
+                        raise ProtocolError("invalid_control")
+                    await hub.renderer_progress(session, event["clause_id"], event["consumed_samples"])
                     continue
                 if (
                     not isinstance(event, dict)

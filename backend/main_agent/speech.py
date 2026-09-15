@@ -5,7 +5,7 @@ DashScope-specific callback fields and credentials terminate inside the adapters
 including a mutable-only partial, requests existing PREPARE admission. Session callbacks enter Core in arrival
 order; SAY-scoped protocol cancellation removes only that utterance from the existing delivery queue;
 graceful finish drains provider-final text, while cancellation retains bounded transport cleanup
-ownership. TTS exposes only clause audio bytes.
+ownership. TTS exposes only clause audio bytes, spooled to a bounded temporary file when playback lags.
 Silero VAD and Smart Turn
 v3.2 share process-wide ONNX sessions, verify both model and license assets before loading, and configure
 ONNX Runtime for sequential single-thread CPU inference; missing optional packages or assets are reported
@@ -15,13 +15,20 @@ it serializes microphone processing with turn resets so typed input can reuse sp
 Static assets are verified on first load, outside the PCM hot path; resetting a turn invalidates old sinks
 before closing STT and never cancels a running VAD thread before resetting its recurrent state.
 It owns only speech resources and never shuts down MainAgentRuntime.
+Near-field RMS and continuous VAD qualification precede Runtime/STT activation, retaining 400 ms pre-roll.
+Delivery explicitly closes synthesis when playback-credit waits are cancelled, joining spool cleanup.
 """
 
+# Acoustic edges are sent to RealtimeHub independently of STT confirmation and Smart Turn completion.
 from __future__ import annotations
 
 import asyncio
 import importlib
 import time
+import tempfile
+import math
+import sys
+from array import array
 import uuid
 from collections import deque
 from collections.abc import AsyncIterable, Awaitable, Callable, Mapping
@@ -29,6 +36,8 @@ from dataclasses import dataclass
 from pathlib import Path
 from threading import Lock
 from typing import Any, Protocol, runtime_checkable
+
+from .metrics import speech_logger
 
 # Only these local preparation codes may cross the realtime transport.
 SPEECH_PREPARATION_ERRORS = frozenset({
@@ -42,6 +51,7 @@ SPEECH_PREPARATION_ERRORS = frozenset({
 
 TranscriptSink = Callable[["TranscriptUpdate"], Awaitable[None]]
 _CLEANUP_TIMEOUT_SECONDS = 0.25
+MAX_TTS_SPOOL_BYTES = 24_000 * 2 * 120
 
 
 @dataclass(frozen=True, slots=True)
@@ -324,59 +334,90 @@ class DashScopeSpeechOutputProvider:
             await source.aclose()
 
     async def _callback_stream(self, transport: Any, clause: str):
-        """Bridge SDK callback threads into one bounded async PCM stream."""
+        """Spool fast SDK callbacks to a bounded temporary file while playback applies backpressure.
 
-        queue: asyncio.Queue[tuple[str, Any]] = asyncio.Queue(maxsize=32)
+        The existing SDK thread writes PCM; the event loop reads at most one 200 ms chunk at a time.
+        A single wakeup flag coalesces callback notifications. No audio survives generator cleanup.
+        """
         loop = asyncio.get_running_loop()
+        changed = asyncio.Event()
+        guard = Lock()
+        spool = tempfile.TemporaryFile()
+        written = 0
+        read = 0
         terminal = False
+        abandoned = False
+        failure: BaseException | None = None
+        notification_pending = False
+
+        def wake() -> None:
+            nonlocal notification_pending
+            with guard:
+                notification_pending = False
+            changed.set()
 
         def publish(kind: str, value: Any = None) -> None:
-            def enqueue() -> None:
-                nonlocal terminal
-                if terminal:
+            nonlocal written, terminal, failure, notification_pending
+            with guard:
+                if terminal or abandoned:
                     return
-                if kind in {"complete", "error"}:
-                    terminal = True
                 try:
-                    queue.put_nowait((kind, value))
-                except asyncio.QueueFull:
-                    terminal = True
-                    while not queue.empty():
-                        queue.get_nowait()
-                    queue.put_nowait(("error", SpeechProviderUnavailable(
-                        "DashScope TTS callback queue overflowed"
-                    )))
-                    transport.cancel()
-
-            loop.call_soon_threadsafe(enqueue)
+                    if kind == "data":
+                        data = _audio_chunk(value)
+                        if written + len(data) > MAX_TTS_SPOOL_BYTES:
+                            speech_logger.warning("tts_spool_limit bytes=%d", written + len(data))
+                            raise SpeechProviderUnavailable("TTS clause exceeds 120 seconds")
+                        spool.seek(written)
+                        spool.write(data)
+                        written += len(data)
+                    elif kind == "error":
+                        failure = value if isinstance(value, BaseException) else RuntimeError("TTS provider error")
+                        terminal = True
+                    else:
+                        terminal = True
+                except BaseException as exc:
+                    failure, terminal = exc, True
+                if not notification_pending:
+                    notification_pending = True
+                    loop.call_soon_threadsafe(wake)
 
         def run_stream() -> None:
             try:
-                transport.stream(
-                    clause,
-                    lambda chunk: publish("data", chunk),
-                    lambda: publish("complete"),
-                    lambda error: publish("error", error),
-                )
+                transport.stream(clause, lambda chunk: publish("data", chunk),
+                                 lambda: publish("complete"), lambda error: publish("error", error))
             except BaseException as exc:
                 publish("error", exc)
 
-        worker = asyncio.create_task(
-            asyncio.to_thread(run_stream), name="dashscope-tts-stream"
-        )
+        worker = asyncio.create_task(asyncio.to_thread(run_stream), name="dashscope-tts-stream")
         try:
             while True:
-                kind, value = await queue.get()
-                if kind == "data":
-                    yield _audio_chunk(value)
-                elif kind == "complete":
+                changed.clear()
+                with guard:
+                    error = failure
+                    done = terminal and read == written
+                    spool.seek(read)
+                    chunk = spool.read(min(9_600, written - read))
+                    read += len(chunk)
+                if error is not None:
+                    raise SpeechProviderUnavailable("DashScope TTS streaming failed") from error
+                if chunk:
+                    yield chunk
+                elif done:
                     break
                 else:
-                    raise SpeechProviderUnavailable("DashScope TTS streaming failed") from value
+                    await changed.wait()
         finally:
-            if not worker.done() and not terminal:
-                await asyncio.to_thread(transport.cancel)
-            await asyncio.gather(worker, return_exceptions=True)
+            with guard:
+                abandoned = True
+                cancel = not terminal or failure is not None
+            try:
+                if cancel:
+                    await asyncio.to_thread(transport.cancel)
+            finally:
+                try:
+                    await asyncio.gather(worker, return_exceptions=True)
+                finally:
+                    spool.close()
 
 
 @dataclass(frozen=True, slots=True)
@@ -599,6 +640,8 @@ class SmartTurnDetector(_LazyLocalDetector):
 class SpeechInputCoordinator:
     """Feed continuous mic PCM through short pre-roll, VAD, normalized STT, and bounded EOU timing.
 
+    Near-field RMS, relative noise and continuous VAD must agree for 300 ms before any Runtime/STT
+    side effects. Pre-roll retains the onset; transcript callbacks cannot bypass acoustic confirmation.
     The coordinator creates no resident worker: each incoming 20 ms frame advances the small acoustic
     state, while at most one transient endpoint task exists during a silence candidate.  VAD silence
     alone never calls StrongPause; only a complete EOU score or the fixed fallback deadline can do so.
@@ -612,11 +655,13 @@ class SpeechInputCoordinator:
         vad: Any | None = None,
         eou: Any | None = None,
         playback_lifecycle: Any | None = None,
-        pre_roll_frames: int = 10,
+        pre_roll_frames: int = 20,
         frame_ms: int = 20,
-        vad_threshold: float = 0.5,
+        vad_threshold: float = 0.6,
         vad_stop_ms: int = 300,
-        speech_confirm_ms: int = 160,
+        speech_confirm_ms: int = 300,
+        min_speech_rms: float = 0.02,
+        speech_noise_ratio: float = 3.0,
         eou_threshold: float = 0.5,
         eou_recheck_seconds: float = 0.5,
         incomplete_fallback_seconds: float = 1.8,
@@ -637,7 +682,11 @@ class SpeechInputCoordinator:
         self.frame_ms = frame_ms
         self.vad_threshold = vad_threshold
         self.stop_frames = max(1, vad_stop_ms // frame_ms)
-        self.confirm_frames = max(1, speech_confirm_ms // frame_ms)
+        self.confirm_frames = max(1, math.ceil(speech_confirm_ms / frame_ms))
+        self.min_speech_rms = min_speech_rms
+        self.speech_noise_ratio = speech_noise_ratio
+        self._noise_floor = 0.003
+        self._diagnostic_frames = 0
         self.eou_threshold = eou_threshold
         self.eou_recheck_seconds = eou_recheck_seconds
         self.incomplete_fallback_seconds = incomplete_fallback_seconds
@@ -648,7 +697,6 @@ class SpeechInputCoordinator:
         self.clock = clock or time.monotonic
         self.sleep = sleep or asyncio.sleep
         self._active = False
-        self._confirmed = False
         self._speech_frames = 0
         self._silence_frames = 0
         self._stop_issued = False
@@ -663,12 +711,13 @@ class SpeechInputCoordinator:
     async def accept_mic_frame(self, pcm16le: bytes) -> None:
         if self._closed:
             return
-        if not isinstance(pcm16le, bytes) or not pcm16le:
-            raise ValueError("mic frame must be non-empty bytes")
+        if not isinstance(pcm16le, bytes) or len(pcm16le) != self.frame_ms * 32:
+            raise ValueError("mic frame must contain exactly one PCM16 frame")
         self.pre_roll.append(pcm16le)
         self.audio.append(pcm16le)
         probability = await self._vad_probability(pcm16le)
         if probability is None:
+            self._speech_frames = 0
             if self._active:
                 await self._cancel_endpoint()
                 try:
@@ -676,9 +725,21 @@ class SpeechInputCoordinator:
                 finally:
                     await self._finish_turn()
             return
-        speech = probability >= self.vad_threshold
+        samples = array("h", pcm16le)
+        if sys.byteorder != "little":
+            samples.byteswap()
+        rms = math.sqrt(sum(sample * sample for sample in samples) / len(samples)) / 32768
+        threshold = max(self.min_speech_rms, self._noise_floor * self.speech_noise_ratio)
+        speech = probability >= self.vad_threshold and rms >= threshold
+        self._diagnostic_frames += 1
+        if self._diagnostic_frames % 250 == 0:
+            speech_logger.info("mic_gate rms=%.4f noise=%.4f threshold=%.4f vad=%.3f active=%s", rms, self._noise_floor, threshold, probability, self._active)
         if not self._active:
-            if speech:
+            if probability < self.vad_threshold:
+                self._noise_floor += 0.05 * (rms - self._noise_floor)
+            self._speech_frames = self._speech_frames + 1 if speech else 0
+            if self._speech_frames >= self.confirm_frames:
+                speech_logger.info("speech_confirmed rms=%.4f threshold=%.4f vad=%.3f duration_ms=%d", rms, threshold, probability, self._speech_frames * self.frame_ms)
                 await self._start_candidate()
             return
 
@@ -691,26 +752,22 @@ class SpeechInputCoordinator:
             if self._stop_issued:
                 await self._cancel_endpoint()
                 self._stop_issued = False
-                self._confirmed = False
                 self._speech_frames = 0
                 await self.runtime.vad_start()
-            self._silence_frames = 0
-            self._speech_frames += 1
-            if not self._confirmed and self._speech_frames >= self.confirm_frames:
-                self._confirmed = True
-                await self._playback("speech_confirmed")
+                # This utterance already passed near-field confirmation. A brief continuation must
+                # not discard its earlier transcript by requiring another full onset window.
                 await self.runtime.confirm_speech()
+                await self._playback("speech_activity", active=True)
+            self._silence_frames = 0
             return
 
+        self._speech_frames = 0
         self._silence_frames += 1
         if self._stop_issued or self._silence_frames < self.stop_frames:
             return
         self._stop_issued = True
         await self.runtime.vad_stop_candidate()
-        if not self._confirmed:
-            await self._reject_candidate()
-            await self._finish_turn()
-            return
+        await self._playback("speech_activity", active=False)
         self._endpoint_generation += 1
         generation = self._endpoint_generation
         self._endpoint_task = asyncio.create_task(
@@ -733,6 +790,7 @@ class SpeechInputCoordinator:
 
         self._active = False
         self._segment_id = None
+        self._noise_floor = 0.003
         await self._cancel_endpoint()
         if self._eou_work is not None:
             await asyncio.gather(asyncio.shield(self._eou_work), return_exceptions=True)
@@ -741,14 +799,15 @@ class SpeechInputCoordinator:
 
     async def _start_candidate(self) -> None:
         self._active = True
-        self._confirmed = False
-        self._speech_frames = 1
+        self._speech_frames = self.confirm_frames
         self._silence_frames = 0
         self._stop_issued = False
         self._has_transcript = False
         self._segment_id = str(uuid.uuid4())
         await self._playback("speech_candidate_started")
         await self.runtime.vad_start()
+        await self._playback("speech_confirmed")
+        await self.runtime.confirm_speech()
         if self.stt_provider is None:
             return
         segment_id = self._segment_id
@@ -765,14 +824,6 @@ class SpeechInputCoordinator:
         if not self._transcript_current(segment_id) or not update.full_text:
             return
         self._has_transcript = True
-        if not self._confirmed:
-            self._confirmed = True
-            await self._playback("speech_confirmed")
-            if not self._transcript_current(segment_id):
-                return
-            await self.runtime.confirm_speech()
-        if not self._transcript_current(segment_id):
-            return
         await self.runtime.update_transcript(
             update.full_text,
             segment_id=segment_id,
@@ -943,7 +994,9 @@ class SpeechInputCoordinator:
     async def _playback(self, method_name: str, **fields: Any) -> None:
         lifecycle = self.playback_lifecycle
         try:
-            if method_name == "speech_candidate_started":
+            if method_name == "speech_activity":
+                await lifecycle.speech_activity(**fields)
+            elif method_name == "speech_candidate_started":
                 await lifecycle.speech_candidate_started()
             elif method_name == "speech_confirmed":
                 await lifecycle.speech_confirmed()
@@ -960,9 +1013,9 @@ class SpeechInputCoordinator:
         await self.runtime.reject_speech_candidate()
 
     async def _finish_turn(self) -> None:
+        await self._playback("speech_activity", active=False)
         await self._close_stt()
         self._active = False
-        self._confirmed = False
         self._speech_frames = 0
         self._silence_frames = 0
         self._stop_issued = False
@@ -1143,18 +1196,24 @@ class ClauseSpeechDelivery:
                 raise SpeechProviderUnavailable("renderer rejected clause")
             played = False
             buffer = bytearray()
-            async for chunk in self.provider.synthesize(str(clause.text)):
-                buffer.extend(_audio_chunk(chunk))
-                size = len(buffer) - len(buffer) % 2
-                if not size:
-                    continue
-                payload = bytes(buffer[:size])
-                del buffer[:size]
-                if await port.send_audio(payload) is not None:
-                    raise SpeechProviderUnavailable("renderer rejected audio")
-                if not played:
-                    played = True
-                    await self.runtime.renderer_playing(clause_id)
+            stream = self.provider.synthesize(str(clause.text)).__aiter__()
+            try:
+                async for chunk in stream:
+                    buffer.extend(_audio_chunk(chunk))
+                    size = len(buffer) - len(buffer) % 2
+                    if not size:
+                        continue
+                    payload = bytes(buffer[:size])
+                    del buffer[:size]
+                    if await port.send_audio(payload) is not None:
+                        raise SpeechProviderUnavailable("renderer rejected audio")
+                    if not played:
+                        played = True
+                        await self.runtime.renderer_playing(clause_id)
+            finally:
+                close = getattr(stream, "aclose", None)
+                if close is not None:
+                    await close()
             if buffer:
                 raise SpeechProviderUnavailable("TTS ended on a partial PCM sample")
             if not played:
@@ -1165,8 +1224,9 @@ class ClauseSpeechDelivery:
                 await self.runtime.renderer_ack(clause_id, complete=False)
         except asyncio.CancelledError:
             raise
-        except BaseException:
+        except BaseException as exc:
             failed = True
+            speech_logger.warning("delivery_failed clause=%s error=%s", clause_id, type(exc).__name__)
             await self.runtime.renderer_failed(clause_id)
         finally:
             self._waiters.pop(clause_id, None)

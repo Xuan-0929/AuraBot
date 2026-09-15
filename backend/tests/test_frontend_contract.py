@@ -2,6 +2,8 @@
 
 Controlled speech failures preserve text sessions and redact unknown errors. Real Runtime/Context/TaskStore owners run against temporary databases. Controlled model output proves
 that desktop history receives accepted inputs and say_to_user only, while restart fences all admissions.
+Speech lifecycle fixtures use near-field PCM and an explicit short confirmation window; production
+acoustic thresholds are exercised separately by the speech coordinator tests.
 """
 from __future__ import annotations
 
@@ -131,16 +133,16 @@ class DesktopContractTests(unittest.IsolatedAsyncioTestCase):
     async def _disconnect_voice(self, transition: str):
         from unittest.mock import AsyncMock
         from backend.main_agent.speech import SpeechInputCoordinator, SpeechService, TranscriptUpdate
-        from backend.tests.test_main_agent_speech import FakeStt, FakeVad
+        from backend.tests.test_main_agent_speech import FakeStt, FakeVad, NEAR_PCM
         stt = FakeStt()
         coordinator = SpeechInputCoordinator(self.runtime, stt_provider=stt,
-            vad=FakeVad([1.0]), playback_lifecycle=self.hub)
+            vad=FakeVad([1.0]), playback_lifecycle=self.hub, speech_confirm_ms=20)
         delivery = SimpleNamespace(startup=AsyncMock(), shutdown=AsyncMock(), cancel_current=AsyncMock())
         speech = SpeechService(self.hub, coordinator, delivery)
         self.profile.speech = speech
         self.session.mode = 'voice'
         await speech.startup()
-        await coordinator.accept_mic_frame(b'\0' * 640)
+        await coordinator.accept_mic_frame(NEAR_PCM)
         stt.sessions[0].close = AsyncMock()
         await stt.sessions[0].sink(TranscriptUpdate('unfinished', '', 'unfinished', 'partial'))
         await self.runtime.wait_until_idle()
@@ -178,7 +180,7 @@ class DesktopContractTests(unittest.IsolatedAsyncioTestCase):
 
     async def _endpoint_final_transcript(self, *, partial: bool):
         from backend.main_agent.speech import SpeechInputCoordinator, DashScopeStreamingSttProvider
-        from backend.tests.test_main_agent_speech import FakeDashScopeSttTransport, FakeVad
+        from backend.tests.test_main_agent_speech import FakeDashScopeSttTransport, FakeVad, NEAR_PCM
         transports = []
         class FinalTransport(FakeDashScopeSttTransport):
             def stop(self):
@@ -190,11 +192,11 @@ class DesktopContractTests(unittest.IsolatedAsyncioTestCase):
             return transport
         coordinator = SpeechInputCoordinator(self.runtime,
             stt_provider=DashScopeStreamingSttProvider('test', transport_factory=factory),
-            vad=FakeVad([1.0, 0.0] if partial else [1.0, 1.0, 0.0]), vad_stop_ms=20, speech_confirm_ms=40,
+            vad=FakeVad([1.0, 0.0] if partial else [1.0, 1.0, 0.0]), vad_stop_ms=20, speech_confirm_ms=20,
             eou=SimpleNamespace(completion_probability=lambda _audio: 1.0),
             playback_lifecycle=self.hub)
         try:
-            await coordinator.accept_mic_frame(b'\0' * 640)
+            await coordinator.accept_mic_frame(NEAR_PCM)
             if partial:
                 transports[0].emit_partial("partial words")
                 for _ in range(20):
@@ -202,8 +204,8 @@ class DesktopContractTests(unittest.IsolatedAsyncioTestCase):
                         break
                     await asyncio.sleep(0)
             else:
-                await coordinator.accept_mic_frame(b"\0" * 640)
-            await coordinator.accept_mic_frame(b'\0' * 640)
+                await coordinator.accept_mic_frame(NEAR_PCM)
+            await coordinator.accept_mic_frame(NEAR_PCM)
             await coordinator.wait_for_endpoint()
             users = [event for event in self.socket.sent if event.get('type') == 'user.message']
             self.assertEqual([event['text'] for event in users], ['complete final words'])
@@ -219,7 +221,7 @@ class DesktopContractTests(unittest.IsolatedAsyncioTestCase):
 
     async def test_typed_input_during_voice_keeps_spoken_delivery_and_retires_old_mic_turn(self):
         from backend.main_agent.speech import SpeechInputCoordinator, SpeechService, ClauseSpeechDelivery, TranscriptUpdate
-        from backend.tests.test_main_agent_speech import FakeStt, FakeVad
+        from backend.tests.test_main_agent_speech import FakeStt, FakeVad, NEAR_PCM
         class Output:
             def __init__(self):
                 self.started, self.cancelled = asyncio.Event(), asyncio.Event()
@@ -233,7 +235,7 @@ class DesktopContractTests(unittest.IsolatedAsyncioTestCase):
                         self.cancelled.set()
         stt = FakeStt()
         coordinator = SpeechInputCoordinator(self.runtime, stt_provider=stt,
-            vad=FakeVad([1.0, 1.0]), playback_lifecycle=self.hub)
+            vad=FakeVad([1.0, 1.0]), playback_lifecycle=self.hub, speech_confirm_ms=20)
         output = Output()
         delivery = ClauseSpeechDelivery(output, self.hub.acquire_renderer_port, self.runtime)
         speech = SpeechService(self.hub, coordinator, delivery)
@@ -241,7 +243,7 @@ class DesktopContractTests(unittest.IsolatedAsyncioTestCase):
         self.session.mode = 'voice'
         await speech.startup()
         mic_worker, delivery_worker = speech._mic_task, delivery._worker
-        await coordinator.accept_mic_frame(b"\0" * 640)
+        await coordinator.accept_mic_frame(NEAR_PCM)
         old_sink = stt.sessions[0].sink
         await old_sink(TranscriptUpdate('unfinished mic', '', 'unfinished mic', 'partial'))
         await self.hub.command(self.session, {'type': 'text.submit', 'command_id': 'typed', 'text': 'Typed while talking'})

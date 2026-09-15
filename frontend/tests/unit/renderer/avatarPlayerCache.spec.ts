@@ -1,4 +1,5 @@
 /** Runs the production player with the real Cubism/Core evaluator to protect resident baseline phase.
+ * Playback gates must not freeze unowned resident actions when Backend VAD changes state.
  * Fetch supplies a bounded authored motion; GPU rendering is covered separately by Electron tests.
  */
 import {afterAll,afterEach,beforeAll,expect,it,vi} from 'vitest';
@@ -27,7 +28,12 @@ it('retains active resource identity and its continuing phase when only the Prof
  const config={modelPath:'/Hiyori.model3.json',profileId:'a',revision:1,modelVersion:'v',generation:1,adaptor};const beforeInstances=avatarInstances.active;
  const player=new AvatarPlayer(app as any,model as any,config,sdk);
  try{
-  await player.prepare();for(let i=0;i<12;i++)player.advance(100);
+  await player.prepare();
+  player.accept({type:'pause'});await player.setState('listening');
+  const phase=player.channel.elapsedMs;player.advance(100);
+  expect(player.channel.elapsedMs).toBeGreaterThan(phase); // No SAY owner: resident remains alive under the audio gate.
+  player.accept({type:'resume'});await player.setState('idle');
+  for(let i=0;i<12;i++)player.advance(100);
   const baseline=player.channel.currentBaseline;const elapsed=player.channel.elapsedMs;const angle=player.sampler.index('ParamAngleX');expect(player.channel.pose[angle]).toBeCloseTo(3.4,4);
   await player.configure({...config,revision:2,generation:2,adaptor:{...structuredClone(adaptor),revision:2}});
   expect(fetch).toHaveBeenCalledOnce();expect(player.channel.currentBaseline).toBe(baseline);expect(player.channel.elapsedMs).toBe(elapsed);
@@ -132,4 +138,19 @@ it('resumes resident rounds after a candidate pause is followed by confirmed SAY
 });
 it('applies a changed source under the same stable ID even when native clip timing is identical',async()=>{
  const {p,config}=residentFixture();config.adaptor.states.idle=['a'];try{await p.prepare();for(let i=0;i<4;i++)p.advance(100);const before=p.channel.currentBaseline;const changed=structuredClone(config);changed.revision=2;changed.adaptor.revision=2;changed.adaptor.entries.a!.source.file='model/b.motion3.json';await p.configure(changed);expect(p.channel.currentBaseline).not.toBe(before);}finally{p.dispose();vi.unstubAllGlobals();}
+});
+
+it('freezes an owned SAY on VAD pause, resumes its phase on noise, and releases listening on confirmation',async()=>{
+ const {p,config}=residentFixture();config.adaptor.states.listening=['b'];
+ const cue={profile_id:'a',generation:1,config_revision:1,say_id:'vad-say',invoke_id:'i',call_id:'c',avatar:{motion:'say'}};
+ try{
+  await p.prepare();p.accept({type:'start',cue,clauseId:'c',mode:'voice'});p.advance(100);
+  p.accept({type:'pause'});await p.setState('listening');
+  const phase=p.channel.elapsedMs;const starts=p.diagnostics.residentStarts;
+  p.advance(100);expect(p.channel.elapsedMs).toBe(phase);expect(p.diagnostics.residentStarts).toBe(starts);
+  await p.setState('speaking');p.accept({type:'resume'});p.advance(100);expect(p.channel.elapsedMs).toBeGreaterThan(phase);
+  p.accept({type:'pause'});await p.setState('listening');p.accept({type:'cancel',cue});
+  expect(p.diagnostics.residentStarts).toBeGreaterThan(starts);
+  const listeningPhase=p.channel.elapsedMs;p.advance(100);expect(p.channel.elapsedMs).toBeGreaterThan(listeningPhase);
+ }finally{p.dispose();vi.unstubAllGlobals();}
 });

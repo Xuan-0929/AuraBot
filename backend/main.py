@@ -4,7 +4,8 @@ Startup tolerates absent chat, Pi and speech capabilities. Explicit Profile acti
 and text runtime; voice.start alone validates model inference, speech assets and providers. Shutdown fences realtime before
 closing Profile workers and the durable Task control plane. ProfileResources owns lazy speech; Runtime
 keeps Hub.render as its renderer for the entire Profile lifetime. Applied workspaces enter the model
-snapshot as user-provided names and paths without scanning directories. WebTools uses the configured search adapter for search and read."""
+snapshot as user-provided names and paths without scanning directories. WebTools uses the configured search adapter for search and read.
+The production lifespan owns bounded content-free speech diagnostics beside the desktop configuration."""
 
 from __future__ import annotations
 
@@ -30,7 +31,7 @@ from .app.gateway.task_routes import router as task_router
 from .main_agent.context import ContextStore
 from .main_agent.lifecycle import ActiveProfileManager, ProfileResources, _close
 from .main_agent.profile_storage import prepare_memory_directory
-from .main_agent.metrics import LifecycleMetrics
+from .main_agent.metrics import LifecycleMetrics, speech_diagnostics
 from .main_agent.web_provider import create_search_provider
 from .main_agent.observations import (
     WebTools,
@@ -147,13 +148,14 @@ def create_app(
         hub.start_accepting()
         application.state.backend_ready = True
         logger.info("backend_lifespan_started")
-        try:
-            yield
-        finally:
-            application.state.backend_ready = False
-            await _shutdown_immune(hub, profiles, manager)
-            metric_sink.increment("backend.shutdown")
-            logger.info("backend_lifespan_stopped")
+        with speech_diagnostics(config.path.parent if task_manager is None else None):
+            try:
+                yield
+            finally:
+                application.state.backend_ready = False
+                await _shutdown_immune(hub, profiles, manager)
+                metric_sink.increment("backend.shutdown")
+                logger.info("backend_lifespan_stopped")
 
     application = FastAPI(title="AuraBot Backend", lifespan=lifespan)
     application.state.main_agent_realtime = hub

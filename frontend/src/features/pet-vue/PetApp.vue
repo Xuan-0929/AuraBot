@@ -1,3 +1,4 @@
+<!-- Backend no_audio reuses Profile idle actions; only Backend VAD selects listening. -->
 <!-- Gates token and microphone access on the active Profile snapshot; Main reconnect commands complete activation. -->
 <!--
   桌宠窗口：组合 Live2D 舞台、唯一的 Main Agent 文字／语音连接、已交付消息气泡与窗口控制。
@@ -206,7 +207,7 @@ watch(
   { immediate: true }
 );
 
-function syncAgentState(){const state=petStore.agentStatus;void scene.value?.setState(state==='typing'?'thinking':state);}
+function syncAgentState(){const state=petStore.agentStatus;void scene.value?.setState(state==='typing'?'thinking':state==='no_audio'?'idle':state);}
 watch(()=>petStore.agentStatus,syncAgentState);
 watch(()=>petStore.profile?.id,id=>{live2dViewTransform.value=readStoredLive2DViewTransform(window.localStorage,id);mainAgentClauseText.value=null;});
 

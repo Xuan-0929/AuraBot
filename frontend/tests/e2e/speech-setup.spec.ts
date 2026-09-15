@@ -29,6 +29,7 @@ test('prepares resources in settings, applies and toggles voice with real local 
   await settings.screenshot({path:'/private/tmp/aurabot-speech-ready.png'});
   const mic=pet.locator('.pet-action-voice');await mic.click({force:true});
   await expect(mic).toHaveAttribute('aria-pressed','true',{timeout:20000});
+  await expect(pet.locator('.desktop-pet')).toHaveAttribute('data-agent-status','no_audio');
   await mic.click({force:true});await expect(mic).toHaveAttribute('aria-pressed','false');
   await mic.click({force:true});await expect(mic).toHaveAttribute('aria-pressed','true',{timeout:20000});
   await mic.click({force:true});

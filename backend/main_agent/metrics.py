@@ -3,14 +3,49 @@
 ``LifecycleMetrics`` stores only named counters and numeric timing summaries in small LRU maps;
 individual samples are bounded deques and no transcript, prompt, Memory content, provider payload, or
 high-frequency log body is retained.  Runtime, Memory worker, and FastAPI composition share this one
-process-local sink, while the optional metrics route returns a read-only defensive snapshot.
+process-local sink, while the optional metrics route returns a read-only defensive snapshot. The process
+lifespan also owns a two-file rotating speech log for content-free acoustic and delivery diagnostics.
 """
 
 from __future__ import annotations
 
 import threading
+import logging
 from collections import OrderedDict, deque
+from contextlib import contextmanager
+from logging.handlers import RotatingFileHandler
+from pathlib import Path
 from typing import Any
+
+
+speech_logger = logging.getLogger("aurabot.speech")
+
+
+@contextmanager
+def speech_diagnostics(directory: Path | None):
+    """Own bounded speech diagnostics separately from discarded SDK stdout/stderr."""
+    if directory is None:
+        yield
+        return
+    try:
+        directory.mkdir(parents=True, exist_ok=True)
+        handler = RotatingFileHandler(directory / "speech-diagnostics.log", maxBytes=512_000, backupCount=1, encoding="utf-8")
+    except OSError:
+        # A read-only log directory must not disable voice or text sessions.
+        yield
+        return
+    old_level, old_propagate = speech_logger.level, speech_logger.propagate
+    handler.setFormatter(logging.Formatter("%(asctime)s %(levelname)s %(message)s"))
+    speech_logger.setLevel(logging.INFO)
+    speech_logger.propagate = False
+    speech_logger.addHandler(handler)
+    try:
+        yield
+    finally:
+        speech_logger.removeHandler(handler)
+        handler.close()
+        speech_logger.setLevel(old_level)
+        speech_logger.propagate = old_propagate
 
 
 class LifecycleMetrics:
