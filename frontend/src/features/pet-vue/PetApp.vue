@@ -4,6 +4,7 @@
   桌宠窗口：组合 Live2D 舞台、唯一的 Main Agent 文字／语音连接、已交付消息气泡与窗口控制。
   语音 clause 经 AudioWorklet 确认播放完成后，由 Electron 持久化再显示并 ACK；文字无需麦克风。
   控件根据已有全局光标事件显隐，以真实麦克风状态提供持续标记；透明窗口命中与捕获由 useClickThrough 协调。
+  可选调试采集订阅 Main 状态并将客户端标量事件转发 IPC；订阅先于初始读取以防竞态，卸载时释放。
   Task 业务归 Backend；Live2D 表演由实例播放器消费实际交付事件，窗口交互委托给 preload IPC。
 -->
 <template>
@@ -133,6 +134,7 @@ const live2dZoomRequest = ref<{ id: number; deltaY: number; focalPoint: { x: num
 const mainAgentRealtime = new MainAgentRealtimeClient({
   displayLanguage:()=>petStore.displayLanguage,
   getToken:async()=>{const token=await window.aurabot.getRealtimeToken();transportGeneration.value=token.generation;await nextTick();return token;},
+  onDebug:event=>{void window.aurabot.reportLiveDebugEvent(event).catch(()=>undefined);},
   onPerformance:event=>scene.value?.accept(event),
   onState: (state,detail) => {
     if (state === "error" && (voiceEnabled.value || isVoiceConnecting.value)) microphoneError.value = true;
@@ -147,6 +149,17 @@ const mainAgentRealtime = new MainAgentRealtimeClient({
     if(text)setTimeout(()=>{if(mainAgentClauseText.value===text)mainAgentClauseText.value=null;},7000);
   }
 });
+
+let debugDisposed=false;
+let debugVersion=0;
+const unsubscribeDebug=window.aurabot.onLiveDebugCaptureChanged(value=>{
+  debugVersion++;
+  if(!debugDisposed)mainAgentRealtime.setDebugCapture(value.enabled?value.captureId:null);
+});
+const initialDebugVersion=debugVersion;
+void window.aurabot.getLiveDebugCapture().then(value=>{
+  if(!debugDisposed&&debugVersion===initialDebugVersion)mainAgentRealtime.setDebugCapture(value.enabled?value.captureId:null);
+}).catch(()=>undefined);
 
 let unsubscribeCommand:(()=>void)|undefined;
 async function connect(){
@@ -172,7 +185,7 @@ onMounted(async()=>{
   await petStore.loadInitialState();
   if(settings.online&&profileReady.value)try{await connect();}catch(error){voiceError.value=String(error);}
 });
-onBeforeUnmount(()=>{unsubscribeCommand?.();void mainAgentRealtime.stop();});
+onBeforeUnmount(()=>{debugDisposed=true;unsubscribeDebug();mainAgentRealtime.setDebugCapture(null);unsubscribeCommand?.();void mainAgentRealtime.stop();});
 
 const clickThrough = useClickThrough({
   enabled: computed(() => petStore.petSettings.clickThroughPet),

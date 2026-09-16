@@ -1,6 +1,6 @@
 // @vitest-environment jsdom
 /** Exercises rendered pet controls and window hover using mocked desktop/media boundaries;
- * verifies microphone status and capture interactions without starting a Live2D renderer. */
+ * verifies microphone status, debug subscription races and capture interactions without starting a Live2D renderer. */
 import { createApp, defineComponent, h, nextTick, reactive } from 'vue';
 import { afterEach, describe, expect, it, vi } from 'vitest';
 import ControlButtons from '../../../src/features/pet-vue/components/ControlButtons.vue';
@@ -70,12 +70,14 @@ vi.mock('../../../src/main-agent-realtime/client', () => ({ MainAgentRealtimeCli
   async toggle() { if (toggleError) throw toggleError; this.voiceEnabled = !this.voiceEnabled; this.options.onState('active'); }
   async start() { starts++;this.options.onState('active'); }
   async stop() {}
+  setDebugCapture(captureId:string|null) { debugCaptures(captureId); }
 } }));
 vi.mock('../../../src/features/pet-vue/live2d/Scene.vue', () => ({ default: defineComponent({ setup(_, { expose }) {
   expose({ ready: async () => ({ available: true }), setState: () => {} });
   return () => h('canvas');
 } }) }));
 import PetApp from '../../../src/features/pet-vue/PetApp.vue';
+const debugCaptures=vi.fn();
 let starts=0;
 const petStore = reactive({
   agentStatus: 'idle', displayLanguage: 'en', petSettings: { clickThroughPet: true }, profile: { id: 'a' },
@@ -83,11 +85,14 @@ const petStore = reactive({
   petCursorPosition: undefined as undefined | { localX: number; localY: number },
   loadInitialState: async () => {}, armPetActivityAutoClear: () => {}, openConsoleWindow: vi.fn()
 });
-function mountPet(ready=true) {
+function mountPet(ready=true,debugApi:Record<string,unknown>={}) {
+  debugCaptures.mockClear();
   petStore.profileRuntime={activating:false,online:ready,activeId:ready?'a':null,revision:1,error:undefined};
   toggleError = undefined;
   petStore.petCursorPosition = undefined;
   Object.assign(window, { aurabot: {
+    onLiveDebugCaptureChanged: () => () => {}, getLiveDebugCapture: async () => ({enabled:false,captureId:""}), reportLiveDebugEvent: async () => {},
+    ...debugApi,
     onPetCommand: () => () => {}, petReady: async () => {}, getSettings: async () => ({ online: true }),
     setPetMousePassthrough: vi.fn(async () => {}), resizePetWindowCorner: vi.fn(async () => {}), reportRealtimeError: async () => {}
   } });
@@ -184,4 +189,22 @@ it('waits for Profile activation even when Backend is already online',async()=>{
  petStore.profileRuntime.activating=true;await nextTick();expect(mic.disabled).toBe(true);
  petStore.profileRuntime={activating:false,online:false,activeId:null,revision:1,error:'Activation failed'};await nextTick();
  expect(mic.disabled).toBe(true);expect(mic.title).toBe('Activation failed');
+});
+
+
+it('keeps a newer debug subscription update over a late initial read and disposes capture',async()=>{
+  let resolve!:(value:{enabled:boolean;captureId:string})=>void;
+  let changed!:(value:{enabled:boolean;captureId:string})=>void;
+  const unsubscribe=vi.fn();
+  mountPet(true,{
+    onLiveDebugCaptureChanged:(listener:typeof changed)=>{changed=listener;return unsubscribe;},
+    getLiveDebugCapture:()=>new Promise(r=>resolve=r)
+  });
+  changed({enabled:true,captureId:'new'});
+  resolve({enabled:true,captureId:'old'});await nextTick();
+  expect(debugCaptures.mock.calls).toEqual([['new']]);
+  cleanup?.();cleanup=undefined;
+  expect(unsubscribe).toHaveBeenCalledOnce();expect(debugCaptures).toHaveBeenLastCalledWith(null);
+  changed({enabled:true,captureId:'after-unmount'});
+  expect(debugCaptures).not.toHaveBeenCalledWith('after-unmount');
 });

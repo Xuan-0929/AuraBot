@@ -1,11 +1,12 @@
-"""Own the single profile-bound text/voice WebSocket, capability tokens and renderer delivery.
+"""Own the profile-bound WebSocket, renderer delivery, and opt-in live diagnostics.
 
 Acoustic activity overlays the session work state; silent voice sessions report no_audio.
 Controlled speech preparation errors reach the renderer without provider details. Sessions begin in text mode; explicit commands activate speech or submit text. Only accepted user segments
 and say_to_user clauses cross into desktop history. Text ACKs commit draft delivery, while voice ACKs
 require completed audio; binary PCM and playback gates remain confined to voice mode. Typed input remains
 available during voice mode, resetting microphone input while preserving spoken delivery. ProfileResources
-is the sole Speech owner; this transport reads it and retires Runtime session state exactly once."""
+is the sole Speech owner; this transport reads it and retires Runtime session state exactly once.
+Opt-in playback diagnostics retain bounded user-visible reply text and recover active clauses from Context."""
 
 # Cumulative source-consumption receipts bound PCM in flight to two seconds; they never commit history.
 
@@ -27,6 +28,7 @@ from pydantic import BaseModel, ConfigDict, Field, field_validator
 from starlette.websockets import WebSocketDisconnect
 
 from .lifecycle import ActiveProfileManager, ProfileResources
+from .debug import DebugRecorder
 from .metrics import speech_logger
 from ..task.models import TaskStatus
 
@@ -193,6 +195,9 @@ class RealtimeHub:
         self.profile_activator = profile_activator
         self.profile_session_renewer: Callable[[str, int], Awaitable[int]] | None = None
         self.mic_queue = MicFrameQueue()
+        self.debug = DebugRecorder()
+        self._debug_mic_frames = 0
+        self._debug_mic_drops = 0
         self.active_profile_id: str | None = None
         self.active_generation = 0
         self.profile: ProfileResources | None = None
@@ -217,6 +222,47 @@ class RealtimeHub:
             return _origin(origin) in self.allowed_origins
         except ValueError:
             return False
+
+    def debug_snapshot(self, after: int = 0, instance_id: str | None = None, capture_id: str | None = None) -> dict[str, Any]:
+        """Read current owners on demand, including when capture starts midway through a turn."""
+        scope = self.debug.scope
+        if scope.enabled:
+            session = self.session
+            self.debug.update_state(scope, "connection", connected=session is not None and not session.closed,
+                accepting=self.accepting, mode=session.mode if session else "text",
+                inputActive=session.input_active if session else False,
+                workState=session.work_state if session else "idle")
+            self.debug.update_state(scope, "input", frames=self._debug_mic_frames,
+                droppedFrames=self._debug_mic_drops, queuedFrames=self.mic_queue._queue.qsize())
+            if session:
+                self.debug.update_state(scope, "playback", clauseId=session.current_clause,
+                    sayId=session.current_say_id, sentSamples=session.sent_samples,
+                    consumedSamples=session.consumed_samples, audioFinished=session.audio_finished,
+                    cancelled=session.audio_cancelled)
+                if session.current_clause and "text" not in self.debug.state.get("playback", {}):
+                    store = getattr(self.runtime, "context_store", None)
+                    if store is not None:
+                        try:
+                            clause = store.get_clause(session.current_clause)
+                            self.debug.update_state(scope, "playback", text=clause.text)
+                        except Exception:
+                            # Debugging must not require a live ledger or change delivery on read failure.
+                            pass
+            for owner in (self.runtime, getattr(self.speech, "coordinator", None), getattr(self.speech, "delivery", None)):
+                snapshot = getattr(owner, "debug_snapshot", None)
+                if callable(snapshot):
+                    snapshot()
+        return self.debug.snapshot(after, instance_id, capture_id)
+
+    def accept_mic_frame(self, frame: bytes) -> None:
+        dropped = self.mic_queue.put(frame)
+        scope = self.debug.scope
+        if scope.enabled:
+            self._debug_mic_frames += 1
+            self._debug_mic_drops += int(dropped)
+            if scope.sample_due("mic"):
+                scope.emit("input", "mic_frames", frames=self._debug_mic_frames,
+                    droppedFrames=self._debug_mic_drops, queuedFrames=self.mic_queue._queue.qsize())
 
     async def activate(self, profile_id: str, soul: str, **snapshot: Any) -> int:
         if self.profile_activator is None:
@@ -243,6 +289,13 @@ class RealtimeHub:
             self.active_profile_id = profile_id
             self.active_generation = generation
             self.profile = profile
+            scope = self.debug.bind(profile_id, generation, profile.revision)
+            profile.runtime.debug = scope
+            for owner in (getattr(profile.speech, "coordinator", None), getattr(profile.speech, "delivery", None)):
+                if owner is not None:
+                    owner.debug = scope
+            self._debug_mic_frames = self._debug_mic_drops = 0
+            scope.emit("connection", "profile_active")
             profile.runtime.user_message_listener = self.user_message
             profile.runtime.state_listener = self.agent_state
             profile.runtime.error_listener = self.session_error
@@ -256,6 +309,7 @@ class RealtimeHub:
                 await self._close_locked(self.session, "profile_switched")
             self.active_profile_id = None
             self.profile = None
+            self.debug.bind(None, self.active_generation, 0).emit("connection", "profile_cleared")
 
     async def attach(self, socket: Any) -> VoiceSession:
         async with self._session_lock:
@@ -268,6 +322,7 @@ class RealtimeHub:
             )
             self.session = session
             self.mic_queue.clear()
+            self.debug.scope.emit("connection", "attached", connected=True, mode="text")
         await session.send({"type": "session.ready", "profile_id": session.profile_id,
             "generation": session.generation, "config_revision": self.profile.revision if self.profile else 0})
         return session
@@ -286,6 +341,7 @@ class RealtimeHub:
             if session.current_clause is not None:
                 await self._settle_locked(session, session.current_clause, complete=False)
             session.closed = True
+            self.debug.scope.emit("connection", "closed", connected=False, reason=reason)
             if self.session is session:
                 self.session = None
             self.mic_queue.clear()
@@ -340,12 +396,17 @@ class RealtimeHub:
         session.audio_cancelled = False
         session.sent_samples = session.consumed_samples = 0
         session.playback_progress.clear()
+        debug = self.debug.scope
         try:
             await session.send({"type": "clause.offer", "clause_id": session.current_clause, "text": str(clause.text), "mode": session.clause_mode,
                 "profile_id": session.profile_id, "generation": session.generation,
                 "config_revision": self.profile.revision if self.profile else 0,
                 "say_id": getattr(clause, "say_id", ""), "call_id": getattr(clause, "call_id", ""),
                 "invoke_id": getattr(clause, "invoke_id", ""), "avatar": dict(getattr(clause, "avatar", None) or {})})
+            if debug.enabled:
+                debug.emit("playback", "offer", text=str(clause.text), mode=session.clause_mode,
+                    inputId=getattr(clause, "input_id", None), invokeId=getattr(clause, "invoke_id", None),
+                    sayId=getattr(clause, "say_id", None), clauseId=session.current_clause)
             await self.agent_state("speaking")
         except Exception:
             session.current_clause = None
@@ -369,10 +430,14 @@ class RealtimeHub:
                 return "unknown_clause"
             available = PLAYBACK_WINDOW_SAMPLES - (session.sent_samples - session.consumed_samples)
             if available <= 0:
+                if self.debug.scope.sample_due("backpressure"):
+                    self.debug.scope.emit("playback", "backpressure", clauseId=clause_id,
+                        sentSamples=session.sent_samples, consumedSamples=session.consumed_samples)
                 session.playback_progress.clear()
                 try:
                     await asyncio.wait_for(session.playback_progress.wait(), 10)
                 except TimeoutError:
+                    self.debug.scope.emit("playback", "timeout", level="warning", clauseId=clause_id, code="playback_stalled")
                     speech_logger.warning("playback_stalled clause=%s sent=%d consumed=%d", clause_id, session.sent_samples, session.consumed_samples)
                     return "playback_stalled"
                 continue
@@ -418,6 +483,7 @@ class RealtimeHub:
             if session.current_clause != clause_id:
                 return "unknown_clause"
             session.audio_cancelled = True
+            self.debug.scope.emit("playback", "cancel", clauseId=clause_id, reason=reason)
             speech_logger.info("playback_cancelled clause=%s reason=%s sent=%d consumed=%d", clause_id, reason, session.sent_samples, session.consumed_samples)
             session.playback_progress.set()
             await session.send({"type": "clause.cancel", "clause_id": clause_id, "reason": reason})
@@ -437,6 +503,7 @@ class RealtimeHub:
             raise ProtocolError("audio_incomplete")
         kwargs = {"mode": "text"} if session.clause_mode == "text" else {}
         accepted = bool(await self.runtime.renderer_ack(clause_id, complete=complete, **kwargs)) if self.runtime else False
+        self.debug.scope.emit("playback", "ack", clauseId=clause_id, complete=complete, accepted=bool(complete and accepted))
         speech_logger.info("playback_settled clause=%s complete=%s accepted=%s sent=%d consumed=%d", clause_id, complete, accepted, session.sent_samples, session.consumed_samples)
         session.retired_clauses[clause_id] = None
         if len(session.retired_clauses) > 32:
@@ -463,6 +530,7 @@ class RealtimeHub:
                 elif state == "idle":
                     state = "no_audio"
             try:
+                self.debug.scope.emit("connection", "state", mode=session.mode, state=state, inputActive=session.input_active)
                 await session.send({"type": "agent.state", "state": state})
             except Exception:
                 pass
@@ -475,6 +543,7 @@ class RealtimeHub:
             await self.agent_state()
 
     async def session_error(self, code: str) -> None:
+        self.debug.scope.emit("system", "session_error", level="error", code=code)
         if self.session is not None:
             try:
                 await self.session.send({"type": "session.error", "code": code})
@@ -580,6 +649,8 @@ class RealtimeHub:
             code = str(exc)
         except Exception:
             code = "command_unavailable"
+        self.debug.scope.emit("connection", "command", mode=session.mode, reason=kind,
+            accepted=code is None, code=code)
         await session.send({"type": "command.ack", "command_id": command_id,
                             "status": "rejected" if code else "accepted", **({"code": code} if code else {})})
 
@@ -658,6 +729,39 @@ def _require_origin(request: Request) -> RealtimeHub:
     if not hub.origin_allowed(request.headers.get("origin")):
         raise HTTPException(403, "origin is not allowed")
     return hub
+
+
+class DebugCaptureRequest(BaseModel):
+    model_config = ConfigDict(extra="forbid")
+    captureId: str = Field(min_length=1, max_length=128, pattern=r"^[A-Za-z0-9_-]+$")
+
+
+class DebugConfigureRequest(DebugCaptureRequest):
+    enabled: bool = Field(strict=True)
+
+
+@router.get("/debug/events")
+async def debug_events(request: Request, response: Response, after: int = 0,
+                       instanceId: str | None = None, captureId: str | None = None) -> dict[str, Any]:
+    hub = _require_origin(request)
+    response.headers["Cache-Control"] = "no-store"
+    return hub.debug_snapshot(max(0, after), instanceId, captureId)
+
+
+@router.post("/debug/configure")
+async def debug_configure(body: DebugConfigureRequest, request: Request, response: Response) -> dict[str, Any]:
+    hub = _require_origin(request)
+    response.headers["Cache-Control"] = "no-store"
+    hub.debug.configure(body.enabled, body.captureId)
+    return hub.debug_snapshot()
+
+
+@router.post("/debug/clear")
+async def debug_clear(body: DebugCaptureRequest, request: Request, response: Response) -> dict[str, Any]:
+    hub = _require_origin(request)
+    response.headers["Cache-Control"] = "no-store"
+    hub.debug.clear(body.captureId)
+    return hub.debug_snapshot()
 
 
 @router.get("/profile/activation-check")
@@ -796,7 +900,7 @@ async def main_agent_realtime(websocket: WebSocket) -> None:
                 try:
                     if not hub.accepting or session.mode != "voice":
                         raise ValueError("voice is not active")
-                    hub.mic_queue.put(message["bytes"])
+                    hub.accept_mic_frame(message["bytes"])
                 except ValueError:
                     await session.send({"type": "session.error", "code": "invalid_mic_frame"})
                 continue

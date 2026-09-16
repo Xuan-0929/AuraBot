@@ -1,6 +1,6 @@
 /**
  * Verifies the Pet's minimal voice-session contract at browser boundaries. The suite covers profile-bound
- * token acquisition, one shared AudioContext, raw microphone/TTS PCM, server playback gates, consumption
+ * token acquisition, opt-in debug capture fencing/redaction, one shared AudioContext, raw microphone/TTS PCM, server playback gates, consumption
  * credit, redacted device settings, and physical cursor ACK. Cancellation drains old PCM without ending
  * the session; hardware/browser boundaries are controlled while the production client runs unchanged.
  */
@@ -279,6 +279,66 @@ describe('formal Pet unified realtime client',()=>{
    socket.message(JSON.stringify({type:'playback.pause'}));
    await vi.waitFor(()=>expect(perform).toHaveBeenCalledWith({type:'pause'}));FakeAudioContext.instances[0].outputTime=0.3;
    await new Promise(resolve=>setTimeout(resolve,60));expect(perform.mock.calls.some(([event])=>event.type==='level'&&event.level===0.9)).toBe(false);await client.stop();
+ });
+
+ it('starts debug capture with actual snapshots and isolates failing diagnostics',async()=>{
+   const onDebug=vi.fn();const {client,socket}=await connected({onDebug});
+   expect(onDebug).not.toHaveBeenCalled();client.setDebugCapture('capture-a');
+   expect(onDebug.mock.calls.map(([e])=>e.name)).toEqual(['transport.snapshot','capture.snapshot','devicePlayback.snapshot']);
+   expect(onDebug.mock.calls[0][0]).toMatchObject({source:'pet',captureId:'capture-a',profileId:profile.profileId,generation:7,configRevision:1,details:{state:'active'}});
+   onDebug.mockImplementation(()=>{throw new Error('diagnostics must not break delivery');});
+   socket.message(JSON.stringify({type:'clause.offer',clause_id:'safe',text:'secret words',mode:'text',...cue}));
+   await vi.waitFor(()=>expect(sentControls(socket)).toContainEqual({type:'renderer.ack',clause_id:'safe',complete:true}));
+   client.setDebugCapture(null);onDebug.mockClear();await client.stop();expect(onDebug).not.toHaveBeenCalled();
+ });
+ it('fences late debug history completion across capture replacement and redacts errors',async()=>{
+   let finish!:()=>void;const onDebug=vi.fn();const {client,socket}=await connected({onDebug,onMessage:()=>new Promise<void>(resolve=>finish=resolve)});
+   client.setDebugCapture('capture-a');
+   socket.message(JSON.stringify({type:'clause.offer',clause_id:'late-debug',text:'private words',mode:'text',...cue}));
+   await vi.waitFor(()=>expect(onDebug.mock.calls.some(([e])=>e.name==='history.write.started')).toBe(true));
+   client.setDebugCapture('capture-b');onDebug.mockClear();finish();
+   await vi.waitFor(()=>expect(sentControls(socket)).toContainEqual({type:'renderer.ack',clause_id:'late-debug',complete:true}));
+   expect(onDebug.mock.calls.some(([e])=>e.name==='history.write.completed')).toBe(false);
+   vi.mocked(navigator.mediaDevices.getUserMedia).mockRejectedValue(new Error('secret-token device-id private words'));
+   await expect(client.toggle(profile)).rejects.toThrow('secret-token');
+   expect(onDebug.mock.calls.some(([e])=>e.name==='capture.failed')).toBe(true);
+   expect(JSON.stringify(onDebug.mock.calls)).not.toMatch(/secret-token|device-id|private words/);await client.stop();
+ });
+ it('snapshots current queue without restarting audio and ignores retired session callbacks',async()=>{
+   const onDebug=vi.fn();const {client,socket}=await connected({onDebug});await voice(client,socket);
+   socket.message(JSON.stringify({type:'clause.offer',clause_id:'current',text:'hidden',mode:'voice',...cue}));
+   socket.message(new Int16Array(2400).buffer);
+   const playback=FakeAudioWorkletNode.instances.find(n=>n.processorName==='aurabot-tts-playback')!;
+   await vi.waitFor(()=>expect(playback.port.sent.some((e:any)=>e.type==='append')).toBe(true));
+   client.setDebugCapture('capture-a');
+   expect(onDebug.mock.calls.find(([e])=>e.name==='devicePlayback.snapshot')?.[0]).toMatchObject({clauseId:'current',sayId:'say',invokeId:'invoke',details:{receivedSamples:2400,consumedSamples:0,queuedMs:100}});
+   client.setDebugCapture(null);expect(client.voiceEnabled).toBe(true);expect(FakeAudioContext.instances[0].close).not.toHaveBeenCalled();
+   const staleMessage=playback.port.onmessage;await client.stop();client.setDebugCapture('capture-b');onDebug.mockClear();
+   staleMessage?.({data:{type:'clause-complete',clauseId:'current',endContextTime:0}} as MessageEvent);
+   expect(onDebug).not.toHaveBeenCalled();
+ });
+ it('samples PCM statistics and separates consumed start from physical output and history ACK',async()=>{
+   const onDebug=vi.fn();const {client,socket}=await connected({onDebug});await voice(client,socket);client.setDebugCapture('capture');
+   const mic=FakeAudioWorkletNode.instances.find(n=>n.processorName==='aurabot-mic-capture')!;
+   for(let i=0;i<20;i++)mic.port.onmessage?.({data:{type:'frame',samples:new Int16Array(160)}} as MessageEvent);
+   socket.bufferedAmount=999999;mic.port.onmessage?.({data:{type:'frame',samples:new Int16Array(160)}} as MessageEvent);
+   socket.message(JSON.stringify({type:'clause.offer',clause_id:'clocked',text:'hidden',mode:'voice',...cue}));
+   socket.message(new Int16Array(2400).buffer);
+   const playback=FakeAudioWorkletNode.instances.find(n=>n.processorName==='aurabot-tts-playback')!;
+   await vi.waitFor(()=>expect(playback.port.sent.some((e:any)=>e.type==='append')).toBe(true));
+   playback.port.onmessage?.({data:{type:'clause-start',clauseId:'clocked',contextTime:0.1}} as MessageEvent);
+   expect(onDebug.mock.calls.some(([e])=>e.name==='devicePlayback.consumed.started')).toBe(true);
+   expect(onDebug.mock.calls.some(([e])=>e.name==='devicePlayback.physical.started')).toBe(false);
+   FakeAudioContext.instances[0].outputTime=0.1;
+   await vi.waitFor(()=>expect(onDebug.mock.calls.some(([e])=>e.name==='devicePlayback.physical.started')).toBe(true));
+   playback.port.onmessage?.({data:{type:'playback-progress',clauseId:'clocked',consumedSamples:2400}} as MessageEvent);
+   playback.port.onmessage?.({data:{type:'clause-complete',clauseId:'clocked',endContextTime:0.1}} as MessageEvent);
+   await vi.waitFor(()=>expect(onDebug.mock.calls.some(([e])=>e.name==='renderer.ack.sent')).toBe(true));
+   const names=onDebug.mock.calls.map(([e])=>e.name);
+   expect(names.indexOf('devicePlayback.physical.completed')).toBeLessThan(names.indexOf('history.write.started'));
+   expect(names.indexOf('history.write.completed')).toBeLessThan(names.indexOf('renderer.ack.sent'));
+   expect(names.filter(n=>n==='audio.stats')).toHaveLength(1);
+   const events=onDebug.mock.calls.map(([e])=>e);expect(new Set(events.map(e=>e.seq)).size).toBe(events.length);await client.stop();
  });
 
 });

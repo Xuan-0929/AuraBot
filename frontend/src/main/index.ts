@@ -1,10 +1,13 @@
-/** Carries Backend acoustic no_audio/listening state through the existing desktop status flow. */
+/** Composes immediate Live Debug preferences, bounded diagnostics and the independent debug window;
+ * the Pet still exclusively owns realtime media, and diagnostics cannot restart or control it. */
 /** Composes the desktop shell and one Backend process around a controlled Profile repository.
  * AURABOT_USER_DATA_DIR selects the installation/data root independently of source code.
  * Main owns sequential speech downloads and profile readiness; migrates configuration, serves owned model packages, serializes selection/application and
  * opens only a repository-owned Profile SOUL path through shell; fences history receipts by their original Profile/generation. Pet alone owns realtime media;
  * Backend exclusively owns Context, Memory, task state and the active business lifecycle. */
 import {SpeechAssets} from './speechAssets';
+import {LiveDebugService} from './liveDebug';
+import {openLiveDebugWindow,closeLiveDebugWindow,broadcastLiveDebug} from './createWindow';
 import { app, net, BrowserWindow, ipcMain, Notification, dialog, shell } from 'electron';
 import { join, resolve, dirname } from 'node:path';
 import { randomUUID } from 'node:crypto';
@@ -34,6 +37,7 @@ const projectRoot=resolve(__dirname,'../../..');
 let backend:BackendProcess|undefined;
 let history:ConversationHistory|undefined;
 let desktopConfig:DesktopConfigStore|undefined;
+let liveDebug:LiveDebugService|undefined;
 
 let speechAssets:SpeechAssets|undefined;
 let quitting=false;
@@ -68,11 +72,15 @@ async function bootstrap(){
  const bounds=new PetWindowStateStore(root);
  let pet:BrowserWindow;
  let petReady=false;
+ liveDebug=new LiveDebugService(root,backendJson,broadcastLiveDebug,value=>{
+   if(pet&&!pet.isDestroyed())pet.webContents.send(C.liveDebugCaptureChanged,value);
+ });
  let agentState:AgentStatus='idle';
  let realtimeError='';
  const pending=new Map<string,{resolve:(result?:PetCommandResult)=>void;reject:(error:Error)=>void;timer:ReturnType<typeof setTimeout>}>();
- const changed=()=>{if(config.online&&!quitting&&runtime.online)tasks?.start();else {tasks?.stop();if(!config.online){runtime={...runtime,activeId:null,online:false};broadcast(C.profilesChanged,runtime);}}broadcast(C.settingsChanged,config.status());};
- const profilesChanged=()=>broadcast(C.profilesChanged,runtime);
+ const syncDebugIdentity=()=>liveDebug?.setIdentity(runtime.online&&runtime.activeId?{profileId:runtime.activeId,generation:runtime.generation,configRevision:runtime.revision??0}:undefined);
+ const changed=()=>{if(config.online&&!quitting&&runtime.online)tasks?.start();else {tasks?.stop();if(!config.online){runtime={...runtime,activeId:null,online:false};broadcast(C.profilesChanged,runtime);}}liveDebug?.setOnline(config.online&&!quitting);syncDebugIdentity();broadcast(C.settingsChanged,config.status());};
+ const profilesChanged=()=>{syncDebugIdentity();broadcast(C.profilesChanged,runtime);};
  backend=new BackendProcess(config,projectRoot,changed,()=>tasks?.stop());
  const sendPet=(command:PetCommand)=>{if(!petReady||pet.isDestroyed())throw new Error('桌宠尚未就绪');pet.webContents.send(C.petCommand,command);};
  const assertPet=(event:Electron.IpcMainInvokeEvent)=>{if(event.sender.id!==pet.webContents.id)throw new Error('此操作仅允许桌宠窗口执行');};
@@ -85,6 +93,32 @@ async function bootstrap(){
  handle(C.openConsoleWindow,()=>{openConsoleWindow();});
  handle(C.openSettingsWindow,()=>{openSettingsWindow();});
  handle(C.getSettings,()=>config.status());
+ let debugControl:Promise<unknown>=Promise.resolve();
+ handle(C.setLiveDebugEnabled,(_event,enabled)=>{
+   if(typeof enabled!=='boolean')throw new Error('Invalid debug preference');
+   const operation=debugControl.then(async()=>{
+     config.setLiveDebugEnabled(enabled);broadcast(C.settingsChanged,config.status());
+     if(!enabled)closeLiveDebugWindow();
+     const state=await liveDebug!.setEnabled(enabled);
+     if(enabled)openLiveDebugWindow();return state;
+   });
+   debugControl=operation.catch(()=>undefined);return operation;
+ });
+ handle(C.getLiveDebugState,()=>liveDebug!.snapshot());
+ handle(C.getLiveDebugCapture,()=>liveDebug!.capture());
+ handle(C.openLiveDebugWindow,()=>{if(liveDebug!.capture().enabled)openLiveDebugWindow();});
+ handle(C.clearLiveDebugLogs,()=>liveDebug!.clear());
+ handle(C.openLiveDebugLogDirectory,async()=>{
+   const {mkdir}=await import('node:fs/promises');await mkdir(liveDebug!.logDirectory,{recursive:true,mode:0o700});
+   const error=await shell.openPath(liveDebug!.logDirectory);if(error)throw new Error('debug_log_open_failed');
+ });
+ handle(C.reportLiveDebugEvent,(event,value)=>{
+   assertPet(event);
+   if(value?.profileId&&(value.profileId!==(runtime.activeId??runtime.selectedId)
+     ||(value.generation!==undefined&&value.generation!==runtime.generation)
+     ||(value.configRevision!==undefined&&runtime.revision!==null&&value.configRevision!==runtime.revision)))return;
+   liveDebug!.recordPet(value);
+ });
  handle(C.getSpeechAssets,()=>speechAssets!.status());
  handle(C.prepareSpeechAssets,()=>speechAssets!.prepare());
  handle(C.cancelSpeechAssets,()=>speechAssets!.cancel());
@@ -191,6 +225,7 @@ async function bootstrap(){
  handle(C.movePetWindowBy,(event,delta)=>{assertPet(event);movePetWindowBy(movement(delta));});
  handle(C.resizePetWindowCorner,(event,value)=>{assertPet(event);if(!['n','s','e','w','nw','ne','sw','se'].includes(value.direction))throw new Error('无效方向');resizePetWindowCorner(value.direction,movement(value.movement));});
  pet=createPetWindow({settings:config.current().desktop.pet,live2dModelState:modelState(),savedBounds:bounds.getBounds(runtime.selectedId),onBoundsChanged:value=>bounds.saveBounds(value,runtime.selectedId)});
+ if(config.current().desktop.liveDebugEnabled){await liveDebug.setEnabled(true);openLiveDebugWindow();}
  pet.webContents.on('render-process-gone',()=>{petReady=false;for(const item of pending.values()){clearTimeout(item.timer);item.reject(new Error('桌宠窗口已断开'));}pending.clear();});
  try{await backend.start();await activate(runtime.selectedId,true,false,true);}catch(error){config.error=error instanceof Error?error.message:'Backend 启动失败';changed();openSettingsWindow();}
 }
@@ -198,5 +233,5 @@ app.whenReady().then(bootstrap).catch(error=>{const language=desktopConfig?.curr
 app.on('window-all-closed',()=>app.quit());
 app.on('before-quit',event=>{
  if(quitting)return;event.preventDefault();quitting=true;tasks?.stop();
- void (async()=>{try{await speechAssets?.cancel();await backend?.stop();history?.close();app.quit();}catch(error){quitting=false;const language=desktopConfig?.current().desktop.pet.displayLanguage??'zh';dialog.showErrorBox(t(language,'quitFailedTitle'),error instanceof Error?error.message:t(language,'quitFailedMessage'));}})();
+ void (async()=>{try{await speechAssets?.cancel();await liveDebug?.shutdown();await backend?.stop();history?.close();app.quit();}catch(error){quitting=false;const language=desktopConfig?.current().desktop.pet.displayLanguage??'zh';dialog.showErrorBox(t(language,'quitFailedTitle'),error instanceof Error?error.message:t(language,'quitFailedMessage'));}})();
 });

@@ -1,7 +1,7 @@
 /** Exercises settings draft/apply IPC and compact advanced controls through the real Vue form.
  * Controlled desktop configuration fixtures verify save safety, native invalid-field revelation,
  * recoverable server errors, and masked-key preservation/replacement/deletion through the real save
- * store, separate workspace and pet status navigation with actionable runtime reminders and localized status labels and native search-provider dropdown selection, including length-matched first/last-four previews, without starting Electron or a backend. */
+ * store, separate workspace and pet status navigation with actionable runtime reminders and localized status labels and native search-provider dropdown selection, including length-matched first/last-four previews and immediate debug toggles that preserve unrelated drafts, without starting Electron or a backend. */
 // @vitest-environment jsdom
 import { createApp, nextTick } from 'vue';
 import { createPinia } from 'pinia';
@@ -91,4 +91,24 @@ it('keeps advanced fields collapsed until invalid or a save failure needs attent
  language.value='ja';language.dispatchEvent(new Event('change',{bubbles:true}));await nextTick();expect(host.querySelector('.settings-v2-sidebar-brand')?.textContent).toBe('設定');
  expect(host.textContent).toContain(t('ja','displayLanguage'));expect(host.textContent).toContain(t('ja','clickThroughPet'));
 
+});
+
+it('toggles debug immediately without saving or losing an existing draft',async()=>{
+ const root=mkdtempSync(join(tmpdir(),'aura-debug-setting-'));const config=new DesktopConfigStore(root,root);config.markApplied(config.snapshot());config.online=true;
+ let changed:(value:ReturnType<typeof config.status>)=>void=()=>{};
+ const status=()=>{const value=config.status();Object.assign(value.config.desktop,{liveDebugEnabled:false});return value;};
+ const setLiveDebugEnabled=vi.fn(async(enabled:boolean)=>{const value=status();Object.assign(value.config.desktop,{liveDebugEnabled:enabled});changed(value);return {enabled};});
+ const saveSettings=vi.fn(async(value)=>config.save(structuredClone(value)));
+ Object.assign(window,{aurabot:{getSettings:async()=>status(),saveSettings,setLiveDebugEnabled,onSettingsChanged:(listener:typeof changed)=>{changed=listener;return ()=>{};}}});
+ const host=document.createElement('div');document.body.append(host);const app=createApp(SettingsWindow);app.use(createPinia());app.mount(host);
+ dispose=()=>{app.unmount();host.remove();rmSync(root,{recursive:true,force:true});};
+ await vi.waitFor(()=>expect(host.querySelector('input')).not.toBeNull());
+ const navigation=host.querySelectorAll<HTMLButtonElement>('nav button');navigation[2]!.click();await nextTick();
+ const toggle=host.querySelector<HTMLInputElement>('[name="live-debug-enabled"]');expect(toggle).not.toBeNull();
+ toggle!.click();await nextTick();await nextTick();
+ expect(setLiveDebugEnabled).toHaveBeenCalledWith(true);expect(saveSettings).not.toHaveBeenCalled();
+ expect(host.querySelector<HTMLButtonElement>('button[type=submit]')!.disabled).toBe(true);
+ navigation[0]!.click();await nextTick();const address=host.querySelector('input')!;address.value='https://draft.example/v1';address.dispatchEvent(new Event('input',{bubbles:true}));await nextTick();
+ navigation[2]!.click();await nextTick();host.querySelector<HTMLInputElement>('[name="live-debug-enabled"]')!.click();await nextTick();await nextTick();
+ navigation[0]!.click();await nextTick();expect(host.querySelector('input')!.value).toBe('https://draft.example/v1');expect(host.querySelector<HTMLButtonElement>('button[type=submit]')!.disabled).toBe(false);
 });

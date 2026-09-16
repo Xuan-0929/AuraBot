@@ -2,7 +2,9 @@
  * New installations use app-owned speech assets; existing paths remain authoritative. Forms send redacted configuration with write-only secret replacements; saves are atomic and never
  * change live state. Settings previews expose only the first/last four code points and length-matched
  * bullets; first-run defaults register the installation root and user home, and keep Pi dependencies
- * under that root independently of the source checkout. Legacy search credentials normalize on read and persist under provider/api_key on the next write. Existing configuration remains authoritative. The middle of a saved key never leaves Main. Backend and Pi consume saved configuration only during explicit application/start.
+ * under that root independently of the source checkout. The immediate live debug flag is Main-owned and
+ * changes both saved/applied desktop snapshots without applying other fields or changing backend revision.
+ * Legacy search credentials normalize on read; secrets never leave Main except masked previews.
  */
 import {speechAssetPaths} from './speechAssetManifest';
 import { existsSync, mkdirSync, realpathSync, readFileSync, writeFileSync, renameSync, chmodSync } from 'node:fs';
@@ -37,7 +39,7 @@ export class DesktopConfigStore {
       main_agent:{profile_dir:'profiles',web:{provider:'tavily',api_key:''},speech:{enabled:false,api_key:'',stt_model_name:'fun-asr-realtime',tts_model_name:'cosyvoice-v3-flash',tts_voice:'longanyang',
         ...speechAssetPaths(root)}},
       memory:{embedding:{provider:'hash',dimension:384}},task:{user_data_dir:root,pi_runtime_dir:join(root,'pi-runtime'),node_executable:process.execPath.includes('Electron')?'node':process.execPath,default_timeout_seconds:1800,model:{...blankModel}}
-    },desktop:{pet:{clickThroughPet:false,displayLanguage:'zh'},systemNotificationsEnabled:true}};
+    },desktop:{pet:{clickThroughPet:false,displayLanguage:'zh'},systemNotificationsEnabled:true,liveDebugEnabled:false}};
     const existing=existsSync(this.path)?JSON.parse(readFileSync(this.path,'utf8')):null;
     this.saved=existing?desktopConfigSchema.parse({...existing,version:2}):defaults;
     // The repository must back up and import v1 persona before the old file is replaced.
@@ -55,6 +57,7 @@ export class DesktopConfigStore {
   }
   save(input:unknown, clearSecrets:string[]=[]):SettingsState {
     const next=desktopConfigSchema.parse(input);
+    next.desktop.liveDebugEnabled=this.saved.desktop.liveDebugEnabled;
     // Empty redacted fields preserve credentials; clearing requires an explicit named action.
     for(const path of secretPaths) if(!access(next,path)) access(next,path,clearSecrets.includes(path)?'':access(this.saved,path));
     // Storage and runtime installation locations are application-owned, never mutable from a renderer.
@@ -77,7 +80,15 @@ export class DesktopConfigStore {
     try { this.persist(); } catch(error) { this.saved=previous; throw error; }
     return this.status();
   }
-  markApplied(snapshot:DesktopConfig) { this.applied=structuredClone(snapshot); this.error=undefined; }
+  setLiveDebugEnabled(enabled:boolean):SettingsState {
+    if(typeof enabled!=='boolean')throw new Error('Invalid debug preference');
+    const previous=this.saved;
+    this.saved={...this.saved,desktop:{...this.saved.desktop,liveDebugEnabled:enabled}};
+    try{this.persist();}catch(error){this.saved=previous;throw error;}
+    if(this.applied)this.applied={...this.applied,desktop:{...this.applied.desktop,liveDebugEnabled:enabled}};
+    return this.status();
+  }
+  markApplied(snapshot:DesktopConfig) { this.applied=structuredClone(snapshot);this.applied.desktop.liveDebugEnabled=this.saved.desktop.liveDebugEnabled; this.error=undefined; }
   private persist() {
     const temporary=this.path+'.tmp';
     writeFileSync(temporary,JSON.stringify(this.saved,null,2)+'\n',{mode:0o600});

@@ -1,5 +1,7 @@
 /** Mounts the actual editor/workbench and controlled IPC to verify drafts, three-language text,
- * conflict decisions, click-to-loop resource selection and stable action IDs. Only the GPU boundary is replaced; Electron E2E uses Core. */
+ * conflict decisions, click-to-loop resource selection, modal resident bindings and stable action IDs.
+ * Controlled IPC and GPU preview isolate the editor; per-dialog shims supply native methods absent
+ * from jsdom, while tests exercise the actual Add/select/Done workflow and saved adaptor. */
 // @vitest-environment jsdom
 import {createApp,nextTick,defineComponent,h,onMounted,onUnmounted} from 'vue';
 import {afterEach,expect,it,vi} from 'vitest';
@@ -22,6 +24,22 @@ function mount(detail:ProfileDetail,currentId='a',language:DisplayLanguage='zh')
 function button(host:HTMLElement,text:string){const found=[...host.querySelectorAll('button')].find(b=>b.textContent?.trim()===text);if(!found)throw new Error('Missing button: '+text);return found;}
 async function openB(host:HTMLElement,language:DisplayLanguage='zh'){await vi.waitFor(()=>expect(host.querySelectorAll('.profile-list-row')).toHaveLength(2));button(host.querySelectorAll('.profile-list-row')[1] as HTMLElement,t(language,'pEdit')).click();await vi.waitFor(()=>expect(host.querySelector('.soul-editor')).not.toBeNull());}
 function input(node:HTMLInputElement|HTMLTextAreaElement,value:string){node.value=value;node.dispatchEvent(new Event('input',{bubbles:true}));}
+async function residentChoice(host:HTMLElement,state:string,index=0,language:DisplayLanguage='zh'){
+ const section=host.querySelector(`[data-state=${state}]`) as HTMLElement;
+ const dialog=host.querySelector('.resident-picker') as HTMLDialogElement;
+ // jsdom has no native dialog methods; keep the shim local to this mounted element.
+ dialog.showModal=()=>{dialog.open=true;};dialog.close=()=>{dialog.open=false;};
+ button(section,t(language,'pAddResident')).click();
+ await vi.waitFor(()=>expect(dialog.open).toBe(true));
+ const check=dialog.querySelectorAll<HTMLInputElement>('input[type=checkbox]')[index]!;
+ expect(check).toBeDefined();await vi.waitFor(()=>expect(check.disabled).toBe(false));
+ return {dialog,check};
+}
+async function finishResident(dialog:HTMLDialogElement,language:DisplayLanguage='zh'){
+ await nextTick();
+ await vi.waitFor(()=>expect(button(dialog,t(language,'pDone')).disabled).toBe(false));
+ button(dialog,t(language,'pDone')).click();expect(dialog.open).toBe(false);
+}
 it('edits one SOUL and saves B without activation, retaining dirty navigation decisions',async()=>{
  const {host,api,instance}=mount(fixture());await openB(host);expect(host.querySelectorAll('textarea')).toHaveLength(1);
  input(host.querySelector('.soul-editor')!,'whole document\n日本語');await nextTick();const leave=instance.canLeave();await nextTick();button(host,'继续编辑').click();expect(await leave).toBe(false);
@@ -37,12 +55,12 @@ it('mounts preview only in the model tab and creates a natural label in place wi
  await vi.waitFor(()=>expect(button(host,'002').disabled).toBe(false));button(host,'002').click();await vi.waitFor(()=>expect(playback.play).toHaveBeenLastCalledWith({motion:'model/002.motion3.json',loop:true}));expect((host.querySelector('.resource-editor input') as HTMLInputElement).value).toBe('002');
  await vi.waitFor(()=>expect(button(host,'001').disabled).toBe(false));button(host,'001').click();await vi.waitFor(()=>expect(playback.play).toHaveBeenLastCalledWith({motion:'model/001.motion3.json',loop:true}));
  expect(host.querySelector('.resource-editor textarea')).toBeNull();input(host.querySelector('.resource-editor input')!,'轻轻点头');await nextTick();const allow=host.querySelector('.check-field input') as HTMLInputElement;allow.click();await vi.waitFor(()=>expect(host.querySelector('.resource-editor textarea')).not.toBeNull());await nextTick();expect((host.querySelector('.resource-editor textarea') as HTMLTextAreaElement).value).toBe('');input(host.querySelector('.resource-editor textarea')!,'保留用途');allow.click();await nextTick();expect(host.querySelector('.resource-editor textarea')).toBeNull();await vi.waitFor(()=>expect(allow.disabled).toBe(false));allow.click();await vi.waitFor(()=>expect(host.querySelector('.resource-editor textarea')).not.toBeNull());expect((host.querySelector('.resource-editor textarea') as HTMLTextAreaElement).value).toBe('保留用途');
- expect(host.textContent).not.toContain('设为默认待机');button(host,'常驻').click();await nextTick();const idle=host.querySelector('[data-state=idle] input') as HTMLInputElement;await vi.waitFor(()=>expect(idle.disabled).toBe(false));idle.click();await nextTick();await vi.waitFor(()=>expect(idle.disabled).toBe(false));expect(idle.checked).toBe(true);button(host,'动作').click();await nextTick();
+ expect(host.textContent).not.toContain('设为默认待机');button(host,'常驻').click();await nextTick();const {dialog:idleDialog,check:idle}=await residentChoice(host,'idle');idle.click();await finishResident(idleDialog);expect(idle.checked).toBe(true);expect(idle.disabled).toBe(true);expect(host.querySelectorAll('[data-state=idle] .resident-items li')).toHaveLength(1);button(host,'动作').click();await nextTick();
  button(host,'保存').click();await vi.waitFor(()=>expect(api.saveProfile).toHaveBeenCalledOnce());const first=api.saveProfile.mock.calls[0]![1].adaptor;const id=Object.keys(first.entries).find(id=>first.entries[id].agent_enabled)!;
  expect(first.entries[id].display_name).toBe('轻轻点头');expect(first.entries[first.states.idle[0]].playback.mode).toBe('loop');expect(first.entries[id].playback.mode).toBe('once');
  await vi.waitFor(()=>expect(host.querySelector('[aria-busy]')?.getAttribute('aria-busy')).toBe('false'));input(host.querySelector('.resource-editor input')!,'Gentle nod');await nextTick();button(host,'保存').click();await vi.waitFor(()=>expect(api.saveProfile).toHaveBeenCalledTimes(2));expect(api.saveProfile.mock.calls[1]![1].adaptor.entries[id].display_name).toBe('Gentle nod');
  button(host,'常驻').click();await nextTick();expect(host.querySelectorAll('.resident-state')).toHaveLength(4);expect(host.querySelector('.resource-editor')).toBeNull();expect(host.textContent).not.toContain('动作与表情组合');expect(playback.active).toBe(1);
- const listening=host.querySelectorAll('[data-state=listening] input')[1] as HTMLInputElement;listening.click();await nextTick();await vi.waitFor(()=>expect(api.verifyProfileResources).toHaveBeenCalledWith('b','v1',['model/002.motion3.json']));await vi.waitFor(()=>expect(listening.disabled).toBe(false));button(host,'保存').click();await vi.waitFor(()=>expect(api.saveProfile).toHaveBeenCalledTimes(3));const resident=api.saveProfile.mock.calls[2]![1].adaptor;expect(resident.entries[resident.states.listening[0]].playback.mode).toBe('loop');expect(resident.entries[resident.states.listening[0]].agent_enabled).toBe(false);
+ const {dialog:listeningDialog,check:listening}=await residentChoice(host,'listening',1);listening.click();await nextTick();await vi.waitFor(()=>expect(api.verifyProfileResources).toHaveBeenCalledWith('b','v1',['model/002.motion3.json']));await finishResident(listeningDialog);expect(listening.checked).toBe(true);button(host,'保存').click();await vi.waitFor(()=>expect(api.saveProfile).toHaveBeenCalledTimes(3));const resident=api.saveProfile.mock.calls[2]![1].adaptor;expect(resident.entries[resident.states.listening[0]].playback.mode).toBe('loop');expect(resident.entries[resident.states.listening[0]].agent_enabled).toBe(false);
  button(host,'动作').click();await nextTick();expect((host.querySelector('.resource-editor input') as HTMLInputElement).value).toBe('Gentle nod');
  button(host,'角色').click();await nextTick();expect(playback.active).toBe(0);expect(api.activateProfile).not.toHaveBeenCalled();
 });
@@ -63,9 +81,9 @@ it.each(['zh','en','ja'] as const)('enables an unnamed resource with an optional
  const detail=fixture();detail.saved.modelVersion='v1';detail.saved.adaptor.model={manifest:'model/Test.model3.json'};detail.resources=[{file:'model/face.exp3.json',kind:'expression',referenced:true,verified:false}];
  const {host,api}=mount(detail,'a',language);await openB(host,language);button(host,t(language,'pModelTab')).click();await nextTick();button(host,t(language,'pExpression')).click();await nextTick();
  expect(host.querySelector('.resource-editor textarea')).toBeNull();const allow=host.querySelector('.resource-editor input[type=checkbox]') as HTMLInputElement;await vi.waitFor(()=>expect(allow.disabled).toBe(false));allow.click();await vi.waitFor(()=>expect(host.querySelector('.resource-editor textarea')).not.toBeNull());expect((host.querySelector('.resource-editor textarea') as HTMLTextAreaElement).value).toBe('');
- button(host,t(language,'pResident')).click();await nextTick();expect(host.textContent).not.toContain('未单独设置的状态');const check=host.querySelector('[data-state=idle] input') as HTMLInputElement;await vi.waitFor(()=>expect(check.disabled).toBe(false));check.click();await nextTick();await vi.waitFor(()=>expect(check.disabled).toBe(false));expect(check.checked).toBe(true);
+ button(host,t(language,'pResident')).click();await nextTick();expect(host.textContent).not.toContain('未单独设置的状态');const {dialog,check}=await residentChoice(host,'idle',0,language);check.click();await finishResident(dialog,language);expect(check.checked).toBe(true);expect(check.disabled).toBe(true);
  button(host,t(language,'pExpression')).click();await nextTick();button(host,t(language,'pRemoveLabel')).click();await nextTick();expect(host.querySelector('.resource-editor textarea')).toBeNull();button(host,t(language,'pSave')).click();await vi.waitFor(()=>expect(api.saveProfile).toHaveBeenCalledOnce());const adaptor=api.saveProfile.mock.calls[0]![1].adaptor;expect(adaptor.states.idle).toHaveLength(1);const retained=adaptor.entries[adaptor.states.idle[0]];expect(retained.kind).toBe('expression');expect(retained.agent_enabled).toBe(false);expect(retained.description).toBe('');expect(api.activateProfile).not.toHaveBeenCalled();
 });
 it('retains a resident pool after a failed resource verification',async()=>{
- const detail=fixture();detail.saved.modelVersion='v1';detail.saved.adaptor.model={manifest:'model/Test.model3.json'};detail.resources=[{file:'model/bad.motion3.json',kind:'motion',referenced:true,verified:false}];const {host,api}=mount(detail);await openB(host);button(host,'模型与动作').click();await nextTick();button(host,'常驻').click();await nextTick();api.verifyProfileResources.mockRejectedValueOnce(new Error('resource_unverified'));const check=host.querySelector('[data-state=idle] input') as HTMLInputElement;check.click();await vi.waitFor(()=>expect(host.querySelector('[role=alert]')).not.toBeNull());expect(check.checked).toBe(false);expect(api.saveProfile).not.toHaveBeenCalled();
+ const detail=fixture();detail.saved.modelVersion='v1';detail.saved.adaptor.model={manifest:'model/Test.model3.json'};detail.resources=[{file:'model/bad.motion3.json',kind:'motion',referenced:true,verified:false}];const {host,api}=mount(detail);await openB(host);button(host,'模型与动作').click();await nextTick();button(host,'常驻').click();await nextTick();api.verifyProfileResources.mockRejectedValueOnce(new Error('resource_unverified'));const {dialog,check}=await residentChoice(host,'idle');check.click();await vi.waitFor(()=>expect(dialog.querySelector('[role=alert]')).not.toBeNull());await finishResident(dialog);expect(check.checked).toBe(false);expect(host.querySelectorAll('[data-state=idle] .resident-items li')).toHaveLength(0);expect(api.saveProfile).not.toHaveBeenCalled();
 });

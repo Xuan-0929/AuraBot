@@ -1,5 +1,6 @@
 /**
- * 创建并管理 AuraBot 桌宠、控制台与设置窗口及其非 Task broadcasts。
+ * 创建并管理 AuraBot 桌宠、控制台、设置和独立 Live Debug 窗口及其非 Task broadcasts。
+ * Debug 窗口关闭只销毁视图，采集与日志生命周期由 Main 的 LiveDebugService 管理。
  *
  * 模块负责窗口位置、尺寸、点击穿透、Live2D/聊天/通知事件投影；macOS 内容窗口隐藏
  * 原生标题栏，由渲染层提供同色背景、窗口按钮留白和拖动区域。仅为 Pet 窗口安装
@@ -23,6 +24,7 @@ import { clampWindowBoundsToWorkArea, placeWindowNearPet, type WindowRectangle }
 let petWindow: BrowserWindow | undefined;
 let consoleWindow: BrowserWindow | undefined;
 let settingsWindow: BrowserWindow | undefined;
+let liveDebugWindow: BrowserWindow | undefined;
 let currentPetSettings: PetSettings = { ...DEFAULT_PET_SETTINGS };
 let onPetBoundsChanged: ((bounds: WindowRectangle) => void) | undefined;
 let petCursorTrackingInterval: NodeJS.Timeout | undefined;
@@ -169,6 +171,21 @@ export function applyPetSettings(settings: PetSettings): void {
   broadcastPetSettings(settings);
 }
 
+export function openLiveDebugWindow():BrowserWindow {
+  if(liveDebugWindow&&!liveDebugWindow.isDestroyed()){liveDebugWindow.show();liveDebugWindow.focus();return liveDebugWindow;}
+  liveDebugWindow=new BrowserWindow({width:720,height:560,minWidth:540,minHeight:400,title:'AuraBot Live Debug',
+    backgroundColor:nativeTheme.shouldUseDarkColors?'#191d1a':'#f7f7f2',show:false,webPreferences:sharedWebPreferences()});
+  positionConsoleNearPet(liveDebugWindow);
+  const window=liveDebugWindow;
+  window.once('ready-to-show',()=>{if(!window.isDestroyed()){window.show();window.focus();}});
+  window.once('closed',()=>{liveDebugWindow=undefined;});
+  loadRenderer(window,'live-debug');return window;
+}
+export function closeLiveDebugWindow():void {liveDebugWindow?.close();}
+export function broadcastLiveDebug(value:import('../shared/contracts/liveDebug').LiveDebugUpdate):void {
+  if(liveDebugWindow&&!liveDebugWindow.isDestroyed())liveDebugWindow.webContents.send(IPC_CHANNELS.liveDebugChanged,value);
+}
+
 export function setPetMousePassthrough(enabled: boolean): void {
   if (!petWindow || petWindow.isDestroyed()) {
     return;
@@ -274,7 +291,7 @@ function sharedWebPreferences() {
   };
 }
 
-function loadRenderer(window: BrowserWindow, route: "pet" | "console" | "settings"): void {
+function loadRenderer(window: BrowserWindow, route: "pet" | "console" | "settings" | "live-debug"): void {
   window.webContents.setWindowOpenHandler(()=>({action:"deny"}));
   window.webContents.on("will-navigate",event=>event.preventDefault());
   const devServerUrl = process.env.ELECTRON_RENDERER_URL;

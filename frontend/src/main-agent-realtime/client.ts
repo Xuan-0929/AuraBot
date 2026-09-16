@@ -9,8 +9,11 @@
  * the next ordered offer so a local clause failure cannot tear down an otherwise healthy session.
  * Capture requests echo cancellation/noise suppression without automatic gain and reports only actual
  * numeric/boolean audio settings to backend diagnostics; device identifiers remain local.
+ * Opt-in scalar debug events observe these existing boundaries, sampling PCM on existing messages only;
+ * capture/session fences and isolated callbacks keep diagnostics independent of voice and durable ACKs.
  */
 
+import type { DebugScalar, LiveDebugEvent } from "../shared/contracts/liveDebug";
 import {SPEECH_TEXT} from "../features/settings/speechText";
 import type {DisplayLanguage} from "../i18n";
 import type { AvatarCue } from "../shared/contracts/avatar";
@@ -27,6 +30,7 @@ export interface MainAgentRealtimeClientOptions {
   gatewayUrl?: string;
   displayLanguage?:()=>DisplayLanguage;
   getToken?: () => Promise<RealtimeToken>;
+  onDebug?: (event: LiveDebugEvent) => void;
   onPerformance?: (event: PerformanceEvent) => void;
   onState?: (state: MainAgentRealtimeState, detail?: string) => void;
   onClause?: (text: string | null) => void;
@@ -34,7 +38,7 @@ export interface MainAgentRealtimeClientOptions {
   onAgentState?: (state: "idle"|"no_audio"|"listening"|"thinking"|"speaking")=>void;
 }
 
-interface CurrentClause { id: string; text:string; settled: boolean; cancelled: boolean; draining?:boolean; cue?:AvatarCue; mode:"text"|"voice"; profileId:string; serverGeneration:number; started:boolean; startContextTime?:number; startDeadline?:number; }
+interface CurrentClause { receivedSamples:number; consumedSamples:number; id: string; text:string; settled: boolean; cancelled: boolean; draining?:boolean; cue?:AvatarCue; mode:"text"|"voice"; profileId:string; serverGeneration:number; started:boolean; startContextTime?:number; startDeadline?:number; }
 interface WorkletMessage {
   type: "frame" | "clause-complete" | "clause-start" | "playback-level" | "playback-progress" | "overrun";
   samples?: Int16Array;
@@ -72,7 +76,15 @@ export class MainAgentRealtimeClient {
   private readyResolve:(()=>void)|null=null;
   private readyReject:((error:Error)=>void)|null=null;
   private controls:Promise<void>=Promise.resolve();
-  private pending=new Map<string,{resolve:()=>void;reject:(error:Error)=>void;timer:ReturnType<typeof setTimeout>}>();
+  private pending=new Map<string,{resolve:()=>void;reject:(error:Error)=>void;timer:ReturnType<typeof setTimeout>;debugCaptureId:string|null}>();
+  private readonly debugInstanceId = crypto.randomUUID();
+  private debugCaptureId:string|null=null;
+  private debugSeq=0;
+  private debugLastSample=-Infinity;
+  private micSentFrames=0;
+  private micDroppedFrames=0;
+  private micSentSamples=0;
+  private micDroppedSamples=0;
   get voiceEnabled():boolean {return this.voice;}
 
 
@@ -83,6 +95,49 @@ export class MainAgentRealtimeClient {
   }
 
   get currentState(): MainAgentRealtimeState { return this.state; }
+
+  setDebugCapture(captureId:string|null):void {
+    if(this.debugCaptureId===captureId)return;
+    this.debugCaptureId=captureId;
+    if(!captureId)return;
+    this.debugLastSample=-Infinity;
+    this.micSentFrames=this.micDroppedFrames=this.micSentSamples=this.micDroppedSamples=0;
+    this.debug("transport","transport.snapshot",{state:this.state});
+    this.debug("capture","capture.snapshot",{state:this.stream?"running":"off",voiceEnabled:this.voice,contextState:this.context?.state??"absent",...this.microphoneSettings});
+    this.debug("devicePlayback","devicePlayback.snapshot",{state:this.clause?(this.playbackBlocked?"paused":this.clause.draining?"draining":this.clause.started?"playing":"queued"):"idle",playbackBlocked:this.playbackBlocked,hasClause:!!this.clause,started:this.clause?.started??false,draining:this.clause?.draining??false,...this.queueStats()});
+  }
+
+  private debug(stage:string,name:string,details:Record<string,DebugScalar>,level:LiveDebugEvent["level"]="info",clause=this.clause):void {
+    if(!this.debugCaptureId)return;
+    const event:LiveDebugEvent={source:"pet",instanceId:this.debugInstanceId,seq:++this.debugSeq,captureId:this.debugCaptureId,timestamp:Date.now(),stage,name,level,
+      ...(this.profile?{profileId:clause?.profileId??this.profile.profileId}:{}),
+      ...(this.serverGeneration?{generation:clause?.serverGeneration??this.serverGeneration}:{}),
+      ...(this.configRevision?{configRevision:this.configRevision}:{}),
+      ...(clause?{clauseId:clause.id,...(clause.cue?{sayId:clause.cue.say_id,invokeId:clause.cue.invoke_id}:{})}:{}),details};
+    try{this.options.onDebug?.(event);}catch{/* Diagnostics never affect realtime delivery. */}
+  }
+  private queueStats():Record<string,number> {
+    const receivedSamples=this.clause?.receivedSamples??0,consumedSamples=this.clause?.consumedSamples??0;
+    const queuedSamples=Math.max(0,receivedSamples-consumedSamples);
+    return {receivedSamples,consumedSamples,queuedSamples,queuedMs:queuedSamples/24};
+  }
+  private sampleAudio(stage:"capture"|"devicePlayback"):void {
+    if(!this.debugCaptureId)return;
+    const now=performance.now();if(now-this.debugLastSample<500)return;this.debugLastSample=now;
+    this.debug(stage,"audio.stats",{micSentFrames:this.micSentFrames,micDroppedFrames:this.micDroppedFrames,micSentSamples:this.micSentSamples,micDroppedSamples:this.micDroppedSamples,bufferedAmount:this.socket?.bufferedAmount??0,...this.queueStats()});
+  }
+  private async writeHistory(entry:Parameters<NonNullable<MainAgentRealtimeClientOptions["onMessage"]>>[0]):Promise<void> {
+    const captureId=this.debugCaptureId,generation=this.generation,clause=this.clause;
+    const started=captureId?performance.now():0;
+    if(captureId)this.debug("devicePlayback","history.write.started",{role:entry.role},"info",clause);
+    try{
+      await this.options.onMessage?.(entry);
+      if(captureId&&captureId===this.debugCaptureId&&generation===this.generation)this.debug("devicePlayback","history.write.completed",{role:entry.role,elapsedMs:performance.now()-started},"info",clause);
+    }catch(error){
+      if(captureId&&captureId===this.debugCaptureId&&generation===this.generation)this.debug("devicePlayback","history.write.failed",{role:entry.role,code:"history_write_failed",errorType:debugErrorType(error),elapsedMs:performance.now()-started},"error",clause);
+      throw error;
+    }
+  }
 
   async start(profile: VoiceProfile): Promise<void> {
     if(this.profile&&(this.profile.profileId!==profile.profileId||this.profile.revision!==profile.revision))await this.stop();
@@ -96,7 +151,8 @@ export class MainAgentRealtimeClient {
     this.setState("connecting");
     this.ready=new Promise<void>((resolve,reject)=>{this.readyResolve=resolve;this.readyReject=reject;});
     const waiting=this.ready;
-    const timeout=setTimeout(()=>{if(generation===this.generation)void this.fail("连接超时");},15000);
+    const timeout=setTimeout(()=>{if(generation===this.generation)void this.fail("连接超时","connection_timeout");},15000);
+    const debugCaptureId=this.debugCaptureId;
     void (async()=>{
       try {
         let body:Partial<RealtimeToken>;
@@ -109,7 +165,7 @@ export class MainAgentRealtimeClient {
         if(typeof body.token!=="string"||!body.token||body.profile_id!==profile.profileId||!Number.isInteger(body.generation)||!Number.isInteger(body.revision))throw new Error("无效或过期会话凭据");
         if(profile.revision!==undefined&&body.revision!==profile.revision)throw new Error("Profile 配置版本已变化");
         if(generation===this.generation){this.serverGeneration=body.generation!;this.configRevision=body.revision!;this.openSocket(body.token,generation);}
-      }catch(error){if(generation===this.generation)await this.fail(error);}
+      }catch(error){if(generation===this.generation)await this.fail(error,"connection_failed",debugCaptureId);}
     })();
     try {await waiting;}finally{clearTimeout(timeout);if(this.ready===waiting)this.ready=null;}
   }
@@ -138,17 +194,19 @@ export class MainAgentRealtimeClient {
           await this.startAudio(generation);
           if(generation!==this.generation)return;
           await this.command("voice.start", {audio_settings:this.microphoneSettings});
-          if(generation===this.generation)this.voice=true;
+          if(generation===this.generation){this.voice=true;if(this.debugCaptureId)this.debug("capture","voice.started",{voiceEnabled:true});}
         } catch(error){await this.stopAudio();throw error;}
       }
     } finally {this.toggling=false;}
   }
 
   private command(type:string,fields:Record<string,unknown>={},id=crypto.randomUUID()):Promise<void>{
+    const captureId=this.debugCaptureId,generation=this.generation;
     return new Promise((resolve,reject)=>{
-      const timer=setTimeout(()=>{this.pending.delete(id);reject(new Error("命令确认超时，未自动重试"));void this.fail("命令确认超时，未自动重试，请确认对话状态。");},12000);
-      this.pending.set(id,{resolve,reject,timer});
-      if(!this.send({type,command_id:id,...fields})){clearTimeout(timer);this.pending.delete(id);reject(new Error("连接已断开"));}
+      const timer=setTimeout(()=>{if(captureId&&captureId===this.debugCaptureId&&generation===this.generation)this.debug("transport","command.timeout",{commandType:type,commandId:id,code:"command_timeout"},"error");this.pending.delete(id);reject(new Error("命令确认超时，未自动重试"));void this.fail("命令确认超时，未自动重试，请确认对话状态。","command_timeout",captureId);},12000);
+      this.pending.set(id,{resolve,reject,timer,debugCaptureId:captureId});
+      if(this.debugCaptureId)this.debug("transport","command.sent",{commandType:type,commandId:id});
+      if(!this.send({type,command_id:id,...fields})){clearTimeout(timer);this.pending.delete(id);reject(new Error("连接已断开"));if(this.debugCaptureId)this.debug("transport","command.failed",{commandType:type,commandId:id,code:"socket_not_open"},"error");}
     });
   }
   private rejectPending(error:Error){
@@ -163,17 +221,19 @@ export class MainAgentRealtimeClient {
     const socket = new WebSocket(url, [SUBPROTOCOL, `aurabot.capability.${token}`]);
     socket.binaryType = "arraybuffer";
     this.socket = socket;
+    socket.onopen=()=>{if(this.current(socket,generation)&&this.debugCaptureId)this.debug("transport","transport.open",{state:"open"});};
     socket.onmessage = (message) => {
       if (!this.current(socket, generation)) return;
+      const debugCaptureId=this.debugCaptureId;
       // PCM must follow its offer even while an earlier history write is awaiting IPC.
       this.controls=this.controls.then(async()=>{
         if(!this.current(socket,generation))return;
         if(typeof message.data==="string")await this.handleControl(JSON.parse(message.data),generation);
         else this.appendTts(message.data as ArrayBuffer);
-      }).catch(error=>{if(this.current(socket,generation))return this.fail(error);});
+      }).catch(error=>{if(this.current(socket,generation))return this.fail(error,"control_failed",debugCaptureId);});
     };
-    socket.onerror = () => { if (this.current(socket, generation)) void this.fail("realtime transport error"); };
-    socket.onclose = () => { if (this.current(socket, generation)) void this.fail("realtime connection closed"); };
+    socket.onerror = () => { if (this.current(socket, generation)) void this.fail("realtime transport error","transport_error"); };
+    socket.onclose = () => { if (this.current(socket, generation)) void this.fail("realtime connection closed","transport_closed"); };
   }
 
   private async handleControl(event: Record<string, unknown>, generation: number): Promise<void> {
@@ -193,8 +253,9 @@ export class MainAgentRealtimeClient {
         if (!id || this.clause) throw new Error("invalid clause offer");
         this.discardAudio = false;
         const cue=this.cueFrom(event);
-        this.clause = { id, text:String(event.text??""), settled: false, cancelled: false, cue,
+        this.clause = { receivedSamples:0,consumedSamples:0,id, text:String(event.text??""), settled: false, cancelled: false, cue,
           mode:event.mode==="text"?"text":"voice",profileId:this.profile!.profileId,serverGeneration:this.serverGeneration,started:false };
+        if(this.debugCaptureId)this.debug("devicePlayback","clause.offered",{state:"queued",hasClause:true,started:false,draining:false,mode:this.clause.mode,...this.queueStats()});
         if(cue)this.performance({type:"offer",cue,clauseId:id,mode:this.clause.mode});
         if(event.mode==="text") { await this.completeClause(id); }
         else { this.playback?.port.postMessage({ type: "offer", clauseId: id }); }
@@ -220,6 +281,7 @@ export class MainAgentRealtimeClient {
       case "clause.cancel": {
         const clause = this.clause;
         if (clause && clause.id === event.clause_id) {
+          if(this.debugCaptureId)this.debug("devicePlayback","clause.cancelled",{state:"idle",hasClause:false,draining:false,code:"server_cancel"});
           clause.cancelled = true;
           clause.settled = true;
           this.flushClause();
@@ -228,17 +290,18 @@ export class MainAgentRealtimeClient {
       }
       case "command.ack": {
         const id=String(event.command_id??"");const item=this.pending.get(id);
+        if(item&&item.debugCaptureId&&item.debugCaptureId===this.debugCaptureId)this.debug("transport",event.status==="accepted"?"command.accepted":"command.rejected",{commandId:id,status:event.status==="accepted"?"accepted":"rejected",...(event.status==="accepted"?{}:{code:debugCode(event.code,"command_rejected")})},event.status==="accepted"?"info":"warning");
         if(item){clearTimeout(item.timer);this.pending.delete(id);event.status==="accepted"?item.resolve():item.reject(new Error(publicError(String(event.code??"请求被拒绝"),this.options.displayLanguage?.())));}
         break;
       }
       case "user.message":
-        await this.options.onMessage?.({id:String(event.message_id),role:"user",content:String(event.text),profileId:this.profile!.profileId,generation:this.serverGeneration});
+        await this.writeHistory({id:String(event.message_id),role:"user",content:String(event.text),profileId:this.profile!.profileId,generation:this.serverGeneration});
         break;
       case "agent.state":
         if(["idle","no_audio","listening","thinking","speaking"].includes(String(event.state)))this.options.onAgentState?.(event.state as "idle"|"no_audio"|"listening"|"thinking"|"speaking");
         break;
       case "session.error":
-        await this.fail(publicError(String(event.code ?? "session error"),this.options.displayLanguage?.()));
+        await this.fail(publicError(String(event.code ?? "session error"),this.options.displayLanguage?.()),debugCode(event.code,"session_error"));
         break;
       default:
         break;
@@ -247,6 +310,8 @@ export class MainAgentRealtimeClient {
 
   private async startAudio(generation: number): Promise<void> {
     if (this.context || generation !== this.generation) return;
+    const captureId=this.debugCaptureId;
+    if(captureId)this.debug("capture","capture.starting",{state:"starting"});
     try {
       const stream = await navigator.mediaDevices.getUserMedia({
         audio: { channelCount: 1, echoCancellation: true, noiseSuppression: true, autoGainControl: false },
@@ -262,8 +327,9 @@ export class MainAgentRealtimeClient {
         const value = settings?.[key];
         if(typeof value === "boolean" || (typeof value === "number" && Number.isFinite(value)))this.microphoneSettings[key]=value;
       }
+      if(captureId&&captureId===this.debugCaptureId)this.debug("capture","capture.settings",this.microphoneSettings);
       for(const track of stream.getTracks())track.addEventListener("ended",()=>{
-        if(generation===this.generation&&this.stream===stream)void this.fail("麦克风已断开，请检查设备后重新开启语音。");
+        if(generation===this.generation&&this.stream===stream)void this.fail("麦克风已断开，请检查设备后重新开启语音。","microphone_ended");
       },{once:true});
       const context = new AudioContext();
       this.context=context;
@@ -280,16 +346,18 @@ export class MainAgentRealtimeClient {
       context.createMediaStreamSource(stream).connect(mic);
       // A destination connection keeps the capture processor in the active pull graph; it emits silence.
       mic.connect(context.destination);
-      for(const node of [mic,playback])node.onprocessorerror=()=>{if(generation===this.generation&&this.context===context)void this.fail("音频处理失败，请重新开启语音。");};
+      for(const node of [mic,playback])node.onprocessorerror=()=>{if(generation===this.generation&&this.context===context)void this.fail("音频处理失败，请重新开启语音。","audio_processor_error");};
       playback.connect(context.destination);
       await context.resume();
       if(generation!==this.generation){stream.getTracks().forEach(track=>track.stop());if(context.state!=="closed")await context.close();return;}
       this.stream = stream;
       this.context = context;
       this.playback = playback;
+      if(this.debugCaptureId)this.debug("capture","capture.started",{state:"running",contextState:context.state,...this.microphoneSettings});
       this.applyGate(false);
       this.setState("active");
     } catch (error) {
+      if(captureId&&captureId===this.debugCaptureId&&generation===this.generation)this.debug("capture","capture.failed",{code:"capture_failed",errorType:debugErrorType(error)},"error");
       if(generation===this.generation)await this.stopAudio();
       throw error;
     }
@@ -305,7 +373,9 @@ export class MainAgentRealtimeClient {
           message.samples.buffer, message.samples.byteOffset, message.samples.byteLength,
         ));
         socket.send(bytes.buffer);
-      }
+        if(this.debugCaptureId){this.micSentFrames++;this.micSentSamples+=message.samples.length;}
+      }else if(this.debugCaptureId){this.micDroppedFrames++;this.micDroppedSamples+=message.samples.length;}
+      this.sampleAudio("capture");
     }
   }
 
@@ -315,6 +385,7 @@ export class MainAgentRealtimeClient {
       void this.fail("TTS PCM has no active clause or is malformed");
       return;
     }
+    this.clause.receivedSamples+=encoded.byteLength/2;this.sampleAudio("devicePlayback");
     const samples = new Int16Array(encoded);
     this.playback?.port.postMessage({ type: "append", samples }, [samples.buffer]);
   }
@@ -322,13 +393,15 @@ export class MainAgentRealtimeClient {
   private handlePlayback(message: WorkletMessage): void {
     const clause=this.clause;
     if(message.type==="playback-progress"){
-      if(clause&&!clause.settled&&message.clauseId===clause.id&&Number.isSafeInteger(message.consumedSamples)&&message.consumedSamples!>=0)
+      if(clause&&!clause.settled&&message.clauseId===clause.id&&Number.isSafeInteger(message.consumedSamples)&&message.consumedSamples!>=0){
+        clause.consumedSamples=message.consumedSamples!;this.sampleAudio("devicePlayback");
         this.send({type:"renderer.progress",clause_id:clause.id,consumed_samples:message.consumedSamples});
+      }
       return;
     }
     if(message.type==="clause-start"&&clause&&message.clauseId===clause.id&&!clause.started&&!clause.settled){
       if(!Number.isFinite(message.contextTime)){this.visualDiagnostics.dropped++;return;}
-      if(clause.startContextTime===undefined){clause.startContextTime=message.contextTime;clause.startDeadline=Date.now()+1500;this.scheduleStart(clause);}return;
+      if(clause.startContextTime===undefined){if(this.debugCaptureId)this.debug("devicePlayback","devicePlayback.consumed.started",{contextTime:message.contextTime!});clause.startContextTime=message.contextTime;clause.startDeadline=Date.now()+1500;this.scheduleStart(clause);}return;
     }
     if(message.type==="playback-level"){
       if(clause&&message.clauseId===clause.id&&!clause.settled&&!this.playbackBlocked&&Number.isFinite(message.level)&&Number.isFinite(message.contextTime)){
@@ -339,11 +412,11 @@ export class MainAgentRealtimeClient {
       return;
     }
     if (message.type === "clause-complete" && message.clauseId) {
-      const generation=this.generation;
+      const generation=this.generation,debugCaptureId=this.debugCaptureId;
       if(message.endContextTime===undefined){void this.fail("音频输出时钟不可用");return;}
-      void this.completeClause(message.clauseId,message.endContextTime).catch(error=>{if(generation===this.generation)return this.fail(error);});
+      void this.completeClause(message.clauseId,message.endContextTime).catch(error=>{if(generation===this.generation)return this.fail(error,"playback_failed",debugCaptureId);});
     }
-    else if (message.type === "overrun" && clause && message.clauseId === clause.id) this.interruptClause();
+    else if (message.type === "overrun" && clause && message.clauseId === clause.id){if(this.debugCaptureId)this.debug("devicePlayback","devicePlayback.overrun",{code:"playback_overrun",...this.queueStats()},"warning");this.interruptClause();}
   }
 
   private async completeClause(clauseId: string, endContextTime?:number): Promise<void> {
@@ -361,12 +434,14 @@ export class MainAgentRealtimeClient {
       }
       if(!context||this.clause!==clause||clause.settled||generation!==this.generation)return;
     }
+    if(endContextTime!==undefined&&this.debugCaptureId)this.debug("devicePlayback","devicePlayback.physical.completed",{state:"completed",contextTime:endContextTime,...this.queueStats()});
     clause.settled = true;
-    await this.options.onMessage?.({id:clause.id,role:"assistant",content:clause.text,profileId:clause.profileId,generation:clause.serverGeneration});
+    await this.writeHistory({id:clause.id,role:"assistant",content:clause.text,profileId:clause.profileId,generation:clause.serverGeneration});
     if(generation!==this.generation||this.clause!==clause||clause.cancelled)return;
     this.onClause(clause.text);
     if(clause.mode==="text"&&clause.cue)this.performance({type:"start",cue:clause.cue,clauseId:clause.id,mode:"text",text:clause.text});
-    this.send({ type: "renderer.ack", clause_id: clause.id, complete: true });
+    const ackSent=this.send({ type: "renderer.ack", clause_id: clause.id, complete: true });
+    if(ackSent&&this.debugCaptureId)this.debug("devicePlayback","renderer.ack.sent",{state:"idle",hasClause:false,draining:false,complete:true});
     if(clause.cue)this.performance({type:"complete",cue:clause.cue,clauseId:clause.id,mode:clause.mode});
     this.performance({type:"level",level:0});this.clearCueTimer();this.clearLevels();
     if(this.clause===clause)this.clause=null;
@@ -376,7 +451,8 @@ export class MainAgentRealtimeClient {
     const clause = this.clause;
     if (clause && !clause.settled && !clause.cancelled) {
       clause.settled = true;
-      this.send({ type: "renderer.ack", clause_id: clause.id, complete: false });
+      const ackSent=this.send({ type: "renderer.ack", clause_id: clause.id, complete: false });
+      if(this.debugCaptureId){this.debug("devicePlayback","clause.interrupted",{state:"idle",hasClause:false,draining:false,code:"local_interrupt"},"warning");if(ackSent)this.debug("devicePlayback","renderer.ack.sent",{complete:false});}
     }
     this.flushClause();
   }
@@ -392,6 +468,7 @@ export class MainAgentRealtimeClient {
   private applyGate(blocked: boolean): void {
     if (blocked !== this.playbackBlocked) {
       this.playbackBlocked = blocked;
+      if(this.debugCaptureId)this.debug("devicePlayback",blocked?"devicePlayback.paused":"devicePlayback.resumed",{state:blocked?"paused":this.clause?"playing":"idle",playbackBlocked:blocked});
       const transition = blocked ? "pause" : "resume";
       this.playback?.port.postMessage({ type: transition });this.performance({type:transition});
       if(transition==="pause"){this.clearCueTimer();this.clearLevels();}else if(this.clause&&!this.clause.started)this.scheduleStart(this.clause);
@@ -409,7 +486,8 @@ export class MainAgentRealtimeClient {
     return this.socket === socket && this.generation === generation;
   }
 
-  private async fail(error: unknown): Promise<void> {
+  private async fail(error: unknown,code="realtime_failed",debugCaptureId=this.debugCaptureId): Promise<void> {
+    if(debugCaptureId&&debugCaptureId===this.debugCaptureId)this.debug("transport","transport.failed",{code,errorType:debugErrorType(error)},"error");
     const generation=++this.generation;
     this.rejectPending(new Error(error instanceof Error?error.message:String(error)));
     await this.teardown(false);
@@ -435,9 +513,11 @@ export class MainAgentRealtimeClient {
     await this.stopAudio();
   }
   private async stopAudio():Promise<void>{
+    const hadAudio=!!(this.stream||this.context);
     this.microphoneSettings = {};
     this.clearCueTimer();this.clearLevels();this.performance({type:"level",level:0});
     const stream=this.stream;this.stream=null;stream?.getTracks().forEach(track=>track.stop());
+    if(this.debugCaptureId&&hadAudio)this.debug("capture","voice.stopped",{voiceEnabled:false,state:"off",micSentFrames:this.micSentFrames,micDroppedFrames:this.micDroppedFrames,micSentSamples:this.micSentSamples,micDroppedSamples:this.micDroppedSamples});
     this.playback?.port.postMessage({type:"flush"});this.playback=null;
     const context=this.context;this.context=null;if(context&&context.state!=="closed")await context.close();
   }
@@ -482,6 +562,7 @@ export class MainAgentRealtimeClient {
       const remaining=clause.startContextTime!-outputTime;
       if(remaining>0.001){this.cueTimer=setTimeout(check,Math.max(5,Math.min(50,remaining*1000)));return;}
       clause.started=true;this.visualDiagnostics.starts++;this.visualDiagnostics.clockSkewMs=Math.max(0,-remaining*1000);
+      if(this.debugCaptureId)this.debug("devicePlayback","devicePlayback.physical.started",{state:"playing",contextTime:outputTime,clockSkewMs:this.visualDiagnostics.clockSkewMs});
       if(clause.cue)this.performance({type:"start",cue:clause.cue,clauseId:clause.id,mode:"voice",text:clause.text});
     };
     check();
@@ -489,6 +570,7 @@ export class MainAgentRealtimeClient {
 
   private setState(state: MainAgentRealtimeState, detail?: string): void {
     this.state = state;
+    if(this.debugCaptureId)this.debug("transport","transport.state",{state});
     this.onState(state, detail);
   }
 }
@@ -504,4 +586,13 @@ export function publicError(code:string,language:DisplayLanguage="zh"):string {
     backend_restarting:"正在应用配置，请等待 Backend 重新就绪。"
   };
   return messages[code]??code;
+}
+
+// Only known error classes and machine codes enter diagnostics; messages may contain secrets.
+function debugErrorType(error:unknown):string {
+  const name=error instanceof Error?error.name:"UnknownError";
+  return ["Error","TypeError","RangeError","SyntaxError","AbortError","NotAllowedError","NotFoundError","NotReadableError","OverconstrainedError","InvalidStateError","SecurityError"].includes(name)?name:"UnknownError";
+}
+function debugCode(value:unknown,fallback:string):string {
+  return typeof value==="string"&&/^[a-z][a-z0-9_]{0,79}$/.test(value)?value:fallback;
 }

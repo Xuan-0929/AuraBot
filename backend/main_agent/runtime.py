@@ -7,6 +7,7 @@ owns proposal timers, accepted controls and Task fact synchronization. Memory us
 Context boundary and immediately retires its causal input, then an independent archive worker submits that
 sealed boundary without blocking or being cancelled by later input. Context cleanup occurs only after Memory
 success and never retires the newer causal scope.
+Frozen Hub diagnostic scopes record opt-in control timing and content-free tool receipts.
 Harness settlements retain content-free receipt counters for backend diagnostics. No say_to_user means
 intentional silence; tool rejections and discarded ordinary content do not become frontend debug errors.
 """
@@ -125,6 +126,7 @@ class InvokeRequest:
     snapshot: Snapshot
     tool_surface: ToolSurface
     settlement: InvokeSettlement | None = None
+    debug_scope: Any = None
 
 
 @dataclass(slots=True)
@@ -190,6 +192,7 @@ class MainAgentRuntime:
         self.wall_clock = wall_clock or time.time
         self.owner_profile_id = owner_profile_id
         self.metrics = metrics
+        self.debug = None
         self.clock = clock or time.monotonic
         self.prepare_admission = prepare_admission or PrepareAdmissionPolicy()
         self.observation_ledger = observation_ledger or ObservationLedger()
@@ -269,6 +272,25 @@ class MainAgentRuntime:
     @property
     def active_input(self) -> ActiveInput | None:
         return self._active_input
+
+    def debug_snapshot(self) -> None:
+        debug = self.debug
+        if debug is not None and debug.enabled:
+            active = self._active_input
+            invoke = self._active_invoke
+            pending = self._pending_trigger
+            debug.recorder.update_state(debug, "model", inputId=active.input_id if active else None,
+                revision=active.revision if active else None,
+                invokeId=invoke.request.invoke_id if invoke else None, running=invoke is not None,
+                mode=invoke.request.mode.value if invoke else None,
+                pending=pending.mode.value if pending else None, prepareCount=self._prepare_count,
+                speechCandidate=self._speech_candidate, confirmedSpeech=self._confirmed_speech)
+
+    def _debug(self, name: str, **details: Any) -> None:
+        debug = self.debug
+        if debug is not None and debug.enabled:
+            active = self._active_input
+            debug.emit("model", name, inputId=active.input_id if active else None, **details)
 
     @property
     def latest_context_version(self) -> int:
@@ -558,6 +580,7 @@ class MainAgentRuntime:
             if not self.accepting or self._shutdown:
                 raise RuntimeError("backend_restarting")
             if self._active_input is None or self._shutdown:
+                self._debug("trigger_suppressed", mode="CONTINUE", reason="input_unavailable")
                 return False
             self._merge_trigger_locked(InvokeMode.CONTINUE, _required_text(reason, "reason"))
             self._kick_locked()
@@ -723,8 +746,10 @@ class MainAgentRuntime:
     def _request_prepare_locked(self, reason: str, high_priority: bool) -> bool:
         active_input = self._active_input
         if active_input is None or self._shutdown:
+            self._debug("trigger_suppressed", mode="PREPARE", reason="input_unavailable")
             return False
         if self._prepare_count >= self.prepare_admission.max_prepares_per_input:
+            self._debug("trigger_suppressed", mode="PREPARE", reason="prepare_budget")
             return False
         now = self.clock()
         units = _stable_units(active_input.latest_transcript)
@@ -746,6 +771,7 @@ class MainAgentRuntime:
                 and bool(_PUNCTUATED.search(active_input.latest_transcript))
             )
             if not interval_ready or not (enough_growth or punctuation_reward or waited):
+                self._debug("trigger_suppressed", mode="PREPARE", reason="interval_or_growth")
                 return False
         self._merge_trigger_locked(InvokeMode.PREPARE, reason)
         return True
@@ -753,6 +779,7 @@ class MainAgentRuntime:
     def _merge_trigger_locked(self, mode: InvokeMode, reason: str) -> None:
         active_input = self._active_input
         if active_input is None:
+            self._debug("trigger_suppressed", mode=mode.value, reason="input_unavailable")
             return
         candidate = PendingTrigger(
             active_input.input_id,
@@ -762,9 +789,13 @@ class MainAgentRuntime:
         current = self._pending_trigger
         if current is None or current.input_id != candidate.input_id:
             self._pending_trigger = candidate
+            self._debug("trigger_admitted", mode=mode.value, reason=reason)
             return
         if _TRIGGER_PRIORITY[candidate.mode] >= _TRIGGER_PRIORITY[current.mode]:
             self._pending_trigger = candidate
+            self._debug("trigger_admitted", mode=mode.value, reason=reason)
+        else:
+            self._debug("trigger_suppressed", mode=mode.value, reason="higher_priority_pending")
 
     def _prepare_barrier_locked(self) -> asyncio.Event | None:
         active = self._active_invoke
@@ -965,6 +996,7 @@ class MainAgentRuntime:
                         response_grant=surface.response_grant,
                         snapshot=snapshot,
                         tool_surface=surface,
+                        debug_scope=self.debug,
                     )
                     active = _ActiveInvoke(request, asyncio.Event())
                     self._active_invoke = active
@@ -995,13 +1027,24 @@ class MainAgentRuntime:
     async def _report_settlement(self, request: InvokeRequest) -> None:
         settlement = request.settlement
         assert settlement is not None
+        debug = request.debug_scope
         for receipt in settlement.receipts:
             self._increment_metric(f"main.receipt.{receipt.code}")
+            if debug is not None and debug.enabled:
+                debug.emit("model", "receipt", invokeId=request.invoke_id, inputId=request.input_id,
+                    toolName=receipt.tool_name, code=receipt.code, mode=request.mode.value)
         provider_failed = any(receipt.code == "provider_stream_error" for receipt in settlement.receipts)
         if not settlement.cancelled and not provider_failed and not any(
             receipt.tool_name == "say_to_user" for receipt in settlement.receipts
         ):
             self._increment_metric("main.invoke.silent")
+            if debug is not None and debug.enabled:
+                debug.emit("model", "silent", invokeId=request.invoke_id, inputId=request.input_id,
+                    mode=request.mode.value, silent=True)
+        if debug is not None and debug.enabled:
+            debug.emit("model", "cancel" if settlement.cancelled else "settled",
+                invokeId=request.invoke_id, inputId=request.input_id, mode=request.mode.value,
+                cancelled=settlement.cancelled, code="provider_stream_error" if provider_failed else "settled")
         current = self._active_input
         if (settlement.cancelled or self._shutdown or not self.accepting
                 or current is None or (current.input_id, current.revision) != (request.input_id, request.revision)):
@@ -1011,11 +1054,24 @@ class MainAgentRuntime:
 
     async def _provider_chunks(self, request: InvokeRequest):
         started_at = time.monotonic()
+        debug = request.debug_scope
+        first = True
+        if debug is not None and debug.enabled:
+            debug.emit("model", "invoke_start", invokeId=request.invoke_id, inputId=request.input_id,
+                mode=request.mode.value, reason=request.reason, running=True)
         self._increment_metric("main.invoke.started")
         try:
             async for chunk in self.provider(request):
+                if first:
+                    first = False
+                    if debug is not None and debug.enabled:
+                        debug.emit("model", "first_chunk", invokeId=request.invoke_id, inputId=request.input_id,
+                            elapsedMs=(time.monotonic() - started_at) * 1000)
                 yield chunk
         finally:
+            if debug is not None and debug.enabled:
+                debug.emit("model", "invoke_end", invokeId=request.invoke_id, inputId=request.input_id,
+                    mode=request.mode.value, running=False, elapsedMs=(time.monotonic() - started_at) * 1000)
             observe = getattr(self.metrics, "observe", None)
             if callable(observe):
                 observe("main.invoke.latency", time.monotonic() - started_at)

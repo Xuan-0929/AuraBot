@@ -17,6 +17,8 @@ before closing STT and never cancels a running VAD thread before resetting its r
 It owns only speech resources and never shuts down MainAgentRuntime.
 Near-field RMS and continuous VAD qualification precede Runtime/STT activation, retaining 400 ms pre-roll.
 Delivery explicitly closes synthesis when playback-credit waits are cancelled, joining spool cleanup.
+Hub-owned frozen diagnostic scopes observe sampled acoustics and STT/EOU/TTS transitions synchronously;
+they never retain audio, provider payloads, exceptions, or add workers to the speech pipeline.
 """
 
 # Acoustic edges are sent to RealtimeHub independently of STT confirmation and Smart Turn completion.
@@ -673,6 +675,7 @@ class SpeechInputCoordinator:
         if pre_roll_frames < 1 or frame_ms < 1:
             raise ValueError("speech frame and pre-roll limits must be positive")
         self.runtime = runtime
+        self.debug = vars(runtime).get("debug")
         self.stt_provider = stt_provider
         self.vad = vad
         self.eou = eou
@@ -708,6 +711,28 @@ class SpeechInputCoordinator:
         self._endpoint_generation = 0
         self._closed = False
 
+    def _debug(self, stage: str, name: str, **details: Any) -> None:
+        debug = self.debug
+        if debug is not None and debug.enabled:
+            debug.emit(stage, name, segmentId=self._segment_id, **details)
+
+    def debug_snapshot(self) -> None:
+        debug = self.debug
+        if debug is None or not debug.enabled:
+            return
+        debug.recorder.update_state(debug, "input", active=self._active,
+            confirmMs=self._speech_frames * self.frame_ms, silenceMs=self._silence_frames * self.frame_ms,
+            confirmTargetMs=self.confirm_frames * self.frame_ms, silenceTargetMs=self.stop_frames * self.frame_ms,
+            noiseFloor=self._noise_floor, threshold=max(self.min_speech_rms, self._noise_floor * self.speech_noise_ratio))
+        active = getattr(self.runtime, "active_input", None)
+        text = next((item.text for item in active.segments if item.segment_id == self._segment_id), "") if active else ""
+        debug.recorder.update_state(debug, "stt", segmentId=self._segment_id, active=self._session is not None,
+            hasTranscript=self._has_transcript, text=text)
+        debug.recorder.update_state(debug, "eou", segmentId=self._segment_id,
+            endpointPending=self._endpoint_task is not None and not self._endpoint_task.done(),
+            threshold=self.eou_threshold, fallbackMs=self.incomplete_fallback_seconds * 1000,
+            timeoutMs=self.eou_inference_timeout_seconds * 1000)
+
     async def accept_mic_frame(self, pcm16le: bytes) -> None:
         if self._closed:
             return
@@ -717,6 +742,8 @@ class SpeechInputCoordinator:
         self.audio.append(pcm16le)
         probability = await self._vad_probability(pcm16le)
         if probability is None:
+            if self.debug is not None and self.debug.sample_due("acoustics"):
+                self._debug("input", "vad_unavailable", code="vad_unavailable", vad=None)
             self._speech_frames = 0
             if self._active:
                 await self._cancel_endpoint()
@@ -731,6 +758,11 @@ class SpeechInputCoordinator:
         rms = math.sqrt(sum(sample * sample for sample in samples) / len(samples)) / 32768
         threshold = max(self.min_speech_rms, self._noise_floor * self.speech_noise_ratio)
         speech = probability >= self.vad_threshold and rms >= threshold
+        if self.debug is not None and self.debug.sample_due("acoustics"):
+            self._debug("input", "acoustics", rms=rms, noiseFloor=self._noise_floor, threshold=threshold,
+                vad=probability, speech=speech, active=self._active,
+                confirmMs=self._speech_frames * self.frame_ms, silenceMs=self._silence_frames * self.frame_ms,
+                confirmTargetMs=self.confirm_frames * self.frame_ms, silenceTargetMs=self.stop_frames * self.frame_ms)
         self._diagnostic_frames += 1
         if self._diagnostic_frames % 250 == 0:
             speech_logger.info("mic_gate rms=%.4f noise=%.4f threshold=%.4f vad=%.3f active=%s", rms, self._noise_floor, threshold, probability, self._active)
@@ -747,6 +779,7 @@ class SpeechInputCoordinator:
             try:
                 await self._session.send_audio(pcm16le)
             except Exception:
+                self._debug("stt", "error", level="error", code="stt_send_failed")
                 await self._close_stt()
         if speech:
             if self._stop_issued:
@@ -766,6 +799,7 @@ class SpeechInputCoordinator:
         if self._stop_issued or self._silence_frames < self.stop_frames:
             return
         self._stop_issued = True
+        self._debug("input", "silence", silenceMs=self._silence_frames * self.frame_ms)
         await self.runtime.vad_stop_candidate()
         await self._playback("speech_activity", active=False)
         self._endpoint_generation += 1
@@ -804,6 +838,7 @@ class SpeechInputCoordinator:
         self._stop_issued = False
         self._has_transcript = False
         self._segment_id = str(uuid.uuid4())
+        self._debug("input", "confirmed", confirmMs=self._speech_frames * self.frame_ms)
         await self._playback("speech_candidate_started")
         await self.runtime.vad_start()
         await self._playback("speech_confirmed")
@@ -814,16 +849,21 @@ class SpeechInputCoordinator:
         async def on_transcript(update: TranscriptUpdate) -> None:
             await self._on_transcript(update, segment_id)
         try:
+            self._debug("stt", "start", active=True)
             self._session = await self.stt_provider.start(on_transcript)
             for frame in tuple(self.pre_roll):
                 await self._session.send_audio(frame)
         except Exception:
+            self._debug("stt", "error", level="error", code="stt_start_failed", active=False)
             await self._close_stt()
 
     async def _on_transcript(self, update: TranscriptUpdate, segment_id: str | None) -> None:
         if not self._transcript_current(segment_id) or not update.full_text:
             return
         self._has_transcript = True
+        if self.debug is not None and self.debug.enabled:
+            self._debug("stt", "update", text=update.full_text, stablePrefix=update.stable_prefix,
+                mutableSuffix=update.mutable_suffix, stability=update.provider_stability, active=True)
         await self.runtime.update_transcript(
             update.full_text,
             segment_id=segment_id,
@@ -835,6 +875,7 @@ class SpeechInputCoordinator:
 
     async def _resolve_endpoint(self, generation: int) -> None:
         candidate_at = self.clock()
+        self._debug("eou", "start", endpointPending=True, threshold=self.eou_threshold)
         finish = False
         try:
             probability = await asyncio.wait_for(
@@ -849,6 +890,7 @@ class SpeechInputCoordinator:
                     if not await self._finalize_endpoint():
                         finish = True
                         return
+                    self._debug("eou", "fallback", elapsedMs=(self.clock() - candidate_at) * 1000)
                     await self.runtime.endpoint_fallback()
                     finish = True
                 return
@@ -858,10 +900,12 @@ class SpeechInputCoordinator:
                     if not await self._finalize_endpoint():
                         finish = True
                         return
+                    self._debug("eou", "complete", probability=probability, elapsedMs=(self.clock() - candidate_at) * 1000)
                     await self.runtime.eou_complete()
                     finish = True
                 return
             await self._playback("speech_endpoint", complete=False)
+            self._debug("eou", "incomplete", probability=probability, incomplete=True)
             await self.runtime.eou_incomplete()
             deadline = candidate_at + self.incomplete_fallback_seconds
             while self._endpoint_current(generation):
@@ -871,6 +915,7 @@ class SpeechInputCoordinator:
                     if not await self._finalize_endpoint():
                         finish = True
                         return
+                    self._debug("eou", "fallback", elapsedMs=(self.clock() - candidate_at) * 1000)
                     await self.runtime.endpoint_fallback()
                     finish = True
                     return
@@ -882,6 +927,7 @@ class SpeechInputCoordinator:
                     if not await self._finalize_endpoint():
                         finish = True
                         return
+                    self._debug("eou", "fallback", elapsedMs=(self.clock() - candidate_at) * 1000)
                     await self.runtime.endpoint_fallback()
                     finish = True
                     return
@@ -891,16 +937,20 @@ class SpeechInputCoordinator:
                         min(self.eou_inference_timeout_seconds, deadline - self.clock()),
                     )
                 except TimeoutError:
+                    self._debug("eou", "timeout", level="warning", code="eou_recheck_timeout")
                     probability = None
                 if probability is not None and probability >= self.eou_threshold:
                     await self._playback("speech_endpoint", complete=True)
                     if not await self._finalize_endpoint():
                         finish = True
                         return
+                    self._debug("eou", "complete", probability=probability, elapsedMs=(self.clock() - candidate_at) * 1000)
                     await self.runtime.eou_complete()
                     finish = True
                     return
         except TimeoutError:
+            self._debug("eou", "timeout", level="warning", code="eou_timeout",
+                elapsedMs=(self.clock() - candidate_at) * 1000)
             delay = max(0.0, candidate_at + self.unavailable_fallback_seconds - self.clock())
             if delay:
                 await self.sleep(delay)
@@ -909,16 +959,20 @@ class SpeechInputCoordinator:
                 if not await self._finalize_endpoint():
                     finish = True
                     return
+                self._debug("eou", "fallback", elapsedMs=(self.clock() - candidate_at) * 1000)
                 await self.runtime.endpoint_fallback()
                 finish = True
         except asyncio.CancelledError:
+            self._debug("eou", "cancel", cancelled=True, endpointPending=False)
             raise
         except Exception:
+            self._debug("eou", "error", level="warning", code="eou_unavailable")
             if self._endpoint_current(generation):
                 await self._playback("speech_endpoint", complete=True)
                 if not await self._finalize_endpoint():
                     finish = True
                     return
+                self._debug("eou", "fallback", elapsedMs=(self.clock() - candidate_at) * 1000)
                 await self.runtime.endpoint_fallback()
             finish = True
         finally:
@@ -947,7 +1001,9 @@ class SpeechInputCoordinator:
         return float(value) if isinstance(value, (int, float)) and not isinstance(value, bool) else None
 
     async def _eou_probability(self) -> float | None:
+        started = self.clock()
         if self.eou is None:
+            self._debug("eou", "unavailable", probability=None, code="eou_unavailable")
             return None
         try:
             # A timed-out endpoint stops waiting, not its inference thread. Reuse remains serial,
@@ -959,7 +1015,10 @@ class SpeechInputCoordinator:
             ))
             value = await asyncio.shield(self._eou_work)
         except Exception:
+            self._debug("eou", "error", level="warning", code="eou_inference_failed")
             return None
+        self._debug("eou", "probability", probability=value if isinstance(value, (int, float)) else None,
+            elapsedMs=(self.clock() - started) * 1000, threshold=self.eou_threshold)
         return float(value) if isinstance(value, (int, float)) and not isinstance(value, bool) else None
 
     async def _cancel_endpoint(self) -> None:
@@ -984,11 +1043,13 @@ class SpeechInputCoordinator:
             # Service shutdown retries this still-owned session after the mic task has stopped.
             raise
         except Exception:
+            self._debug("stt", "error", level="error", code="stt_finish_failed" if finalize else "stt_close_failed")
             if self._session is session:
                 self._session = None
             return False
         if self._session is session:
             self._session = None
+        self._debug("stt", "end", active=False, complete=finalize)
         return True
 
     async def _playback(self, method_name: str, **fields: Any) -> None:
@@ -1009,10 +1070,12 @@ class SpeechInputCoordinator:
             pass
 
     async def _reject_candidate(self) -> None:
+        self._debug("input", "rejected", reason="no_transcript")
         await self._playback("speech_candidate_rejected")
         await self.runtime.reject_speech_candidate()
 
     async def _finish_turn(self) -> None:
+        self._debug("eou", "end", endpointPending=False)
         await self._playback("speech_activity", active=False)
         await self._close_stt()
         self._active = False
@@ -1133,6 +1196,7 @@ class ClauseSpeechDelivery:
         self.provider = provider
         self.renderer_port_factory = renderer_port_factory
         self.runtime = runtime
+        self.debug = vars(runtime).get("debug")
         self.ack_timeout_seconds = ack_timeout_seconds
         self._queue: asyncio.Queue[_SpeechJob] = asyncio.Queue(max_pending_clauses)
         self._waiters: dict[str, asyncio.Future[bool]] = {}
@@ -1142,6 +1206,19 @@ class ClauseSpeechDelivery:
         self._worker: asyncio.Task[None] | None = None
         self._delivery_task: asyncio.Task[None] | None = None
         self._closed = False
+
+    def debug_snapshot(self) -> None:
+        debug = self.debug
+        if debug is not None and debug.enabled:
+            debug.recorder.update_state(debug, "tts", clauseId=self._current_clause_id,
+                sayId=self._current_say_id, queuedClauses=self._queue.qsize(),
+                running=self._delivery_task is not None and not self._delivery_task.done())
+
+    def _debug(self, name: str, clause: Any, **details: Any) -> None:
+        debug = self.debug
+        if debug is not None and debug.enabled:
+            debug.emit("tts", name, clauseId=clause.clause_id, sayId=getattr(clause, "say_id", None),
+                inputId=getattr(clause, "input_id", None), invokeId=getattr(clause, "invoke_id", None), **details)
 
     async def startup(self) -> None:
         if self._closed:
@@ -1157,9 +1234,11 @@ class ClauseSpeechDelivery:
         try:
             self._queue.put_nowait(_SpeechJob(clause))
         except asyncio.QueueFull as exc:
+            self._debug("failure", clause, level="warning", code="tts_queue_full")
             await self.runtime.renderer_failed(clause_id)
             raise SpeechProviderUnavailable("speech delivery queue is full") from exc
         await self.runtime.renderer_tts_queued(clause_id)
+        self._debug("queued", clause, queuedClauses=self._queue.qsize())
 
     async def _run(self) -> None:
         while True:
@@ -1185,6 +1264,7 @@ class ClauseSpeechDelivery:
         self._waiters[clause_id] = waiter
         port: Any | None = None
         failed = False
+        started = time.monotonic()
         try:
             port = await self.renderer_port_factory()
             if port is None:
@@ -1195,6 +1275,8 @@ class ClauseSpeechDelivery:
             if await port.offer_clause(clause) is not None:
                 raise SpeechProviderUnavailable("renderer rejected clause")
             played = False
+            first_audio = True
+            self._debug("start", clause, running=True)
             buffer = bytearray()
             stream = self.provider.synthesize(str(clause.text)).__aiter__()
             try:
@@ -1205,6 +1287,9 @@ class ClauseSpeechDelivery:
                         continue
                     payload = bytes(buffer[:size])
                     del buffer[:size]
+                    if first_audio:
+                        first_audio = False
+                        self._debug("first_audio", clause, firstAudio=True, elapsedMs=(time.monotonic() - started) * 1000)
                     if await port.send_audio(payload) is not None:
                         raise SpeechProviderUnavailable("renderer rejected audio")
                     if not played:
@@ -1220,11 +1305,14 @@ class ClauseSpeechDelivery:
                 raise SpeechProviderUnavailable("TTS returned no audio")
             if await port.finish_audio(clause_id) is not None:
                 raise SpeechProviderUnavailable("renderer rejected audio end")
+            self._debug("end", clause, running=False, elapsedMs=(time.monotonic() - started) * 1000)
             if not await asyncio.wait_for(asyncio.shield(waiter), self.ack_timeout_seconds):
                 await self.runtime.renderer_ack(clause_id, complete=False)
         except asyncio.CancelledError:
+            self._debug("cancel", clause, cancelled=True, running=False)
             raise
         except BaseException as exc:
+            self._debug("failure", clause, level="error", code="ack_timeout" if isinstance(exc, TimeoutError) else "tts_delivery_failed", running=False)
             failed = True
             speech_logger.warning("delivery_failed clause=%s error=%s", clause_id, type(exc).__name__)
             await self.runtime.renderer_failed(clause_id)
