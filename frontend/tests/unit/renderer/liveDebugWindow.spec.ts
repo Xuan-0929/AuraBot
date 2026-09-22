@@ -1,5 +1,5 @@
 /** Exercises the debug renderer through its desktop IPC seam, including revision races,
- * bounded event pages, filters and cleanup. The App route test prevents debug windows from
+ * anchored history reading, sidebar selection, bounded event pages, filters and cleanup. The App route test prevents debug windows from
  * initializing chat history, Pet media or ordinary event subscriptions. */
 // @vitest-environment jsdom
 import { createApp, nextTick } from 'vue';
@@ -32,7 +32,7 @@ it('keeps newest 200 visible with older pages, filters and expandable structured
  search.value='';search.dispatchEvent(new Event('input'));await nextTick();
  emit({...snapshot(2,[event(451,{level:'error',source:'pet',stage:'capture'})]),reset:false});await nextTick();
  const level=host.querySelector<HTMLSelectElement>('[name="debug-level"]')!;level.value='error';level.dispatchEvent(new Event('change'));await nextTick();expect(host.querySelectorAll('[data-debug-event]')).toHaveLength(1);
- expect(host.querySelector('[data-debug-event] details')?.textContent).toContain('capture');
+ (host.querySelector('[data-debug-event]') as HTMLButtonElement).click();await nextTick();expect(host.querySelector('[data-event-detail]')?.textContent).toContain('Microphone capture');
  button('Clear debug logs').click();await vi.waitFor(()=>expect(host.querySelectorAll('[data-debug-event]')).toHaveLength(0));
  dispose();expect(host.isConnected).toBe(false);
 });
@@ -43,7 +43,7 @@ it('merges updates received during initial snapshot and rejects stale/reset race
  await vi.waitFor(()=>expect(host.querySelectorAll('[data-debug-event]')).toHaveLength(2));
  emit({...snapshot(3,[]),reset:true});emit({...snapshot(2,[event(2)]),reset:false});await nextTick();expect(host.querySelectorAll('[data-debug-event]')).toHaveLength(0);
  emit({...snapshot(4,[event(3),event(3)]),reset:false});await nextTick();expect(host.querySelectorAll('[data-debug-event]')).toHaveLength(1);
- const auto=host.querySelector<HTMLInputElement>('[name="debug-autoscroll"]')!;auto.click();emit({...snapshot(5,[event(4)]),reset:false});await nextTick();expect(host.querySelectorAll('[data-debug-event]')).toHaveLength(2);
+ const auto=host.querySelector<HTMLInputElement>('[name="debug-autoscroll"]')!;auto.click();emit({...snapshot(5,[event(4)]),reset:false});await nextTick();expect(host.querySelectorAll('[data-debug-event]')).toHaveLength(1);expect(host.querySelector('[data-new-events]')?.textContent).toContain('1');
  dispose();expect(unsubscribe).toHaveBeenCalledOnce();
 });
 it('opens the debug route without chat initialization or a Pet mount',async()=>{
@@ -64,4 +64,38 @@ it('does not restore an old initial snapshot after a reset and shows operation f
  const {host,emit}=mount(LiveDebugWindow,{getLiveDebugState:()=>initial,openLiveDebugLogDirectory:async()=>{throw new Error('folder unavailable');}});
  emit({...snapshot(3,[]),reset:true});resolve(snapshot(1));await nextTick();await nextTick();expect(host.querySelectorAll('[data-debug-event]')).toHaveLength(0);
  const folder=[...host.querySelectorAll('button')].find(item=>item.textContent==='Open log directory')!;folder.click();await vi.waitFor(()=>expect(host.querySelector('[role=alert]')?.textContent).toContain('folder unavailable'));
+});
+
+const click = async (host:HTMLElement, text:string) => {
+ const button=[...host.querySelectorAll<HTMLButtonElement>('button')].find(item=>item.textContent?.trim()===text);
+ expect(button, `button ${text}`).toBeTruthy();button!.click();await nextTick();
+};
+it('keeps historical pages anchored while new matching events arrive and resumes on demand',async()=>{
+ const {host,emit}=mount(LiveDebugWindow,{getLiveDebugState:async()=>snapshot(1,Array.from({length:450},(_,i)=>event(i+1)))});
+ await vi.waitFor(()=>expect(host.querySelectorAll('[data-debug-event]')).toHaveLength(200));
+ await click(host,'Older');
+ const before=[...host.querySelectorAll('[data-debug-event]')].map(row=>row.textContent);
+ emit({...snapshot(2,[event(451),event(452)]),reset:false});await nextTick();
+ expect([...host.querySelectorAll('[data-debug-event]')].map(row=>row.textContent)).toEqual(before);
+ expect(host.querySelector('[data-new-events]')?.textContent).toContain('2');
+ expect((host.querySelector('[name="debug-autoscroll"]') as HTMLInputElement).checked).toBe(false);
+ await click(host,'Latest');expect(host.querySelectorAll('[data-debug-event]')[199]?.textContent).toContain('event-452');
+});
+it('selects stable event details in the sidebar and keeps them after eviction until clear',async()=>{
+ const {host,emit}=mount();await vi.waitFor(()=>expect(host.querySelector('[data-debug-event]')).not.toBeNull());
+ (host.querySelector('[data-debug-event]') as HTMLButtonElement).click();await nextTick();
+ expect(host.querySelector('[data-event-detail]')?.textContent).toContain('transcript-1');
+ expect((host.querySelector('[name="debug-autoscroll"]') as HTMLInputElement).checked).toBe(false);
+ emit({...snapshot(2,Array.from({length:1001},(_,i)=>event(i+2))),reset:false});await nextTick();
+ expect(host.querySelector('[data-event-detail]')?.textContent).toContain('transcript-1');
+ expect(host.querySelector('[data-event-detail]')?.textContent).toContain('no longer in the list');
+ expect(host.querySelector('[data-history-expired]')).not.toBeNull();
+ await click(host,'Clear debug logs');await vi.waitFor(()=>expect(host.querySelector('[data-event-detail]')).toBeNull());
+});
+it('groups state into six sections and reads full transcripts through a separate tab',async()=>{
+ const {host}=mount();await vi.waitFor(()=>expect(host.querySelectorAll('[data-state-group]')).toHaveLength(6));
+ expect([...host.querySelectorAll('details[data-state-group]')].every(item=>item.hasAttribute('open'))).toBe(true);
+ await vi.waitFor(()=>expect(host.textContent).toContain('Conversation text'));await click(host,'Conversation text');expect(host.querySelector('[data-transcripts]')?.textContent).toContain('stable words');
+ expect(host.querySelector('[data-transcripts]')?.textContent).toContain('mutable words');
+ expect(host.querySelector('[data-transcripts]')?.textContent).toContain('reply words');
 });

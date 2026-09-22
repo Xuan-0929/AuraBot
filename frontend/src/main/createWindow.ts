@@ -1,6 +1,6 @@
 /**
  * 创建并管理 AuraBot 桌宠、控制台、设置和独立 Live Debug 窗口及其非 Task broadcasts。
- * Debug 窗口关闭只销毁视图，采集与日志生命周期由 Main 的 LiveDebugService 管理。
+ * Debug 窗口按桌宠所在屏幕工作区限制初始及最小尺寸；关闭只销毁视图，采集与日志生命周期由 Main 的 LiveDebugService 管理。
  *
  * 模块负责窗口位置、尺寸、点击穿透、Live2D/聊天/通知事件投影；macOS 内容窗口隐藏
  * 原生标题栏，由渲染层提供同色背景、窗口按钮留白和拖动区域。仅为 Pet 窗口安装
@@ -173,7 +173,10 @@ export function applyPetSettings(settings: PetSettings): void {
 
 export function openLiveDebugWindow():BrowserWindow {
   if(liveDebugWindow&&!liveDebugWindow.isDestroyed()){liveDebugWindow.show();liveDebugWindow.focus();return liveDebugWindow;}
-  liveDebugWindow=new BrowserWindow({width:720,height:560,minWidth:540,minHeight:400,title:'AuraBot Live Debug',
+  const display=petWindow&&!petWindow.isDestroyed()?screen.getDisplayMatching(petWindow.getBounds()):screen.getPrimaryDisplay();
+  const availableWidth=Math.max(1,display.workArea.width-24),availableHeight=Math.max(1,display.workArea.height-24);
+  liveDebugWindow=new BrowserWindow({width:Math.min(1120,availableWidth),height:Math.min(760,availableHeight),
+    minWidth:Math.min(800,availableWidth),minHeight:Math.min(600,availableHeight),title:'AuraBot Live Debug',
     backgroundColor:nativeTheme.shouldUseDarkColors?'#191d1a':'#f7f7f2',show:false,webPreferences:sharedWebPreferences()});
   positionConsoleNearPet(liveDebugWindow);
   const window=liveDebugWindow;

@@ -1,5 +1,5 @@
 /** Verifies desktop window placement, drag/resize bounds and platform workspace behavior.
- * The Electron double includes navigation guards while geometry remains controlled by fake screens. */
+ * The Electron double includes navigation guards; controlled screens verify Pet geometry and debug initial/minimum sizes on small or offset displays. */
 import { beforeEach, describe, expect, test, vi } from "vitest";
 
 type Bounds = {
@@ -66,6 +66,7 @@ const electronMock = vi.hoisted(() => {
 
     setVisibleOnAllWorkspaces = setVisibleOnAllWorkspaces;
     on = vi.fn();
+    once = vi.fn();
     loadURL = vi.fn();
     loadFile = vi.fn();
     show = vi.fn();
@@ -87,7 +88,8 @@ const electronMock = vi.hoisted(() => {
 
 vi.mock("electron", () => ({
   BrowserWindow: electronMock.FakeBrowserWindow,
-  screen: electronMock.screen
+  screen: electronMock.screen,
+  nativeTheme: {shouldUseDarkColors:false}
 }));
 
 async function loadWindowModule() {
@@ -215,4 +217,21 @@ test("applying unrelated preferences preserves interactive hit testing, while pr
   expect(native).toHaveBeenLastCalledWith(false, {forward:true});
   windows.createPetWindow({settings});
   expect(native).toHaveBeenLastCalledWith(true, {forward:true});
+});
+
+
+test.each([
+ {width:1440,height:900,expected:[1120,760,800,600]},
+ {width:760,height:550,expected:[736,526,736,526]}
+])('fits debug initial and minimum sizes inside the selected display ($width x $height)',async({width,height,expected})=>{
+ const display={bounds:{x:-1000,y:100,width,height},workArea:{x:-1000,y:100,width,height}};
+ electronMock.screen.getPrimaryDisplay.mockReturnValueOnce(display);
+ electronMock.screen.getPrimaryDisplay.mockReturnValueOnce(display);
+ const {openLiveDebugWindow}=await loadWindowModule();openLiveDebugWindow();
+ const window=electronMock.instances[0]!;
+ expect([window.options.width,window.options.height,window.options.minWidth,window.options.minHeight]).toEqual(expected);
+ const bounds=window.getBounds();expect(bounds.x).toBeGreaterThanOrEqual(display.workArea.x);
+ expect(bounds.y).toBeGreaterThanOrEqual(display.workArea.y);
+ expect(bounds.x+bounds.width).toBeLessThanOrEqual(display.workArea.x+width);
+ expect(bounds.y+bounds.height).toBeLessThanOrEqual(display.workArea.y+height);
 });
