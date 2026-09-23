@@ -1,7 +1,8 @@
 <!-- Displays bounded desktop telemetry as an event workspace and a single-scroll inspector.
      Stable event identities anchor paused reading while Main continues collecting; selected
      details retain one immutable event. Snapshot/reset fencing uses the existing IPC contract,
-     without initializing chat history, Pet media, or a second diagnostic transport. -->
+     without initializing chat history, Pet media, or a second diagnostic transport.
+     Acoustic values retain six decimal places so quiet input remains visible in scalar details. -->
 <template>
   <main class="live-debug-window" data-live-debug>
     <header class="debug-header">
@@ -97,7 +98,8 @@ function format(key:string,value:unknown):string {
  if(typeof value==='boolean')return label(value?'yes':'no');
  if(typeof value==='number'){
   if(['timestamp','updatedAt','startedAt'].includes(key))return time(value);
-  const number=Number.isInteger(value)?String(value):String(Number(value.toFixed(3)));
+  const precision=['rms','rmsMin','rmsMax','noise','noiseFloor','threshold','thresholdMin','thresholdMax'].includes(key)?6:3;
+  const number=Number.isInteger(value)?String(value):String(Number(value.toFixed(precision)));
   if(/Ms$|_ms$/.test(key))return `${number} ms`;
   if(key==='sampleRate')return `${number} Hz`;
   if(/bytes$/i.test(key)||key==='bufferedAmount')return `${number} B`;

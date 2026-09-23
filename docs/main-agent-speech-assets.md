@@ -96,6 +96,20 @@ flowchart LR
 
 现场验收时让 Aura 连续播报至少 10 秒，分别验证：保持安静时完整播放、室友远处轻声不打断、近处连续插话后停止旧回复、下一轮可以正常播报。电脑外放还需验证 Aura 自己的播报不会触发近讲确认。自动化覆盖传输/确认/取消，但不代替这两种物理设备的声学验收。
 
+### Live debug 声学窗口与收尾诊断
+
+开启 Live debug 后，详细事件写入桌面数据目录的 `logs/live-debug/live-debug.jsonl`，与上面的内容无关诊断文件分开。Live debug 已有转写和回复记录；新增统计只保存数值、状态及稳定错误码，不保存原始音频或供应商异常正文。
+
+- `input / acoustics` 在经过 500ms 后的首个处理帧汇总一次，`windowMs` 是实际经过时间，`windowFrames` 是实际帧数，不假设恰好 25 帧。轮次结束或停止语音时输出剩余非空窗口，标记 `partial=true`；没有输入时不补发空窗口。
+- `vadPassFrames`、`rmsPassFrames`、`qualifiedFrames` 分别表示 VAD 达标、音量达标和同时达标的帧数。`maxQualifiedRunMs` 在窗口边界截断；`confirmMs` 是处理本帧后的真实确认计数，`maxConfirmMs` 保留窗口内峰值，两者可跨窗口连续增长。
+- `rmsMin/rmsMax` 和 `thresholdMin/thresholdMax` 表示窗口内输入强度及实际音量门槛范围。面板保留最多六位小数，JSONL 保留原始数值精度。
+- `resetRmsCount`、`resetVadCount`、`resetBothCount`、`resetUnavailableCount` 只累计未确认期间实际发生的“非零确认计数变成零”，持续静音不重复计数。`lastResetReason` 和 `lastResetFromMs` 记录最后一次原因及丢失时长，没有清零时为 `null`。
+- `input / vad_status` 仅在状态变化时发出：`warming_up` 为首个推理窗口预热，`ready` 为已有有效概率，`unavailable` 为资源或依赖不可用，`inference_failed` 为推理失败。窗口中的 `vadWarmupFrames`、`vadUnavailableFrames`、`vadErrorFrames` 累计对应帧数；`vadReason` 提供稳定原因码。
+- `stt / error` 增加 `operation`、`finalizing`、`endpointPending`、`exceptionType`。`finish_started` 和 `finish_ended` 使用同一 `segmentId`，可以核对发送失败是否与收尾重叠；`finish_ended` 只表示收尾操作退出，成功与否仍结合错误及原有 `end` 事件判断。
+- 清空日志、切换 Profile、关闭再开启 debug 都会隔离旧统计；关闭 debug 后不继续采集窗口。这些统计不改变语音判定或播放行为。
+
+实测时重启开发应用、开启 debug，完成一轮问答后再尝试数次说话，每次之间停顿约 2 秒，最后关闭语音以输出尾部窗口。无需先清空旧日志，`captureId` 可以区分本次采集。若后续仍无响应，结合上述计数与 `input / confirmed`、`stt / start` 定位输入停在哪个阶段。
+
 ### 修复验证记录（2026-09-15）
 
 - 后端完整测试 272 项通过，包含真实 WebSocket 协议下的 10 秒 PCM 突发、缓存进度及最终交付 ACK。

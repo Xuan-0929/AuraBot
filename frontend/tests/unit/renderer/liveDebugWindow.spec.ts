@@ -1,6 +1,7 @@
 /** Exercises the debug renderer through its desktop IPC seam, including revision races,
  * anchored history reading, sidebar selection, bounded event pages, filters and cleanup. The App route test prevents debug windows from
- * initializing chat history, Pet media or ordinary event subscriptions. */
+ * initializing chat history, Pet media or ordinary event subscriptions. Acoustic detail
+ * checks preserve small RMS values that otherwise disappear when formatted for display. */
 // @vitest-environment jsdom
 import { createApp, nextTick } from 'vue';
 import { afterEach, expect, it, vi } from 'vitest';
@@ -21,6 +22,16 @@ function mount(component=LiveDebugWindow,overrides:Record<string,unknown>={}){
  Object.assign(window,{aurabot:api});const host=document.createElement('div');document.body.append(host);const app=createApp(component);app.mount(host);dispose=()=>{app.unmount();host.remove();};
  return {host,api,emit:(value:any)=>emit(value),unsubscribe};
 }
+it('shows acoustic window labels and six decimal RMS precision in event details',async()=>{
+ const {host}=mount(LiveDebugWindow,{getLiveDebugState:async()=>snapshot(1,[event(1,{stage:'input',name:'acoustics',
+  details:{rmsMin:.000031,rmsMax:.041234,thresholdMin:.000123,windowFrames:25,resetRmsCount:3}})])});
+ await vi.waitFor(()=>expect(host.querySelector('[data-debug-event]')).not.toBeNull());
+ (host.querySelector('[data-debug-event]') as HTMLButtonElement).click();await nextTick();
+ const detail=host.querySelector('[data-event-detail]')!;
+ expect(detail.textContent).toContain('0.000031');expect(detail.textContent).toContain('0.041234');
+ expect(detail.textContent).toContain('0.000123');expect(detail.textContent).toContain('Window frames');
+ expect(detail.textContent).toContain('RMS resets');
+});
 it('keeps newest 200 visible with older pages, filters and expandable structured details',async()=>{
  const {host,emit}=mount(LiveDebugWindow,{getLiveDebugState:async()=>snapshot(1,Array.from({length:450},(_,i)=>event(i+1)))});
  await vi.waitFor(()=>expect(host.querySelectorAll('[data-debug-event]')).toHaveLength(200));

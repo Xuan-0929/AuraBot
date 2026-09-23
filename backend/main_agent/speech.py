@@ -17,7 +17,8 @@ before closing STT and never cancels a running VAD thread before resetting its r
 It owns only speech resources and never shuts down MainAgentRuntime.
 Near-field RMS and continuous VAD qualification precede Runtime/STT activation, retaining 400 ms pre-roll.
 Delivery explicitly closes synthesis when playback-credit waits are cancelled, joining spool cleanup.
-Hub-owned frozen diagnostic scopes observe sampled acoustics and STT/EOU/TTS transitions synchronously;
+Hub-owned frozen diagnostic scopes observe 500 ms acoustic windows, VAD readiness and
+session-specific STT finalization alongside EOU/TTS transitions synchronously;
 they never retain audio, provider payloads, exceptions, or add workers to the speech pipeline.
 """
 
@@ -40,6 +41,7 @@ from threading import Lock
 from typing import Any, Protocol, runtime_checkable
 
 from .metrics import speech_logger
+from .debug import AcousticWindow
 
 # Only these local preparation codes may cross the realtime transport.
 SPEECH_PREPARATION_ERRORS = frozenset({
@@ -527,6 +529,18 @@ class SileroVadDetector(_LazyLocalDetector):
         self._context: Any | None = None
         self._last_probability: float | None = None
 
+    @property
+    def diagnostic_state(self) -> tuple[str, str | None]:
+        """Describe cached inference state without loading models or reading static assets."""
+        if self._load_reason is not None:
+            status = "inference_failed" if self._load_reason in {"inference_failed", "invalid_audio"} else "unavailable"
+            return status, self._load_reason
+        if self._last_probability is not None:
+            return "ready", None
+        if self._session is not None:
+            return "warming_up", None
+        return "unavailable", "not_loaded"
+
     def reset(self) -> None:
         """Start a new audio stream without mutating the shared immutable ORT session."""
 
@@ -699,6 +713,9 @@ class SpeechInputCoordinator:
             raise ValueError("EOU inference timeout must be positive")
         self.clock = clock or time.monotonic
         self.sleep = sleep or asyncio.sleep
+        self._acoustics = AcousticWindow(self.debug, self.clock)
+        self._vad_failed = False
+        self._finalizing_session: StreamingSttSession | None = None
         self._active = False
         self._speech_frames = 0
         self._silence_frames = 0
@@ -741,10 +758,18 @@ class SpeechInputCoordinator:
         self.pre_roll.append(pcm16le)
         self.audio.append(pcm16le)
         probability = await self._vad_probability(pcm16le)
+        before_confirm_ms, was_active = self._speech_frames * self.frame_ms, self._active
+        observing = self.debug is not None and self.debug.enabled
+        rms = 0.0
+        if probability is not None or observing:
+            samples = array("h", pcm16le)
+            if sys.byteorder != "little":
+                samples.byteswap()
+            rms = math.sqrt(sum(sample * sample for sample in samples) / len(samples)) / 32768
+        threshold = max(self.min_speech_rms, self._noise_floor * self.speech_noise_ratio)
         if probability is None:
-            if self.debug is not None and self.debug.sample_due("acoustics"):
-                self._debug("input", "vad_unavailable", code="vad_unavailable", vad=None)
             self._speech_frames = 0
+            self._observe_acoustics(probability, rms, threshold, before_confirm_ms, was_active)
             if self._active:
                 await self._cancel_endpoint()
                 try:
@@ -752,17 +777,7 @@ class SpeechInputCoordinator:
                 finally:
                     await self._finish_turn()
             return
-        samples = array("h", pcm16le)
-        if sys.byteorder != "little":
-            samples.byteswap()
-        rms = math.sqrt(sum(sample * sample for sample in samples) / len(samples)) / 32768
-        threshold = max(self.min_speech_rms, self._noise_floor * self.speech_noise_ratio)
         speech = probability >= self.vad_threshold and rms >= threshold
-        if self.debug is not None and self.debug.sample_due("acoustics"):
-            self._debug("input", "acoustics", rms=rms, noiseFloor=self._noise_floor, threshold=threshold,
-                vad=probability, speech=speech, active=self._active,
-                confirmMs=self._speech_frames * self.frame_ms, silenceMs=self._silence_frames * self.frame_ms,
-                confirmTargetMs=self.confirm_frames * self.frame_ms, silenceTargetMs=self.stop_frames * self.frame_ms)
         self._diagnostic_frames += 1
         if self._diagnostic_frames % 250 == 0:
             speech_logger.info("mic_gate rms=%.4f noise=%.4f threshold=%.4f vad=%.3f active=%s", rms, self._noise_floor, threshold, probability, self._active)
@@ -770,16 +785,18 @@ class SpeechInputCoordinator:
             if probability < self.vad_threshold:
                 self._noise_floor += 0.05 * (rms - self._noise_floor)
             self._speech_frames = self._speech_frames + 1 if speech else 0
+            self._observe_acoustics(probability, rms, threshold, before_confirm_ms, was_active)
             if self._speech_frames >= self.confirm_frames:
                 speech_logger.info("speech_confirmed rms=%.4f threshold=%.4f vad=%.3f duration_ms=%d", rms, threshold, probability, self._speech_frames * self.frame_ms)
                 await self._start_candidate()
             return
 
         if self._session is not None:
+            session = self._session
             try:
-                await self._session.send_audio(pcm16le)
-            except Exception:
-                self._debug("stt", "error", level="error", code="stt_send_failed")
+                await session.send_audio(pcm16le)
+            except Exception as error:
+                self._stt_error("stt_send_failed", "send_audio", error, session)
                 await self._close_stt()
         if speech:
             if self._stop_issued:
@@ -792,10 +809,12 @@ class SpeechInputCoordinator:
                 await self.runtime.confirm_speech()
                 await self._playback("speech_activity", active=True)
             self._silence_frames = 0
+            self._observe_acoustics(probability, rms, threshold, before_confirm_ms, was_active)
             return
 
         self._speech_frames = 0
         self._silence_frames += 1
+        self._observe_acoustics(probability, rms, threshold, before_confirm_ms, was_active)
         if self._stop_issued or self._silence_frames < self.stop_frames:
             return
         self._stop_issued = True
@@ -807,6 +826,37 @@ class SpeechInputCoordinator:
         self._endpoint_task = asyncio.create_task(
             self._resolve_endpoint(generation), name="main-agent-speech-endpoint"
         )
+
+    def _observe_acoustics(self, probability: float | None, rms: float, threshold: float,
+                           before_confirm_ms: int, was_active: bool) -> None:
+        if self.debug is None or not self.debug.enabled:
+            return
+        try:
+            if self._vad_failed:
+                status, reason = "inference_failed", "inference_failed"
+            elif probability is not None:
+                status, reason = "ready", None
+            else:
+                status, reason = getattr(self.vad, "diagnostic_state", ("unavailable", "unknown"))
+            self._acoustics.observe(frame_ms=self.frame_ms, before_confirm_ms=before_confirm_ms,
+                was_active=was_active, segmentId=self._segment_id, rms=rms,
+                noiseFloor=self._noise_floor, threshold=threshold, vad=probability,
+                vadThreshold=self.vad_threshold, vadStatus=status, vadReason=reason,
+                speech=probability is not None and probability >= self.vad_threshold and rms >= threshold,
+                active=self._active, confirmMs=self._speech_frames * self.frame_ms,
+                silenceMs=self._silence_frames * self.frame_ms,
+                confirmTargetMs=self.confirm_frames * self.frame_ms,
+                silenceTargetMs=self.stop_frames * self.frame_ms)
+        except Exception:
+            # Observation must not alter microphone processing even for a broken diagnostic adapter.
+            self.debug.recorder.dropped += 1
+
+    def _stt_error(self, code: str, operation: str, error: Exception,
+                   session: StreamingSttSession | None) -> None:
+        self._debug("stt", "error", level="error", code=code, operation=operation,
+            finalizing=session is not None and self._finalizing_session is session,
+            endpointPending=self._endpoint_task is not None and not self._endpoint_task.done(),
+            exceptionType=type(error).__name__)
 
     async def wait_for_endpoint(self) -> None:
         task = self._endpoint_task
@@ -822,6 +872,7 @@ class SpeechInputCoordinator:
     async def reset_input(self) -> None:
         """Abort the old turn without final transcription, preserving reusable detectors/providers."""
 
+        self._acoustics.flush()
         self._active = False
         self._segment_id = None
         self._noise_floor = 0.003
@@ -848,13 +899,15 @@ class SpeechInputCoordinator:
         segment_id = self._segment_id
         async def on_transcript(update: TranscriptUpdate) -> None:
             await self._on_transcript(update, segment_id)
+        operation = "start"
         try:
             self._debug("stt", "start", active=True)
             self._session = await self.stt_provider.start(on_transcript)
+            operation = "send_audio"
             for frame in tuple(self.pre_roll):
                 await self._session.send_audio(frame)
-        except Exception:
-            self._debug("stt", "error", level="error", code="stt_start_failed", active=False)
+        except Exception as error:
+            self._stt_error("stt_start_failed", operation, error, self._session)
             await self._close_stt()
 
     async def _on_transcript(self, update: TranscriptUpdate, segment_id: str | None) -> None:
@@ -992,11 +1045,13 @@ class SpeechInputCoordinator:
         return self._stop_issued and generation == self._endpoint_generation and not self._closed
 
     async def _vad_probability(self, frame: bytes) -> float | None:
+        self._vad_failed = False
         if self.vad is None:
             return None
         try:
             value = await asyncio.to_thread(self.vad.speech_probability, frame)
         except Exception:
+            self._vad_failed = True
             return None
         return float(value) if isinstance(value, (int, float)) and not isinstance(value, bool) else None
 
@@ -1033,6 +1088,10 @@ class SpeechInputCoordinator:
         session = self._session
         if session is None:
             return True
+        segment_id = self._segment_id
+        if finalize:
+            self._finalizing_session = session
+            self._debug("stt", "finish_started", operation="finish", finalizing=True)
         try:
             if finalize:
                 await asyncio.wait_for(session.finish(), _CLEANUP_TIMEOUT_SECONDS)
@@ -1042,11 +1101,19 @@ class SpeechInputCoordinator:
         except asyncio.CancelledError:
             # Service shutdown retries this still-owned session after the mic task has stopped.
             raise
-        except Exception:
-            self._debug("stt", "error", level="error", code="stt_finish_failed" if finalize else "stt_close_failed")
+        except Exception as error:
+            self._stt_error("stt_finish_failed" if finalize else "stt_close_failed",
+                "finish" if finalize else "close", error, session)
             if self._session is session:
                 self._session = None
             return False
+        finally:
+            if finalize:
+                if self._finalizing_session is session:
+                    self._finalizing_session = None
+                if self.debug is not None:
+                    self.debug.emit("stt", "finish_ended", segmentId=segment_id,
+                        operation="finish", finalizing=False)
         if self._session is session:
             self._session = None
         self._debug("stt", "end", active=False, complete=finalize)
@@ -1078,6 +1145,7 @@ class SpeechInputCoordinator:
         self._debug("eou", "end", endpointPending=False)
         await self._playback("speech_activity", active=False)
         await self._close_stt()
+        self._acoustics.flush()
         self._active = False
         self._speech_frames = 0
         self._silence_frames = 0

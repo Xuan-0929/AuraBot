@@ -3,6 +3,8 @@
 RealtimeHub owns this synchronous recorder; frozen profile scopes are shared with
 Runtime and Speech. Scalar allowlists exclude provider payloads and secrets, while
 capture and process identities make polling, clears, and restarts unambiguous.
+AcousticWindow aggregates scalar frame facts on the existing microphone task;
+capture epochs fence partial windows across clears and enable/disable transitions.
 """
 from __future__ import annotations
 
@@ -12,6 +14,7 @@ import time
 import uuid
 from collections import deque
 from dataclasses import dataclass
+from collections.abc import Callable
 from typing import Any
 
 STAGES = frozenset({"connection", "input", "stt", "eou", "model", "tts", "playback", "system"})
@@ -24,6 +27,12 @@ DETAILS = frozenset({
     "silent", "accepted", "complete", "sentSamples", "consumedSamples", "queuedClauses",
     "hasTranscript", "endpointPending", "speechCandidate", "confirmedSpeech", "revision",
     "prepareCount", "firstAudio", "audioFinished", "inputActive", "workState", "status",
+    "windowMs", "windowFrames", "vadPassFrames", "rmsPassFrames", "qualifiedFrames",
+    "maxQualifiedRunMs", "rmsMin", "rmsMax", "thresholdMin", "thresholdMax", "maxConfirmMs",
+    "resetRmsCount", "resetVadCount", "resetBothCount", "resetUnavailableCount",
+    "lastResetReason", "lastResetFromMs", "partial", "vadStatus", "vadReason",
+    "vadWarmupFrames", "vadUnavailableFrames", "vadErrorFrames", "vadThreshold",
+    "operation", "finalizing", "exceptionType",
 })
 IDENTITIES = frozenset({"segmentId", "inputId", "invokeId", "sayId", "clauseId"})
 
@@ -79,20 +88,25 @@ class DebugRecorder:
         self.state: dict[str, dict[str, Any]] = {}
         self.samples: dict[str, float] = {}
         self.scope = DebugScope(self, None, 0, 0)
+        self.epoch = 0
 
     def bind(self, profile_id: str | None, generation: int, revision: int) -> DebugScope:
+        self.epoch += 1
         self.scope = DebugScope(self, profile_id, generation, revision)
         self.state.clear()
         self.samples.clear()
         return self.scope
 
     def clear(self, capture_id: str) -> None:
+        self.epoch += 1
         self.capture_id = capture_id
         self.events.clear()
         self.bytes = self.dropped = 0
         self.samples.clear()
 
     def configure(self, enabled: bool, capture_id: str) -> None:
+        if enabled != self.enabled:
+            self.epoch += 1
         if capture_id != self.capture_id:
             self.clear(capture_id)
         self.enabled = enabled
@@ -152,3 +166,89 @@ class DebugRecorder:
         return {"instanceId": self.instance_id, "captureId": self.capture_id, "cursor": self.cursor,
             "events": events, "dropped": self.dropped + int(restarted),
             "state": {stage: state.copy() for stage, state in self.state.items()}, "enabled": self.enabled}
+
+
+class AcousticWindow:
+    """Observe frame decisions with constant memory and no scheduling or audio retention."""
+
+    def __init__(self, scope: DebugScope | None, clock: Callable[[], float]) -> None:
+        self.scope, self.clock = scope, clock
+        self.epoch = -1
+        self.started: float | None = None
+        self.stats: dict[str, Any] = {}
+        self.last: dict[str, Any] = {}
+        self.run_ms = 0
+        self.vad_state: tuple[str, str | None] | None = None
+
+    def _current(self) -> bool:
+        scope = self.scope
+        if scope is None or not scope.enabled or self.epoch != scope.recorder.epoch:
+            self.started, self.stats, self.last, self.run_ms = None, {}, {}, 0
+            self.vad_state = None
+            self.epoch = scope.recorder.epoch if scope is not None else -1
+        return scope is not None and scope.enabled
+
+    def observe(self, *, frame_ms: int, before_confirm_ms: int, was_active: bool,
+                **facts: Any) -> None:
+        if not self._current():
+            return
+        now = self.clock()
+        if self.started is None:
+            self.started = now
+        if not self.stats:
+            self.stats = dict.fromkeys(("windowFrames", "vadPassFrames", "rmsPassFrames",
+                "qualifiedFrames", "maxQualifiedRunMs", "maxConfirmMs", "resetRmsCount",
+                "resetVadCount", "resetBothCount", "resetUnavailableCount", "vadWarmupFrames",
+                "vadUnavailableFrames", "vadErrorFrames"), 0)
+            self.stats.update(rmsMin=facts["rms"], rmsMax=facts["rms"],
+                thresholdMin=facts["threshold"], thresholdMax=facts["threshold"],
+                lastResetReason=None, lastResetFromMs=None)
+        stats = self.stats
+        vad = facts["vad"]
+        vad_pass = vad is not None and vad >= facts["vadThreshold"]
+        rms_pass = facts["rms"] >= facts["threshold"]
+        qualified = vad_pass and rms_pass
+        stats["windowFrames"] += 1
+        stats["vadPassFrames"] += int(vad_pass)
+        stats["rmsPassFrames"] += int(rms_pass)
+        stats["qualifiedFrames"] += int(qualified)
+        self.run_ms = self.run_ms + frame_ms if qualified else 0
+        stats["maxQualifiedRunMs"] = max(stats["maxQualifiedRunMs"], self.run_ms)
+        stats["maxConfirmMs"] = max(stats["maxConfirmMs"], facts["confirmMs"])
+        for key in ("rms", "threshold"):
+            stats[key + "Min"] = min(stats[key + "Min"], facts[key])
+            stats[key + "Max"] = max(stats[key + "Max"], facts[key])
+        if not was_active and before_confirm_ms > 0 and facts["confirmMs"] == 0:
+            if vad is None:
+                field, reason = "resetUnavailableCount", "vad_unavailable"
+            elif vad_pass:
+                field, reason = "resetRmsCount", "rms_below_threshold"
+            elif rms_pass:
+                field, reason = "resetVadCount", "vad_below_threshold"
+            else:
+                field, reason = "resetBothCount", "both_below_threshold"
+            stats[field] += 1
+            stats.update(lastResetReason=reason, lastResetFromMs=before_confirm_ms)
+        status = facts["vadStatus"]
+        field = {"warming_up": "vadWarmupFrames", "unavailable": "vadUnavailableFrames",
+                 "inference_failed": "vadErrorFrames"}.get(status)
+        if field:
+            stats[field] += 1
+        state = (status, facts["vadReason"])
+        if state != self.vad_state:
+            self.vad_state = state
+            self.scope.emit("input", "vad_status", vadStatus=status, vadReason=state[1],
+                segmentId=facts.get("segmentId"),
+                level="warning" if field and status != "warming_up" else "info")
+        self.last = facts
+        if now - self.started >= .5:
+            self.flush(partial=False)
+
+    def flush(self, *, partial: bool = True) -> None:
+        if not self._current() or not self.stats:
+            return
+        now = self.clock()
+        self.scope.emit("input", "acoustics", **self.last, **self.stats,
+            windowMs=max(0.0, (now - self.started) * 1000), partial=partial)
+        self.started = None if partial else now
+        self.stats, self.last, self.run_ms = {}, {}, 0

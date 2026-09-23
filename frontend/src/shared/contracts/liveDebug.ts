@@ -1,6 +1,7 @@
 /** Defines the opt-in diagnostic boundary shared by Pet, Main and the debug window.
  * Only approved scalar facts cross IPC; byte/count caps apply before caching, displaying or logging.
- * Source sequence preserves local order; Main assigns id for its merged, bounded timeline. */
+ * Source sequence preserves local order; Main assigns id for its merged, bounded timeline.
+ * Acoustic window counters and STT teardown facts pass the same scalar whitelist into disk and UI. */
 export type DebugScalar = string | number | boolean | null;
 export type DebugState = Record<string, Record<string, DebugScalar>>;
 export interface LiveDebugEvent {
@@ -33,6 +34,9 @@ const fields=new Set(`state enabled voiceEnabled code reason errorType text stab
  contextState playbackBlocked hasClause started role micSentFrames micDroppedFrames micSentSamples micDroppedSamples receivedSamples
  accepting queuedFrames speech confirmTargetMs silenceTargetMs timeoutMs incomplete pending running queuedClauses hasTranscript endpointPending speechCandidate confirmedSpeech prepareCount firstAudio timestamp
  exceptionType partial stableText mutableText kind eventKind stability consumed sentBytes receivedBytes microphoneState
+ windowMs windowFrames vadPassFrames rmsPassFrames qualifiedFrames maxQualifiedRunMs rmsMin rmsMax thresholdMin thresholdMax maxConfirmMs
+ resetRmsCount resetVadCount resetBothCount resetUnavailableCount lastResetReason lastResetFromMs
+ vadStatus vadReason vadWarmupFrames vadUnavailableFrames vadErrorFrames operation finalizing
  backendOnline connectionState recording truncation error droppedEvents instanceId source`.split(/\s+/));
 const encoder=new TextEncoder();
 export const debugByteLength=(value:unknown):number=>encoder.encode(JSON.stringify(value)).byteLength;

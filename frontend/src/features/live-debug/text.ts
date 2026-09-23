@@ -1,6 +1,7 @@
 /** Localizes the independent Live debug window and its immediate settings controls.
  * Shared keys keep status, stage and structured field labels consistent across zh/en/ja;
- * field labels and inspector controls format existing telemetry without changing its wire contract; unknown keys stay inspectable. */
+ * field labels include acoustic windows, VAD readiness and STT teardown context;
+ * inspector controls leave unknown keys inspectable without altering telemetry values. */
 const en = {
  title:'Live voice debug', toggle:'Live voice debug mode', hint:'Takes effect immediately. Logs save recognized speech and replies on this computer.',
  open:'Open debug window', clear:'Clear debug logs', folder:'Open log directory', autoScroll:'Follow latest', enabled:'Capturing', disabled:'Capture off',
@@ -113,6 +114,30 @@ eouThreshold|EOU threshold|EOU 门限|EOU しきい値
 speechMs|Speech duration|讲话时长|発話時間
 silenceMs|Silence duration|静音时长|無音時間
 confirmMs|Confirmation duration|连续确认时长|確認時間
+windowMs|Window duration|窗口时长|ウィンドウ時間
+windowFrames|Window frames|窗口帧数|ウィンドウフレーム数
+vadPassFrames|VAD passing frames|VAD 达标帧数|VAD 判定通過フレーム数
+rmsPassFrames|RMS passing frames|音量达标帧数|音量判定通過フレーム数
+qualifiedFrames|Jointly passing frames|共同达标帧数|両方の判定通過フレーム数
+maxQualifiedRunMs|Longest passing run in window|窗口内最长连续达标时长|ウィンドウ内最長連続通過時間
+maxConfirmMs|Peak confirmation duration|窗口内最大确认时长|最大確認時間
+rmsMin|Minimum RMS|最低 RMS|最小 RMS
+rmsMax|Maximum RMS|最高 RMS|最大 RMS
+thresholdMin|Minimum volume threshold|最低音量门槛|最小音量しきい値
+thresholdMax|Maximum volume threshold|最高音量门槛|最大音量しきい値
+resetRmsCount|RMS resets|音量不足清零次数|音量不足リセット回数
+resetVadCount|VAD resets|VAD 不足清零次数|VAD 不足リセット回数
+resetBothCount|Joint failure resets|两者不足清零次数|両方不足リセット回数
+resetUnavailableCount|Unavailable VAD resets|VAD 无结果清零次数|VAD 結果なしリセット回数
+lastResetReason|Last reset reason|最后清零原因|最後のリセット理由
+lastResetFromMs|Confirmation lost on last reset|最后清零前确认时长|最後に失われた確認時間
+vadStatus|VAD status|VAD 状态|VAD 状態
+vadReason|VAD status reason|VAD 状态原因|VAD 状態の理由
+vadWarmupFrames|VAD warmup frames|VAD 预热帧数|VAD ウォームアップフレーム数
+vadUnavailableFrames|VAD unavailable frames|VAD 不可用帧数|VAD 利用不可フレーム数
+vadErrorFrames|VAD error frames|VAD 推理错误帧数|VAD 推論エラーフレーム数
+operation|Operation|操作|操作
+finalizing|Finalizing STT session|正在收尾转写会话|音声認識終了処理中
 commandId|Command ID|命令标识|コマンド ID
 commandType|Command type|命令类型|コマンド種類
 revision|Revision|版本|リビジョン
@@ -170,7 +195,7 @@ speechCandidate|Speech candidate|候选讲话|発話候補
 confirmedSpeech|Confirmed speech|已确认讲话|発話確認済み
 prepareCount|Preparation count|准备次数|準備回数
 firstAudio|First audio|首包音频|最初の音声
-partial|Partial transcript|中间转写|暫定認識
+partial|Partial|部分|部分
 kind|Kind|类型|種類
 eventKind|Event kind|事件类型|イベント種類
 stability|Stability|稳定性|安定度

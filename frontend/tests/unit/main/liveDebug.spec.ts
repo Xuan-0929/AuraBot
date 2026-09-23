@@ -1,5 +1,6 @@
 /** Exercises immediate debug settings, bounded diagnostics, and real rotating files.
- * Main's collector is tested with an injected HTTP boundary, never a second voice connection. */
+ * Main's collector is tested with an injected HTTP boundary, including acoustic windows
+ * surviving sanitization and disk writes, never a second voice connection. */
 import { mkdtempSync, mkdirSync, readFileSync, readdirSync, rmSync, writeFileSync, statSync } from 'node:fs';
 import { join } from 'node:path';
 import { tmpdir } from 'node:os';
@@ -11,6 +12,32 @@ const roots:string[]=[];
 const root=()=>{const path=mkdtempSync(join(tmpdir(),'aura-debug-'));roots.push(path);return path;};
 afterEach(()=>{vi.useRealTimers();for(const path of roots.splice(0))rmSync(path,{recursive:true,force:true});});
 const event=(seq:number,captureId='capture'):LiveDebugEvent=>({source:'pet',seq,instanceId:'pet-instance',captureId,timestamp:Date.now(),stage:'capture',name:'mic.stats',level:'info',profileId:'p',generation:1,details:{sent:seq}});
+
+it('preserves acoustic window and teardown facts from backend polling to JSONL',async()=>{
+ const details={windowMs:501,windowFrames:25,vadPassFrames:22,rmsPassFrames:17,qualifiedFrames:16,
+  maxQualifiedRunMs:160,rmsMin:.000031,rmsMax:.041234,thresholdMin:.02,thresholdMax:.023,
+  maxConfirmMs:240,confirmMs:0,resetRmsCount:3,resetVadCount:1,resetBothCount:0,resetUnavailableCount:0,
+  lastResetReason:'rms_below_threshold',lastResetFromMs:240,partial:false,vadStatus:'ready',vadReason:null,
+  vadWarmupFrames:1,vadUnavailableFrames:0,vadErrorFrames:0,operation:'send_audio',finalizing:true,
+  endpointPending:true,exceptionType:'RuntimeError'};
+ let capture='';
+ const service=new LiveDebugService(root(),async(path,init)=>{
+  if(path.endsWith('/configure')){
+   const body=JSON.parse(String(init?.body));capture=body.captureId;
+   return {instanceId:'backend',captureId:capture,cursor:0,events:[],state:{},dropped:0,enabled:body.enabled};
+  }
+  return {instanceId:'backend',captureId:capture,cursor:1,events:[{...event(1,capture),source:'backend',instanceId:'backend',
+   stage:'input',name:'acoustics',details:{...details,api_key:'secret',pcm:'private audio'}}],state:{},dropped:0,enabled:true};
+ },()=>{},()=>{});
+ service.setIdentity({profileId:'p',generation:1,configRevision:1});
+ try{
+  await service.setEnabled(true);service.setOnline(true);
+  await vi.waitFor(()=>expect(service.snapshot().events.some(e=>e.name==='acoustics')).toBe(true));
+  await service.flush();
+  const lines=readFileSync(join(service.snapshot().logDirectory,'live-debug.jsonl'),'utf8').trim().split('\n').map(line=>JSON.parse(line));
+  expect(lines.find(e=>e.name==='acoustics').details).toEqual(details);
+ }finally{service.setOnline(false);await service.shutdown();}
+});
 
 it('updates only the debug preference without applying pending settings or accepting stale drafts',()=>{
  const path=root(), config=new DesktopConfigStore(path,path);config.markApplied(config.snapshot());
