@@ -3,6 +3,7 @@
 The suite protects mode/grant exposure, the incremental text/avatar say parser, effect grouping, fencing,
 say-first execution before the provider finishes later tools, and detached Observation callbacks. Removed schema self-validation, motion tokens,
 alternate provider event dialects, private caches, and thread-based limiter internals are not tested.
+Debug milestones distinguish decoded SAY text, safe clause release, and authorization before execution.
 """
 
 from __future__ import annotations
@@ -20,6 +21,7 @@ from backend.main_agent.tool_runtime import (
     ToolSurfacePolicy,
 )
 from backend.main_agent.tool_runtime.stream import ToolCallAssembler, segment_say_text
+from backend.main_agent.debug import DebugRecorder
 
 
 def chunks(*calls: tuple[int, str, str, str]) -> AsyncIterator[dict[str, Any]]:
@@ -103,6 +105,28 @@ class StreamingParserTests(unittest.TestCase):
 
 
 class ToolHarnessTests(unittest.IsolatedAsyncioTestCase):
+    async def test_say_debug_milestones_precede_execution(self):
+        recorder = DebugRecorder()
+        debug = recorder.bind("profile", 1, 1)
+        recorder.configure(True, "capture")
+        async def execute(call):
+            self.assertEqual(recorder.snapshot()["events"][-1]["name"], "say.authorized")
+        async def stream():
+            async for chunk in chunks((0, "say", "say_to_user", '{"text":"能听到')):
+                yield chunk
+            names = [e["name"] for e in recorder.snapshot()["events"]]
+            self.assertIn("say.first_text", names)
+            self.assertNotIn("say.clause_ready", names)
+            async for chunk in chunks((0, "say", "say_to_user", '。"}')):
+                yield chunk
+        harness = ToolHarness(self.policy, {"say_to_user": execute}, state_provider=self.fence)
+        await harness.run(stream(), invoke_id="invoke", tool_surface=self.surface, debug=debug)
+        events = recorder.snapshot()["events"]
+        self.assertEqual([e["name"] for e in events], ["first_tool_delta", "say.first_text", "say.clause_ready", "say.authorized"])
+        self.assertEqual(events[-2]["details"]["flushReason"], "hard_punctuation")
+        self.assertEqual(events[-2]["details"]["charCount"], 4)
+        self.assertTrue(all(e["invokeId"] == "invoke" for e in events))
+
     def setUp(self) -> None:
         self.policy = ToolSurfacePolicy(
             workspace_ids=("repo",), observation_tools=("web_search",),

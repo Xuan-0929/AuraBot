@@ -11,6 +11,7 @@
  * numeric/boolean audio settings to backend diagnostics; device identifiers remain local.
  * Opt-in scalar debug events observe these existing boundaries, sampling PCM on existing messages only;
  * capture/session fences and isolated callbacks keep diagnostics independent of voice and durable ACKs.
+ * Recognition failures use the existing public error channel to request a repeat of unconfirmed speech.
  */
 
 import type { DebugScalar, LiveDebugEvent } from "../shared/contracts/liveDebug";
@@ -582,6 +583,7 @@ export function publicError(code:string,language:DisplayLanguage="zh"):string {
   const messages:Record<string,string>={
     text_model_unavailable:"Main Agent 模型尚未配置，请在设置中保存并应用。",
     main_model_error:"Main Agent 请求失败，请检查模型配置和网络后重试。",
+    stt_transcription_failed:language==="zh"?"这句话没有识别完整，请再说一遍。":"Speech recognition did not complete. Please say that again.",
     runtime_unavailable:"Backend 尚未就绪，请稍后重试。",
     backend_restarting:"正在应用配置，请等待 Backend 重新就绪。"
   };

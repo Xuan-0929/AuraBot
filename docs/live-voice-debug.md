@@ -42,6 +42,31 @@ flowchart LR
 
 ## 实现约束
 
+### 首音延迟的细分事件
+
+模型阶段新增以下事件，沿同一个 `inputId`、`invokeId`、`sayId` 关联：
+
+```mermaid
+flowchart LR
+  A[provider.request_started] --> B[first_chunk]
+  B --> C[first_tool_delta]
+  C --> D[say.first_text]
+  D --> E[say.clause_ready]
+  E --> F[say.authorized]
+  F --> G[tts queued / first_audio]
+  G --> H[devicePlayback.physical.started]
+```
+
+`provider.request_started` 包含实际请求的 `modelName`；`first_chunk` 仍是已有的首个解析后 SSE 数据块。`say.first_text` 表示增量解析出首段非空 SAY 文本，尚不代表授权交付。`say.clause_ready` 表示该分句已满足工具身份与顺序要求、即将检查执行权限；`say.authorized` 位于权限检查之后、交付调用之前。多个事件可以来自同一个 SSE 数据块，不应据此推算服务端逐 token 时间。
+
+分句事件记录 `charCount` 和 `flushReason`：`hard_punctuation`、`soft_boundary`、`length_limit`、`object_closed`。现有 24/80 字符阈值保持不变。SAY 事件的 `elapsedMs` 起点是本次 Harness 开始消费流；跨阶段比较优先使用同一调用内事件差值，不把首 SSE 到首分句的全部时间称作分句等待。
+
+STT 正常收尾先停止接收新发送并等待在途发送，再等待最终回调；正常完成预算暂为 1 秒，取消清理仍为 250ms。`finish_ended.elapsedMs` 用于后续真机校准。收尾或提交期间新到的讲话会等待当前端点结算，再开始新 segment；现有麦克风队列保留最多 50 帧，复测时仍需检查 `droppedFrames`，尤其是极慢服务与连续插话场景。
+
+STT 失败会使当前未确认输入失效，并通过现有错误通道提示重说；不拿 partial 执行操作。底层 SDK 阻塞线程不能被 Python 强制停止，超时后仍由唯一 stop 任务持有；迟到转写被隔离，不启动第二个并行 stop。
+
+本轮模型提示词实验要求首句短、完整、带句末标点；耗时读取前在同一调用说明具体下一步，简单聊天优先利用现有上下文。它不保证模型必定遵循，也不代表已经测得首音改善。建议用相同模型配置复测问候、自我介绍、读取任务、拒绝恢复任务和连续插话，分别记录有效确认、实质答案及失败次数。TTS 预合成和模型配置调整留待新日志提供依据。
+
 诊断是观测层，不修改 VAD/EOU 阈值、语音打断、TTS 背压或 ACK 次序。后端没有新增常驻采集任务，声学和音频计数最多每 500ms 汇总一次。Main 使用不重叠的 HTTP 请求，不占用语音 WebSocket 发送锁。关闭采集后不读取事件；若停用控制请求暂时失败，只重试停用同步。
 
 Main 为合并时间线分配 `id`；事件保留来源进程、序号、采集批次、Profile、generation 和关联分句／调用身份。阶段耗时由同一进程的单调时钟计算，不跨进程相减。清除和会话替换会撤销旧身份，迟到数据不能恢复已清除历史。

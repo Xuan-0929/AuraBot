@@ -5,6 +5,7 @@ Runtime and Speech. Scalar allowlists exclude provider payloads and secrets, whi
 capture and process identities make polling, clears, and restarts unambiguous.
 AcousticWindow aggregates scalar frame facts on the existing microphone task;
 capture epochs fence partial windows across clears and enable/disable transitions.
+Speech-stream milestones admit only model names, character counts and flush reasons, never raw deltas.
 """
 from __future__ import annotations
 
@@ -33,6 +34,7 @@ DETAILS = frozenset({
     "lastResetReason", "lastResetFromMs", "partial", "vadStatus", "vadReason",
     "vadWarmupFrames", "vadUnavailableFrames", "vadErrorFrames", "vadThreshold",
     "operation", "finalizing", "exceptionType",
+    "charCount", "flushReason", "modelName",
 })
 IDENTITIES = frozenset({"segmentId", "inputId", "invokeId", "sayId", "clauseId"})
 

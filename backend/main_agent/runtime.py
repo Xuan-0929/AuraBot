@@ -10,6 +10,8 @@ success and never retires the newer causal scope.
 Frozen Hub diagnostic scopes record opt-in control timing and content-free tool receipts.
 Harness settlements retain content-free receipt counters for backend diagnostics. No say_to_user means
 intentional silence; tool rejections and discarded ordinary content do not become frontend debug errors.
+Failed STT segments replace uncertain context with a failure marker and retire their causal authority;
+the existing error listener asks the user to retry without admitting a response from partial text.
 """
 
 from __future__ import annotations
@@ -460,6 +462,31 @@ class MainAgentRuntime:
             self._confirmed_speech = False
             self._resume_pending_proposals_locked()
             self._resume_memory_idle_locked()
+
+    async def speech_input_failed(self, segment_id: str | None, *, has_transcript: bool = True) -> None:
+        """Retire failed recognition without letting its partial text authorize a later action."""
+        async with self._lock:
+            if self._shutdown or not self.accepting:
+                return
+            active = self._active_input
+            if has_transcript and active is not None and not any(s.segment_id == segment_id for s in active.segments):
+                return
+            if not has_transcript and not (self._confirmed_speech or self._speech_candidate):
+                return
+            if self._active_invoke is not None:
+                self.harness.cancel(self._active_invoke.request.invoke_id)
+            if active is not None and has_transcript:
+                self.context_store.append_event("user_segment", {
+                    "segment_id": segment_id, "input_id": active.input_id,
+                    "text": "[语音识别失败：本段内容未确认，请用户重说。]",
+                })
+                self.context_store.append_event("think_note", {"text": ""})
+                self._context_changed_locked(refresh_grant=False)
+            self._retire_sealed_input_locked()
+            self._user_speaking = self._speech_candidate = self._confirmed_speech = False
+            self._resume_memory_idle_locked()
+        if self.error_listener is not None:
+            await self.error_listener("stt_transcription_failed")
 
     async def eou_incomplete(self) -> bool:
         """Settle response-class work, revoke its grant, then admit only high-priority PREPARE."""
@@ -1006,6 +1033,7 @@ class MainAgentRuntime:
                         self._provider_chunks(request),
                         invoke_id=request.invoke_id,
                         tool_surface=request.tool_surface,
+                        debug=request.debug_scope,
                     )
                     await self._report_settlement(request)
                 finally:

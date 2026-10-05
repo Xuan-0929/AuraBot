@@ -5,6 +5,7 @@ Observation continuation, seal-time retirement, non-cancellable new-input archiv
 retry, bounded real Snapshots, and physical Renderer ACK through public Runtime behavior.
 No-say invocations remain silent; tool receipts are retained only in content-free backend diagnostics.
 Public SAY segmentation checks preserve mixed-language whitespace and enforce Unicode code-point limits.
+Recognition failure retires uncertain input and prevents it leaking into the next request's context.
 """
 
 from __future__ import annotations
@@ -369,6 +370,37 @@ class ConversationMemoryLifecycleTests(RuntimeTestCase):
 
 
 class ActiveInputAndSchedulingTests(RuntimeTestCase):
+    async def test_stt_start_failure_after_previous_input_is_visible(self):
+        runtime = self.runtime(ScriptedProvider())
+        from unittest.mock import AsyncMock
+        runtime.error_listener = AsyncMock()
+        await runtime.update_transcript("previous words", segment_id="previous", request_prepare=False)
+        await runtime.confirm_speech()
+        await runtime.speech_input_failed("new", has_transcript=False)
+        self.assertIsNone(runtime.active_input)
+        runtime.error_listener.assert_awaited_once_with("stt_transcription_failed")
+
+    async def test_failed_speech_retires_partial_and_fences_late_failure(self):
+        runtime = self.runtime(ScriptedProvider())
+        errors = []
+        async def report(code):
+            errors.append(code)
+        runtime.error_listener = report
+        await runtime.update_transcript("uncertain command", segment_id="old", request_prepare=False)
+        self.store.append_event("think_note", {"text": "act on uncertain command"})
+        old_id = runtime.active_input.input_id
+        await runtime.speech_input_failed("old")
+        self.assertIsNone(runtime.active_input)
+        self.assertIsNone(runtime.pending_trigger)
+        self.assertNotIn("uncertain command", str(self.store.fold().conversation_turns))
+        self.assertFalse(self.store.fold().think_note)
+        await runtime.update_transcript("new words", segment_id="new", request_prepare=False)
+        self.assertNotEqual(runtime.active_input.input_id, old_id)
+        await runtime.speech_input_failed("old")
+        self.assertEqual(runtime.active_input.latest_transcript, "new words")
+        self.assertEqual(errors, ["stt_transcription_failed"])
+
+
     async def test_stable_segment_replaces_in_place_and_new_utterance_appends(self) -> None:
         runtime = self.runtime(ScriptedProvider())
         await runtime.update_transcript("我想", segment_id="seg-1", request_prepare=False)

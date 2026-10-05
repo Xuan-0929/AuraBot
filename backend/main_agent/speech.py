@@ -20,6 +20,8 @@ Delivery explicitly closes synthesis when playback-credit waits are cancelled, j
 Hub-owned frozen diagnostic scopes observe 500 ms acoustic windows, VAD readiness and
 session-specific STT finalization alongside EOU/TTS transitions synchronously;
 they never retain audio, provider payloads, exceptions, or add workers to the speech pipeline.
+STT sends and finalization share one coordinator lock; the adapter serializes actual SDK calls and
+owns one stop task even after timeout. Failed recognition retires Runtime input instead of using partials.
 """
 
 # Acoustic edges are sent to RealtimeHub independently of STT confirmation and Smart Turn completion.
@@ -55,6 +57,8 @@ SPEECH_PREPARATION_ERRORS = frozenset({
 
 TranscriptSink = Callable[["TranscriptUpdate"], Awaitable[None]]
 _CLEANUP_TIMEOUT_SECONDS = 0.25
+# Initial bounded budget for final network callbacks; tune with finish_ended elapsedMs on real devices.
+_STT_FINISH_TIMEOUT_SECONDS = 1.0
 MAX_TTS_SPOOL_BYTES = 24_000 * 2 * 120
 
 
@@ -124,6 +128,22 @@ class _DashScopeSttSession:
         self._sink_lock = asyncio.Lock()
         self._failure_task: asyncio.Task[None] | None = None
         self._close_task: asyncio.Task[None] | None = None
+        self._ending = False
+        self._io_lock = Lock()
+        self._stop_task: asyncio.Task[None] | None = None
+
+    def _transport_call(self, method: Callable[..., Any], *args: Any) -> None:
+        # Cancelling to_thread does not stop its thread. Serialize the actual SDK operations here.
+        with self._io_lock:
+            method(*args)
+
+    async def _stop(self, timeout: float) -> None:
+        self._ending = True
+        if self._stop_task is None:
+            self._stop_task = self._owner_loop.create_task(
+                asyncio.to_thread(self._transport_call, self._transport.stop))
+            self._stop_task.add_done_callback(lambda task: task.exception() if not task.cancelled() else None)
+        await asyncio.wait_for(asyncio.shield(self._stop_task), timeout)
 
     def provider_event(self, event: Any) -> None:
         """Accept an SDK-thread event only for this still-open session generation."""
@@ -181,29 +201,28 @@ class _DashScopeSttSession:
         if self._sink_tasks:
             await asyncio.gather(*tuple(self._sink_tasks), return_exceptions=True)
         try:
-            await asyncio.wait_for(
-                asyncio.to_thread(self._transport.stop),
-                _CLEANUP_TIMEOUT_SECONDS,
-            )
+            await self._stop(_CLEANUP_TIMEOUT_SECONDS)
         except BaseException:
             pass
 
     async def send_audio(self, pcm16le: bytes) -> None:
-        if self._closed:
+        if self._closed or self._ending:
             raise RuntimeError("STT session is closed")
         if not isinstance(pcm16le, bytes) or not pcm16le:
             raise ValueError("STT audio must be non-empty bytes")
-        await asyncio.to_thread(self._transport.send_audio_frame, pcm16le)
+        await asyncio.to_thread(self._transport_call, self._transport.send_audio_frame, pcm16le)
 
     async def finish(self) -> None:
         """Flush provider-final transcription, then drain its callbacks before sealing this turn."""
         if self._closed:
             await self.close()
-            return
+            raise RuntimeError("STT session is closed")
         try:
-            await asyncio.wait_for(asyncio.to_thread(self._transport.stop), _CLEANUP_TIMEOUT_SECONDS)
+            await self._stop(_STT_FINISH_TIMEOUT_SECONDS)
             # SDK-thread callbacks are scheduled before stop returns; let their sink tasks enter the set.
             await asyncio.sleep(0)
+            if self._closed:
+                raise RuntimeError("STT finalization was aborted")
             self._closed = True
             if self._sink_tasks:
                 await asyncio.gather(*tuple(self._sink_tasks))
@@ -237,7 +256,7 @@ class _DashScopeSttSession:
         if tasks:
             await asyncio.gather(*tasks, return_exceptions=True)
         try:
-            await asyncio.wait_for(asyncio.to_thread(self._transport.stop), _CLEANUP_TIMEOUT_SECONDS)
+            await self._stop(_CLEANUP_TIMEOUT_SECONDS)
         except Exception:
             pass
 
@@ -722,10 +741,12 @@ class SpeechInputCoordinator:
         self._stop_issued = False
         self._has_transcript = False
         self._session: StreamingSttSession | None = None
+        self._stt_lock = asyncio.Lock()
         self._segment_id: str | None = None
         self._endpoint_task: asyncio.Task[None] | None = None
         self._eou_work: asyncio.Task[Any] | None = None
         self._endpoint_generation = 0
+        self._endpoint_committing = False
         self._closed = False
 
     def _debug(self, stage: str, name: str, **details: Any) -> None:
@@ -778,6 +799,17 @@ class SpeechInputCoordinator:
                     await self._finish_turn()
             return
         speech = probability >= self.vad_threshold and rms >= threshold
+        if self._finalizing_session is not None or self._endpoint_committing:
+            if not speech or self._endpoint_task is None:
+                self._observe_acoustics(probability, rms, threshold, before_confirm_ms, was_active)
+                return
+            # Once stop starts it cannot be undone. Preserve this onset while the bounded finish
+            # settles, then let subsequent queued PCM qualify a fresh segment.
+            await self.wait_for_endpoint()
+            if self._closed:
+                return
+            self.pre_roll.append(pcm16le)
+            self.audio.append(pcm16le)
         self._diagnostic_frames += 1
         if self._diagnostic_frames % 250 == 0:
             speech_logger.info("mic_gate rms=%.4f noise=%.4f threshold=%.4f vad=%.3f active=%s", rms, self._noise_floor, threshold, probability, self._active)
@@ -794,10 +826,13 @@ class SpeechInputCoordinator:
         if self._session is not None:
             session = self._session
             try:
-                await session.send_audio(pcm16le)
+                async with self._stt_lock:
+                    if self._session is session and self._finalizing_session is None:
+                        await session.send_audio(pcm16le)
             except Exception as error:
                 self._stt_error("stt_send_failed", "send_audio", error, session)
-                await self._close_stt()
+                await self._fail_input()
+                return
         if speech:
             if self._stop_issued:
                 await self._cancel_endpoint()
@@ -908,7 +943,7 @@ class SpeechInputCoordinator:
                 await self._session.send_audio(frame)
         except Exception as error:
             self._stt_error("stt_start_failed", operation, error, self._session)
-            await self._close_stt()
+            await self._fail_input()
 
     async def _on_transcript(self, update: TranscriptUpdate, segment_id: str | None) -> None:
         if not self._transcript_current(segment_id) or not update.full_text:
@@ -1034,7 +1069,9 @@ class SpeechInputCoordinator:
 
     async def _finalize_endpoint(self) -> bool:
         """Allow a confirmed utterance to receive its first transcript from provider stop."""
+        self._endpoint_committing = True
         if not await self._close_stt(finalize=True):
+            await self._fail_input()
             return False
         if not self._has_transcript:
             await self._reject_candidate()
@@ -1089,23 +1126,35 @@ class SpeechInputCoordinator:
         if session is None:
             return True
         segment_id = self._segment_id
+        started = self.clock()
         if finalize:
             self._finalizing_session = session
             self._debug("stt", "finish_started", operation="finish", finalizing=True)
         try:
-            if finalize:
-                await asyncio.wait_for(session.finish(), _CLEANUP_TIMEOUT_SECONDS)
-            else:
-                # The adapter bounds transport.stop itself and joins its cancelled callbacks.
-                await session.close()
+            async with self._stt_lock:
+                if self._session is not session:
+                    return True
+                self._session = None
+                try:
+                    if finalize:
+                        await asyncio.wait_for(session.finish(), _STT_FINISH_TIMEOUT_SECONDS)
+                    else:
+                        await session.close()
+                except BaseException:
+                    # Join the adapter's existing stop owner; never launch a competing stop.
+                    await session.close()
+                    raise
         except asyncio.CancelledError:
-            # Service shutdown retries this still-owned session after the mic task has stopped.
+            # Reset/shutdown can join cancellation-safe adapter cleanup on a subsequent close.
+            if self._session is None:
+                self._session = session
             raise
         except Exception as error:
             self._stt_error("stt_finish_failed" if finalize else "stt_close_failed",
                 "finish" if finalize else "close", error, session)
             if self._session is session:
                 self._session = None
+            self._debug("stt", "end", active=False, complete=False)
             return False
         finally:
             if finalize:
@@ -1113,11 +1162,21 @@ class SpeechInputCoordinator:
                     self._finalizing_session = None
                 if self.debug is not None:
                     self.debug.emit("stt", "finish_ended", segmentId=segment_id,
-                        operation="finish", finalizing=False)
+                        operation="finish", finalizing=False, elapsedMs=(self.clock() - started) * 1000)
         if self._session is session:
             self._session = None
         self._debug("stt", "end", active=False, complete=finalize)
         return True
+
+    async def _fail_input(self) -> None:
+        segment_id = self._segment_id
+        self._segment_id = None  # Fence late callbacks before any awaited cleanup.
+        await self._cancel_endpoint()
+        try:
+            await self.runtime.speech_input_failed(segment_id, has_transcript=self._has_transcript)
+        finally:
+            await self._playback("speech_candidate_rejected")
+            await self._finish_turn()
 
     async def _playback(self, method_name: str, **fields: Any) -> None:
         lifecycle = self.playback_lifecycle
@@ -1152,6 +1211,7 @@ class SpeechInputCoordinator:
         self._stop_issued = False
         self._has_transcript = False
         self._segment_id = None
+        self._endpoint_committing = False
         self.pre_roll.clear()
         self.audio.clear()
         if self.vad is not None:

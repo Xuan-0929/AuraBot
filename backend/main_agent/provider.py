@@ -6,6 +6,8 @@ cancellation and shutdown; unavailable credentials remain an offline-safe silent
 endpoints connect directly, while external providers honor the user's HTTP/SOCKS proxy environment.
 The control model decides whether to speak. If it does, say_to_user must be its first tool call so
 the Harness can stream speech early; absence of that tool is a valid silent decision.
+Control guidance favors complete short first sentences and evidence-aware reads; request diagnostics
+record the selected model without credentials or generated reasoning.
 """
 
 from __future__ import annotations
@@ -25,7 +27,10 @@ Decide for yourself whether there is anything worth saying to the user. You do n
 All user-visible language MUST be emitted through the say_to_user tool. If you choose to speak, say_to_user MUST be your FIRST tool call (index 0), before any other tool, so the runtime can parse and deliver its text early.
 If you do not call say_to_user, the runtime interprets that as your decision to remain silent, even if you call other tools. Ordinary assistant content is discarded and never shown to the user.
 PREPARE may only perform safe reads and save at most one think note; it must not speak or perform durable actions.
-RESPOND may answer by calling say_to_user first, or remain silent. Before a slow read it may call say_to_user first with one short Soul-consistent acknowledgement. For a short emotional or greeting micro-turn, if you choose to reply, call say_to_user without search, think notes, or task creation.
+RESPOND should answer direct questions, greetings, introductions and clear refusals from the available context without unnecessary reads or think notes. Remain silent when the user does not need a reply.
+For a request that needs slow reads, use say_to_user first in this same invoke to state the concrete next step briefly, then issue the necessary read. Do not wait through multiple silent tool rounds before acknowledging that request. Do not add a separate acknowledgement invoke or repeat a generic filler.
+Begin spoken replies with a short, complete, useful sentence ending in 。, !, or ?. Do not use only a tilde or emoji as the first sentence boundary. Continue any explanation in later sentences.
+Use supplied task facts for known task state; workspace_list lists files, not tasks. A refusal to resume a known paused task needs no directory read. Cancelling a running task still requires the actual control and its confirmed result.
 CONTINUE must consume returned observations, then decide whether to speak through say_to_user first, start only one necessary safe read, or remain silent.
 Never mix safe-read tools and durable actions in one invoke.
 Never claim a task has started before a committed task fact exists.
@@ -90,6 +95,10 @@ class OpenAICompatibleProvider:
             "tool_choice": "auto",
         }
         try:
+            debug = getattr(request, "debug_scope", None)
+            if debug is not None and debug.enabled:
+                debug.emit("model", "provider.request_started", invokeId=request.invoke_id,
+                    inputId=request.input_id, modelName=self.settings.model_name)
             async with asyncio.timeout(self.settings.timeout_seconds):
                 client = await self._client_owner()
                 async with client.stream(

@@ -3,11 +3,14 @@
 The Harness owns control-invoke single-flight and streams an authorized ``say_to_user`` before staging other
 effects. Safe reads detach under one three-slot asyncio semaphore; Runtime's acceptance/completion hooks own
 dedupe and canonical Observation state. Executors and provider chunks use the single production async shape.
+Frozen debug scopes measure decoded SAY text, eligible clauses and effect authorization on the same
+streaming path, without retaining model payloads or adding tasks.
 """
 
 from __future__ import annotations
 
 import asyncio
+import time
 from collections.abc import AsyncIterable, Callable, Mapping
 from typing import Any
 
@@ -107,6 +110,7 @@ class ToolHarness:
         *,
         invoke_id: str,
         tool_surface: ToolSurface,
+        debug: Any = None,
     ) -> InvokeSettlement:
         if invoke_id in self._cancel:
             return InvokeSettlement(invoke_id, (ToolReceipt("", "invoke", False, "duplicate_invoke"),))
@@ -114,7 +118,7 @@ class ToolHarness:
         self._cancel[invoke_id] = event
         async with self._single_flight:
             try:
-                return await self._consume(chunks, invoke_id, tool_surface, event)
+                return await self._consume(chunks, invoke_id, tool_surface, event, debug)
             finally:
                 self._cancel.pop(invoke_id, None)
                 self._control_tasks.pop(invoke_id, None)
@@ -125,6 +129,7 @@ class ToolHarness:
         invoke_id: str,
         surface: ToolSurface,
         event: asyncio.Event,
+        debug: Any = None,
     ) -> InvokeSettlement:
         parser = ToolCallAssembler()
         streamed: dict[int, int] = {}
@@ -134,6 +139,14 @@ class ToolHarness:
         counts: dict[int, int] = {}
         closed: set[int] = set()
         cancelled_scopes: set[int] = set()
+        first_text: set[int] = set()
+        first_tool = True
+        started = time.monotonic()
+
+        def trace(name: str, **fields: Any) -> None:
+            if debug is not None and debug.enabled:
+                debug.emit("model", name, invokeId=invoke_id, inputId=surface.input_id,
+                    elapsedMs=(time.monotonic() - started) * 1000, **fields)
 
         async def close_say(call_id: str, index: int, cancelled: bool = False) -> None:
             if index not in counts or index in cancelled_scopes or (index in closed and not cancelled):
@@ -154,7 +167,12 @@ class ToolHarness:
             avatar = frozen.get(clause.index, surface.avatar_capabilities.validate(clause.avatar))
             if self.diagnostic_hook is not None and clause.index not in frozen and clause.avatar is not None and clause.avatar != avatar:
                 self.diagnostic_hook("main.avatar.invalid")
-            code = await self._stream_say(clause, invoke_id, surface, event, avatar)
+            reason = ("hard_punctuation" if clause.text[-1:] in "。！？!?；;\n" else
+                      "soft_boundary" if len(clause.text) >= 24 and clause.text[-1:] in "，,、：:—-" else
+                      "length_limit" if len(clause.text) == 80 else "object_closed")
+            trace("say.clause_ready", sayId=f"{invoke_id}:{clause.call_id}",
+                charCount=len(clause.text), flushReason=reason)
+            code = await self._stream_say(clause, invoke_id, surface, event, avatar, trace)
             if code is None:
                 frozen.setdefault(clause.index, avatar)
                 counts[clause.index] = counts.get(clause.index, 0) + 1
@@ -164,7 +182,16 @@ class ToolHarness:
 
         try:
             async for chunk in _until_cancelled(chunks, event):
-                for clause in parser.feed(chunk):
+                clauses = parser.feed(chunk)
+                if parser.calls and first_tool:
+                    trace("first_tool_delta")
+                    first_tool = False
+                for index, partial in parser.calls.items():
+                    stream = partial.say_stream
+                    if stream is not None and stream.decoded and not stream.invalid and index not in first_text:
+                        first_text.add(index)
+                        trace("say.first_text", sayId=f"{invoke_id}:{partial.call_id}", charCount=len(stream.decoded))
+                for clause in clauses:
                     if clause.index in early_codes or not parser.can_stream_say(clause.index, self.policy.max_calls):
                         continue
                     if any(index != clause.index for index in streamed):
@@ -270,12 +297,14 @@ class ToolHarness:
         )
 
     async def _stream_say(
-        self, clause: SayClause, invoke_id: str, surface: ToolSurface, event: asyncio.Event, avatar: Mapping[str, str]
+        self, clause: SayClause, invoke_id: str, surface: ToolSurface, event: asyncio.Event, avatar: Mapping[str, str],
+        trace: Callable[..., None],
     ) -> str | None:
         if "say_to_user" not in surface.names:
             return "tool_not_exposed"
         if code := self._fence_code(EffectClass.SAY, invoke_id, surface, event):
             return code
+        trace("say.authorized", sayId=f"{invoke_id}:{clause.call_id}", charCount=len(clause.text))
         result = await self._execute(
             ToolCall(clause.call_id, "say_to_user", {"text": clause.text}, clause.index, avatar=avatar),
             invoke_id,

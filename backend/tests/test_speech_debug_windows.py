@@ -1,7 +1,7 @@
 """Verify microphone diagnostics through the coordinator and recorder interfaces.
 
 Controlled clocks and PCM frames exercise window accounting, capture isolation and
-STT teardown overlap without cloud providers or changes to production speech rules.
+STT teardown serialization without cloud providers; finalization must exclude new sends.
 """
 import asyncio
 import struct
@@ -149,7 +149,7 @@ class SpeechDebugWindowTests(unittest.IsolatedAsyncioTestCase):
         self.assertEqual(failure["code"], "stt_start_failed")
         self.assertEqual(failure["operation"], "send_audio")
 
-    async def test_stt_send_failure_reports_overlap_with_finish(self):
+    async def test_stt_finish_excludes_new_audio_sends(self):
         entered, release = asyncio.Event(), asyncio.Event()
 
         class Session:
@@ -174,15 +174,12 @@ class SpeechDebugWindowTests(unittest.IsolatedAsyncioTestCase):
         task = asyncio.create_task(self.coordinator._close_stt(finalize=True))
         try:
             await entered.wait()
-            await self.frame(.02)
+            await self.frame(.02, vad=0.0)
         finally:
             release.set()
             await task
         events = self.recorder.snapshot()["events"]
-        failure = next(e for e in events if e["name"] == "error")
-        self.assertEqual(failure["details"]["operation"], "send_audio")
-        self.assertTrue(failure["details"]["finalizing"])
-        self.assertEqual(failure["details"]["exceptionType"], "RuntimeError")
+        self.assertFalse([e for e in events if e["name"] == "error"])
         self.assertNotIn("private provider message", str(events))
         self.assertTrue({"finish_started", "finish_ended"} <= {e["name"] for e in events})
 
