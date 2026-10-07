@@ -2,15 +2,15 @@
  * New installations use app-owned speech assets; existing paths remain authoritative. Forms send redacted configuration with write-only secret replacements; saves are atomic and never
  * change live state. Settings previews expose only the first/last four code points and length-matched
  * bullets; first-run defaults register the installation root and user home, and keep Pi dependencies
- * under that root independently of the source checkout. The immediate live debug flag is Main-owned and
- * changes both saved/applied desktop snapshots without applying other fields or changing backend revision.
+ * under that root independently of the source checkout. Launch options are immutable process state returned alongside settings, never persisted.
+ * Legacy debug preferences are stripped by the schema.
  * Legacy search credentials normalize on read; secrets never leave Main except masked previews.
  */
 import {speechAssetPaths} from './speechAssetManifest';
 import { existsSync, mkdirSync, realpathSync, readFileSync, writeFileSync, renameSync, chmodSync } from 'node:fs';
 import { join, isAbsolute, resolve } from 'node:path';
 import { homedir } from 'node:os';
-import { desktopConfigSchema, type DesktopConfig, type SettingsState } from '../shared/contracts/desktop';
+import { desktopConfigSchema, type DesktopConfig, type SettingsState, type LaunchOptions } from '../shared/contracts/desktop';
 
 const secretPaths = ['chat_model.api_key','task.model.api_key','main_agent.speech.api_key','main_agent.web.api_key'];
 function secretPreview(value:string):string {
@@ -30,7 +30,7 @@ export class DesktopConfigStore {
   online=false;
   error?:string;
   capabilities?:SettingsState["capabilities"];
-  constructor(readonly root:string, projectRoot:string) {
+  constructor(readonly root:string, projectRoot:string, readonly launchOptions:LaunchOptions=Object.freeze({debug:false,lockMemory:false})) {
     root=resolve(root);mkdirSync(root,{recursive:true});root=realpathSync(root);this.root=root;
     this.path=join(root,'settings.json');
     const blankModel={base_url:'',model_name:'',api_key:'',timeout_seconds:60};
@@ -39,7 +39,7 @@ export class DesktopConfigStore {
       main_agent:{profile_dir:'profiles',web:{provider:'tavily',api_key:''},speech:{enabled:false,api_key:'',stt_model_name:'fun-asr-realtime',tts_model_name:'cosyvoice-v3-flash',tts_voice:'longanyang',
         ...speechAssetPaths(root)}},
       memory:{embedding:{provider:'hash',dimension:384}},task:{user_data_dir:root,pi_runtime_dir:join(root,'pi-runtime'),node_executable:process.execPath.includes('Electron')?'node':process.execPath,default_timeout_seconds:1800,model:{...blankModel}}
-    },desktop:{pet:{clickThroughPet:false,displayLanguage:'zh'},systemNotificationsEnabled:true,liveDebugEnabled:false}};
+    },desktop:{pet:{clickThroughPet:false,displayLanguage:'zh'},systemNotificationsEnabled:true}};
     const existing=existsSync(this.path)?JSON.parse(readFileSync(this.path,'utf8')):null;
     this.saved=existing?desktopConfigSchema.parse({...existing,version:2}):defaults;
     // The repository must back up and import v1 persona before the old file is replaced.
@@ -50,14 +50,13 @@ export class DesktopConfigStore {
   current():DesktopConfig { return structuredClone(this.applied??this.saved); }
   publicConfig():DesktopConfig { const value=this.snapshot(); for(const path of secretPaths) access(value,path,''); return value; }
   status():SettingsState {
-    return {config:this.publicConfig(),appliedRevision:this.applied?.revision??null,pending:JSON.stringify(this.saved)!==JSON.stringify(this.applied),
+    return {launchOptions:{...this.launchOptions},config:this.publicConfig(),appliedRevision:this.applied?.revision??null,pending:JSON.stringify(this.saved)!==JSON.stringify(this.applied),
       backendPending:JSON.stringify(this.saved.backend)!==JSON.stringify(this.applied?.backend),online:this.online,capabilities:this.capabilities,error:this.error,
       secretPreviews:Object.fromEntries(secretPaths.map(path=>[path,secretPreview(access(this.saved,path))])),
       secrets:Object.fromEntries(secretPaths.map(path=>[path,Boolean(access(this.saved,path))]))};
   }
   save(input:unknown, clearSecrets:string[]=[]):SettingsState {
     const next=desktopConfigSchema.parse(input);
-    next.desktop.liveDebugEnabled=this.saved.desktop.liveDebugEnabled;
     // Empty redacted fields preserve credentials; clearing requires an explicit named action.
     for(const path of secretPaths) if(!access(next,path)) access(next,path,clearSecrets.includes(path)?'':access(this.saved,path));
     // Storage and runtime installation locations are application-owned, never mutable from a renderer.
@@ -80,15 +79,7 @@ export class DesktopConfigStore {
     try { this.persist(); } catch(error) { this.saved=previous; throw error; }
     return this.status();
   }
-  setLiveDebugEnabled(enabled:boolean):SettingsState {
-    if(typeof enabled!=='boolean')throw new Error('Invalid debug preference');
-    const previous=this.saved;
-    this.saved={...this.saved,desktop:{...this.saved.desktop,liveDebugEnabled:enabled}};
-    try{this.persist();}catch(error){this.saved=previous;throw error;}
-    if(this.applied)this.applied={...this.applied,desktop:{...this.applied.desktop,liveDebugEnabled:enabled}};
-    return this.status();
-  }
-  markApplied(snapshot:DesktopConfig) { this.applied=structuredClone(snapshot);this.applied.desktop.liveDebugEnabled=this.saved.desktop.liveDebugEnabled; this.error=undefined; }
+  markApplied(snapshot:DesktopConfig) { this.applied=structuredClone(snapshot);this.error=undefined; }
   private persist() {
     const temporary=this.path+'.tmp';
     writeFileSync(temporary,JSON.stringify(this.saved,null,2)+'\n',{mode:0o600});

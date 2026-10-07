@@ -6,7 +6,7 @@ and say_to_user clauses cross into desktop history. Text ACKs commit draft deliv
 require completed audio; binary PCM and playback gates remain confined to voice mode. Typed input remains
 available during voice mode, resetting microphone input while preserving spoken delivery. ProfileResources
 is the sole Speech owner; this transport reads it and retires Runtime session state exactly once.
-Opt-in playback diagnostics retain bounded user-visible reply text and recover active clauses from Context."""
+HTTP diagnostics require debug permission fixed at process startup. Opt-in playback diagnostics retain bounded user-visible reply text and recover active clauses from Context."""
 
 # Cumulative source-consumption receipts bound PCM in flight to two seconds; they never commit history.
 
@@ -28,6 +28,7 @@ from pydantic import BaseModel, ConfigDict, Field, field_validator
 from starlette.websockets import WebSocketDisconnect
 
 from .lifecycle import ActiveProfileManager, ProfileResources
+from ..launch_options import MEMORY_FIXTURE
 from .debug import DebugRecorder
 from .metrics import speech_logger
 from ..task.models import TaskStatus
@@ -740,27 +741,46 @@ class DebugConfigureRequest(DebugCaptureRequest):
     enabled: bool = Field(strict=True)
 
 
+def _record_launch_state(request: Request, hub: RealtimeHub, *, emit: bool = False) -> None:
+    options = request.app.state.launch_options
+    details = {**options.public(), "memoryFixture": MEMORY_FIXTURE if options.lock_memory else None}
+    hub.debug.update_state(hub.debug.scope, "system", **details)
+    if emit:
+        hub.debug.scope.emit("system", "launch.options", **details)
+
+
+def _require_debug(request: Request) -> RealtimeHub:
+    hub = _require_origin(request)
+    options = getattr(request.app.state, "launch_options", None)
+    if options is None or not options.debug:
+        raise HTTPException(403, "debug_mode_required")
+    return hub
+
+
 @router.get("/debug/events")
 async def debug_events(request: Request, response: Response, after: int = 0,
                        instanceId: str | None = None, captureId: str | None = None) -> dict[str, Any]:
-    hub = _require_origin(request)
+    hub = _require_debug(request)
     response.headers["Cache-Control"] = "no-store"
+    _record_launch_state(request, hub)
     return hub.debug_snapshot(max(0, after), instanceId, captureId)
 
 
 @router.post("/debug/configure")
 async def debug_configure(body: DebugConfigureRequest, request: Request, response: Response) -> dict[str, Any]:
-    hub = _require_origin(request)
+    hub = _require_debug(request)
     response.headers["Cache-Control"] = "no-store"
     hub.debug.configure(body.enabled, body.captureId)
+    _record_launch_state(request, hub, emit=True)
     return hub.debug_snapshot()
 
 
 @router.post("/debug/clear")
 async def debug_clear(body: DebugCaptureRequest, request: Request, response: Response) -> dict[str, Any]:
-    hub = _require_origin(request)
+    hub = _require_debug(request)
     response.headers["Cache-Control"] = "no-store"
     hub.debug.clear(body.captureId)
+    _record_launch_state(request, hub, emit=True)
     return hub.debug_snapshot()
 
 

@@ -1,6 +1,6 @@
 /** Owns opt-in live diagnostics outside the audio transport.
  * One non-overlapping HTTP poll merges Backend events with Pet IPC, fences capture/identity changes,
- * and publishes bounded UI deltas. A bounded serial file writer owns rotation, clearing and shutdown;
+ * and publishes bounded UI deltas. Each successful handshake records the Backend-confirmed launch mode and fixture. A bounded serial file writer owns rotation, clearing and shutdown;
  * diagnostic network or disk failures never control the live conversation. */
 import { randomUUID } from 'node:crypto';
 import { mkdir, stat, appendFile, rename, rm } from 'node:fs/promises';
@@ -164,7 +164,14 @@ export class LiveDebugService {
       if(clear&&result.enabled!==this.enabled){await this.configure(false);return;}
       if(result.enabled!==this.enabled)throw Error('Debug control not acknowledged');
       this.configured=true;this.backendInstance=result.instanceId;this.cursor=result.cursor;this.backendDropped=result.dropped??0;
-      if(this.enabled)this.mergeState(result.state);this.networkError=undefined;
+      if(this.enabled){
+        this.mergeState(result.state);
+        const mode=sanitizeDebugDetails(result.state?.system);
+        if(typeof mode.debug==='boolean'&&typeof mode.lockMemory==='boolean'){
+          this.local('launch.options',{debug:mode.debug,lockMemory:mode.lockMemory,memoryFixture:mode.memoryFixture??null});
+        }
+      }
+      this.networkError=undefined;
     }catch{if(capture===this.captureId&&epoch===this.onlineEpoch){this.configured=false;this.networkError='debug_backend_unavailable';}}
   }
   private async readBackend():Promise<void> {

@@ -12,6 +12,7 @@ Harness settlements retain content-free receipt counters for backend diagnostics
 intentional silence; tool rejections and discarded ordinary content do not become frontend debug errors.
 Failed STT segments replace uncertain context with a failure marker and retire their causal authority;
 the existing error listener asks the user to retry without admitting a response from partial text.
+Read-only Memory keeps normal recall while suppressing idle timers and archive workers.
 """
 
 from __future__ import annotations
@@ -1363,7 +1364,7 @@ class MainAgentRuntime:
     def _start_memory_idle_locked(self) -> None:
         """Persist confirmed activity and replace only the Profile's idle timer."""
 
-        if self.memory_service is None or self._shutdown or not self.accepting:
+        if self.memory_service is None or getattr(self.memory_service, "read_only", False) or self._shutdown or not self.accepting:
             return
         self.context_store.set_last_user_activity(self.wall_clock())
         self._schedule_memory_idle_locked(self.memory_idle_seconds)
@@ -1373,6 +1374,7 @@ class MainAgentRuntime:
 
         if (
             self.memory_service is None
+            or getattr(self.memory_service, "read_only", False)
             or self._shutdown
             or not self.accepting
             or self._user_speaking
@@ -1440,6 +1442,8 @@ class MainAgentRuntime:
     def _start_memory_archive_locked(self, pending: PendingConversationArchive) -> None:
         """Start the sole sealed-boundary worker, leaving any existing worker untouched."""
 
+        if self.memory_service is None or getattr(self.memory_service, "read_only", False):
+            return
         task = self._memory_archive_task
         if task is not None and not task.done():
             return

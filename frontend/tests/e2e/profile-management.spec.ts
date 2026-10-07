@@ -1,5 +1,5 @@
 /** Drives the real two-tab editor, SOUL files and production Cubism preview in a temporary data root.
- * Checks A/B isolation, stable natural labels, externally edited SOUL, preview teardown and restart.
+ * Checks A/B isolation, stable natural labels, the resident candidate picker, externally edited SOUL, preview teardown and restart.
  * No paid provider, microphone or real user directory participates in this test. */
 import {mkdtempSync,rmSync,readFileSync,existsSync,cpSync,renameSync,writeFileSync} from 'node:fs';
 import {tmpdir} from 'node:os';
@@ -37,7 +37,15 @@ test('Profile workbench edits SOUL and actions without switching, releases previ
   await expect.poll(()=>settings.evaluate(()=>{const canvas=document.querySelector('canvas');if(!canvas)return false;const gl=canvas.getContext('webgl2')??canvas.getContext('webgl');if(!gl)return false;const pixels=new Uint8Array(canvas.width*canvas.height*4);gl.readPixels(0,0,canvas.width,canvas.height,gl.RGBA,gl.UNSIGNED_BYTE,pixels);return pixels.some((value,index)=>index%4===3&&value>0);}),{timeout:20000}).toBe(true);
   const first=settings.locator('.resource-row').first();await first.locator('.resource-choice').click();
   await settings.getByLabel('名称',{exact:true}).fill('测试动作');await settings.getByLabel('允许角色在对话中使用').check();await settings.getByLabel('用途说明').fill('用户通过实际预览确认的测试动作。');
-  await settings.getByRole('tab',{name:'常驻',exact:true}).click();await settings.locator('[data-state=idle] summary').click();await settings.locator('[data-state=idle] input').first().check();await expect(settings.locator('[data-state=idle] input').first()).toBeEnabled();await settings.locator('[data-state=idle] input').nth(1).check();await expect(settings.locator('[data-state=idle] input').nth(1)).toBeEnabled();await settings.locator('[data-state=idle] input').last().check();await expect(settings.locator('[data-state=idle] input').last()).toBeEnabled();await settings.getByRole('tab',{name:'动作',exact:true}).click();
+  await settings.getByRole('tab',{name:'常驻',exact:true}).click();
+  await settings.locator('[data-state=idle]').getByRole('button',{name:t('zh','pAddResident'),exact:true}).click();
+  const picker=settings.getByRole('dialog',{name:t('zh','pSelectCandidates'),exact:true});
+  for(const candidate of [picker.getByRole('checkbox').first(),picker.getByRole('checkbox').nth(1),picker.getByRole('checkbox').last()]){
+   await candidate.check();await expect(candidate).toBeChecked();await expect(candidate).toBeDisabled();
+  }
+  await picker.getByRole('button',{name:t('zh','pDone'),exact:true}).click();
+  await expect(settings.locator('[data-state=idle] .resident-items li')).toHaveCount(3);
+  await settings.getByRole('tab',{name:'动作',exact:true}).click();
   await settings.getByRole('button',{name:'保存',exact:true}).click();await expect(settings.getByText('已保存，待应用',{exact:true})).toBeVisible();
   const saved=(await pet.evaluate(id=>window.aurabot.getProfile(id),b)).saved;const id=Object.keys(saved.adaptor.entries).find(id=>saved.adaptor.entries[id].agent_enabled)!;
   expect(saved.adaptor.schema_version).toBe(2);expect(saved.adaptor.states.idle).toHaveLength(3);expect(saved.adaptor.entries[id].display_name).toBe('测试动作');expect(saved.adaptor.entries[saved.adaptor.states.idle[0]!].playback.mode).toBe('loop');

@@ -1,8 +1,8 @@
 /** Verifies the real Electron settings/debug lifecycle against its isolated Python backend.
  * Observational Pet IPC events exercise the production collector and JSONL writer without
  * microphone, cloud credentials or provider calls. Measured layout, anchored reading, window/socket observations, unsaved drafts,
- * clear fencing and restart persistence cross public desktop interfaces only. */
-import { mkdtempSync, readFileSync, existsSync, rmSync } from 'node:fs';
+ * clear fencing and launch-scoped permission cross public desktop interfaces only. */
+import { mkdtempSync, readFileSync, writeFileSync, existsSync, rmSync } from 'node:fs';
 import { tmpdir } from 'node:os';
 import { dirname, join, resolve } from 'node:path';
 import { fileURLToPath } from 'node:url';
@@ -35,13 +35,13 @@ async function report(pet:Page,name:string,seq:number){
  },{name,seq});
 }
 
-test('debug captures without its window, preserves drafts and clears logs across reopen and app restart',async()=>{
+test('debug captures without its window and ordinary restart ignores legacy debug settings',async()=>{
  const userDataDir=mkdtempSync(join(tmpdir(),'aurabot-live-debug-e2e-'));
  const logPath=join(userDataDir,'logs','live-debug','live-debug.jsonl');
  const logs=()=>existsSync(logPath)?readFileSync(logPath,'utf8'):'';
  const sockets:Array<{page:Page;url:string}>=[];
- const launch=async()=>{
-  const value=await electron.launch({args:[join(appRoot,'out/main/index.js')],cwd:appRoot,env:{...process.env,AURABOT_USER_DATA_DIR:userDataDir}});
+ const launch=async(debug=true)=>{
+  const value=await electron.launch({args:[join(appRoot,'out/main/index.js'),...(debug?['--aurabot-debug']:[])],cwd:appRoot,env:{...process.env,AURABOT_USER_DATA_DIR:userDataDir}});
   value.context().on('page',page=>page.on('websocket',socket=>sockets.push({page,url:socket.url()})));
   return value;
  };
@@ -54,7 +54,9 @@ test('debug captures without its window, preserves drafts and clears logs across
   const model=settings.getByLabel('模型名称',{exact:true}).first();await model.fill('unsaved-debug-draft');
   await settings.getByRole('button',{name:'桌宠状态',exact:true}).click();
   const socketsBefore=sockets.length;
-  const debugOpened=app.waitForEvent('window');await settings.getByLabel('Live 语音 Debug 模式',{exact:true}).check();let debug=await debugOpened;
+  await expect.poll(()=>debugWindows(app!)).toHaveLength(1);let debug=app.windows().find(page=>page.url().endsWith('#live-debug'))!;
+  await expect(settings.locator('[data-debug-settings]')).toBeVisible();
+  await expect(settings.locator('[name=live-debug-enabled]')).toHaveCount(0);
   await expect(debug).toHaveURL(/#live-debug$/);await expect(debug.getByRole('heading',{name:'Live 语音 Debug',exact:true})).toBeVisible();
   await expect.poll(()=>debugWindows(app!)).toEqual([{id:expect.any(Number),size:[1120,760],resizable:true}]);
   const firstId=(await debugWindows(app))[0]!.id;
@@ -88,26 +90,25 @@ test('debug captures without its window, preserves drafts and clears logs across
   await report(pet,'e2e.after-clear',2);await expect.poll(logs).toContain('e2e.after-clear');
   await expect(debug.locator('[data-debug-event]')).toContainText(['e2e.after-clear']);
 
-  await settings.getByRole('button',{name:'桌宠状态',exact:true}).click();await settings.getByLabel('Live 语音 Debug 模式',{exact:true}).uncheck();
-  await expect.poll(()=>debugWindows(app!)).toEqual([]);
-  await expect.poll(async()=>(await pet.evaluate(()=>window.aurabot.getLiveDebugCapture())).enabled).toBe(false);
-  await expect(settings.getByLabel('Live 语音 Debug 模式',{exact:true})).toBeEnabled();
-  const stoppedLog=logs();await report(pet,'e2e.disabled-must-not-record',3);
-  expect(logs()).toBe(stoppedLog);expect((await pet.evaluate(()=>window.aurabot.getLiveDebugState())).events.some(event=>event.name==='e2e.disabled-must-not-record')).toBe(false);
-  await pet.evaluate(()=>window.aurabot.openLiveDebugWindow());expect(await debugWindows(app)).toEqual([]);
-  const enableAgain=app.waitForEvent('window');await settings.getByLabel('Live 语音 Debug 模式',{exact:true}).check();debug=await enableAgain;
-  await expect(debug.getByRole('heading',{name:'Live 语音 Debug',exact:true})).toBeVisible();
-  await expect(settings.getByLabel('Live 语音 Debug 模式',{exact:true})).toBeEnabled();
-  expect((await readiness()).processId).toBe(initial.processId);expect((await readiness()).instanceId).toBe(initial.instanceId);
+  expect((await readiness()).processId).toBe(initial.processId);
   expect(sockets.slice(socketsBefore)).toEqual([]);
   await stop(app);app=undefined;
-
-  app=await launch();pet=await petWindow(app);await ready(pet);
-  await expect.poll(()=>debugWindows(app!)).toHaveLength(1);
-  expect((await pet.evaluate(()=>window.aurabot.getSettings())).config.desktop.liveDebugEnabled).toBe(true);
-  expect((await pet.evaluate(()=>window.aurabot.getLiveDebugCapture())).enabled).toBe(true);
-  await expect(pet.locator('.pet-action-voice')).toHaveAttribute('aria-pressed','false');
-  expect(logs()).not.toContain('e2e.background-observation');expect(logs()).not.toContain('e2e.disabled-must-not-record');
+  const stoppedLog=logs();
+  const speechLog=readFileSync(join(userDataDir,'speech-diagnostics.log'),'utf8');
+  const legacy=JSON.parse(readFileSync(join(userDataDir,'settings.json'),'utf8'));legacy.desktop.liveDebugEnabled=true;
+  writeFileSync(join(userDataDir,'settings.json'),JSON.stringify(legacy));
+  app=await launch(false);pet=await petWindow(app);await ready(pet);
+  expect(await debugWindows(app)).toEqual([]);
+  expect((await pet.evaluate(()=>window.aurabot.getSettings())).launchOptions).toEqual({debug:false,lockMemory:false});
+  expect((await pet.evaluate(()=>window.aurabot.getLiveDebugCapture())).enabled).toBe(false);
+  for(const action of ['openLiveDebugWindow','clearLiveDebugLogs','openLiveDebugLogDirectory'] as const){
+   await expect(pet.evaluate(async action=>{await window.aurabot[action]();},action)).rejects.toThrow('debug_mode_required');
+  }
+  expect(logs()).toBe(stoppedLog);
+  expect(readFileSync(join(userDataDir,'speech-diagnostics.log'),'utf8')).toBe(speechLog);
+  const opened=app.waitForEvent('window');await pet.evaluate(()=>window.aurabot.openSettingsWindow());const normalSettings=await opened;
+  await normalSettings.getByRole('button',{name:'桌宠状态',exact:true}).click();
+  await expect(normalSettings.locator('[data-debug-settings]')).toHaveCount(0);
   expect((await readiness()).instanceId).not.toBe(initial.instanceId);
  }finally{if(app)await stop(app);rmSync(userDataDir,{recursive:true,force:true});}
 });
@@ -115,10 +116,10 @@ test('debug captures without its window, preserves drafts and clears logs across
 
 test('debug gives events real reading space and keeps history stable at all window sizes and languages',async()=>{
  const userDataDir=mkdtempSync(join(tmpdir(),'aurabot-live-debug-layout-'));
- const app=await electron.launch({args:[join(appRoot,'out/main/index.js')],cwd:appRoot,env:{...process.env,AURABOT_USER_DATA_DIR:userDataDir}});
+ const app=await electron.launch({args:[join(appRoot,'out/main/index.js'),'--aurabot-debug'],cwd:appRoot,env:{...process.env,AURABOT_USER_DATA_DIR:userDataDir}});
  try{
   const pet=await petWindow(app);await ready(pet);
-  const opening=app.waitForEvent('window');await pet.evaluate(()=>window.aurabot.setLiveDebugEnabled(true));const page=await opening;
+  await expect.poll(()=>debugWindows(app)).toHaveLength(1);const page=app.windows().find(page=>page.url().endsWith('#live-debug'))!;
   await expect(page.locator('[data-live-debug]')).toBeVisible();
   let revision=100000;
   const makeEvent=(id:number)=>({id,source:'backend',seq:id,instanceId:'layout',captureId:'layout',timestamp:1700000000000+id,stage:'stt',name:`event-${id}`,level:'info',details:{reason:`reason-${id}`,text:`long transcript ${id} `+'完整文字 '.repeat(100)}});
@@ -168,4 +169,30 @@ test('debug gives events real reading space and keeps history stable at all wind
   await feed(Array.from({length:1001},(_,i)=>makeEvent(i+454)));
   await expect(page.locator('[data-history-expired]')).toBeVisible();await expect(page.locator('[data-debug-event]')).toHaveCount(200);
  }finally{await stop(app);rmSync(userDataDir,{recursive:true,force:true});}
+});
+
+for(const debug of [false,true])test(`locked memory launch preserves mode after Backend restart (debug=${debug})`,async()=>{
+ const root=mkdtempSync(join(tmpdir(),'aurabot-locked-e2e-'));
+ const app=await electron.launch({args:[join(appRoot,'out/main/index.js'),'--aurabot-lock-memory',...(debug?['--aurabot-debug']:[])],cwd:appRoot,env:{...process.env,AURABOT_USER_DATA_DIR:root}});
+ try{
+  const pet=await petWindow(app);await ready(pet);
+  const first=await readiness();
+  expect(first.launchOptions).toEqual({debug,lockMemory:true});
+  expect(first.memoryFixture).toBe('benchmark-memory-v1');
+  const {runtime}=await pet.evaluate(()=>window.aurabot.listProfiles());
+  expect(existsSync(join(root,'profiles',runtime.activeId!,'context.sqlite3'))).toBe(false);
+  expect(existsSync(join(root,'profiles',runtime.activeId!,'memory','memory.sqlite3'))).toBe(false);
+  await expect.poll(()=>debugWindows(app)).toHaveLength(debug?1:0);
+  expect(existsSync(join(root,'speech-diagnostics.log'))).toBe(debug);
+  const result=await pet.evaluate(async()=>{
+   const state=await window.aurabot.getSettings();state.config.backend.chat_model.model_name='restart-mode-check';
+   await window.aurabot.saveSettings(state.config);return window.aurabot.applySettings();
+  });
+  expect(result.busy).toBeUndefined();await ready(pet);
+  const restarted=await readiness();expect(restarted.instanceId).not.toBe(first.instanceId);
+  expect(restarted.launchOptions).toEqual({debug,lockMemory:true});
+  expect((await pet.evaluate(()=>window.aurabot.getSettings())).launchOptions).toEqual({debug,lockMemory:true});
+  if(debug)await expect.poll(()=>readFileSync(join(root,'logs/live-debug/live-debug.jsonl'),'utf8')).toContain('benchmark-memory-v1');
+  else expect(existsSync(join(root,'logs/live-debug'))).toBe(false);
+ }finally{await stop(app);rmSync(root,{recursive:true,force:true});}
 });

@@ -1,9 +1,9 @@
-/** Localizes the independent Live debug window and its immediate settings controls.
+/** Localizes the independent Live debug window and its launch-gated settings actions.
  * Shared keys keep status, stage and structured field labels consistent across zh/en/ja;
  * field labels include acoustic windows, VAD readiness and STT teardown context;
  * inspector controls leave unknown keys inspectable without altering telemetry values. */
 const en = {
- title:'Live voice debug', toggle:'Live voice debug mode', hint:'Takes effect immediately. Logs save recognized speech and replies on this computer.',
+ title:'Live voice debug', launchMode:'Started in debug mode', hint:'Enabled for this application run. Logs save recognized speech and replies on this computer.',
  open:'Open debug window', clear:'Clear debug logs', folder:'Open log directory', autoScroll:'Follow latest', enabled:'Capturing', disabled:'Capture off',
  state:'Current state', events:'Events', source:'Source', stage:'Stage', level:'Level', all:'All', search:'Search events', empty:'No events',
  newer:'Newer', older:'Older', latest:'Latest', dropped:'Dropped', stable:'Stable transcript', mutable:'Mutable transcript', reply:'Reply',
@@ -16,7 +16,7 @@ const en = {
 } as const;
 type DebugTextKey = keyof typeof en;
 const zh:Record<DebugTextKey,string> = {
- title:'Live 语音 Debug', toggle:'Live 语音 Debug 模式', hint:'立即生效。日志会在本机保存识别文本和回复文本。',
+ title:'Live 语音 Debug', launchMode:'本次以调试模式启动', hint:'仅本次运行生效。日志会在本机保存识别文本和回复文本。',
  open:'打开 Debug 窗口', clear:'清空 Debug 日志', folder:'打开日志目录', autoScroll:'跟随最新', enabled:'正在采集', disabled:'采集已关闭',
  state:'当前状态', events:'事件', source:'来源', stage:'阶段', level:'级别', all:'全部', search:'搜索事件', empty:'暂无事件',
  newer:'较新', older:'更早', latest:'最新', dropped:'已丢弃', stable:'稳定识别文本', mutable:'可变识别文本', reply:'回复文本',
@@ -28,7 +28,7 @@ const zh:Record<DebugTextKey,string> = {
  truncated:'已截断', logDirectory:'日志目录', details:'详情', waiting:'等待事件', failure:'操作失败',
 };
 const ja:Record<DebugTextKey,string> = {
- title:'Live 音声 Debug', toggle:'Live 音声 Debug モード', hint:'すぐに反映されます。認識テキストと応答テキストをこの端末のログに保存します。',
+ title:'Live 音声 Debug', launchMode:'デバッグモードで起動中', hint:'今回の起動でのみ有効です。認識テキストと応答テキストをこの端末のログに保存します。',
  open:'Debug ウィンドウを開く', clear:'Debug ログを消去', folder:'ログフォルダーを開く', autoScroll:'最新を追跡', enabled:'記録中', disabled:'記録停止',
  state:'現在の状態', events:'イベント', source:'ソース', stage:'段階', level:'レベル', all:'すべて', search:'イベントを検索', empty:'イベントなし',
  newer:'新しい', older:'古い', latest:'最新', dropped:'破棄', stable:'確定認識テキスト', mutable:'暫定認識テキスト', reply:'応答テキスト',

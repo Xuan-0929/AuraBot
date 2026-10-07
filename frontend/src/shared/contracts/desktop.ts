@@ -1,5 +1,5 @@
 /** Defines desktop-owned configuration, delivered history and the read-only Task projection.
- * ProfileRuntimeState exposes activation in progress to fence Pet media controls. Main validates and persists these DTOs; renderer forms never own runtime configuration or saved secrets. Legacy Tavily fields normalize into provider/api_key before validation; SettingsState carries masked
+ * LaunchOptions is read-only process state, separate from persisted settings. ProfileRuntimeState exposes activation in progress to fence Pet media controls. Main validates and persists these DTOs; renderer forms never own runtime configuration or saved secrets. Legacy Tavily fields normalize into provider/api_key before validation; SettingsState carries masked
  * first/last-four previews separately from redacted configuration for editable key fields.
  */
 import { z } from 'zod';
@@ -24,10 +24,11 @@ export const desktopConfigSchema = z.object({
     memory:z.object({embedding:z.object({provider:z.literal('hash'),dimension:z.literal(384)})}),
     task:z.object({user_data_dir:z.string(),pi_runtime_dir:z.string(),node_executable:z.string().min(1),default_timeout_seconds:z.number().int().min(1).max(86400),model:model})
   }),
-  desktop:z.object({pet:petSettingsSchema,systemNotificationsEnabled:z.boolean(),liveDebugEnabled:z.boolean().default(false)})
+  desktop:z.object({pet:petSettingsSchema,systemNotificationsEnabled:z.boolean()})
 });
 export type DesktopConfig = z.infer<typeof desktopConfigSchema>;
-export interface SettingsState { config:DesktopConfig; appliedRevision:number|null; pending:boolean; backendPending:boolean; online:boolean; capabilities?:{text:boolean;voice:boolean;tasks:boolean}; error?:string; secrets:Record<string,boolean>; secretPreviews?:Record<string,string>; }
+export interface LaunchOptions { readonly debug:boolean; readonly lockMemory:boolean; }
+export interface SettingsState { launchOptions:LaunchOptions; config:DesktopConfig; appliedRevision:number|null; pending:boolean; backendPending:boolean; online:boolean; capabilities?:{text:boolean;voice:boolean;tasks:boolean}; error?:string; secrets:Record<string,boolean>; secretPreviews?:Record<string,string>; }
 export interface BusyState { tasks:number; memoryWriting:boolean; mainAgent:boolean; }
 export interface ApplyResult { state:SettingsState; busy?:BusyState; }
 export interface HistoryEntry { profileId?:string; generation?:number; id:string; role:'user'|'assistant'; content:string; }

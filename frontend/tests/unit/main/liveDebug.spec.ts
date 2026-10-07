@@ -1,17 +1,29 @@
-/** Exercises immediate debug settings, bounded diagnostics, and real rotating files.
+/** Exercises bounded debug collection, bounded diagnostics, and real rotating files.
  * Main's collector is tested with an injected HTTP boundary, including acoustic windows
  * surviving sanitization and disk writes, never a second voice connection. */
 import { mkdtempSync, mkdirSync, readFileSync, readdirSync, rmSync, writeFileSync, statSync } from 'node:fs';
 import { join } from 'node:path';
 import { tmpdir } from 'node:os';
 import { afterEach, expect, it, vi } from 'vitest';
-import { DesktopConfigStore } from '../../../src/main/desktopConfigStore';
 import { LiveDebugService } from '../../../src/main/liveDebug';
 import { appendDebugEvents, sanitizeDebugEvent, type LiveDebugEvent } from '../../../src/shared/contracts/liveDebug';
 const roots:string[]=[];
 const root=()=>{const path=mkdtempSync(join(tmpdir(),'aura-debug-'));roots.push(path);return path;};
 afterEach(()=>{vi.useRealTimers();for(const path of roots.splice(0))rmSync(path,{recursive:true,force:true});});
 const event=(seq:number,captureId='capture'):LiveDebugEvent=>({source:'pet',seq,instanceId:'pet-instance',captureId,timestamp:Date.now(),stage:'capture',name:'mic.stats',level:'info',profileId:'p',generation:1,details:{sent:seq}});
+
+it('writes the backend-confirmed launch mode and fixture into each synchronized capture',async()=>{
+ const service=new LiveDebugService(root(),async(_path,init)=>{
+  const body=JSON.parse(String(init?.body));
+  return {instanceId:'backend',captureId:body.captureId,cursor:1,events:[],dropped:0,enabled:true,
+   state:{system:{debug:true,lockMemory:true,memoryFixture:'benchmark-memory-v1',api_key:'secret'}}};
+ },()=>{},()=>{});
+ try{
+  service.setOnline(true);await service.setEnabled(true);await service.flush();
+  expect(readFileSync(join(service.logDirectory,'live-debug.jsonl'),'utf8')).toContain('benchmark-memory-v1');
+  expect(service.snapshot().events.find(event=>event.name==='launch.options')?.details).toEqual({debug:true,lockMemory:true,memoryFixture:'benchmark-memory-v1'});
+ }finally{service.setOnline(false);await service.shutdown();}
+});
 
 it('preserves acoustic window and teardown facts from backend polling to JSONL',async()=>{
  const details={windowMs:501,windowFrames:25,vadPassFrames:22,rmsPassFrames:17,qualifiedFrames:16,
@@ -37,18 +49,6 @@ it('preserves acoustic window and teardown facts from backend polling to JSONL',
   const lines=readFileSync(join(service.snapshot().logDirectory,'live-debug.jsonl'),'utf8').trim().split('\n').map(line=>JSON.parse(line));
   expect(lines.find(e=>e.name==='acoustics').details).toEqual(details);
  }finally{service.setOnline(false);await service.shutdown();}
-});
-
-it('updates only the debug preference without applying pending settings or accepting stale drafts',()=>{
- const path=root(), config=new DesktopConfigStore(path,path);config.markApplied(config.snapshot());
- const stale=config.publicConfig();
- config.setLiveDebugEnabled(true);
- expect(config.current().desktop.liveDebugEnabled).toBe(true);expect(config.status().pending).toBe(false);
- stale.backend.chat_model.model_name='pending-model';config.save(stale);
- expect(config.snapshot().desktop.liveDebugEnabled).toBe(true);expect(config.status().backendPending).toBe(true);
- config.setLiveDebugEnabled(false);
- expect(config.current().backend.chat_model.model_name).toBe('');expect(config.snapshot().backend.chat_model.model_name).toBe('pending-model');
- expect(config.status().pending).toBe(true);expect(new DesktopConfigStore(path,path).snapshot().desktop.liveDebugEnabled).toBe(false);
 });
 
 it('bounds event count and bytes and drops unapproved data at the IPC boundary',()=>{

@@ -1,6 +1,6 @@
 // Validates saved/applied status labels and the current combined settings navigation.
 /** Exercises the actual local Provider → Python SAY stream → Pet AvatarPlayer production chain.
- * Settings locates roles by their displayed fixture names and verifies a bundled motion through the SDK
+ * Startup waits for the first applied Profile before saving settings. Settings locates roles by their displayed fixture names and verifies a bundled motion through the SDK
  * before exposing its user-selected semantic name; internal Profile IDs remain only in IPC assertions.
  * A controlled SSE server gates internal clauses, proving one gesture per SAY, repeatability across SAYs,
  * text-only history, and old-Profile receipt rejection. Every model/data copy is in a temporary root;
@@ -29,9 +29,11 @@ function toolDelta(argumentsText: string, callId?: string) {
   }] } }] };
 }
 async function ready(pet: Page) {
-  await expect.poll(() => pet.evaluate(async () => Boolean(window.aurabot)
-    && (await window.aurabot.getSettings()).online
-    && (await window.aurabot.listProfiles()).runtime.online), { timeout: 45_000 }).toBe(true);
+  await expect.poll(() => pet.evaluate(async () => {
+    if (!window.aurabot || !(await window.aurabot.getSettings()).online) return false;
+    const {runtime} = await window.aurabot.listProfiles();
+    return runtime.online && Boolean(runtime.activeId && (await window.aurabot.getProfile(runtime.activeId)).applied);
+  }), { timeout: 45_000 }).toBe(true);
 }
 async function history(pet: Page, profileId?: string) {
   return pet.evaluate(async id => (await window.aurabot.getHistory(undefined, id)).messages, profileId);

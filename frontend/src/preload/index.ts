@@ -1,5 +1,5 @@
 /** Bridges resource preparation and live diagnostics through typed IPC; Main owns paths, capture
- * controls and bounded logging. Pet is the sole permitted source of renderer diagnostic facts. */
+ * permission fixed at launch and bounded logging. Pet is the sole permitted source of renderer diagnostic facts. */
 /** Exposes only typed desktop IPC; Pet delivery and command methods are checked by Main against its webContents.
  * SOUL opening carries only a Profile identity. Renderer has no filesystem or Memory API access. Every subscription has an explicit disposer.
  */
@@ -11,7 +11,6 @@ function subscribe<T>(channel:string,listener:(value:T)=>void):()=>void {
 }
 const api:AuraBotApi={
  getLiveDebugState:()=>ipcRenderer.invoke(IPC_CHANNELS.getLiveDebugState),
- setLiveDebugEnabled:enabled=>ipcRenderer.invoke(IPC_CHANNELS.setLiveDebugEnabled,enabled),
  openLiveDebugWindow:()=>ipcRenderer.invoke(IPC_CHANNELS.openLiveDebugWindow),
  clearLiveDebugLogs:()=>ipcRenderer.invoke(IPC_CHANNELS.clearLiveDebugLogs),
  openLiveDebugLogDirectory:()=>ipcRenderer.invoke(IPC_CHANNELS.openLiveDebugLogDirectory),

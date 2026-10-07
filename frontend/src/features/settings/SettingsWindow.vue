@@ -4,8 +4,8 @@
      the existing save IPC, while unchanged keys remain write-only. Native disclosures reveal invalid fields; shared tokens
      provide compact navigation and responsive forms. Pet status groups desktop preferences with actionable runtime reminders only; a separate workspace page describes user-provided task locations;
      Profile detail headings own the top back action and name; localized headings and status labels expose save/apply state without revision numbers. Workspace actions
-     keep equal spacing between separators. Model connections groups a native search-provider dropdown with its secret field. Desktop-only changes apply without restarting. Live debug controls persist immediately through their own IPC,
-     synchronizing only their draft/baseline field so unrelated unsaved edits survive incoming settings events. -->
+     keep equal spacing between separators. Model connections groups a native search-provider dropdown with its secret field. Desktop-only changes apply without restarting. Live debug actions appear only for debug launches; startup flags are read-only,
+     unrelated unsaved edits survive incoming settings events. -->
 <template>
   <main class="settings-window">
     <div class="settings-window-shell settings-v2-layout" :inert="busy ? true : undefined">
@@ -58,13 +58,15 @@
                 <label class="settings-page-toggle"><input v-model="draft.desktop.pet.clickThroughPet" type="checkbox" /> {{ t(displayLanguage, 'clickThroughPet') }}</label>
 
                 <label class="settings-page-toggle"><input v-model="draft.desktop.systemNotificationsEnabled" type="checkbox" /> {{ t(displayLanguage, 'systemNotifications') }}</label>
-                <label class="settings-page-toggle"><input name="live-debug-enabled" type="checkbox" :checked="draft.desktop.liveDebugEnabled" :disabled="debugWorking" @change="toggleDebug" /> {{ debugText(displayLanguage, 'toggle') }}</label>
-                <p class="settings-hint">{{ debugText(displayLanguage, 'hint') }}</p>
-                <div class="debug-actions">
-                  <button type="button" :disabled="!draft.desktop.liveDebugEnabled" @click="debugAction('open')">{{ debugText(displayLanguage, 'open') }}</button>
-                  <button type="button" @click="debugAction('clear')">{{ debugText(displayLanguage, 'clear') }}</button>
-                  <button type="button" @click="debugAction('folder')">{{ debugText(displayLanguage, 'folder') }}</button>
-                </div>
+                <section v-if="state.launchOptions?.debug" data-debug-settings>
+                  <h3>{{ debugText(displayLanguage, 'launchMode') }}</h3>
+                  <p class="settings-hint">{{ debugText(displayLanguage, 'hint') }}</p>
+                  <div class="debug-actions">
+                    <button type="button" @click="debugAction('open')">{{ debugText(displayLanguage, 'open') }}</button>
+                    <button type="button" @click="debugAction('clear')">{{ debugText(displayLanguage, 'clear') }}</button>
+                    <button type="button" @click="debugAction('folder')">{{ debugText(displayLanguage, 'folder') }}</button>
+                  </div>
+                </section>
                 </article>
                 <article v-if="runtimeHints.length || state.error" class="settings-model-card">
                   <h2>{{ t(displayLanguage, 'runtimeHints') }}</h2>
@@ -125,7 +127,6 @@ const pageContainer=ref<HTMLElement>();
 const profilesPage=ref<InstanceType<typeof ProfilesPage>>();
 async function changePage(target:string){if(page.value==='profiles'&&target!=='profiles'&&!await profilesPage.value?.canLeave())return;page.value=target;await nextTick();if(pageContainer.value)pageContainer.value.scrollTop=0;}
 const page=ref('model');const state=ref<SettingsState>();const draft=ref<DesktopConfig>();const baseline=ref('');const clearSecrets=ref<string[]>([]);
-const debugWorking=ref(false);
 const working=ref(false);const error=ref('');const busy=ref<BusyState>();const cancelButton=ref<HTMLButtonElement>();
 const dirty=computed(()=>JSON.stringify(draft.value)!==baseline.value||clearSecrets.value.length>0);
 const displayLanguage=computed(()=>draft.value?.desktop.pet.displayLanguage ?? store.displayLanguage);
@@ -158,24 +159,12 @@ function updateSecretIntent(path:string,value:string){clearSecrets.value=clearSe
 function load(value:SettingsState){state.value=value;draft.value=JSON.parse(JSON.stringify(value.config));baseline.value=JSON.stringify(draft.value);clearSecrets.value=[];}
 async function save(){if(!draft.value)return;working.value=true;error.value='';try{load(await window.aurabot.saveSettings(JSON.parse(JSON.stringify(draft.value)),[...clearSecrets.value]));}catch(e){error.value=e instanceof Error?e.message:t(displayLanguage.value,'saveFailed');revealAdvanced();}finally{working.value=false;}}
 async function apply(force:boolean){if(dirty.value)return;working.value=true;error.value='';try{const result=await window.aurabot.applySettings(force);state.value=result.state;busy.value=result.busy;if(busy.value){await nextTick();cancelButton.value?.focus();}else await store.loadInitialState();}catch(e){error.value=e instanceof Error?e.message:t(displayLanguage.value,'applyFailed');busy.value=undefined;}finally{working.value=false;}}
-// Debug is persisted independently: rebasing only this field preserves every ordinary draft edit.
-function syncDebug(enabled:boolean){
- if(draft.value)draft.value.desktop.liveDebugEnabled=enabled;
- if(baseline.value){const saved=JSON.parse(baseline.value) as DesktopConfig;saved.desktop.liveDebugEnabled=enabled;baseline.value=JSON.stringify(saved);}
-}
-async function toggleDebug(event:Event){
- const input=event.target as HTMLInputElement;const enabled=input.checked;
- debugWorking.value=true;error.value='';
- try{const result=await window.aurabot.setLiveDebugEnabled(enabled);syncDebug(result.enabled);}
- catch(e){input.checked=Boolean(draft.value?.desktop.liveDebugEnabled);error.value=String(e);}
- finally{debugWorking.value=false;}
-}
 async function debugAction(action:'open'|'clear'|'folder'){
  try{if(action==='open')await window.aurabot.openLiveDebugWindow();else if(action==='clear')await window.aurabot.clearLiveDebugLogs();else await window.aurabot.openLiveDebugLogDirectory();}
  catch(e){error.value=String(e);}
 }
 let unsubscribe:(()=>void)|undefined;
-onMounted(async()=>{try{load(await window.aurabot.getSettings());unsubscribe=window.aurabot.onSettingsChanged(value=>{const hadDraft=dirty.value;state.value=value;if(!hadDraft)load(value);else syncDebug(Boolean(value.config.desktop.liveDebugEnabled));});}catch(e){error.value=String(e);}});
+onMounted(async()=>{try{load(await window.aurabot.getSettings());unsubscribe=window.aurabot.onSettingsChanged(value=>{const hadDraft=dirty.value;state.value=value;if(!hadDraft)load(value);});}catch(e){error.value=String(e);}});
 onBeforeUnmount(()=>unsubscribe?.());
 </script>
 <style scoped>

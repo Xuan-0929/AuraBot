@@ -1,7 +1,7 @@
 """Persist one Profile's long-term Memory metadata, episodes, relations, audit log, and FTS index.
 
 ``MemoryService`` is the sole writer of this store. Main Agent conversation buffering remains in
-``ContextStore``; this module intentionally contains no pending-conversation table, background job,
+``ContextStore``. Read-only benchmark connections neither migrate nor create files; this module intentionally contains no pending-conversation table, background job,
 lease, worker, retry queue, or vector outbox.
 """
 
@@ -24,13 +24,17 @@ ACTIVE_MEMORY_STATES = {"active", "archived", "stale", "superseded"}
 
 
 class SQLiteMemoryStore:
-    def __init__(self, path: str | Path):
+    def __init__(self, path: str | Path, *, read_only: bool = False):
         self.path = Path(path)
-        self.path.parent.mkdir(parents=True, exist_ok=True)
-        self._connection = sqlite3.connect(self.path, check_same_thread=False)
+        if read_only:
+            self._connection = sqlite3.connect(self.path.resolve().as_uri() + '?mode=ro', uri=True, check_same_thread=False)
+        else:
+            self.path.parent.mkdir(parents=True, exist_ok=True)
+            self._connection = sqlite3.connect(self.path, check_same_thread=False)
         self._connection.row_factory = sqlite3.Row
         self._lock = threading.RLock()
-        self._migrate()
+        if not read_only:
+            self._migrate()
 
     def close(self) -> None:
         self._connection.close()

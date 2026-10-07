@@ -4,7 +4,8 @@ Main Agent submits each sealed Profile conversation through ``remember_conversat
 remains cancellable; source-id idempotency, atomic SQLite persistence, vector repair, and audit stay inside
 this service. Synchronous store/vector work runs in one private thread operation whose caller waits for local
 convergence before propagating cancellation, so Profile resources cannot close underneath that operation. Retrieval returns its already packed context
-without repeating JSON budget calculations at the Main Agent call site.
+without repeating JSON budget calculations at the Main Agent call site. Read-only benchmark mode
+rejects mutations before extraction and skips audit writes; Runtime uses that capability to suppress archives.
 """
 
 from __future__ import annotations
@@ -31,7 +32,9 @@ class MemoryService:
         vector_store: VectorStore,
         embedding_provider: EmbeddingProvider,
         extractor: MemoryExtractor | None = None,
+        read_only: bool = False,
     ):
+        self._read_only = read_only
         self.metadata_store = metadata_store
         self.vector_store = vector_store
         self.embedding_provider = embedding_provider
@@ -44,6 +47,14 @@ class MemoryService:
         self.consolidator = AddFirstConsolidator(metadata_store)
         self._recall_operation: asyncio.Task[dict[str, Any]] | None = None
         self._closed = False
+
+    @property
+    def read_only(self) -> bool:
+        return self._read_only
+
+    def _require_writable(self) -> None:
+        if self.read_only:
+            raise RuntimeError("memory_read_only")
 
     def close(self) -> None:
         """Synchronously close idle adapters; async callers must use shutdown while recall is running."""
@@ -80,6 +91,7 @@ class MemoryService:
         importance: float = 0.5,
         metadata: dict[str, Any] | None = None,
     ) -> dict[str, Any]:
+        self._require_writable()
         metadata = metadata or {}
         episode_id = self.metadata_store.create_episode(
             profile_id=profile_id,
@@ -131,6 +143,7 @@ class MemoryService:
     ) -> dict[str, Any]:
         """Extract and durably ingest one stable conversation source exactly once."""
 
+        self._require_writable()
         identifier = str(profile_id).strip()
         stable_source = str(source_id).strip()
         if not identifier or not stable_source:
@@ -293,18 +306,19 @@ class MemoryService:
                 )
             ),
         )
-        try:
-            self.metadata_store.write_audit_log(
-                profile_id=profile_id,
-                action="recall",
-                input_summary=query,
-                result_json={
-                    "memory_ids": [memory["memory_id"] for memory in result["memories"]],
-                    "trace": result["trace"],
-                },
-            )
-        except Exception:
-            pass
+        if not self.read_only:
+            try:
+                self.metadata_store.write_audit_log(
+                    profile_id=profile_id,
+                    action="recall",
+                    input_summary=query,
+                    result_json={
+                        "memory_ids": [memory["memory_id"] for memory in result["memories"]],
+                        "trace": result["trace"],
+                    },
+                )
+            except Exception:
+                pass
         return result
 
     async def recall_context_async(
@@ -351,6 +365,7 @@ class MemoryService:
         episode_ids: list[str] | None = None,
         reason: str | None = None,
     ) -> dict[str, Any]:
+        self._require_writable()
         if not memory_ids and not episode_ids:
             raise ValueError("forget requires memory_ids or episode_ids")
 
@@ -381,6 +396,7 @@ class MemoryService:
         return result
 
     def improve(self, profile_id: str) -> dict[str, Any]:
+        self._require_writable()
         result = self.consolidator.improve(profile_id)
         inactive_ids = [
             memory["memory_id"]
@@ -396,12 +412,13 @@ class MemoryService:
             now_iso_value=now_iso,
         )
         result = {"memories": memories}
-        self.metadata_store.write_audit_log(
-            profile_id=profile_id,
-            action="due",
-            input_summary=now_iso,
-            result_json={"memory_ids": [memory["memory_id"] for memory in memories]},
-        )
+        if not self.read_only:
+            self.metadata_store.write_audit_log(
+                profile_id=profile_id,
+                action="due",
+                input_summary=now_iso,
+                result_json={"memory_ids": [memory["memory_id"] for memory in memories]},
+            )
         return result
 
     def debug(self, profile_id: str) -> dict[str, Any]:

@@ -5,7 +5,8 @@ and text runtime; voice.start alone validates model inference, speech assets and
 closing Profile workers and the durable Task control plane. ProfileResources owns lazy speech; Runtime
 keeps Hub.render as its renderer for the entire Profile lifetime. Applied workspaces enter the model
 snapshot as user-provided names and paths without scanning directories. WebTools uses the configured search adapter for search and read.
-The production lifespan owns bounded content-free speech diagnostics beside the desktop configuration."""
+LaunchOptions gates diagnostics and selects isolated Profile storage for fixed-memory runs.
+The production lifespan opens speech log files only for an explicit debug launch."""
 
 from __future__ import annotations
 
@@ -20,6 +21,7 @@ from typing import Any
 from fastapi import FastAPI
 from fastapi.middleware.cors import CORSMiddleware
 
+from .launch_options import LaunchOptions
 from .config import config, initialize_config
 
 initialize_config()
@@ -56,6 +58,7 @@ from .memory.embedding import create_embedding_provider
 from .memory.extraction.providers import OpenAICompatibleMemoryExtractionModel
 from .memory.extractor import StructuredMemoryExtractor
 from .memory.service import MemoryService
+from .memory.locked import build_locked_memory
 from .memory.stores.qdrant import QdrantLocalVectorStore
 from .memory.stores.sqlite import SQLiteMemoryStore
 from .task.manager import TaskManager
@@ -100,9 +103,11 @@ def create_app(
     metrics: LifecycleMetrics | None = None,
     provider_factory: Any | None = None,
     speech_factory: Any | None = None,
+    launch_options: LaunchOptions | None = None,
 ) -> FastAPI:
     """Build FastAPI with injectable process/profile ownership seams for public-boundary tests."""
 
+    options = launch_options or LaunchOptions.from_environment()
     hub = realtime_hub or RealtimeHub()
     metric_sink = metrics or LifecycleMetrics()
 
@@ -125,9 +130,11 @@ def create_app(
                     metrics=metric_sink,
                     provider_factory=provider_factory,
                     speech_factory=speech_factory,
+                    lock_memory=options.lock_memory,
                 )
 
-            profiles = ActiveProfileManager(settings.profile_root, hub, factory)
+            profile_root = options.session_data_dir / "profiles" if options.lock_memory else settings.profile_root
+            profiles = ActiveProfileManager(profile_root, hub, factory)
         hub.profile_activator = profiles.activate
         hub.profile_session_renewer = profiles.renew_session
         application.state.config_revision = config.revision
@@ -148,7 +155,7 @@ def create_app(
         hub.start_accepting()
         application.state.backend_ready = True
         logger.info("backend_lifespan_started")
-        with speech_diagnostics(config.path.parent if task_manager is None else None):
+        with speech_diagnostics(config.path.parent if options.debug and task_manager is None else None):
             try:
                 yield
             finally:
@@ -158,6 +165,7 @@ def create_app(
                 logger.info("backend_lifespan_stopped")
 
     application = FastAPI(title="AuraBot Backend", lifespan=lifespan)
+    application.state.launch_options = options
     application.state.main_agent_realtime = hub
     application.state.main_agent_profiles = profile_manager
     application.state.main_agent_metrics = metric_sink
@@ -187,6 +195,7 @@ async def _build_profile(
     metrics: LifecycleMetrics,
     provider_factory: Any | None,
     speech_factory: Any | None,
+    lock_memory: bool = False,
 ) -> ProfileResources:
     """Compose and start the sole active Profile, cleaning partial owners on any failure."""
 
@@ -194,17 +203,20 @@ async def _build_profile(
         memory_path = prepare_memory_directory(path)
         context = ContextStore(path / "context.sqlite3")
         cleanup.callback(context.close)
-        embedding = create_embedding_provider(config.get("memory", {}).get("embedding", {}))
-        async with AsyncExitStack() as memory_cleanup:
-            vectors = QdrantLocalVectorStore(path=memory_path / "qdrant", vector_size=embedding.dimension)
-            memory_cleanup.callback(vectors.close)
-            metadata = SQLiteMemoryStore(memory_path / "memory.sqlite3")
-            memory_cleanup.callback(metadata.close)
-            memory = MemoryService(
-                metadata_store=metadata, embedding_provider=embedding,
-                extractor=build_memory_extractor(settings.chat_model), vector_store=vectors,
-            )
-            memory_cleanup.pop_all()
+        if lock_memory:
+            memory = build_locked_memory(memory_path, profile_id)
+        else:
+            embedding = create_embedding_provider(config.get("memory", {}).get("embedding", {}))
+            async with AsyncExitStack() as memory_cleanup:
+                vectors = QdrantLocalVectorStore(path=memory_path / "qdrant", vector_size=embedding.dimension)
+                memory_cleanup.callback(vectors.close)
+                metadata = SQLiteMemoryStore(memory_path / "memory.sqlite3")
+                memory_cleanup.callback(metadata.close)
+                memory = MemoryService(
+                    metadata_store=metadata, embedding_provider=embedding,
+                    extractor=build_memory_extractor(settings.chat_model), vector_store=vectors,
+                )
+                memory_cleanup.pop_all()
         cleanup.push_async_callback(memory.shutdown)
         provider = (provider_factory or build_chat_provider)(settings.chat_model, metrics)
         cleanup.push_async_callback(_close, provider)

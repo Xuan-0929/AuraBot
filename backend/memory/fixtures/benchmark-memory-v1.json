@@ -1,0 +1,20 @@
+{
+  "version": "benchmark-memory-v1",
+  "timestamp": "2026-01-01T00:00:00+00:00",
+  "memories": [
+    {"id":"language","content":"用户习惯使用中文交流。","type":"preference","entities":[]},
+    {"id":"answers","content":"用户希望回答先给出结论，再解释必要的细节。","type":"preference","entities":[]},
+    {"id":"coffee","content":"用户喜欢热拿铁，不喜欢过甜的咖啡。","type":"preference","entities":["热拿铁","咖啡"]},
+    {"id":"project","content":"用户正在开发 AuraBot 项目，关注语音输入到首音播放的延迟。","type":"semantic","entities":["AuraBot","项目"]},
+    {"id":"contact","content":"阿杰是用户一起讨论 AuraBot 项目的朋友。","type":"semantic","entities":["阿杰","AuraBot","项目"]},
+    {"id":"meeting","content":"用户和阿杰习惯在咖啡店讨论项目，用户通常点热拿铁。","type":"semantic","entities":["阿杰","咖啡店","项目","热拿铁"]},
+    {"id":"report","content":"用户整理项目周报时喜欢按进展、问题和下一步排列。","type":"preference","entities":["项目","周报"]},
+    {"id":"hobby","content":"用户喜欢散步和听轻音乐。","type":"preference","entities":[]}
+  ],
+  "relations": [
+    {"source":"project","target":"contact"},
+    {"source":"contact","target":"meeting"},
+    {"source":"meeting","target":"coffee"},
+    {"source":"project","target":"report"}
+  ]
+}

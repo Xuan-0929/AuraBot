@@ -38,8 +38,16 @@ node frontend/scripts/install-runtime.mjs "$AURABOT_USER_DATA_DIR"
 
 ~~~bash
 cd frontend
-npm run dev
+npm run dev                         # 普通启动：不采集或写入调试日志
+npm run dev -- --debug              # 打开 Debug 窗口并写入调试日志
+npm run dev -- --lock-memory        # 固定非空记忆 + 本次运行独立的 Context
+npm run dev -- --debug --lock-memory # 语音延迟复测
+npm run dev -- --help
 ~~~
+
+两个参数可组合，只影响本次应用运行，不保存到 `settings.json`。普通启动隐藏调试区域，旧设置中的 Debug 开关不再生效。`--debug` 不会自动开启麦克风；关闭调试窗口后仍会采集，可从设置页重新打开。详见 [Live 语音 Debug](docs/live-voice-debug.md)。
+
+`--lock-memory` 使用内置 `benchmark-memory-v1` 合成记忆，保留 SQLite/Qdrant 检索，关闭记忆写入与后台提炼。每次应用启动创建独立临时 Context，本次多轮对话、切换 Profile 和 Backend 重启保留该 Context，退出后丢弃。Task 与可见聊天历史仍正常持久化；复测应保持 Profile/Soul、Task 状态、模型和输入顺序一致。此选项不保证远程模型响应或网络延迟确定性。
 
 Electron Main 是唯一 Backend 进程 owner；开发入口启动 Electron/Vite，再由 Electron 启动 Python。Vite 使用 `127.0.0.1:6400`，Backend 使用 `127.0.0.1:6401`。不要另外启动第二个 Backend；端口被其他进程占用时应用报告错误，不终止其他进程。
 

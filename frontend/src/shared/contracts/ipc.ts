@@ -1,5 +1,5 @@
 /** Defines typed IPC for desktop settings, visible history and Pet-owned realtime.
- * Live debug uses separate capture control, bounded Pet reports and read-only timeline updates;
+ * Live debug uses startup-gated capture, bounded Pet reports and read-only timeline updates;
  * Main owns immediate preferences, log paths and clearing. Speech assets accept no arbitrary destinations.
  * Electron validates callers and payloads; Task is read-only and Memory has no renderer surface.
  */
@@ -14,7 +14,7 @@ import type { ProfileDetail, ProfileSummary, ProfileSaveInput } from './profiles
 import type { ProfileRuntimeState, RealtimeToken, PetCommandResult } from './desktop';
 import type { DesktopConfig, SettingsState, ApplyResult, HistoryPage, HistoryEntry, TaskSummary, PetCommand } from './desktop';
 export const IPC_CHANNELS = {
- getLiveDebugState:'live-debug:get',setLiveDebugEnabled:'live-debug:set-enabled',openLiveDebugWindow:'live-debug:open',clearLiveDebugLogs:'live-debug:clear',openLiveDebugLogDirectory:'live-debug:folder',liveDebugChanged:'live-debug:changed',getLiveDebugCapture:'live-debug:capture',liveDebugCaptureChanged:'live-debug:capture-changed',reportLiveDebugEvent:'live-debug:report',
+ getLiveDebugState:'live-debug:get',openLiveDebugWindow:'live-debug:open',clearLiveDebugLogs:'live-debug:clear',openLiveDebugLogDirectory:'live-debug:folder',liveDebugChanged:'live-debug:changed',getLiveDebugCapture:'live-debug:capture',liveDebugCaptureChanged:'live-debug:capture-changed',reportLiveDebugEvent:'live-debug:report',
  getSpeechAssets:'speech-assets:get',prepareSpeechAssets:'speech-assets:prepare',cancelSpeechAssets:'speech-assets:cancel',speechAssetsChanged:'speech-assets:changed',
  openProfileSoul:'profiles:open-soul',listProfiles:'profiles:list',getProfile:'profiles:get',createProfile:'profiles:create',saveProfile:'profiles:save',activateProfile:'profiles:activate',deleteProfile:'profiles:delete',importProfileModel:'profiles:import-model',verifyProfileResources:'profiles:verify-resources',profilesChanged:'profiles:changed',getRealtimeToken:'profiles:realtime-token',
  getInitialState:'app:get-initial-state',openConsoleWindow:'window:open-console',openSettingsWindow:'window:open-settings',
@@ -37,7 +37,7 @@ export type PetResizeDirection = "n" | "s" | "e" | "w" | "nw" | "ne" | "sw" | "s
 export type PetResizeCorner = Extract<PetResizeDirection, "nw" | "ne" | "sw" | "se">;
 
 export interface AuraBotApi {
- getLiveDebugState():Promise<LiveDebugState>;setLiveDebugEnabled(enabled:boolean):Promise<LiveDebugState>;
+ getLiveDebugState():Promise<LiveDebugState>;
  openLiveDebugWindow():Promise<void>;clearLiveDebugLogs():Promise<LiveDebugState>;openLiveDebugLogDirectory():Promise<void>;
  onLiveDebugChanged(listener:(value:LiveDebugUpdate)=>void):()=>void;
  getLiveDebugCapture():Promise<LiveDebugCapture>;onLiveDebugCaptureChanged(listener:(value:LiveDebugCapture)=>void):()=>void;

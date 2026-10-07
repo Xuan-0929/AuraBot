@@ -2,7 +2,7 @@
 
 Unlike the exact process liveness route, readiness reflects lifespan admission and local owner state.
 It reads no model, embedding, Qdrant, provider, network, or Task subprocess health endpoint and never
-creates product Tasks.  Metrics are an optional bounded in-memory diagnostic snapshot with no content.
+creates product Tasks.  Immutable launch options and fixture identity accompany readiness, never user settings. Metrics are an optional bounded in-memory diagnostic snapshot with no content.
 """
 
 from __future__ import annotations
@@ -14,6 +14,7 @@ from typing import Any
 
 from fastapi import APIRouter, Request, HTTPException
 from pydantic import BaseModel, ConfigDict
+from ...launch_options import LaunchOptions, MEMORY_FIXTURE
 
 
 router = APIRouter(prefix="/api/v1", tags=["backend-readiness"])
@@ -35,7 +36,10 @@ async def readiness(request: Request) -> dict[str, Any]:
         value = local_status()
         components["memory"] = await value if inspect.isawaitable(value) else value
     components["activeProfileId"] = getattr(profiles, "active_profile_id", None)
+    options = getattr(application.state, "launch_options", LaunchOptions())
     return {
+        "launchOptions": options.public(),
+        "memoryFixture": MEMORY_FIXTURE if options.lock_memory else None,
         "ready": bool(getattr(application.state, "backend_ready", False)),
         "configRevision": getattr(application.state, "config_revision", 0),
         "processId": os.getpid(),

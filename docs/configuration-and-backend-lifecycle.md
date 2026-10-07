@@ -65,6 +65,14 @@ sequenceDiagram
 
 从 `frontend` 执行 `npm run dev`：Electron/Vite 启动后由 Electron 独占 Python 子进程。固定 Vite `127.0.0.1:6400`，Backend `127.0.0.1:6401`。不要并行另启 Backend；端口占用时只报告错误。
 
+### 本次启动选项
+
+`npm run dev -- --debug` 控制 Debug 窗口、诊断采集、JSONL 和 `speech-diagnostics.log`；`--lock-memory` 控制固定记忆与 Context 隔离。两个参数可组合，帮助入口为 `npm run dev -- --help`，未知参数在启动任何子进程前报错。启动脚本把公开参数转换为内部 `--aurabot-debug` / `--aurabot-lock-memory`，再通过应用参数分隔符传给 Electron，避开 Electron 和 electron-vite 自身的调试参数。
+
+Electron Main 在启动时冻结 `{debug, lockMemory}`，通过只读设置状态返回，保存接口不接受它作为配置。原 `desktop.liveDebugEnabled` 字段被忽略，配置仍为 version 2。Electron 显式传递 `AURABOT_DEBUG`、`AURABOT_LOCK_MEMORY` 和锁定模式的 `AURABOT_SESSION_DATA_DIR` 给每个 Backend 子进程；这些是内部进程传递字段，日常使用 CLI 参数即可。Backend readiness 返回 `launchOptions` 和 `memoryFixture`，Main 确认模式与实例、配置版本均匹配后才标记已应用。
+
+锁定模式的临时目录由 Electron 创建和持有；Backend 只在该目录下打开按 Profile 分区的 Memory/Context，不读取日常记忆。固定语料在首次激活时初始化，检索正常，禁止所有 Memory 业务修改及审计写入，不运行归档/提炼。应用配置重启 Backend 和 Profile 切换保留临时数据；退出时先等待 Backend 关闭，再清理目录。创建或初始化失败不会回退到正常存储；新启动不复用残留目录。Task、Profile/Soul 配置、语音资源与桌面可见历史维持原有存储路径。
+
 Backend startup 只创建 Task 控制面、RealtimeHub 和 Profile owner。Main 通过显式 Profile activation 提交冻结 Soul/adaptor，才打开目标 Context、Memory 和文字 Runtime；Pet token 仅携带当前 `profileId` 与 `revision`，不隐式选择 Profile。连接默认文字；语音资源延迟到 `voice.start`。未配置模型或语音不阻止桌面/设置启动，调用不可用能力会明确拒绝。
 
 `GET /health` 精确返回 `{"ok":true,"service":"backend"}`。`GET /api/v1/readiness` 返回生命周期、实例/配置版本和本地能力状态；不向 Provider 发健康探测。

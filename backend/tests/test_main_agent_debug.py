@@ -1,6 +1,6 @@
 """Exercise bounded opt-in diagnostics and origin-protected HTTP capture control.
 
-Tests cross the recorder and realtime route interfaces, including identity retirement,
+Debug routes require explicit launch permission. Tests cross the recorder and realtime route interfaces, including identity retirement,
 capture rollover, safe scalar projection, and snapshots of already running sessions.
 """
 import json
@@ -13,6 +13,7 @@ from unittest.mock import patch
 from fastapi import FastAPI
 from fastapi.testclient import TestClient
 
+from backend.launch_options import LaunchOptions
 from backend.main_agent.debug import DebugRecorder
 from backend.main_agent.realtime import RealtimeHub, router
 
@@ -261,6 +262,7 @@ class DebugRouteTests(unittest.TestCase):
         self.hub = RealtimeHub()
         app = FastAPI()
         app.state.main_agent_realtime = self.hub
+        app.state.launch_options = LaunchOptions(debug=True)
         app.include_router(router)
         self.client = TestClient(app)
         self.headers = {"origin": "http://localhost:6400"}
@@ -275,7 +277,7 @@ class DebugRouteTests(unittest.TestCase):
         self.assertEqual(response.headers["cache-control"], "no-store")
         value = response.json()
         self.assertTrue(value["enabled"])
-        self.assertEqual(value["events"], [])
+        self.assertEqual([event["name"] for event in value["events"]], ["launch.options"])
         self.assertFalse(value["state"]["connection"]["connected"])
         self.assertIsInstance(value["state"]["connection"]["timestamp"], int)
         clear = self.client.post(path + "/clear", headers=self.headers, json={"captureId": "two"}).json()

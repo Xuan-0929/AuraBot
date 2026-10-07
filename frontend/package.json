@@ -6,7 +6,7 @@
   "main": "out/main/index.js",
   "productName": "AuraBot",
   "scripts": {
-    "dev": "npm run rebuild:native && node scripts/dev.mjs",
+    "dev": "node scripts/dev.mjs",
     "dev:frontend": "vite --host 127.0.0.1 --port 6400 --strictPort",
     "dev:desktop": "electron-rebuild -f -w better-sqlite3 && electron-vite dev",
     "dev:clean": "node scripts/run-clean.mjs dev",

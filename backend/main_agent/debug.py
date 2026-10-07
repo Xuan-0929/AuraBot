@@ -1,4 +1,4 @@
-"""Record opt-in, bounded live diagnostics without owning tasks, threads, or audio.
+"""Record launch-gated, bounded live diagnostics and fixture identity without owning tasks, threads, or audio.
 
 RealtimeHub owns this synchronous recorder; frozen profile scopes are shared with
 Runtime and Speech. Scalar allowlists exclude provider payloads and secrets, while
@@ -34,7 +34,7 @@ DETAILS = frozenset({
     "lastResetReason", "lastResetFromMs", "partial", "vadStatus", "vadReason",
     "vadWarmupFrames", "vadUnavailableFrames", "vadErrorFrames", "vadThreshold",
     "operation", "finalizing", "exceptionType",
-    "charCount", "flushReason", "modelName",
+    "charCount", "flushReason", "modelName", "debug", "lockMemory", "memoryFixture",
 })
 IDENTITIES = frozenset({"segmentId", "inputId", "invokeId", "sayId", "clauseId"})
 

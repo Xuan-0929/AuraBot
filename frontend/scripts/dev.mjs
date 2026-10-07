@@ -1,5 +1,29 @@
-/** Starts only Electron/Vite. Electron Main is the sole owner of the Python Backend child. */
+/** Validates AuraBot launch flags before rebuilding native dependencies and starting Electron/Vite.
+ * Namespaced application switches bypass Electron's reserved --debug switch; the separator also
+ * keeps them out of electron-vite's CLI handling. Electron Main
+ * owns Backend processes and temporary memory data; this launcher only forwards arguments and signals. */
 import { spawn } from 'node:child_process';
-const child=spawn('npx',['electron-vite','dev'],{cwd:new URL('../',import.meta.url),env:{...process.env,ELECTRON_RENDERER_URL:'http://127.0.0.1:6400'},stdio:'inherit'});
-for(const signal of ['SIGINT','SIGTERM'])process.on(signal,()=>child.kill(signal));
-child.on('exit',code=>{process.exitCode=code??0;});
+import { parseArgs } from 'node:util';
+
+try {
+  const {values} = parseArgs({options:{debug:{type:'boolean'}, 'lock-memory':{type:'boolean'}, help:{type:'boolean',short:'h'}}, allowPositionals:false});
+  if (values.help) {
+    console.log('Usage: npm run dev -- [--debug] [--lock-memory]\n  --debug        Open Live Debug and write diagnostic logs for this run.\n  --lock-memory  Use fixed benchmark memory and a fresh temporary Context.');
+  } else {
+    let child;
+    let stopped=false;
+    for(const signal of ['SIGINT','SIGTERM']) process.on(signal,()=>{stopped=true;child?.kill(signal);});
+    const run=(command,args)=>new Promise((resolve,reject)=>{
+      child=spawn(command,args,{cwd:new URL('../',import.meta.url),env:{...process.env,ELECTRON_RENDERER_URL:'http://127.0.0.1:6400'},stdio:'inherit'});
+      child.once('error',reject);
+      child.once('exit',(code,signal)=>resolve(code??(signal?1:0)));
+    });
+    const rebuilt=await run('npm',['run','rebuild:native']);
+    process.exitCode=rebuilt;
+    if(!rebuilt&&!stopped) process.exitCode=await run('npx',['electron-vite','dev','--',
+      ...(values.debug?['--aurabot-debug']:[]),...(values['lock-memory']?['--aurabot-lock-memory']:[])]);
+  }
+} catch(error) {
+  console.error(error instanceof Error?error.message:String(error));
+  process.exitCode=1;
+}
