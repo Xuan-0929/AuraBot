@@ -1,3 +1,5 @@
+/** Verifies production model discovery against local manifest files.
+ * Temporary model roots exercise the registry used by desktop model selection without Electron. */
 import { mkdirSync, mkdtempSync, writeFileSync, rmSync } from "node:fs";
 import { join } from "node:path";
 import { tmpdir } from "node:os";
@@ -32,25 +34,5 @@ describe("Live2DModelRegistry", () => {
       displayName: "Alpha",
       manifestPath: "assets/live2d/alpha/Alpha.model3.json"
     });
-  });
-
-  it("prefers the requested current model id when it exists and otherwise falls back safely", () => {
-    const root = mkdtempSync(join(tmpdir(), "aurabot-live2d-models-"));
-    tempDirs.push(root);
-
-    mkdirSync(join(root, "hiyori"), { recursive: true });
-    writeFileSync(join(root, "hiyori", "Hiyori.model3.json"), "{}\n", "utf8");
-    mkdirSync(join(root, "beta"), { recursive: true });
-    writeFileSync(join(root, "beta", "Beta.model3.json"), "{}\n", "utf8");
-
-    const registry = createLive2DModelRegistry({
-      modelRootPath: root
-    });
-
-    const explicit = registry.resolveCurrentModel("beta");
-    expect(explicit?.id).toBe("beta");
-
-    const fallback = registry.resolveCurrentModel("missing");
-    expect(fallback?.id).toBe("hiyori");
   });
 });

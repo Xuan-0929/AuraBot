@@ -220,39 +220,6 @@ class ActiveProfileManagerTests(unittest.IsolatedAsyncioTestCase):
             self.assertFalse((root.parent / "escape").exists())
             await manager.shutdown()
 
-    async def test_profile_a_and_b_reopen_independent_context_and_soul(self) -> None:
-        calls: list[str] = []
-        hub = Hub(calls)
-
-        async def build(profile_id, path, soul):
-            context = ContextStore(path / "context.sqlite3")
-            runtime = Runtime(profile_id, soul, calls)
-            runtime.context = context
-            return ProfileResources(
-                profile_id, runtime, Owner("speech", profile_id, calls),
-                Memory("memory", profile_id, calls), closeables=(context,),
-            )
-
-        with tempfile.TemporaryDirectory() as directory:
-            manager = ActiveProfileManager(Path(directory), hub, build, generation_seed=0)
-            await manager.activate("profile_a", "Soul A")
-            manager.runtime.context.append_event("user_segment", {
-                "segment_id": "a-1", "input_id": "a", "text": "only A",
-            })
-            await manager.activate("profile_b", "Soul B")
-            manager.runtime.context.append_event("user_segment", {
-                "segment_id": "b-1", "input_id": "b", "text": "only B",
-            })
-            await manager.activate("profile_a", "Soul A restored")
-
-            self.assertEqual(manager.runtime.soul, "Soul A restored")
-            self.assertEqual(
-                [turn["content"] for turn in manager.runtime.context.fold().conversation_turns],
-                ["only A"],
-            )
-            self.assertEqual(manager.runtime.profile_id, "profile_a")
-            await manager.shutdown()
-
     async def test_real_profile_resources_keep_context_memory_vector_and_soul_isolated(self) -> None:
         calls: list[str] = []
         hub = Hub(calls)

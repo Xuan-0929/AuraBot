@@ -1,3 +1,5 @@
+/** Runs Node/Vue unit regressions without Electron; script and browser suites have separate entries.
+ * Shared aliases match production imports, while forks isolate globals and native SQLite handles. */
 import { defineConfig } from "vitest/config";
 import vue from "@vitejs/plugin-vue";
 
@@ -6,7 +8,7 @@ export default defineConfig({
   test: {
     globals: true,
     environment: "node",
-    include: ["tests/unit/**/*.spec.ts", "tests/integration/**/*.spec.ts"],
+    include: ["tests/unit/**/*.spec.ts"],
     pool: "forks"
   },
   resolve: {

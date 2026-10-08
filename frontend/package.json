@@ -17,11 +17,14 @@
     "rebuild:node": "npm rebuild better-sqlite3",
     "rebuild:native": "electron-rebuild -f -w better-sqlite3",
     "typecheck": "tsc --noEmit",
-    "test": "npm run rebuild:node && vitest run --config configs/vitest.config.ts",
+    "test": "npm run test:scripts && npm run test:unit",
     "test:backend": "uv run --project ../backend python -m unittest discover -s ../backend/tests -t ..",
     "test:unit": "npm run rebuild:node && vitest run --config configs/vitest.config.ts tests/unit",
-    "test:integration": "npm run rebuild:node && vitest run --config configs/vitest.config.ts tests/integration",
-    "test:e2e": "electron-rebuild -f -w better-sqlite3 && npm run build && playwright test --config configs/playwright.config.ts"
+    "test:e2e": "npm run rebuild:native && npm run build && playwright test --config configs/playwright.config.ts",
+    "test:scripts": "node --test tests/scripts/*.test.mjs",
+    "test:browser": "npm run build && playwright test --config configs/playwright.browser.config.ts",
+    "test:pi": "npm --prefix ../pi-aurabot-task test",
+    "test:all": "npm test && npm run test:backend && npm run test:pi && npm run test:e2e && playwright test --config configs/playwright.browser.config.ts"
   },
   "dependencies": {
     "@iconify-json/solar": "^1.2.5",

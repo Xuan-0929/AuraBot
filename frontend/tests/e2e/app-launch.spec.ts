@@ -1,9 +1,8 @@
-// Navigation assertions use the current model-connections product label.
-// Validates saved/applied status labels and the pet status settings navigation.
 /** Runs the real Electron windows, Python child and SQLite delivery path with isolated application data.
  * A local deterministic Chat Completions server checks transport integration without claiming real model,
- * Pi or microphone acceptance. Also verifies saved/applied revisions, no-op desktop application, busy
- * restart cancellation and port ownership; real provider/hardware smoke remains a separate manual check.
+ * Pi or microphone acceptance. The first launch also exercises the packaged AudioWorklet and Pet controls.
+ * Saved/applied revisions, busy restart cancellation and port ownership cross real desktop interfaces;
+ * real provider/hardware smoke remains a separate manual check.
  */
 import { mkdtempSync, rmSync, readdirSync } from 'node:fs';
 import { tmpdir } from 'node:os';
@@ -32,7 +31,33 @@ test('fresh desktop renders Hiyori, exposes unavailable models and applies saved
     const pixels=new Uint8Array(canvas.width*canvas.height*4);gl.readPixels(0,0,canvas.width,canvas.height,gl.RGBA,gl.UNSIGNED_BYTE,pixels);
     return pixels.some((value,index)=>index%4===3&&value>0);
   }),{timeout:20000}).toBe(true);
-  await pet.screenshot({path:'/private/tmp/aurabot-pet-verified.png'});
+  await test.step('packaged AudioWorklet captures and completes successive clauses',async()=>{
+    await pet.locator('.pet-vue-live2d-frame').click({position:{x:150,y:200}});
+    const asset=readdirSync(join(appRoot,'out/renderer/assets')).find(name=>/^audio-worklet-.*\.js$/.test(name))!;
+    const result=await pet.evaluate(async(asset)=>{
+      const context=new AudioContext();const source=context.createOscillator();
+      try{
+        await context.audioWorklet.addModule(new URL('./assets/'+asset,location.href));
+        const mic=new AudioWorkletNode(context,'aurabot-mic-capture');
+        const playback=new AudioWorkletNode(context,'aurabot-tts-playback',{outputChannelCount:[1]});
+        const silent=context.createGain();silent.gain.value=0;silent.connect(context.destination);
+        source.connect(mic);mic.connect(silent);playback.connect(silent);
+        const frame=new Promise<number>((resolve,reject)=>{const timer=setTimeout(()=>reject(new Error('capture timeout')),5000);mic.port.onmessage=event=>{if(event.data.type==='frame'){clearTimeout(timer);resolve(event.data.samples.length);}};});
+        await context.resume();source.start();const samples=await frame;
+        const completed:string[]=[];
+        for(const clauseId of ['first','second']){
+          const done=new Promise<{clauseId:string;endContextTime:number}>((resolve,reject)=>{const timer=setTimeout(()=>reject(new Error('playback timeout')),5000);playback.port.onmessage=event=>{if(event.data.type==='clause-complete'){clearTimeout(timer);resolve(event.data);}};});
+          playback.port.postMessage({type:'offer',clauseId});playback.port.postMessage({type:'append',samples:new Int16Array(2400)});playback.port.postMessage({type:'finish',clauseId});
+          const event=await done;
+          const deadline=Date.now()+5000;
+          while((context.getOutputTimestamp().contextTime??0)<event.endContextTime){if(Date.now()>deadline)throw new Error('device output clock timeout');await new Promise(resolve=>setTimeout(resolve,20));}
+          completed.push(event.clauseId);
+        }
+        return {samples,completed};
+      }finally{source.disconnect();await context.close();}
+    },asset);
+    expect(result).toEqual({samples:320,completed:['first','second']});
+  });
   const initial=await status();expect(initial.capabilities).toEqual({text:false,voice:false,tasks:false});
   const settingsPromise=electronApp.waitForEvent('window');await pet.evaluate(()=>window.aurabot.openSettingsWindow());const settings=await settingsPromise;
   await expect(settings.getByRole('button',{name:'保存',exact:true})).toBeDisabled();
@@ -53,6 +78,15 @@ test('fresh desktop renders Hiyori, exposes unavailable models and applies saved
   await expect(settings.getByRole('status')).toHaveText('已应用',{timeout:40000});
   expect((await status()).processId).not.toBe(initial.processId);
   const consolePromise=electronApp.waitForEvent('window');await pet.evaluate(()=>window.aurabot.openConsoleWindow());const consolePage=await consolePromise;
+  await pet.bringToFront();await pet.locator('.pet-action-console').focus();
+  await expect(pet.locator('.pet-action-console')).toHaveCSS('opacity','1');
+  await expect(pet.locator('.pet-action-console')).toHaveCSS('background-color','rgba(0, 0, 0, 0)');
+  await expect(pet.locator('.pet-vue-live2d-frame')).toHaveCSS('opacity','1');
+  await pet.locator('.pet-action-console').press('Enter');await expect(consolePage).toHaveURL(/#console$/);
+  await pet.evaluate(()=>{(document.activeElement as HTMLElement)?.blur();});
+  const petWindow=await electronApp.browserWindow(pet);
+  await petWindow.evaluate(w=>w.webContents.send('pet:cursor-position',{screenX:-1000,screenY:-1000,localX:-1000,localY:-1000}));
+  await expect(pet.locator('.pet-action-console')).toHaveCSS('opacity','0');
   const taskToggle=consolePage.getByRole('button',{name:'展开任务列表',exact:true});
   await expect(taskToggle.or(consolePage.getByRole('complementary',{name:'任务',exact:true})).first()).toBeVisible();
   if(await taskToggle.isVisible()){await taskToggle.click();await expect(consolePage.getByRole('dialog')).toBeVisible();await consolePage.keyboard.press('Escape');}
@@ -60,8 +94,6 @@ test('fresh desktop renders Hiyori, exposes unavailable models and applies saved
   await consolePage.locator('textarea').fill('未配置模型时不应记录成功');await consolePage.locator('textarea').press('Enter');
   await expect(consolePage.getByRole('alert')).toContainText('模型尚未配置');
   expect((await pet.evaluate(()=>window.aurabot.getHistory())).messages).toEqual([]);
-  await settings.getByRole('button',{name:'桌宠状态',exact:true}).click();
-  await settings.screenshot({path:'/private/tmp/aurabot-settings-verified.png'});
  }finally{await close(electronApp);rmSync(userDataDir,{recursive:true,force:true});}
 });
 
@@ -119,36 +151,4 @@ test('occupied backend port reports an error and never terminates the existing l
   await expect.poll(()=>pet.evaluate(async()=>(await window.aurabot.getSettings()).error),{timeout:10000}).toContain('6401 已被占用');
   expect(await(await fetch('http://127.0.0.1:6401')).text()).toBe('unrelated listener');
  }finally{await electronApp.close();listener.closeAllConnections();await new Promise<void>(resolve=>listener.close(()=>resolve()));rmSync(userDataDir,{recursive:true,force:true});}
-});
-
-test('real Electron loads the packaged AudioWorklet and completes successive synthetic clauses',async()=>{
- const {electronApp,pet,userDataDir}=await launch();
- try{
-  await ready(pet);
-  await pet.locator('.pet-vue-live2d-frame').click({position:{x:150,y:200}});
-  const asset=readdirSync(join(appRoot,'out/renderer/assets')).find(name=>/^audio-worklet-.*\.js$/.test(name))!;
-  const result=await pet.evaluate(async(asset)=>{
-    const context=new AudioContext();const source=context.createOscillator();
-    try{
-      await context.audioWorklet.addModule(new URL('./assets/'+asset,location.href));
-      const mic=new AudioWorkletNode(context,'aurabot-mic-capture');
-      const playback=new AudioWorkletNode(context,'aurabot-tts-playback',{outputChannelCount:[1]});
-      const silent=context.createGain();silent.gain.value=0;silent.connect(context.destination);
-      source.connect(mic);mic.connect(silent);playback.connect(silent);
-      const frame=new Promise<number>((resolve,reject)=>{const timer=setTimeout(()=>reject(new Error('capture timeout')),5000);mic.port.onmessage=event=>{if(event.data.type==='frame'){clearTimeout(timer);resolve(event.data.samples.length);}};});
-      await context.resume();source.start();const samples=await frame;
-      const completed:string[]=[];
-      for(const clauseId of ['first','second']){
-        const done=new Promise<{clauseId:string;endContextTime:number}>((resolve,reject)=>{const timer=setTimeout(()=>reject(new Error('playback timeout')),5000);playback.port.onmessage=event=>{if(event.data.type==='clause-complete'){clearTimeout(timer);resolve(event.data);}};});
-        playback.port.postMessage({type:'offer',clauseId});playback.port.postMessage({type:'append',samples:new Int16Array(2400)});playback.port.postMessage({type:'finish',clauseId});
-        const event=await done;
-        const deadline=Date.now()+5000;
-        while((context.getOutputTimestamp().contextTime??0)<event.endContextTime){if(Date.now()>deadline)throw new Error('device output clock timeout');await new Promise(resolve=>setTimeout(resolve,20));}
-        completed.push(event.clauseId);
-      }
-      return {samples,completed};
-    }finally{source.disconnect();await context.close();}
-  },asset);
-  expect(result).toEqual({samples:320,completed:['first','second']});
- }finally{await close(electronApp);rmSync(userDataDir,{recursive:true,force:true});}
 });
