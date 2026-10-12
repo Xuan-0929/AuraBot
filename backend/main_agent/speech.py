@@ -15,7 +15,8 @@ it serializes microphone processing with turn resets so typed input can reuse sp
 Static assets are verified on first load, outside the PCM hot path; resetting a turn invalidates old sinks
 before closing STT and never cancels a running VAD thread before resetting its recurrent state.
 It owns only speech resources and never shuts down MainAgentRuntime.
-Near-field RMS and continuous VAD qualification precede Runtime/STT activation, retaining 400 ms pre-roll.
+Continuous VAD qualification precedes Runtime/STT activation, retaining 400 ms pre-roll.
+RMS remains observable during onset; the existing joint RMS/VAD gate still detects pauses after activation.
 Delivery explicitly closes synthesis when playback-credit waits are cancelled, joining spool cleanup.
 Hub-owned frozen diagnostic scopes observe 500 ms acoustic windows, VAD readiness and
 session-specific STT finalization alongside EOU/TTS transitions synchronously;
@@ -675,8 +676,9 @@ class SmartTurnDetector(_LazyLocalDetector):
 class SpeechInputCoordinator:
     """Feed continuous mic PCM through short pre-roll, VAD, normalized STT, and bounded EOU timing.
 
-    Near-field RMS, relative noise and continuous VAD must agree for 300 ms before any Runtime/STT
-    side effects. Pre-roll retains the onset; transcript callbacks cannot bypass acoustic confirmation.
+    Continuous VAD must pass for 300 ms before any Runtime/STT side effects, including through
+    brief volume dips. Pre-roll retains the onset; transcript callbacks cannot bypass confirmation.
+    RMS and relative noise continue to qualify activity within an already active turn.
     The coordinator creates no resident worker: each incoming 20 ms frame advances the small acoustic
     state, while at most one transient endpoint task exists during a silence candidate.  VAD silence
     alone never calls StrongPause; only a complete EOU score or the fixed fallback deadline can do so.
@@ -759,6 +761,7 @@ class SpeechInputCoordinator:
         if debug is None or not debug.enabled:
             return
         debug.recorder.update_state(debug, "input", active=self._active,
+            onsetGate="vad",
             confirmMs=self._speech_frames * self.frame_ms, silenceMs=self._silence_frames * self.frame_ms,
             confirmTargetMs=self.confirm_frames * self.frame_ms, silenceTargetMs=self.stop_frames * self.frame_ms,
             noiseFloor=self._noise_floor, threshold=max(self.min_speech_rms, self._noise_floor * self.speech_noise_ratio))
@@ -812,14 +815,15 @@ class SpeechInputCoordinator:
             self.audio.append(pcm16le)
         self._diagnostic_frames += 1
         if self._diagnostic_frames % 250 == 0:
-            speech_logger.info("mic_gate rms=%.4f noise=%.4f threshold=%.4f vad=%.3f active=%s", rms, self._noise_floor, threshold, probability, self._active)
+            speech_logger.info("mic_gate onset_gate=vad rms=%.4f noise=%.4f threshold=%.4f vad=%.3f active=%s", rms, self._noise_floor, threshold, probability, self._active)
         if not self._active:
             if probability < self.vad_threshold:
                 self._noise_floor += 0.05 * (rms - self._noise_floor)
-            self._speech_frames = self._speech_frames + 1 if speech else 0
+            # A quiet phoneme must not erase otherwise continuous VAD evidence at onset.
+            self._speech_frames = self._speech_frames + 1 if probability >= self.vad_threshold else 0
             self._observe_acoustics(probability, rms, threshold, before_confirm_ms, was_active)
             if self._speech_frames >= self.confirm_frames:
-                speech_logger.info("speech_confirmed rms=%.4f threshold=%.4f vad=%.3f duration_ms=%d", rms, threshold, probability, self._speech_frames * self.frame_ms)
+                speech_logger.info("speech_confirmed onset_gate=vad rms=%.4f threshold=%.4f vad=%.3f duration_ms=%d", rms, threshold, probability, self._speech_frames * self.frame_ms)
                 await self._start_candidate()
             return
 
@@ -839,7 +843,7 @@ class SpeechInputCoordinator:
                 self._stop_issued = False
                 self._speech_frames = 0
                 await self.runtime.vad_start()
-                # This utterance already passed near-field confirmation. A brief continuation must
+                # This utterance already passed VAD confirmation. A brief continuation must
                 # not discard its earlier transcript by requiring another full onset window.
                 await self.runtime.confirm_speech()
                 await self._playback("speech_activity", active=True)
@@ -877,7 +881,9 @@ class SpeechInputCoordinator:
                 was_active=was_active, segmentId=self._segment_id, rms=rms,
                 noiseFloor=self._noise_floor, threshold=threshold, vad=probability,
                 vadThreshold=self.vad_threshold, vadStatus=status, vadReason=reason,
-                speech=probability is not None and probability >= self.vad_threshold and rms >= threshold,
+                onsetGate="vad",
+                speech=probability is not None and probability >= self.vad_threshold
+                    and (not self._active or rms >= threshold),
                 active=self._active, confirmMs=self._speech_frames * self.frame_ms,
                 silenceMs=self._silence_frames * self.frame_ms,
                 confirmTargetMs=self.confirm_frames * self.frame_ms,
@@ -924,7 +930,7 @@ class SpeechInputCoordinator:
         self._stop_issued = False
         self._has_transcript = False
         self._segment_id = str(uuid.uuid4())
-        self._debug("input", "confirmed", confirmMs=self._speech_frames * self.frame_ms)
+        self._debug("input", "confirmed", onsetGate="vad", confirmMs=self._speech_frames * self.frame_ms)
         await self._playback("speech_candidate_started")
         await self.runtime.vad_start()
         await self._playback("speech_confirmed")

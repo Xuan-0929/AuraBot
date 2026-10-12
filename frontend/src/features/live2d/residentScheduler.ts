@@ -1,6 +1,7 @@
 /** Selects one verified resident candidate per state round using the player's existing clock.
  * It owns no timers or resources: AvatarPlayer supplies loaded clips and applies each selection.
- * SAY/preview suspension preserves round age; state changes while suspended collapse to the latest. */
+ * SAY/preview suspension preserves round age; state changes while suspended collapse to the latest.
+ * A state change retains a still-eligible current action and its remaining round instead of replaying it. */
 import type {AvatarAdaptor,AvatarState} from '../../shared/contracts/avatar';
 interface Candidate {identity?:string;kind:'motion'|'expression';durationMs:number;fadeInMs:number;fadeOutMs?:number;}
 export class ResidentScheduler {
@@ -21,17 +22,18 @@ export class ResidentScheduler {
   if(this.fingerprint===fingerprint)return;
   this.fingerprint=fingerprint;this.appliedState=undefined;if(!this.paused)this.draw();
  }
- setState(state:AvatarState){this.state=state;if(!this.paused&&this.appliedState!==state)this.draw();}
- pause(value:boolean){this.paused=value;if(!value&&this.appliedState!==this.state)this.draw();}
+ setState(state:AvatarState){this.state=state;if(!this.paused&&this.appliedState!==state)this.draw(true);}
+ pause(value:boolean){this.paused=value;if(!value&&this.appliedState!==this.state)this.draw(true);}
  restart(){this.appliedState=undefined;if(!this.paused)this.draw();}
  advance(deltaMs:number){
   if(this.paused||!Number.isFinite(deltaMs)||deltaMs<=0)return;
   this.remainingMs-=deltaMs;
   if(this.remainingMs<=1e-7)this.draw();
  }
- private draw(){
+ private draw(preserveCurrent=false){
   let pool=this.states[this.state].filter(id=>this.available.has(id));
   if(!pool.length&&this.state!=='idle')pool=this.states.idle.filter(id=>this.available.has(id));
+  if(preserveCurrent&&this.appliedState!==undefined&&this.current&&pool.includes(this.current)){this.appliedState=this.state;return;}
   const previous=this.current;
   const value=this.random();const index=Math.min(pool.length-1,Math.floor(Math.max(0,Number.isFinite(value)?value:0)*pool.length));
   this.current=pool[index];this.appliedState=this.state;

@@ -1,6 +1,6 @@
 /** Localizes the independent Live debug window and its launch-gated settings actions.
  * Shared keys keep status, stage and structured field labels consistent across zh/en/ja;
- * field labels include acoustic windows, VAD readiness and STT teardown context;
+ * field labels include acoustic windows, VAD-only onset and current-gate counts, readiness and STT teardown context;
  * inspector controls leave unknown keys inspectable without altering telemetry values. */
 const en = {
  title:'Live voice debug', launchMode:'Started in debug mode', hint:'Enabled for this application run. Logs save recognized speech and replies on this computer.',
@@ -110,6 +110,7 @@ threshold|Threshold|门限|しきい値
 vad|VAD probability|VAD 概率|VAD 確率
 probability|Probability|概率|確率
 vadThreshold|VAD threshold|VAD 门限|VAD しきい値
+onsetGate|Onset confirmation gate|讲话开始确认规则|発話開始の確認条件
 eouThreshold|EOU threshold|EOU 门限|EOU しきい値
 speechMs|Speech duration|讲话时长|発話時間
 silenceMs|Silence duration|静音时长|無音時間
@@ -118,7 +119,7 @@ windowMs|Window duration|窗口时长|ウィンドウ時間
 windowFrames|Window frames|窗口帧数|ウィンドウフレーム数
 vadPassFrames|VAD passing frames|VAD 达标帧数|VAD 判定通過フレーム数
 rmsPassFrames|RMS passing frames|音量达标帧数|音量判定通過フレーム数
-qualifiedFrames|Jointly passing frames|共同达标帧数|両方の判定通過フレーム数
+qualifiedFrames|Frames passing current gate|当前规则达标帧数|現在の条件を通過したフレーム数
 maxQualifiedRunMs|Longest passing run in window|窗口内最长连续达标时长|ウィンドウ内最長連続通過時間
 maxConfirmMs|Peak confirmation duration|窗口内最大确认时长|最大確認時間
 rmsMin|Minimum RMS|最低 RMS|最小 RMS

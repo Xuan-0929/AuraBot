@@ -1,5 +1,6 @@
 /** Verifies wall-clock pose transitions and SAY identity ownership without mocking the scheduler.
- * Synthetic continuous curves isolate blend math; real Cubism/Core evaluation is covered by Electron.
+ * Synthetic continuous curves isolate blend math and interrupted baseline fades;
+ * real Cubism/Core evaluation is covered by player regressions and Electron.
  */
 import { describe, expect, it } from 'vitest';
 import { PoseChannel, type PoseClip } from '../../../src/features/live2d/poseChannel';
@@ -22,5 +23,15 @@ describe('pose channel',()=>{
  it('new gestures replace ownership and cancellation returns continuously',()=>{
   const p=new PoseChannel(new Float32Array([0]));p.play(clip(5));p.advance(100);p.play(clip(-5));const before=p.pose[0]!;p.advance(1);expect(Math.abs(p.pose[0]!-before)).toBeLessThan(0.01);
   p.cancel();for(let i=0;i<5;i++)p.advance(100);expect(p.pose[0]).toBe(0);
+ });
+ it('collapses interrupted baseline fades to the displayed pose and releases outgoing controls',()=>{
+  const p=new PoseChannel(new Float32Array([0]));
+  p.setBaseline({...clip(5),ids:new Set(['old'])});for(let i=0;i<4;i++)p.advance(100);
+  p.setBaseline({...clip(-5),ids:new Set(['next'])});p.advance(100);
+  const before=p.pose[0]!;p.setBaseline(clip(20));expect(p.pose[0]).toBe(before);
+  p.advance(1);expect(Math.abs(p.pose[0]!-before)).toBeLessThan(.01);
+  expect([...p.fadingIds]).toEqual(['old','next']);
+  for(let i=0;i<3;i++)p.advance(100);
+  expect(p.pose[0]).toBeCloseTo(20.0301,4);expect(p.fadingIds.size).toBe(0);
  });
 });

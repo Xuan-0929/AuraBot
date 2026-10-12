@@ -3,7 +3,7 @@
 The tests protect mutable-only DashScope partials through the real coordinator and Runtime admission limit,
 stable segment identity, authoritative playback events, first-chunk TTS streaming, Speech Ledger phases,
 ACK serialization, cancellation, and SpeechService ownership without real providers or microphones.
-Near-field qualification, lossless burst spooling, log rotation and cancellation while awaiting playback
+VAD-only onset qualification through volume dips, lossless burst spooling, log rotation and cancellation while awaiting playback
 credit exercise the real coordinators with controlled provider callbacks and PCM fixtures.
 STT regression cases delay final callbacks and overlap finish/close to protect single-owner cleanup.
 """
@@ -460,48 +460,50 @@ class SpeechInputTests(unittest.IsolatedAsyncioTestCase):
             self.assertTrue(runtime.completed)
         finally:
             await coordinator.close()
-    async def test_default_gate_ignores_distant_and_intermittent_voice_then_keeps_near_preroll(self):
+    async def test_onset_rejects_non_speech_and_intermittent_vad_but_preserves_volume_dips(self):
         runtime, playback, stt = AsyncMock(), FakePlayback(), FakeStt()
-        values = [1.0] * 30 + [1.0, 0.0] * 20 + [1.0] * 15
+        values = [0.0] * 30 + [1.0, 0.0] * 20 + [1.0] * 15
         coordinator = SpeechInputCoordinator(runtime, vad=FakeVad(values), stt_provider=stt, playback_lifecycle=playback)
         quiet_voice = b"\x40\x00" * 320
         near_voice = b"\x00\x08" * 320
         try:
             for _ in range(30):
-                await coordinator.accept_mic_frame(quiet_voice)
+                await coordinator.accept_mic_frame(near_voice)
             self.assertEqual(playback.events, [])
             self.assertEqual(stt.sessions, [])
             for index in range(40):
                 await coordinator.accept_mic_frame(near_voice if index % 2 == 0 else b"\0" * 640)
             self.assertEqual(playback.events, [])
-            for _ in range(14):
-                await coordinator.accept_mic_frame(near_voice)
+            onset = [near_voice] * 9 + [quiet_voice] + [near_voice] * 5
+            for frame in onset[:14]:
+                await coordinator.accept_mic_frame(frame)
             self.assertEqual(playback.events, [])
             self.assertEqual(runtime.mock_calls, [])
-            await coordinator.accept_mic_frame(near_voice)
+            await coordinator.accept_mic_frame(onset[-1])
             self.assertEqual(playback.events, ["candidate", "confirmed"])
             self.assertEqual(len(stt.sessions), 1)
             self.assertGreaterEqual(len(stt.sessions[0].frames), 15)
-            self.assertEqual(stt.sessions[0].frames[-15:], [near_voice] * 15)
+            self.assertEqual(stt.sessions[0].frames[-15:], onset)
             self.assertEqual(runtime.confirm_speech.await_count, 1)
             await stt.sessions[0].sink(TranscriptUpdate("hello", "", "hello", "partial"))
             self.assertEqual(runtime.confirm_speech.await_count, 1)
         finally:
             await coordinator.close()
 
-    async def test_background_calibration_rejects_marginal_voice_and_resets_for_new_capture(self):
+    async def test_background_calibration_does_not_veto_vad_onset_before_or_after_reset(self):
         runtime, stt = AsyncMock(), FakeStt()
         coordinator = SpeechInputCoordinator(runtime, vad=FakeVad([0.0] * 100 + [1.0] * 30), stt_provider=stt)
         try:
             for _ in range(100):
                 await coordinator.accept_mic_frame(b"\x00\x02" * 320)
-            for _ in range(15):
-                await coordinator.accept_mic_frame(b"\x00\x04" * 320)
             self.assertEqual(stt.sessions, [])
-            await coordinator.reset_input()
             for _ in range(15):
                 await coordinator.accept_mic_frame(b"\x00\x04" * 320)
             self.assertEqual(len(stt.sessions), 1)
+            await coordinator.reset_input()
+            for _ in range(15):
+                await coordinator.accept_mic_frame(b"\x00\x04" * 320)
+            self.assertEqual(len(stt.sessions), 2)
         finally:
             await coordinator.close()
     async def test_acoustic_edges_cover_pause_resume_and_reset_without_transcripts(self) -> None:

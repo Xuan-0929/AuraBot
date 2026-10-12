@@ -1,7 +1,7 @@
 /** Defines the opt-in diagnostic boundary shared by Pet, Main and the debug window.
  * Startup mode and fixture identity accompany approved diagnostic fields. Only approved scalar facts cross IPC; byte/count caps apply before caching, displaying or logging.
  * Source sequence preserves local order; Main assigns id for its merged, bounded timeline.
- * Acoustic window counters and STT teardown facts pass the same scalar whitelist into disk and UI. */
+ * Acoustic window counters, onset gate identity and STT teardown facts pass the same scalar whitelist into disk and UI. */
 export type DebugScalar = string | number | boolean | null;
 export type DebugState = Record<string, Record<string, DebugScalar>>;
 export interface LiveDebugEvent {
@@ -26,7 +26,7 @@ const fields=new Set(`debug lockMemory memoryFixture state enabled voiceEnabled 
  sent dropped received frames sentFrames droppedFrames receivedFrames consumedSamples sentSamples queuedSamples queuedMs bufferedAmount
  sampleRate channelCount echoCancellation noiseSuppression autoGainControl elapsedMs durationMs latencyMs firstChunkMs firstAudioMs
  contextTime endContextTime outputTime outputContextTime clockSkewMs mode status phase accepted complete cancelled available
- rms noise noiseFloor threshold vad probability vadThreshold eouThreshold speechMs silenceMs confirmMs active
+ rms noise noiseFloor threshold vad probability vadThreshold onsetGate eouThreshold speechMs silenceMs confirmMs active
  segmentId inputId invokeId sayId clauseId commandId commandType profileId generation configRevision
  revision contextVersion trigger highPriority admitted count queueDepth bytes samples totalBytes totalSamples
  toolName receiptCode silent startedAt updatedAt deadlineMs fallbackMs online connected audioContextState

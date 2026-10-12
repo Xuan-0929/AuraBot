@@ -1,6 +1,6 @@
 /** Exercises bounded debug collection, bounded diagnostics, and real rotating files.
  * Main's collector is tested with an injected HTTP boundary, including acoustic windows
- * surviving sanitization and disk writes, never a second voice connection. */
+ * and VAD-only onset identity surviving sanitization and disk writes, never a second voice connection. */
 import { mkdtempSync, mkdirSync, readFileSync, readdirSync, rmSync, writeFileSync, statSync } from 'node:fs';
 import { join } from 'node:path';
 import { tmpdir } from 'node:os';
@@ -26,10 +26,10 @@ it('writes the backend-confirmed launch mode and fixture into each synchronized 
 });
 
 it('preserves acoustic window and teardown facts from backend polling to JSONL',async()=>{
- const details={windowMs:501,windowFrames:25,vadPassFrames:22,rmsPassFrames:17,qualifiedFrames:16,
+ const details={onsetGate:'vad',windowMs:501,windowFrames:25,vadPassFrames:22,rmsPassFrames:17,qualifiedFrames:22,
   maxQualifiedRunMs:160,rmsMin:.000031,rmsMax:.041234,thresholdMin:.02,thresholdMax:.023,
-  maxConfirmMs:240,confirmMs:0,resetRmsCount:3,resetVadCount:1,resetBothCount:0,resetUnavailableCount:0,
-  lastResetReason:'rms_below_threshold',lastResetFromMs:240,partial:false,vadStatus:'ready',vadReason:null,
+  maxConfirmMs:240,confirmMs:0,resetRmsCount:0,resetVadCount:1,resetBothCount:0,resetUnavailableCount:0,
+  lastResetReason:'vad_below_threshold',lastResetFromMs:240,partial:false,vadStatus:'ready',vadReason:null,
   vadWarmupFrames:1,vadUnavailableFrames:0,vadErrorFrames:0,operation:'send_audio',finalizing:true,
   endpointPending:true,exceptionType:'RuntimeError'};
  let capture='';

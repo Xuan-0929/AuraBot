@@ -5,6 +5,8 @@ Runtime and Speech. Scalar allowlists exclude provider payloads and secrets, whi
 capture and process identities make polling, clears, and restarts unambiguous.
 AcousticWindow aggregates scalar frame facts on the existing microphone task;
 capture epochs fence partial windows across clears and enable/disable transitions.
+Passing-frame statistics follow the coordinator's current gate; onset resets are VAD-only,
+while independent RMS measurements and legacy reset counters remain available for comparison.
 Speech-stream milestones admit only model names, character counts and flush reasons, never raw deltas.
 """
 from __future__ import annotations
@@ -22,7 +24,7 @@ STAGES = frozenset({"connection", "input", "stt", "eou", "model", "tts", "playba
 DETAILS = frozenset({
     "connected", "accepting", "mode", "state", "active", "enabled", "reason", "code",
     "frames", "droppedFrames", "queuedFrames", "rms", "noiseFloor", "threshold", "vad",
-    "speech", "confirmMs", "silenceMs", "confirmTargetMs", "silenceTargetMs",
+    "speech", "onsetGate", "confirmMs", "silenceMs", "confirmTargetMs", "silenceTargetMs",
     "text", "stablePrefix", "mutableSuffix", "stability", "probability", "elapsedMs",
     "fallbackMs", "timeoutMs", "incomplete", "pending", "running", "toolName", "cancelled",
     "silent", "accepted", "complete", "sentSamples", "consumedSamples", "queuedClauses",
@@ -209,7 +211,7 @@ class AcousticWindow:
         vad = facts["vad"]
         vad_pass = vad is not None and vad >= facts["vadThreshold"]
         rms_pass = facts["rms"] >= facts["threshold"]
-        qualified = vad_pass and rms_pass
+        qualified = facts["speech"]
         stats["windowFrames"] += 1
         stats["vadPassFrames"] += int(vad_pass)
         stats["rmsPassFrames"] += int(rms_pass)
@@ -223,12 +225,8 @@ class AcousticWindow:
         if not was_active and before_confirm_ms > 0 and facts["confirmMs"] == 0:
             if vad is None:
                 field, reason = "resetUnavailableCount", "vad_unavailable"
-            elif vad_pass:
-                field, reason = "resetRmsCount", "rms_below_threshold"
-            elif rms_pass:
-                field, reason = "resetVadCount", "vad_below_threshold"
             else:
-                field, reason = "resetBothCount", "both_below_threshold"
+                field, reason = "resetVadCount", "vad_below_threshold"
             stats[field] += 1
             stats.update(lastResetReason=reason, lastResetFromMs=before_confirm_ms)
         status = facts["vadStatus"]

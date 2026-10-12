@@ -2,7 +2,8 @@
  * SDK samplers produce poses against a stable rest/baseline buffer; timed weights enter from the
  * last body pose and return gesture-only parameters/parts to the continuing baseline. No frame-wise
  * low-pass, parameter accumulation, random selection, callbacks or motion backlog lives in this channel.
- * A bounded union of outgoing parameter IDs preserves control during fades without retaining old clips.
+ * Baseline handoffs keep one outgoing clip moving during the fade. Interrupted fades and gestures
+ * start from the displayed pose; a bounded union of outgoing IDs preserves control without a backlog.
  */
 export interface PoseClip {
   ids?:ReadonlySet<string>;
@@ -21,6 +22,9 @@ export class PoseChannel {
   private baseline?:PoseClip;
   private baselineStarted=0;
   private baselineFadeStarted=0;
+  private outgoingBaseline?:PoseClip;
+  private outgoingStarted=0;
+  private outgoingFadeStarted=0;
   private gesture?:PoseClip;
   private gestureStarted=0;
   private transitionStarted=0;
@@ -35,12 +39,16 @@ export class PoseChannel {
   get activeGesture():boolean{return Boolean(this.gesture);}
   setBaseline(clip:PoseClip|undefined,restart=false){
     if(this.baseline===clip&&!restart)return;
+    const moving=!this.gesture&&this.elapsedMs-this.transitionStarted>=this.transitionMs;
+    const started=this.baselineStarted,fadeStarted=this.baselineFadeStarted;
     const outgoing=this.baseline;if(outgoing!==clip)this.baselineFadeStarted=this.elapsedMs;this.baseline=clip;this.baselineStarted=this.elapsedMs;
     this.transition(Math.min(5000,Math.max(250,clip?.fadeInMs??0,outgoing?.fadeOutMs??0)),outgoing);
+    if(moving){this.outgoingBaseline=outgoing;this.outgoingStarted=started;this.outgoingFadeStarted=fadeStarted;}
   }
   play(clip:PoseClip){const outgoing=this.gesture;this.gesture=clip;this.gestureStarted=this.elapsedMs;this.transition(clip.fadeInMs,outgoing);}
   cancel(durationMs=150){const outgoing=this.gesture;this.gesture=undefined;this.transition(durationMs,outgoing);}
   private transition(durationMs:number,outgoing?:PoseClip){
+    this.outgoingBaseline=undefined;
     this.source.set(this.pose);this.transitionStarted=this.elapsedMs;this.transitionMs=durationMs;
     // Rapid replacement unions IDs only. Validated clips cannot exceed the real model ID set.
     if(durationMs<=0)this.outgoingIds.clear();else for(const id of outgoing?.ids??[])this.outgoingIds.add(id);
@@ -68,7 +76,11 @@ export class PoseChannel {
     this.target.set(this.baselinePose);
     if(this.gesture)this.gesture.sample(this.target,this.elapsedMs-this.gestureStarted,this.baselinePose);
     const weight=this.transitionMs<=0?1:ease((this.elapsedMs-this.transitionStarted)/this.transitionMs);
+    if(this.outgoingBaseline&&weight<1){
+      const time=Math.min(this.elapsedMs-this.outgoingStarted,this.outgoingBaseline.durationMs);
+      this.outgoingBaseline.sample(this.source,time,this.rest,this.elapsedMs-this.outgoingFadeStarted);
+    }
     for(let i=0;i<this.pose.length;i++)this.pose[i]=this.source[i]!+(this.target[i]!-this.source[i]!)*weight;
-    if(weight>=1)this.outgoingIds.clear();
+    if(weight>=1){this.outgoingIds.clear();this.outgoingBaseline=undefined;}
   }
 }

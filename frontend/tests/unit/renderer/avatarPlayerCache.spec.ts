@@ -1,5 +1,6 @@
 /** Runs the production player with the real Cubism/Core evaluator to protect resident baseline phase.
- * Playback gates must not freeze unowned resident actions when Backend VAD changes state.
+ * Playback gates must not freeze unowned resident actions when Backend VAD changes state;
+ * state handoffs retain outgoing motion velocity and shared resident playback phase.
  * Fetch supplies a bounded authored motion; GPU rendering is covered separately by Electron tests.
  */
 import {afterAll,afterEach,beforeAll,expect,it,vi} from 'vitest';
@@ -34,10 +35,10 @@ it('retains active resource identity and its continuing phase when only the Prof
   expect(player.channel.elapsedMs).toBeGreaterThan(phase); // No SAY owner: resident remains alive under the audio gate.
   player.accept({type:'resume'});await player.setState('idle');
   for(let i=0;i<12;i++)player.advance(100);
-  const baseline=player.channel.currentBaseline;const elapsed=player.channel.elapsedMs;const angle=player.sampler.index('ParamAngleX');expect(player.channel.pose[angle]).toBeCloseTo(3.4,4);
+  const baseline=player.channel.currentBaseline;const elapsed=player.channel.elapsedMs;const angle=player.sampler.index('ParamAngleX');expect(player.channel.pose[angle]).toBeCloseTo(3.6,4);
   await player.configure({...config,revision:2,generation:2,adaptor:{...structuredClone(adaptor),revision:2}});
   expect(fetch).toHaveBeenCalledOnce();expect(player.channel.currentBaseline).toBe(baseline);expect(player.channel.elapsedMs).toBe(elapsed);
-  player.advance(100);expect(player.channel.pose[angle]).toBeCloseTo(3.6,4);expect(ticks.size).toBe(1);expect(avatarInstances.active).toBe(beforeInstances+1);
+  player.advance(100);expect(player.channel.pose[angle]).toBeCloseTo(3.8,4);expect(ticks.size).toBe(1);expect(avatarInstances.active).toBe(beforeInstances+1);
  }finally{player.dispose();vi.unstubAllGlobals();}
  expect(ticks.size).toBe(0);expect(avatarInstances.active).toBe(beforeInstances);
 });
@@ -77,6 +78,30 @@ function residentFixture(random:()=>number=()=>0){
  const p=new AvatarPlayer(app as any,model as any,config,sdk,()=>{},random);
  return {p,core,config,ticks};
 }
+it('keeps a moving idle alive during the first listening fade instead of freezing its pose',async()=>{
+ const {p,config}=residentFixture();config.adaptor.states.listening=['b'];
+ try{
+  await p.prepare();for(let i=0;i<5;i++)p.advance(100);
+  const angle=p.sampler.index('ParamAngleX');expect(p.channel.pose[angle]).toBeCloseTo(15);
+  await p.setState('listening');p.advance(1);
+  // A advances 10 degrees/sec. A 1ms crossfade must retain that initial motion,
+  // with only a small contribution from B (cosine weight starts at zero slope).
+  expect(p.channel.pose[angle]).toBeGreaterThan(15.008);
+  for(let i=0;i<3;i++)p.advance(100);
+  expect(p.channel.pose[angle]).toBeCloseTo(-8.495,3);
+ }finally{p.dispose();vi.unstubAllGlobals();}
+});
+it('preserves the round and phase across idle/listening states sharing the current motion',async()=>{
+ const {p,config}=residentFixture();config.adaptor.states.listening=['a'];
+ try{
+  await p.prepare();for(let i=0;i<5;i++)p.advance(100);
+  const angle=p.sampler.index('ParamAngleX');await p.setState('listening');p.advance(100);
+  expect(p.channel.pose[angle]).toBeCloseTo(16,3);
+  await p.setState('idle');p.advance(100);expect(p.channel.pose[angle]).toBeCloseTo(17,3);
+  expect(p.diagnostics.residentStarts).toBe(1);
+  for(let i=0;i<3;i++)p.advance(100);expect(p.diagnostics.residentStarts).toBe(2);
+ }finally{p.dispose();vi.unstubAllGlobals();}
+});
 it('crossfades actual Core motion endpoints and exclusive part opacity without rest frames at 30/60/120 Hz',async()=>{
  const results:number[][]=[];
  for(const hz of [30,60,120]){let n=0;const {p,core,ticks}=residentFixture(()=>n++%2?0.99:0);

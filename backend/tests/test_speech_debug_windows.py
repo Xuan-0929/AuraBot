@@ -2,6 +2,7 @@
 
 Controlled clocks and PCM frames exercise window accounting, capture isolation and
 STT teardown serialization without cloud providers; finalization must exclude new sends.
+Onset diagnostics must follow VAD-only confirmation while retaining independent RMS measurements.
 """
 import asyncio
 import struct
@@ -49,11 +50,11 @@ class SpeechDebugWindowTests(unittest.IsolatedAsyncioTestCase):
 
     async def test_counts_ranges_resets_and_post_frame_counters(self):
         await self.frame(0)
-        await self.frame(.05, .001)  # RMS reset
+        await self.frame(.05, .001)  # Low RMS does not reset onset confirmation.
         await self.frame(.10)
         await self.frame(.15, .04, 0)  # VAD reset
         await self.frame(.20)
-        await self.frame(.25, .001, 0)  # both reset
+        await self.frame(.25, .001, 0)  # VAD reset even when RMS is also low.
         await self.frame(.30)
         await self.frame(.35, .0001, None)  # unavailable reset
         await self.frame(.40, .001, 0)  # zero -> zero is not a reset
@@ -64,17 +65,38 @@ class SpeechDebugWindowTests(unittest.IsolatedAsyncioTestCase):
         self.assertEqual(window["windowMs"], 500)
         self.assertEqual(window["vadPassFrames"], 6)
         self.assertEqual(window["rmsPassFrames"], 6)
-        self.assertEqual(window["qualifiedFrames"], 5)
-        self.assertEqual(window["maxQualifiedRunMs"], 20)
+        self.assertEqual(window["qualifiedFrames"], 6)
+        self.assertEqual(window["maxQualifiedRunMs"], 60)
         self.assertEqual(window["confirmMs"], 20)
-        self.assertEqual(window["maxConfirmMs"], 20)
-        for field in ("resetRmsCount", "resetVadCount", "resetBothCount", "resetUnavailableCount"):
-            self.assertEqual(window[field], 1, field)
+        self.assertEqual(window["maxConfirmMs"], 60)
+        self.assertEqual(window["resetRmsCount"], 0)
+        self.assertEqual(window["resetVadCount"], 2)
+        self.assertEqual(window["resetBothCount"], 0)
+        self.assertEqual(window["resetUnavailableCount"], 1)
         self.assertEqual(window["lastResetReason"], "vad_unavailable")
         self.assertEqual(window["lastResetFromMs"], 20)
         self.assertAlmostEqual(window["rmsMin"], 3 / 32768)
         self.assertAlmostEqual(window["rmsMax"], 1311 / 32768)
         self.assertEqual(window["vadUnavailableFrames"], 1)
+
+    async def test_volume_dip_diagnostics_match_actual_stt_onset(self):
+        self.coordinator.confirm_frames = 15
+        for i in range(14):
+            await self.frame(i * .02, rms=.001 if i == 9 else .04)
+        self.assertEqual(self.stt.sessions, [])
+        await self.frame(.28, rms=.001)
+        self.assertEqual(len(self.stt.sessions), 1)
+        await self.coordinator.reset_input()
+        window = self.windows()[0]
+        self.assertEqual(window["onsetGate"], "vad")
+        self.assertEqual(window["confirmMs"], 300)
+        self.assertEqual(window["maxQualifiedRunMs"], 300)
+        self.assertEqual(window["qualifiedFrames"], 15)
+        self.assertEqual(window["rmsPassFrames"], 13)
+        self.assertTrue(window["speech"])
+        self.assertLess(window["rms"], window["threshold"])
+        self.assertEqual(window["resetRmsCount"], 0)
+        self.assertIsNone(window["lastResetReason"])
 
     async def test_confirmation_continues_across_windows_but_window_run_is_clipped(self):
         for i in range(51):

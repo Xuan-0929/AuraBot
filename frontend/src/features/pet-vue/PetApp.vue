@@ -1,4 +1,6 @@
-<!-- Backend no_audio reuses Profile idle actions; only Backend VAD selects listening. -->
+<!-- Connects realtime voice/state delivery to the resident Live2D scene and desktop controls.
+     Backend no_audio maps to Profile idle; only Backend VAD selects listening. Scene actions
+     and state requests share the opt-in Live Debug log to trace acoustic-to-animation handoffs. -->
 <!-- Gates token and microphone access on the active Profile snapshot; Main reconnect commands complete activation. -->
 <!--
   桌宠窗口：组合 Live2D 舞台、唯一的 Main Agent 文字／语音连接、已交付消息气泡与窗口控制。
@@ -44,6 +46,7 @@
           :zoom-request="live2dZoomRequest"
           @canvas-ready="handleCanvasReady"
           @model-ready="syncAgentState"
+          @playback-change="name => reportAvatarDebug('avatar.resident', { text: name })"
           @view-transform-change="handleLive2DViewTransformChange"
         />
       </div>
@@ -85,6 +88,7 @@
 <script setup lang="ts">
 import { computed, nextTick, onBeforeUnmount, onMounted, ref, watch } from "vue";
 import type { PetResizeDirection } from "@shared/contracts/ipc";
+import type { DebugScalar } from "@shared/contracts/liveDebug";
 import {
   MainAgentRealtimeClient,
   type MainAgentRealtimeState
@@ -152,13 +156,25 @@ const mainAgentRealtime = new MainAgentRealtimeClient({
 
 let debugDisposed=false;
 let debugVersion=0;
+let avatarDebugCaptureId:string|null=null;
+let avatarDebugSeq=0;
+const avatarDebugInstanceId=crypto.randomUUID();
+function reportAvatarDebug(name:string,details:Record<string,DebugScalar>){
+  if(debugDisposed||!avatarDebugCaptureId)return;
+  const diagnostics=scene.value?.diagnostics();
+  void window.aurabot.reportLiveDebugEvent({source:'pet',instanceId:avatarDebugInstanceId,
+    seq:++avatarDebugSeq,captureId:avatarDebugCaptureId,timestamp:Date.now(),stage:'playback',name,level:'info',
+    profileId:petStore.profile?.id,generation:transportGeneration.value,
+    details:{state:petStore.agentStatus,elapsedMs:diagnostics?.elapsedMs??0,count:diagnostics?.residentStarts??0,...details}
+  }).catch(()=>undefined);
+}
 const unsubscribeDebug=window.aurabot.onLiveDebugCaptureChanged(value=>{
   debugVersion++;
-  if(!debugDisposed)mainAgentRealtime.setDebugCapture(value.enabled?value.captureId:null);
+  if(!debugDisposed){avatarDebugCaptureId=value.enabled?value.captureId:null;mainAgentRealtime.setDebugCapture(avatarDebugCaptureId);}
 });
 const initialDebugVersion=debugVersion;
 void window.aurabot.getLiveDebugCapture().then(value=>{
-  if(!debugDisposed&&debugVersion===initialDebugVersion)mainAgentRealtime.setDebugCapture(value.enabled?value.captureId:null);
+  if(!debugDisposed&&debugVersion===initialDebugVersion){avatarDebugCaptureId=value.enabled?value.captureId:null;mainAgentRealtime.setDebugCapture(avatarDebugCaptureId);}
 }).catch(()=>undefined);
 
 let unsubscribeCommand:(()=>void)|undefined;
@@ -220,7 +236,11 @@ watch(
   { immediate: true }
 );
 
-function syncAgentState(){const state=petStore.agentStatus;void scene.value?.setState(state==='typing'?'thinking':state==='no_audio'?'idle':state);}
+function syncAgentState(){
+  const state=petStore.agentStatus;const target=state==='typing'?'thinking':state==='no_audio'?'idle':state;
+  reportAvatarDebug('avatar.state',{phase:target});
+  void scene.value?.setState(target);
+}
 watch(()=>petStore.agentStatus,syncAgentState);
 watch(()=>petStore.profile?.id,id=>{live2dViewTransform.value=readStoredLive2DViewTransform(window.localStorage,id);mainAgentClauseText.value=null;});
 
