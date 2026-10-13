@@ -1,7 +1,7 @@
 /** Defines desktop-owned configuration, delivered history and the read-only Task projection.
  * LaunchOptions is read-only process state, separate from persisted settings. ProfileRuntimeState exposes activation in progress to fence Pet media controls. Main validates and persists these DTOs; renderer forms never own runtime configuration or saved secrets. Legacy Tavily fields normalize into provider/api_key before validation; SettingsState carries masked
  * first/last-four previews separately from redacted configuration for editable key fields.
- * Speech settings migrate absent engine choices to Pipeline and keep SeedDuplex credentials independent.
+ * Speech settings migrate absent engine choices to Pipeline, strip legacy enabled flags, and keep SeedDuplex credentials independent; the Pet microphone owns session activation.
  * ProfileRuntimeState projects Realtime text-input ownership to every desktop window.
  */
 import { z } from 'zod';
@@ -23,7 +23,7 @@ export const desktopConfigSchema = z.object({
     main_agent:z.object({profile_dir:z.string().min(1),web:webSettings,speech:z.object({
       mode:z.enum(['pipeline','realtime']).default('pipeline'),
       realtime:realtimeVoice.default({provider:'seeduplex',api_key:'',model:'1.2.6.1',voice:''}),
-      enabled:z.boolean(),api_key:z.string().max(8192),stt_model_name:z.string().min(1),tts_model_name:z.string().min(1),tts_voice:z.string().min(1),
+      api_key:z.string().max(8192),stt_model_name:z.string().min(1),tts_model_name:z.string().min(1),tts_voice:z.string().min(1),
       silero_model_path:z.string(),silero_license_path:z.string(),smart_turn_model_path:z.string(),smart_turn_license_path:z.string()
     })}),
     memory:z.object({embedding:z.object({provider:z.literal('hash'),dimension:z.literal(384)})}),

@@ -3,7 +3,7 @@
  * change live state. Settings previews expose only the first/last four code points and length-matched
  * bullets; first-run defaults register the installation root and user home, and keep Pi dependencies
  * under that root independently of the source checkout. Launch options are immutable process state returned alongside settings, never persisted.
- * Legacy debug and notification preferences are stripped by the schema.
+ * Legacy debug, notification and voice enable flags are stripped by the schema; microphone sessions control voice activation.
  * Legacy search credentials normalize on read; secrets never leave Main except masked previews.
  * Pipeline and Realtime credentials are retained separately across engine switches and redacted equally.
  */
@@ -37,7 +37,7 @@ export class DesktopConfigStore {
     const blankModel={base_url:'',model_name:'',api_key:'',timeout_seconds:60};
     const defaults:DesktopConfig={version:2,revision:0,backend:{
       app:{data_dir:root,workspaces:[{id:'default',path:root},{id:'home',path:homedir()}]},chat_model:{...blankModel},
-      main_agent:{profile_dir:'profiles',web:{provider:'tavily',api_key:''},speech:{enabled:false,api_key:'',stt_model_name:'fun-asr-realtime',tts_model_name:'cosyvoice-v3-flash',tts_voice:'longanyang',
+      main_agent:{profile_dir:'profiles',web:{provider:'tavily',api_key:''},speech:{api_key:'',stt_model_name:'fun-asr-realtime',tts_model_name:'cosyvoice-v3-flash',tts_voice:'longanyang',
         mode:'pipeline',realtime:{provider:'seeduplex',api_key:'',model:'1.2.6.1',voice:''},
         ...speechAssetPaths(root)}},
       memory:{embedding:{provider:'hash',dimension:384}},task:{user_data_dir:root,pi_runtime_dir:join(root,'pi-runtime'),node_executable:process.execPath.includes('Electron')?'node':process.execPath,default_timeout_seconds:1800,model:{...blankModel}}

@@ -2,11 +2,12 @@
      SpeechResources prepares assets into the draft; apply retries inactive Profiles. Electron owns validation/persistence and Backend restart; busy confirmation never changes a draft
      or exposes Memory. SecretInput presents length-matched first/last-four previews; deleting a mask records clear intent through
      the existing save IPC, while unchanged keys remain write-only. Native disclosures reveal invalid fields; shared tokens
-     provide compact navigation and responsive forms. Pet status groups desktop preferences with actionable runtime reminders only; a separate workspace page describes user-provided task locations;
+     provide compact navigation and responsive forms with bounded reading width, scrollbar clearance and input-aligned help buttons. Pet status groups desktop preferences with actionable runtime reminders only; a separate workspace page describes user-provided task locations;
      Profile detail headings own the top back action and name; localized headings and status labels expose save/apply state without revision numbers. Workspace actions
-     keep equal spacing between separators. Model connections groups a native search-provider dropdown with its secret field. Desktop-only changes apply without restarting. Live debug actions appear only for debug launches; startup flags are read-only,
-     unrelated unsaved edits survive incoming settings events. Voice mode selection preserves both providers' settings;
-     SeedDuplex uses its own secret and voice ID while Pipeline alone exposes local inference resources. -->
+     keep equal spacing between separators. Capability integrations groups Task model and search-provider settings. Desktop-only changes apply without restarting. Live debug actions appear only for debug launches; startup flags are read-only,
+     unrelated unsaved edits survive incoming settings events. An accessible sliding switch with stable label widths selects Pipeline or Realtime; mode details fade sequentially and respect reduced motion.
+     The Pet microphone alone opens/closes voice sessions; settings preserve both providers' configurations; localized help buttons ask Main to open official key/voice guides in the system browser;
+     SeedDuplex uses its own secret and voice ID, with a compatibility hint distinguishing full-duplex from general TTS voices, while Pipeline exposes the conversation LLM form and local inference resources using the existing configuration fields. -->
 <template>
   <main class="settings-window">
     <div class="settings-window-shell settings-v2-layout" :inert="busy ? true : undefined">
@@ -24,13 +25,13 @@
           <template v-else-if="draft && state">
             <form ref="settingsForm" @submit.prevent="save" @invalid.capture="revealInvalid">
               <section v-if="page==='model'" class="settings-page-section">
-                <article v-for="(model,index) in [draft.backend.chat_model,draft.backend.task.model]" :key="index" class="settings-model-card">
-                  <h2>{{ t(displayLanguage, index===0?'chatModel':'taskModel') }}</h2>
+                <article class="settings-model-card">
+                  <h2>{{ t(displayLanguage, 'taskModel') }}</h2>
 
-                  <label class="settings-page-field"><span>{{ t(displayLanguage, 'apiAddress') }}</span><input v-model="model.base_url" placeholder="https://…/v1" autocomplete="off" /></label>
-                  <label class="settings-page-field"><span>{{ t(displayLanguage, 'modelName') }}</span><input v-model="model.model_name" autocomplete="off" /></label>
-                  <label class="settings-page-field"><span>{{ t(displayLanguage, 'apiKey') }}</span><SecretInput v-model="model.api_key" :display-language="displayLanguage" :preview="state.secretPreviews?.[index===0?'chat_model.api_key':'task.model.api_key']" :cleared="clearSecrets.includes(index===0?'chat_model.api_key':'task.model.api_key')" @update:model-value="updateSecretIntent(index===0?'chat_model.api_key':'task.model.api_key', $event)" /></label>
-                  <details class="settings-advanced"><summary>{{ t(displayLanguage, 'advancedConnectionSettings') }}</summary><label class="settings-page-field"><span>{{ t(displayLanguage, 'requestTimeoutSeconds') }}</span><input v-model.number="model.timeout_seconds" type="number" min="1" max="600" /></label></details>
+                  <label class="settings-page-field"><span>{{ t(displayLanguage, 'apiAddress') }}</span><input v-model="draft.backend.task.model.base_url" placeholder="https://…/v1" autocomplete="off" /></label>
+                  <label class="settings-page-field"><span>{{ t(displayLanguage, 'modelName') }}</span><input v-model="draft.backend.task.model.model_name" autocomplete="off" /></label>
+                  <label class="settings-page-field"><span>{{ t(displayLanguage, 'apiKey') }}</span><SecretInput v-model="draft.backend.task.model.api_key" :display-language="displayLanguage" :preview="state.secretPreviews?.['task.model.api_key']" :cleared="clearSecrets.includes('task.model.api_key')" @update:model-value="updateSecretIntent('task.model.api_key', $event)" /></label>
+                  <details class="settings-advanced"><summary>{{ t(displayLanguage, 'advancedConnectionSettings') }}</summary><label class="settings-page-field"><span>{{ t(displayLanguage, 'requestTimeoutSeconds') }}</span><input v-model.number="draft.backend.task.model.timeout_seconds" type="number" min="1" max="600" /></label></details>
                 </article>
                 <article class="settings-model-card">
                   <h2>{{ t(displayLanguage, 'searchInterface') }}</h2>
@@ -46,20 +47,43 @@
                 </article>
               </section>
               <section v-else-if="page==='voice'" class="settings-page-section">
-                <label class="settings-page-toggle"><input v-model="draft.backend.main_agent.speech.enabled" type="checkbox" /> {{ t(displayLanguage, 'enableVoiceCapability') }}</label>
                 <p class="settings-hint">{{ t(displayLanguage, 'voiceCaptureHint') }}</p>
-                <label class="settings-page-field"><span>{{ SPEECH_TEXT[displayLanguage].voiceMode }}</span><select v-model="draft.backend.main_agent.speech.mode" name="voice-mode"><option value="pipeline">Pipeline · STT / LLM / TTS</option><option value="realtime">Realtime · SeedDuplex</option></select></label>
+                <div class="settings-page-field">
+                  <span>{{ SPEECH_TEXT[displayLanguage].voiceMode }}</span>
+                  <div class="voice-mode-control">
+                    <span :class="{selected:draft.backend.main_agent.speech.mode==='pipeline'}">Pipeline</span>
+                    <button type="button" role="switch" name="voice-mode" class="voice-mode-switch" :aria-label="SPEECH_TEXT[displayLanguage].voiceMode + ': Realtime'" :aria-checked="draft.backend.main_agent.speech.mode==='realtime'" @click="draft.backend.main_agent.speech.mode=draft.backend.main_agent.speech.mode==='pipeline'?'realtime':'pipeline'"><span aria-hidden="true" /></button>
+                    <span :class="{selected:draft.backend.main_agent.speech.mode==='realtime'}">Realtime</span>
+                  </div>
+                </div>
                 <p class="settings-hint">{{ SPEECH_TEXT[displayLanguage].voiceModeHint }}</p>
+                <Transition name="voice-details" mode="out-in">
+                <div :key="draft.backend.main_agent.speech.mode" class="voice-details">
                 <template v-if="draft.backend.main_agent.speech.mode==='realtime'">
                   <label class="settings-page-field"><span>SeedDuplex API Key</span><SecretInput v-model="draft.backend.main_agent.speech.realtime.api_key" :display-language="displayLanguage" :preview="state.secretPreviews?.['main_agent.speech.realtime.api_key']" :cleared="clearSecrets.includes('main_agent.speech.realtime.api_key')" @update:model-value="updateSecretIntent('main_agent.speech.realtime.api_key', $event)" /></label>
+                  <div class="settings-field-help"><button type="button" @click="openVoiceDocumentation('seeduplex-key')">{{ SPEECH_TEXT[displayLanguage].apiKeyGuide }} <span aria-hidden="true">↗</span></button></div>
                   <label class="settings-page-field"><span>{{ t(displayLanguage, 'voiceTone') }} ID</span><input v-model="draft.backend.main_agent.speech.realtime.voice" name="realtime-voice" autocomplete="off" /></label>
+                  <div class="settings-field-help"><button type="button" @click="openVoiceDocumentation('seeduplex-voices')">{{ SPEECH_TEXT[displayLanguage].voiceGuide }} <span aria-hidden="true">↗</span></button></div>
+                  <p class="settings-hint">{{ SPEECH_TEXT[displayLanguage].realtimeVoiceHint }}</p>
                 </template>
                 <template v-else>
+                <article class="settings-model-card">
+                  <h2>{{ t(displayLanguage, 'chatModel') }}</h2>
+
+                  <label class="settings-page-field"><span>{{ t(displayLanguage, 'apiAddress') }}</span><input v-model="draft.backend.chat_model.base_url" placeholder="https://…/v1" autocomplete="off" /></label>
+                  <label class="settings-page-field"><span>{{ t(displayLanguage, 'modelName') }}</span><input v-model="draft.backend.chat_model.model_name" autocomplete="off" /></label>
+                  <label class="settings-page-field"><span>{{ t(displayLanguage, 'apiKey') }}</span><SecretInput v-model="draft.backend.chat_model.api_key" :display-language="displayLanguage" :preview="state.secretPreviews?.['chat_model.api_key']" :cleared="clearSecrets.includes('chat_model.api_key')" @update:model-value="updateSecretIntent('chat_model.api_key', $event)" /></label>
+                  <details class="settings-advanced"><summary>{{ t(displayLanguage, 'advancedConnectionSettings') }}</summary><label class="settings-page-field"><span>{{ t(displayLanguage, 'requestTimeoutSeconds') }}</span><input v-model.number="draft.backend.chat_model.timeout_seconds" type="number" min="1" max="600" /></label></details>
+                </article>
                 <label class="settings-page-field"><span>DashScope Key</span><SecretInput v-model="draft.backend.main_agent.speech.api_key" :display-language="displayLanguage" :preview="state.secretPreviews?.['main_agent.speech.api_key']" :cleared="clearSecrets.includes('main_agent.speech.api_key')" @update:model-value="updateSecretIntent('main_agent.speech.api_key', $event)" /></label>
+                <div class="settings-field-help"><button type="button" @click="openVoiceDocumentation('dashscope-key')">{{ SPEECH_TEXT[displayLanguage].apiKeyGuide }} <span aria-hidden="true">↗</span></button></div>
                 <label class="settings-page-field"><span>{{ t(displayLanguage, 'voiceTone') }}</span><input v-model="draft.backend.main_agent.speech.tts_voice" /></label>
+                <div class="settings-field-help"><button type="button" @click="openVoiceDocumentation('cosyvoice-voices')">{{ SPEECH_TEXT[displayLanguage].voiceGuide }} <span aria-hidden="true">↗</span></button></div>
                 <SpeechResources :display-language="displayLanguage" :applied="!dirty && !state.backendPending && state.online" @prepared="Object.assign(draft.backend.main_agent.speech,$event)" />
                 <details class="settings-advanced"><summary>{{ t(displayLanguage, 'voiceModelsAndResources') }}</summary><label v-for="field in speechFields" :key="field.key" class="settings-page-field"><span>{{ t(displayLanguage, field.labelKey) }}</span><input v-model="draft.backend.main_agent.speech[field.key]" /></label></details>
                 </template>
+                </div>
+                </Transition>
               </section>
               <section v-else-if="page==='general'" class="settings-page-section">
                 <article class="settings-model-card"><h2>{{ t(displayLanguage, 'desktopPet') }}</h2>
@@ -126,12 +150,13 @@ const editingName=ref<string|null>(null);
 import ProfilesPage from '../profiles/ProfilesPage.vue';
 import SpeechResources from './SpeechResources.vue';
 import { SPEECH_TEXT } from './speechText';
+import type { VoiceDocumentation } from '../../shared/contracts/ipc';
 import SecretInput from './SecretInput.vue';
 import { interpolate, t, type UiTextKey } from '../../i18n';
 import { debugText } from '../live-debug/text';
 import SettingsNavIcon, {type SettingsNavIconName} from './SettingsNavIcon.vue';
 const store=useAuraBotStore();
-const sections=computed<Array<{key:SettingsNavIconName;label:string}>>(()=>[{key:'model',label:t(displayLanguage.value,'modelConnections')},{key:'voice',label:t(displayLanguage.value,'pVoice')},{key:'general',label:t(displayLanguage.value,'petStatus')},{key:'workspace',label:t(displayLanguage.value,'pWorkspaces')},{key:'profiles',label:t(displayLanguage.value,'pTitle')}]);
+const sections=computed<Array<{key:SettingsNavIconName;label:string}>>(()=>[{key:'model',label:t(displayLanguage.value,'capabilityIntegrations')},{key:'voice',label:t(displayLanguage.value,'pVoice')},{key:'general',label:t(displayLanguage.value,'petStatus')},{key:'workspace',label:t(displayLanguage.value,'pWorkspaces')},{key:'profiles',label:t(displayLanguage.value,'pTitle')}]);
 const pageContainer=ref<HTMLElement>();
 const profilesPage=ref<InstanceType<typeof ProfilesPage>>();
 async function changePage(target:string){if(page.value==='profiles'&&target!=='profiles'&&!await profilesPage.value?.canLeave())return;page.value=target;await nextTick();if(pageContainer.value)pageContainer.value.scrollTop=0;}
@@ -139,6 +164,10 @@ const page=ref('model');const state=ref<SettingsState>();const draft=ref<Desktop
 const working=ref(false);const error=ref('');const busy=ref<BusyState>();const cancelButton=ref<HTMLButtonElement>();
 const dirty=computed(()=>JSON.stringify(draft.value)!==baseline.value||clearSecrets.value.length>0);
 const displayLanguage=computed(()=>draft.value?.desktop.pet.displayLanguage ?? store.displayLanguage);
+async function openVoiceDocumentation(document:VoiceDocumentation){
+ try{await window.aurabot.openVoiceDocumentation(document);}
+ catch{error.value=SPEECH_TEXT[displayLanguage.value].openDocumentationFailed;}
+}
 const configStatus=computed(()=>t(displayLanguage.value,dirty.value?'configUnsaved':state.value?.pending?'configSaved':'configApplied'));
 const runtimeHints=computed(()=>{
   const current=state.value;
@@ -188,16 +217,32 @@ onBeforeUnmount(()=>unsubscribe?.());
 .settings-v2-content{display:flex;flex-direction:column;min-width:0;min-height:0;padding:0 32px}
 .settings-v2-content-header{flex:none;display:flex;align-items:baseline;justify-content:space-between;padding:28px 0 20px;border-bottom:1px solid var(--aura-border)}
 .settings-v2-content-header h1{font-size:22px;letter-spacing:-.4px;margin:0;font-weight:600}
-.settings-page-container{min-height:0;overflow:auto;flex:1;scrollbar-gutter:stable}
+.settings-page-container{min-height:0;overflow:auto;flex:1;scrollbar-gutter:stable;padding-right:24px}
 .settings-page-container>form{display:flex;flex-direction:column;min-height:100%}
-.settings-page-section{padding:8px 0 24px;flex:1}
+.settings-page-section{padding:8px 0 24px;flex:1;min-width:0;width:100%;max-width:800px;overflow-wrap:anywhere}
 .settings-model-card{padding:20px 0;border-bottom:1px solid var(--aura-border)}
 .settings-workspace-add{display:flex;width:fit-content;margin-top:20px}
 .settings-model-card h2,.settings-page-section h2{font-size:15px;font-weight:600;margin:0 0 16px}
 .settings-page-field{display:grid;grid-template-columns:minmax(130px,30%) minmax(0,1fr);align-items:center;gap:16px;margin:16px 0}
 .settings-page-field>span{line-height:1.6;overflow-wrap:anywhere}
 .settings-page-field input,.settings-page-field select{min-width:0}
+.settings-field-help{display:grid;grid-template-columns:minmax(130px,30%) minmax(0,1fr);gap:16px;margin:-8px 0 16px}
+.settings-field-help>button{grid-column:2;justify-self:start;max-width:100%;min-height:28px;padding:2px 0;border:0;background:transparent;color:var(--aura-accent);font-size:12px;font-weight:400;text-align:left}
 .settings-page-toggle{display:flex;align-items:center;gap:8px;margin:20px 0}
+.voice-mode-control{display:flex;align-items:center;gap:12px;min-height:44px;color:var(--aura-muted)}
+.voice-mode-control>span{font-weight:600;transition:color .2s ease}
+.voice-mode-control>.selected{color:var(--aura-text)}
+.voice-mode-switch{display:flex;align-items:center;justify-content:flex-start;flex:none;width:52px;height:32px;min-height:0;padding:3px;border:0;border-radius:999px;background:var(--aura-border);cursor:pointer;transition:background-color .2s ease}
+.voice-mode-switch:hover:not(:disabled){background:var(--aura-border)}
+.voice-mode-switch[aria-checked=true],.voice-mode-switch[aria-checked=true]:hover:not(:disabled){background:var(--aura-accent)}
+.voice-mode-switch>span{display:block;width:26px;height:26px;border-radius:50%;background:#fff;box-shadow:0 1px 3px #0003;transition:transform .2s ease;pointer-events:none}
+.voice-mode-switch[aria-checked=true]>span{transform:translateX(20px)}
+.voice-mode-switch:focus-visible{outline:2px solid var(--aura-accent);outline-offset:4px}
+.voice-details-enter-active{transition:opacity .16s ease-out}
+.voice-details-leave-active{transition:opacity .12s ease-in;pointer-events:none}
+.voice-details-enter-from,.voice-details-leave-to{opacity:0}
+@media(prefers-reduced-motion:reduce){.voice-mode-control>span,.voice-mode-switch,.voice-mode-switch>span,.voice-details-enter-active,.voice-details-leave-active{transition:none}}
+
 .settings-hint,.settings-page-section p{color:var(--aura-muted);font-size:13px;line-height:1.6}
 .settings-advanced{margin-top:20px;padding-top:12px;border-top:1px solid var(--aura-border)}
 .settings-advanced summary{color:var(--aura-muted);cursor:pointer;padding:4px 0;font-size:13px}
@@ -208,6 +253,7 @@ onBeforeUnmount(()=>unsubscribe?.());
 .settings-dialog{width:min(500px,90vw);padding:24px;border:1px solid var(--aura-border);border-radius:8px;background:var(--aura-surface);color:var(--aura-text)}
 .settings-dialog h2{font-size:18px;margin-top:0}.settings-dialog li{margin:12px 0;line-height:1.6}.settings-dialog button{margin:12px 12px 0 0}
 @media(max-width:800px){.settings-v2-layout{grid-template-columns:148px minmax(0,1fr)}.settings-v2-sidebar{padding:24px 8px}.settings-v2-sidebar-brand{padding-left:8px}.settings-v2-nav-item{gap:8px;padding:10px 8px}.settings-v2-content{padding:0 20px}.settings-v2-content-header{padding:24px 0 16px}.settings-page-field{grid-template-columns:1fr;gap:8px;margin:16px 0}.settings-save-bar{flex-wrap:wrap}.settings-save-bar span{min-width:150px}}
+@media(max-width:800px){.settings-field-help{grid-template-columns:1fr;gap:8px}.settings-field-help>button{grid-column:1}}
 @media(max-width:500px){.settings-v2-layout{display:flex;flex-direction:column}.settings-v2-sidebar{padding:12px;border-right:0;border-bottom:1px solid var(--aura-border);overflow:visible}.settings-v2-sidebar-brand{display:none}.settings-v2-navigation{display:flex;overflow:auto}.settings-v2-nav-item{width:auto;white-space:nowrap}.settings-v2-nav-item :deep(svg){display:none}.settings-v2-content{flex:1}}
 </style>
 

@@ -3,6 +3,8 @@
  *
  * Store 通过 preload API 初始化和发送普通聊天，并协调 pet activity 队列；它不保存
  * Task 列表/详情/debug，也不订阅或调用任何 Task IPC。
+ * 并发角色快照只应用最新结果；所有等待者等待最新刷新落地后再继续，
+ * 防止 Main 配置应用后的桌宠重连读取仍在激活中的旧状态。
  */
 
 import { defineStore } from "pinia";
@@ -24,6 +26,7 @@ import { t } from "../i18n";
 
 const PET_ACTIVITY_TIMEOUT_MS = 7000;
 type Unsubscribe = () => void;
+const snapshotLoads = new WeakMap<object, Promise<void>>();
 
 interface AuraBotState {
   snapshotRequest:number;
@@ -70,20 +73,32 @@ export const useAuraBotStore = defineStore("auraBot", {
   },
   actions: {
     async loadInitialState() {
-      const request=++this.snapshotRequest;
-      try {
-        const state: AppInitialState = await window.aurabot.getInitialState();
-        if(request!==this.snapshotRequest)return;
-        if(this.profile?.id!==state.profile?.id){this.historyCursor=undefined;this.petActivity=undefined;this.petActivityQueue=[];}
-        this.$patch({
-          ...state,
-          historyCursor:state.historyCursor,
-          focusAt: this.petCursorPosition
-            ? { x: this.petCursorPosition.localX, y: this.petCursorPosition.localY }
-            : this.focusAt
-        });
-      } finally {
-        if(request===this.snapshotRequest)this.isInitialized = true;
+      const request = ++this.snapshotRequest;
+      const loading = (async () => {
+        try {
+          const state: AppInitialState = await window.aurabot.getInitialState();
+          if (request !== this.snapshotRequest) return;
+          if(this.profile?.id!==state.profile?.id){this.historyCursor=undefined;this.petActivity=undefined;this.petActivityQueue=[];}
+          this.$patch({
+            ...state,
+            historyCursor:state.historyCursor,
+            focusAt: this.petCursorPosition
+              ? { x: this.petCursorPosition.localX, y: this.petCursorPosition.localY }
+              : this.focusAt
+          });
+        } catch (error) {
+          if (request === this.snapshotRequest) throw error;
+        } finally {
+          if (request === this.snapshotRequest) this.isInitialized = true;
+        }
+      })();
+      snapshotLoads.set(this, loading);
+      let pending = loading;
+      for (;;) {
+        await pending;
+        const latest = snapshotLoads.get(this)!;
+        if (latest === pending) return;
+        pending = latest;
       }
     },
     async initialize() {

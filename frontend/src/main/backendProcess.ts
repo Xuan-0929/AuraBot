@@ -1,6 +1,6 @@
 /** Owns the development Python process from Electron startup through explicit Apply and app exit.
  * Every child inherits the immutable LaunchSession environment, including any temporary Profile root;
- * readiness must also match both launch flags. Pipeline voice alone includes the speech extra at launch;
+ * readiness must also match both launch flags. Configured Pipeline credentials include the speech extra at launch; unconfigured installs remain lightweight and microphone activation remains lazy in Backend;
  * Realtime uses core WebSocket dependencies without local inference models. Only the child created here can be stopped. Readiness must match its instance/config revision, and a
  * busy restart must be approved by the user before Backend fences admission. No automatic restarts.
  */
@@ -38,7 +38,7 @@ export class BackendProcess {
     if(this.child) throw new Error('Backend 已经启动');
     await checkPort();
     const snapshot=this.config.snapshot(); this.preparePi(snapshot);const instanceId=randomUUID();
-    const pipeline=snapshot.backend.main_agent.speech.enabled&&snapshot.backend.main_agent.speech.mode==='pipeline';
+    const pipeline=snapshot.backend.main_agent.speech.mode==='pipeline'&&Boolean(snapshot.backend.main_agent.speech.api_key);
     const child=spawn('uv',['run','--project',join(this.projectRoot,'backend'),...(pipeline?['--extra','speech']:[]),'uvicorn','backend.main:app','--host','127.0.0.1','--port','6401','--app-dir',this.projectRoot],{
       cwd:this.projectRoot,stdio:'ignore',env:{...process.env,...(this.launch?.backendEnvironment()??{AURABOT_DEBUG:"0",AURABOT_LOCK_MEMORY:"0",AURABOT_SESSION_DATA_DIR:""}),AURABOT_CONFIG_PATH:this.config.path,AURABOT_BACKEND_INSTANCE:instanceId,AURABOT_TASK_API_KEY:snapshot.backend.task.model.api_key}
     });
@@ -49,7 +49,7 @@ export class BackendProcess {
     try {
       const deadline=Date.now()+30000;
       while(Date.now()<deadline) {
-        if(spawnError||child.exitCode!==null||child.signalCode!==null) throw new Error(snapshot.backend.main_agent.speech.enabled?'Backend 启动失败，请检查 uv、语音依赖安装与配置。':'Backend 启动失败，请检查 Python、uv 与配置。');
+        if(spawnError||child.exitCode!==null||child.signalCode!==null) throw new Error(pipeline?'Backend 启动失败，请检查 uv、语音依赖安装与配置。':'Backend 启动失败，请检查 Python、uv 与配置。');
         try {
           const ready=await backendJson('/api/v1/readiness');
           if(ready.ready&&ready.instanceId===instanceId&&ready.configRevision===snapshot.revision){

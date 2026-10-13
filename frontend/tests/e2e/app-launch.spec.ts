@@ -74,7 +74,7 @@ test('fresh desktop renders Hiyori, exposes unavailable models and applies saved
   await settings.getByRole('button',{name:'保存',exact:true}).click();
   await settings.getByRole('button',{name:'应用',exact:true}).click();
   await expect(settings.getByRole('status')).toHaveText('已应用');
-  await settings.getByRole('button',{name:'模型接入',exact:true}).click();
+  await settings.getByRole('button',{name:'实时语音',exact:true}).click();
   await settings.getByLabel('模型名称',{exact:true}).first().fill('unconfigured-smoke');
   await settings.getByRole('button',{name:'保存',exact:true}).click();
   await expect(settings.getByRole('status')).toHaveText('已保存');

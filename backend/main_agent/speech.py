@@ -1,5 +1,6 @@
 """Own the active Profile's async speech providers, local VAD/EOU, input coordinator, and delivery.
 
+The Pet microphone owns activation; there is no separate configuration enable switch.
 DashScope-specific callback fields and credentials terminate inside the adapters and become normalized
 ``TranscriptUpdate`` facts before Main Agent Core can observe them; every non-empty production snapshot,
 including a mutable-only partial, requests existing PREPARE admission. Session callbacks enter Core in arrival
@@ -50,7 +51,7 @@ from .debug import AcousticWindow
 
 # Only these local preparation codes may cross the realtime transport.
 SPEECH_PREPARATION_ERRORS = frozenset({
-    "speech_disabled", "speech_api_key_missing", "speech_optional_dependency_missing",
+    "speech_api_key_missing", "speech_optional_dependency_missing",
     *(f"speech_{name}_{reason}" for name in ("vad", "eou") for reason in (
         "model_asset_missing", "license_asset_missing", "license_unverified",
         "optional_dependency_missing", "model_load_failed", "inference_failed",

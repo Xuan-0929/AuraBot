@@ -2,7 +2,7 @@
 
 These tests use the real settings parser: existing installations keep their pipeline,
 while Realtime can be selected without supplying local inference assets or DashScope credentials.
-Invalid modes and provider identities must fail before opening a network connection.
+Invalid modes and provider identities must fail before opening a network connection. Legacy enabled=false cannot block a configured microphone session.
 """
 
 import unittest
@@ -37,7 +37,7 @@ class RealtimeVoiceSettingsTests(unittest.TestCase):
         from backend.main import voice_available
         from backend.main_agent.settings import MainAgentSettings
         settings = MainAgentSettings.from_config({"main_agent": {"speech": {
-            "enabled": True, "mode": "realtime", "realtime": {"api_key": "key", "voice": "voice-id"},
+            "enabled": False, "mode": "realtime", "realtime": {"api_key": "key", "voice": "voice-id"},
         }}}, Path("/tmp/config.json"))
         with patch("backend.main.SileroVadDetector", side_effect=AssertionError("must not load VAD")):
             self.assertTrue(voice_available(settings))

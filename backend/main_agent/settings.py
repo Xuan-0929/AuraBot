@@ -4,7 +4,7 @@
 WorkspaceRegistry 只接受由配置声明的真实目录，TaskManager 用它将 workspace_id 解析为
 内部 cwd。聊天与语音设置只记录 Provider 地址、密钥、模型名及本地模型/许可证路径，
 真正的网络连接、可选 SDK 和 ONNX 资产由 composition/provider 模块按需检查加载，因此
-关闭、缺少密钥或未安装语音能力时 Backend 仍能正常启动。语音模式默认沿用 Pipeline；
+缺少密钥或未安装语音能力时 Backend 仍能正常启动。语音开闭仅由桌宠麦克风会话控制，旧 enabled 字段不再生效。语音模式默认沿用 Pipeline；
 Realtime 设置独立保存 SeedDuplex 凭据和音色，不依赖流水线的密钥或本地推理资产。
 """
 
@@ -158,7 +158,6 @@ class RealtimeVoiceSettings:
 class SpeechSettings:
     """Configured provider model identities and explicitly checked local model/license assets."""
 
-    enabled: bool
     api_key: str
     stt_model_name: str
     tts_model_name: str
@@ -181,16 +180,11 @@ class SpeechSettings:
                 raise ValueError(f"main_agent.speech.{key} must be non-empty text.")
             return value.strip()
 
-        enabled = raw.get("enabled", False)
-        if not isinstance(enabled, bool):
-            raise ValueError("main_agent.speech.enabled must be a boolean.")
-
         mode = raw.get("mode", "pipeline")
         if mode not in ("pipeline", "realtime"):
             raise ValueError("main_agent.speech.mode must be pipeline or realtime.")
 
         return cls(
-            enabled=enabled,
             mode=mode,
             realtime=RealtimeVoiceSettings.from_config(raw.get("realtime", {})),
             api_key=str(raw.get("api_key", "")).strip(),

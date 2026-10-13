@@ -50,7 +50,7 @@ test('debug captures without its window and ordinary restart ignores legacy debu
   let pet=await petWindow(app);await ready(pet);
   const initial=await readiness();expect(initial.ready).toBe(true);
   const settingsOpened=app.waitForEvent('window');await pet.evaluate(()=>window.aurabot.openSettingsWindow());const settings=await settingsOpened;
-  await settings.getByRole('button',{name:'模型接入',exact:true}).click();
+  await settings.getByRole('button',{name:'实时语音',exact:true}).click();
   const model=settings.getByLabel('模型名称',{exact:true}).first();await model.fill('unsaved-debug-draft');
   await settings.getByRole('button',{name:'桌宠状态',exact:true}).click();
   const socketsBefore=sockets.length;
@@ -62,7 +62,7 @@ test('debug captures without its window and ordinary restart ignores legacy debu
   const firstId=(await debugWindows(app))[0]!.id;
   await settings.getByRole('button',{name:'打开 Debug 窗口',exact:true}).click();
   expect((await debugWindows(app)).map(window=>window.id)).toEqual([firstId]);
-  await settings.getByRole('button',{name:'模型接入',exact:true}).click();await expect(model).toHaveValue('unsaved-debug-draft');
+  await settings.getByRole('button',{name:'实时语音',exact:true}).click();await expect(model).toHaveValue('unsaved-debug-draft');
   await expect(settings.getByRole('button',{name:'保存',exact:true})).toBeEnabled();
   expect((await pet.evaluate(()=>window.aurabot.getSettings())).config.backend.chat_model.model_name).not.toBe('unsaved-debug-draft');
   expect((await readiness()).processId).toBe(initial.processId);expect((await readiness()).instanceId).toBe(initial.instanceId);

@@ -183,7 +183,7 @@ flowchart TB
 
 ## 6. 实现记录与接入操作
 
-开发分支：`realtime-adaption`。全局语音设置新增 Pipeline / Realtime 选择，旧配置自动保持 Pipeline。Realtime 填写独立的 SeedDuplex API Key 和当前账号可用的音色 ID，保存并应用后重新开启语音。密钥沿用现有脱敏、保留与显式清除机制。切换模式通过现有后端配置应用流程完成，语音运行期间应先关闭语音。
+开发分支：`realtime-adaption`。全局语音设置新增 Pipeline / Realtime 选择，旧配置自动保持 Pipeline。 配置页不再提供“启用语音能力”总开关，旧 `speech.enabled` 字段被忽略；语音会话与收音仅由桌宠麦克风按钮开启和关闭。Realtime 填写独立的 SeedDuplex API Key 和当前账号可用的音色 ID，保存并应用后重新开启语音。密钥沿用现有脱敏、保留与显式清除机制。切换模式通过现有后端配置应用流程完成，语音运行期间应先关闭语音。
 
 | 边界 | 当前代码落点 | 行为 |
 |---|---|---|

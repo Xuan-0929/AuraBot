@@ -7,7 +7,7 @@ keeps Hub.render as its renderer for the entire Profile lifetime. Applied worksp
 snapshot as user-provided names and paths without scanning directories. WebTools uses the configured search adapter for search and read.
 LaunchOptions gates diagnostics and selects isolated Profile storage for fixed-memory runs.
 The production lifespan opens speech log files only for an explicit debug launch.
-Global voice mode selects lazy Pipeline or SeedDuplex resources. Realtime readiness and activation
+Global voice mode selects lazy Pipeline or SeedDuplex resources; only microphone sessions activate them, independent of legacy enabled flags. Realtime readiness and activation
 use independent credentials and never probe DashScope, VAD or SmartTurn assets."""
 
 from __future__ import annotations
@@ -73,8 +73,6 @@ logger = logging.getLogger(__name__)
 def voice_available(settings: MainAgentSettings) -> bool:
     """Report configured capability without loading optional Pipeline assets for Realtime."""
     speech = settings.speech
-    if not speech.enabled:
-        return False
     if speech.mode == "realtime":
         return bool(speech.realtime.api_key and speech.realtime.voice)
     return bool(settings.chat_model.base_url and settings.chat_model.model_name and settings.chat_model.api_key
@@ -273,8 +271,6 @@ async def _build_profile(
             profile_id, runtime, None, memory, closeables=tuple(closeables), voice_mode=settings.speech.mode
         )
         def create_speech() -> Any:
-            if not settings.speech.enabled:
-                raise RuntimeError("speech_disabled")
             if speech_factory is not None:
                 return speech_factory(settings.speech, hub, runtime)
             if settings.speech.mode == "realtime":

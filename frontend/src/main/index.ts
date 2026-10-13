@@ -4,7 +4,8 @@
  * Main owns sequential speech downloads and profile readiness; migrates configuration, serves owned model packages, serializes selection/application and
  * opens only a repository-owned Profile SOUL path through shell; fences history receipts by their original Profile/generation. Pet alone owns realtime media;
  * Backend exclusively owns Context, Memory, task state and the active business lifecycle.
- * Authenticated Pet voice-state reports gate typed sends in all windows while Realtime is active. */
+ * Authenticated Pet voice-state reports gate typed sends in all windows while Realtime is active.
+ * Voice documentation requests resolve only allowlisted official URLs and open in the system browser. */
 import {SpeechAssets} from './speechAssets';
 import {LiveDebugService} from './liveDebug';
 import {LaunchSession,readLaunchOptions} from './launchOptions';
@@ -22,7 +23,7 @@ import { avatarResourceUrl } from '@shared/contracts/avatar';
 import type {ProfileConfig} from '@shared/contracts/profiles';
 import type {ProfileRuntimeState,PetCommandResult} from '@shared/contracts/desktop';
 import type {Live2DModelState} from '@shared/contracts/live2dModel';
-import { IPC_CHANNELS as C } from '@shared/contracts/ipc';
+import { IPC_CHANNELS as C, VOICE_DOCUMENTATION_URLS, type VoiceDocumentation } from '@shared/contracts/ipc';
 import type { AgentStatus } from '@shared/contracts/chat';
 import type { HistoryEntry, PetCommand } from '@shared/contracts/desktop';
 import { DesktopConfigStore } from './desktopConfigStore';
@@ -96,6 +97,10 @@ async function bootstrap(){
  handle(C.openConsoleWindow,()=>{openConsoleWindow();});
  handle(C.openSettingsWindow,()=>{openSettingsWindow();});
  handle(C.getSettings,()=>config.status());
+ handle(C.openVoiceDocumentation,(_event,document:unknown)=>{
+   if(typeof document!=='string'||!Object.hasOwn(VOICE_DOCUMENTATION_URLS,document))throw new Error('invalid_voice_documentation');
+   return shell.openExternal(VOICE_DOCUMENTATION_URLS[document as VoiceDocumentation]);
+ });
  const requireDebug=()=>{if(!liveDebug)throw new Error('debug_mode_required');return liveDebug;};
  handle(C.getLiveDebugState,()=>requireDebug().snapshot());
  handle(C.getLiveDebugCapture,()=>liveDebug?.capture()??{enabled:false,captureId:''});

@@ -1,6 +1,6 @@
 /** Verifies voice-mode migration and SeedDuplex credential handling through the real settings store.
  * Reloads persisted configuration and exercises the renderer-safe save/clear path, so switching
- * engines cannot leak credentials or silently erase the other provider's configuration.
+ * engines cannot leak credentials or silently erase the other provider's configuration. Legacy voice enable flags are discarded; microphone sessions own activation.
  */
 import { mkdtempSync, rmSync, writeFileSync } from 'node:fs';
 import { tmpdir } from 'node:os';
@@ -15,10 +15,11 @@ afterEach(()=>roots.splice(0).forEach(root=>rmSync(root,{recursive:true,force:tr
 it('migrates old settings to pipeline without discarding its credentials',()=>{
   const original=store();const legacy:any=original.snapshot();
   delete legacy.backend.main_agent.speech.mode;delete legacy.backend.main_agent.speech.realtime;
-  legacy.backend.main_agent.speech.api_key='pipeline-key';
+  legacy.backend.main_agent.speech.api_key='pipeline-key';legacy.backend.main_agent.speech.enabled=false;
   writeFileSync(original.path,JSON.stringify(legacy));
   const restored=new DesktopConfigStore(original.root);
   expect(restored.snapshot().backend.main_agent.speech.mode).toBe('pipeline');
+  expect(restored.snapshot().backend.main_agent.speech).not.toHaveProperty('enabled');
   expect(restored.snapshot().backend.main_agent.speech.api_key).toBe('pipeline-key');
 });
 

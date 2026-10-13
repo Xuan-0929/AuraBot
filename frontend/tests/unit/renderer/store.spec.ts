@@ -2,7 +2,8 @@
  * 验证 Renderer store 的普通聊天、附件与非 Task 事件订阅。
  *
  * 测试不构造 Task DTO，确认 optimistic user message 会被服务端消息替换且 preload
- * subscriptions 只包含保留的聊天/桌宠事件。
+ * subscriptions 只包含保留的聊天/桌宠事件。并发快照刷新必须等待最新角色状态落地，
+ * 避免配置应用后的重连读取仍在激活中的旧状态。
  */
 
 import { createPinia, setActivePinia } from "pinia";
@@ -105,6 +106,24 @@ it('discards late initial-state responses after a newer Profile snapshot has arr
  let calls=0;vi.stubGlobal('window',{aurabot:{getInitialState:()=>++calls===1?new Promise(resolve=>first=resolve):Promise.resolve(b)}});
  const store=useAuraBotStore();const stale=store.loadInitialState();await store.loadInitialState();first(a);await stale;
  expect(store.profile?.id).toBe('b');expect(store.profileRuntime?.generation).toBe(2);
+});
+it('keeps reconnect waiting when a Profile event supersedes its in-flight snapshot',async()=>{
+ setActivePinia(createPinia());
+ const replies:Array<(value:unknown)=>void>=[];
+ vi.stubGlobal('window',{aurabot:{getInitialState:()=>new Promise(resolve=>replies.push(resolve))}});
+ const store=useAuraBotStore();
+ store.profileRuntime={selectedId:'a',activeId:null,revision:1,generation:1,online:false,activating:true};
+ let connected=false;
+ const reconnect=store.loadInitialState().then(()=>{connected=true;});
+ const refresh=store.loadInitialState();
+ replies[0]!({profile:{id:'a'},profileRuntime:{selectedId:'a',activeId:'a',revision:1,generation:2,online:true,activating:false}});
+ await new Promise(resolve=>setTimeout(resolve,0));
+ const completedBeforeLatest=connected;
+ replies[1]!({profile:{id:'a'},profileRuntime:{selectedId:'a',activeId:'a',revision:1,generation:2,online:true,activating:false}});
+ await Promise.all([reconnect,refresh]);
+ expect(completedBeforeLatest).toBe(false);
+ expect(store.profileRuntime?.online).toBe(true);
+ expect(store.profileRuntime?.activating).toBe(false);
 });
 it('does not install an old Profile history page when initialization finishes after switching',async()=>{
  setActivePinia(createPinia());let history!:(value:unknown)=>void;

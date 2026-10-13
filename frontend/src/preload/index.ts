@@ -2,6 +2,7 @@
  * permission fixed at launch and bounded logging. Pet is the sole permitted source of renderer diagnostic facts. */
 /** Exposes only typed desktop IPC; Pet delivery and command methods are checked by Main against its webContents.
  * Realtime status carries optional microphone ownership for global text-input gating.
+ * Voice documentation forwards fixed identities to Main, never arbitrary external URLs.
  * SOUL opening carries only a Profile identity. Renderer has no filesystem or Memory API access. Every subscription has an explicit disposer.
  */
 import { contextBridge, ipcRenderer } from 'electron';
@@ -11,6 +12,7 @@ function subscribe<T>(channel:string,listener:(value:T)=>void):()=>void {
  ipcRenderer.on(channel,handler);return ()=>ipcRenderer.removeListener(channel,handler);
 }
 const api:AuraBotApi={
+ openVoiceDocumentation:document=>ipcRenderer.invoke(IPC_CHANNELS.openVoiceDocumentation,document),
  getLiveDebugState:()=>ipcRenderer.invoke(IPC_CHANNELS.getLiveDebugState),
  openLiveDebugWindow:()=>ipcRenderer.invoke(IPC_CHANNELS.openLiveDebugWindow),
  clearLiveDebugLogs:()=>ipcRenderer.invoke(IPC_CHANNELS.clearLiveDebugLogs),

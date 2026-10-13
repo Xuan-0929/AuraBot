@@ -2,7 +2,8 @@
  * Controlled desktop configuration fixtures verify save safety, native invalid-field revelation,
  * recoverable server errors, and masked-key preservation/replacement/deletion through the real save
  * store, separate workspace and pet status navigation with actionable runtime reminders and localized status labels and native search-provider dropdown selection, including length-matched first/last-four previews and launch-gated debug actions that preserve unrelated drafts, without starting Electron or a backend.
- * Realtime selection exposes SeedDuplex credentials and hides Pipeline-only model downloads. */
+ * Capability integrations keeps Task/search settings; Pipeline owns the conversation model form; the accessible voice-mode switch preserves settings after mode transitions settle.
+ * Provider help buttons dispatch fixed document identities without saving and surface browser-opening failures. */
 // @vitest-environment jsdom
 import { createApp, nextTick } from 'vue';
 import { createPinia } from 'pinia';
@@ -18,21 +19,33 @@ afterEach(()=>{dispose();vi.unstubAllGlobals();});
 it('switches voice settings to SeedDuplex without requiring Pipeline resources',async()=>{
  const root=mkdtempSync(join(tmpdir(),'aura-realtime-form-'));const config=new DesktopConfigStore(root);
  const saveSettings=vi.fn(async(value,clear)=>config.save(structuredClone(value),structuredClone(clear)));
- Object.assign(window,{aurabot:{getSettings:async()=>config.status(),saveSettings,onSettingsChanged:()=>()=>{},onSpeechAssetsChanged:()=>()=>{},getSpeechAssets:async()=>({phase:'idle',assets:[],paths:{},received:0,total:1})}});
+ const openVoiceDocumentation=vi.fn(async(_document:string)=>{});
+ Object.assign(window,{aurabot:{getSettings:async()=>config.status(),saveSettings,openVoiceDocumentation,onSettingsChanged:()=>()=>{},onSpeechAssetsChanged:()=>()=>{},getSpeechAssets:async()=>({phase:'idle',assets:[],paths:{},received:0,total:1})}});
  const host=document.createElement('div');document.body.append(host);const app=createApp(SettingsWindow);app.use(createPinia());app.mount(host);
  dispose=()=>{app.unmount();host.remove();rmSync(root,{recursive:true,force:true});};
  await vi.waitFor(()=>expect(host.querySelector('input')).not.toBeNull());
+ expect(host.textContent).not.toContain('会话模型');expect(host.textContent).toContain('任务模型');
  host.querySelectorAll<HTMLButtonElement>('nav button')[1]!.click();await nextTick();
- const select=host.querySelector<HTMLSelectElement>('select[name="voice-mode"]');expect(select).not.toBeNull();
- select!.value='realtime';select!.dispatchEvent(new Event('change',{bubbles:true}));await nextTick();
- expect(host.textContent).toContain('SeedDuplex');expect(host.textContent).not.toContain('DashScope Key');
+ expect(host.textContent).toContain('会话模型');
+ const openGuides=async()=>{for(const button of host.querySelectorAll<HTMLButtonElement>('.settings-field-help button'))button.click();await nextTick();};
+ await openGuides();expect(openVoiceDocumentation.mock.calls.map(([document])=>document)).toEqual(['dashscope-key','cosyvoice-voices']);expect(saveSettings).not.toHaveBeenCalled();
+ const toggle=host.querySelector<HTMLButtonElement>('[role="switch"][name="voice-mode"]');expect(toggle).not.toBeNull();
+ expect(toggle!.getAttribute('aria-checked')).toBe('false');
+ toggle!.click();await nextTick();expect(toggle!.getAttribute('aria-checked')).toBe('true');
+ await vi.waitFor(()=>expect(host.textContent).toContain('SeedDuplex'));expect(host.textContent).not.toContain('DashScope Key');expect(host.textContent).not.toContain('会话模型');
  expect(host.querySelector('details')).toBeNull();
+ await openGuides();expect(openVoiceDocumentation.mock.calls.slice(2).map(([document])=>document)).toEqual(['seeduplex-key','seeduplex-voices']);expect(saveSettings).not.toHaveBeenCalled();
  const input=host.querySelector<HTMLInputElement>('input[name="realtime-voice"]')!;
  input.value='voice-id';input.dispatchEvent(new Event('input',{bubbles:true}));await nextTick();
+ openVoiceDocumentation.mockRejectedValueOnce(new Error('browser unavailable'));
+ host.querySelector<HTMLButtonElement>('.settings-field-help button')!.click();
+ await vi.waitFor(()=>expect(host.querySelector('[role="alert"]')?.textContent).toContain('无法打开文档'));
+ expect(input.value).toBe('voice-id');
  host.querySelector('form')!.dispatchEvent(new Event('submit',{bubbles:true,cancelable:true}));
  await vi.waitFor(()=>expect(saveSettings).toHaveBeenCalledOnce());
  expect(config.snapshot().backend.main_agent.speech.mode).toBe('realtime');
  expect(config.snapshot().backend.main_agent.speech.realtime.voice).toBe('voice-id');
+ toggle!.click();await nextTick();expect(toggle!.getAttribute('aria-checked')).toBe('false');await vi.waitFor(()=>expect(host.textContent).toContain('会话模型'));
 });
 it('preserves untouched keys and lets password inputs replace or delete every saved key',async()=>{
  const root=mkdtempSync(join(tmpdir(),'aura-secrets-'));const config=new DesktopConfigStore(root);
@@ -41,26 +54,28 @@ it('preserves untouched keys and lets password inputs replace or delete every sa
  Object.assign(window,{aurabot:{onSpeechAssetsChanged:()=>()=>{},getSpeechAssets:async()=>({phase:'idle',assets:[],paths:{},received:0,total:1}),getSettings:async()=>config.status(),saveSettings,onSettingsChanged:()=>()=>{}}});
  const host=document.createElement('div');document.body.append(host);const app=createApp(SettingsWindow);app.use(createPinia());app.mount(host);
  dispose=()=>{app.unmount();host.remove();rmSync(root,{recursive:true,force:true});};
- await vi.waitFor(()=>expect(host.querySelectorAll('input[data-secret-input]')).toHaveLength(3));
+ await vi.waitFor(()=>expect(host.querySelectorAll('input[data-secret-input]')).toHaveLength(2));
  const keys=()=>[...host.querySelectorAll<HTMLInputElement>('input[data-secret-input]')];
  const edit=async(input:HTMLInputElement,value:string)=>{input.value=value;input.dispatchEvent(new Event('input',{bubbles:true}));await nextTick();};
  const save=async()=>{const count=saveSettings.mock.calls.length;host.querySelector('form')!.dispatchEvent(new Event('submit',{bubbles:true,cancelable:true}));await vi.waitFor(()=>expect(saveSettings).toHaveBeenCalledTimes(count+1));await nextTick();};
- expect(keys().map(input=>input.value)).toEqual(['chat••••ture','task••••ture','sear••••••ture']);
+ expect(keys().map(input=>input.value)).toEqual(['task••••ture','sear••••••ture']);
  expect(keys().every(input=>input.type==='text')).toBe(true);
  expect(host.querySelector<HTMLSelectElement>('select[name="search-provider"]')?.value).toBe('tavily');
  expect(host.querySelector<HTMLOptionElement>('option[value="infoquest"]')?.disabled).toBe(true);
- expect(host.querySelector('nav button')?.textContent).toBe('模型接入');
+ expect(host.querySelector('nav button')?.textContent).toBe('能力集成');
  expect(config.publicConfig().backend.chat_model.api_key).toBe('');
  expect(host.textContent).not.toContain('清除已保存密钥');expect(host.textContent).toContain('搜索接口');expect(host.querySelector('.settings-v2-content-header span')).toBeNull();
  await edit(host.querySelector('input')!,'https://example.invalid/v1');await save();
  expect(config.snapshot().backend.chat_model.api_key).toBe('chat-fixture');
- expect(keys()[0]!.value).toBe('chat••••ture');
- await edit(keys()[0]!,'new-chat-fixture');await edit(keys()[1]!,'');await edit(keys()[2]!,'');await save();
- expect(config.snapshot().backend.chat_model.api_key).toBe('new-chat-fixture');expect(config.snapshot().backend.task.model.api_key).toBe('');expect(config.snapshot().backend.main_agent.web.api_key).toBe('');
- expect(keys()[1]!.value).toBe('');expect(keys()[2]!.value).toBe('');
+ expect(keys()[0]!.value).toBe('task••••ture');
+ await edit(keys()[0]!,'');await edit(keys()[1]!,'');await save();
+ expect(config.snapshot().backend.task.model.api_key).toBe('');expect(config.snapshot().backend.main_agent.web.api_key).toBe('');
  (host.querySelectorAll('nav button')[1] as HTMLButtonElement).click();await nextTick();
+ expect(keys()[0]!.value).toBe('chat••••ture');
+ await edit(keys()[0]!,'new-chat-fixture');await save();
+ expect(config.snapshot().backend.chat_model.api_key).toBe('new-chat-fixture');
  // Even deleting a single mask character must never save a partial mask as the key.
- keys()[0]!.dispatchEvent(new InputEvent('beforeinput',{inputType:'deleteContentBackward',bubbles:true,cancelable:true}));await nextTick();await save();expect(config.snapshot().backend.main_agent.speech.api_key).toBe('');
+ keys()[1]!.dispatchEvent(new InputEvent('beforeinput',{inputType:'deleteContentBackward',bubbles:true,cancelable:true}));await nextTick();await save();expect(config.snapshot().backend.main_agent.speech.api_key).toBe('');
  expect(saveSettings.mock.calls.every(([value])=>!JSON.stringify(value).includes('•'))).toBe(true);
 });
 it('requires save before apply and defaults the busy dialog to cancel',async()=>{
@@ -88,15 +103,15 @@ it('keeps advanced fields collapsed until invalid or a save failure needs attent
  const host=document.createElement('div');document.body.append(host);const app=createApp(SettingsWindow);app.use(createPinia());app.mount(host);
  dispose=()=>{app.unmount();host.remove();rmSync(root,{recursive:true,force:true});};
  await vi.waitFor(()=>expect(host.querySelector('input')).not.toBeNull());
- const advanced=[...host.querySelectorAll('details')];expect(advanced).toHaveLength(2);expect(advanced.every(group=>!group.open)).toBe(true);
- const timeout=advanced[0]!.querySelector('input')!;const invalid=new Event('invalid',{bubbles:false,cancelable:true});timeout.dispatchEvent(invalid);await nextTick();expect(advanced[0]!.open).toBe(true);expect(advanced[1]!.open).toBe(false);expect(invalid.defaultPrevented).toBe(false);
+ const advanced=[...host.querySelectorAll('details')];expect(advanced).toHaveLength(1);expect(advanced.every(group=>!group.open)).toBe(true);
+ const timeout=advanced[0]!.querySelector('input')!;const invalid=new Event('invalid',{bubbles:false,cancelable:true});timeout.dispatchEvent(invalid);await nextTick();expect(advanced[0]!.open).toBe(true);expect(invalid.defaultPrevented).toBe(false);
  advanced[0]!.open=false;
  host.querySelector('form')!.dispatchEvent(new Event('submit',{bubbles:true,cancelable:true}));
  await vi.waitFor(()=>expect(host.querySelector('[role="alert"]')?.textContent).toContain('配置校验失败'));
  expect(advanced.every(group=>group.open)).toBe(true);
  const navigation=host.querySelectorAll('nav button');expect(navigation).toHaveLength(5);expect(navigation[4]!.textContent).toBe('角色配置');expect(host.querySelectorAll('nav svg')).toHaveLength(5);expect([...host.querySelectorAll('nav svg')].every(icon=>icon.getAttribute('viewBox')==='0 0 24 24')).toBe(true);
  (navigation[1] as HTMLButtonElement).click();await nextTick();
- expect(host.querySelectorAll('details input')).toHaveLength(6);
+ expect(host.querySelectorAll('details input')).toHaveLength(7);
  expect([...host.querySelectorAll('label')].find(label=>label.textContent==='音色')?.closest('details')).toBeNull();
  (navigation[3] as HTMLButtonElement).click();await nextTick();
  expect(host.textContent).toContain('向 Main Agent 提供');expect(host.textContent).not.toContain('只能访问');
@@ -106,9 +121,9 @@ it('keeps advanced fields collapsed until invalid or a save failure needs attent
  expect(host.querySelectorAll('details input')).toHaveLength(0);
  expect(navigation[2]!.textContent).toBe('桌宠状态');expect(host.textContent).toContain('运行提示');expect(host.textContent).not.toContain('服务已连接');expect(host.textContent).toContain('桌宠鼠标穿透');expect(host.textContent).toContain('服务未连接');
  const language=host.querySelector('select')!;language.value='en';language.dispatchEvent(new Event('change',{bubbles:true}));await nextTick();
- expect(host.querySelector('.settings-v2-sidebar-brand')?.textContent).toBe('Settings');expect(host.querySelector('.settings-save-bar [role=status]')?.textContent).toBe('Unsaved');
+ expect(host.querySelector('.settings-v2-sidebar-brand')?.textContent).toBe('Settings');expect(navigation[0]!.textContent).toBe('Capability integrations');expect(host.querySelector('.settings-save-bar [role=status]')?.textContent).toBe('Unsaved');
  expect(host.textContent).toContain(t('en','displayLanguage'));expect(host.textContent).toContain(t('en','clickThroughPet'));
- language.value='ja';language.dispatchEvent(new Event('change',{bubbles:true}));await nextTick();expect(host.querySelector('.settings-v2-sidebar-brand')?.textContent).toBe('設定');
+ language.value='ja';language.dispatchEvent(new Event('change',{bubbles:true}));await nextTick();expect(host.querySelector('.settings-v2-sidebar-brand')?.textContent).toBe('設定');expect(navigation[0]!.textContent).toBe('機能連携');
  expect(host.textContent).toContain(t('ja','displayLanguage'));expect(host.textContent).toContain(t('ja','clickThroughPet'));
 
 });

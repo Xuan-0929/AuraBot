@@ -3,6 +3,7 @@
  * Main owns immediate preferences, log paths and clearing. Speech assets accept no arbitrary destinations.
  * Electron validates callers and payloads; Task is read-only and Memory has no renderer surface.
  * Pet voice-state reports let Main block typed input globally for an active Realtime session.
+ * Voice help accepts fixed documentation identities; Main alone opens their official URLs.
  */
 import type {SpeechAssetsState} from './speechAssets';
 import type {LiveDebugCapture,LiveDebugEvent,LiveDebugState,LiveDebugUpdate} from './liveDebug';
@@ -15,6 +16,7 @@ import type { ProfileDetail, ProfileSummary, ProfileSaveInput } from './profiles
 import type { ProfileRuntimeState, RealtimeToken, PetCommandResult } from './desktop';
 import type { DesktopConfig, SettingsState, ApplyResult, HistoryPage, HistoryEntry, TaskSummary, PetCommand } from './desktop';
 export const IPC_CHANNELS = {
+ openVoiceDocumentation:'settings:voice-documentation',
  getLiveDebugState:'live-debug:get',openLiveDebugWindow:'live-debug:open',clearLiveDebugLogs:'live-debug:clear',openLiveDebugLogDirectory:'live-debug:folder',liveDebugChanged:'live-debug:changed',getLiveDebugCapture:'live-debug:capture',liveDebugCaptureChanged:'live-debug:capture-changed',reportLiveDebugEvent:'live-debug:report',
  getSpeechAssets:'speech-assets:get',prepareSpeechAssets:'speech-assets:prepare',cancelSpeechAssets:'speech-assets:cancel',speechAssetsChanged:'speech-assets:changed',
  openProfileSoul:'profiles:open-soul',listProfiles:'profiles:list',getProfile:'profiles:get',createProfile:'profiles:create',saveProfile:'profiles:save',activateProfile:'profiles:activate',deleteProfile:'profiles:delete',importProfileModel:'profiles:import-model',verifyProfileResources:'profiles:verify-resources',profilesChanged:'profiles:changed',getRealtimeToken:'profiles:realtime-token',
@@ -27,6 +29,13 @@ export const IPC_CHANNELS = {
  petSettingsChanged:'pet:settings-changed',petActivity:'pet:activity',live2dModelStateChanged:'live2d:model-state-changed',
  petCursorPosition:'pet:cursor-position',agentStatusChanged:'agent:status-changed',chatMessageUpdated:'chat:message-updated'
 } as const;
+export const VOICE_DOCUMENTATION_URLS = {
+ 'seeduplex-key':'https://docs.volcengine.com/docs/DoubaoVoice/console-guidance?lang=zh',
+ 'seeduplex-voices':'https://docs.volcengine.com/docs/DoubaoVoice/QuickStartNewConsole?lang=zh',
+ 'dashscope-key':'https://help.aliyun.com/zh/model-studio/get-api-key',
+ 'cosyvoice-voices':'https://help.aliyun.com/zh/model-studio/cosyvoice-voice-list',
+} as const;
+export type VoiceDocumentation = keyof typeof VOICE_DOCUMENTATION_URLS;
 export interface PetCursorPosition {
   screenX: number;
   screenY: number;
@@ -37,6 +46,7 @@ export interface PetCursorPosition {
 export type PetResizeDirection = "n" | "s" | "e" | "w" | "nw" | "ne" | "sw" | "se";
 
 export interface AuraBotApi {
+ openVoiceDocumentation(document:VoiceDocumentation):Promise<void>;
  getLiveDebugState():Promise<LiveDebugState>;
  openLiveDebugWindow():Promise<void>;clearLiveDebugLogs():Promise<LiveDebugState>;openLiveDebugLogDirectory():Promise<void>;
  onLiveDebugChanged(listener:(value:LiveDebugUpdate)=>void):()=>void;
