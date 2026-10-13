@@ -7,7 +7,6 @@ creates product Tasks.  Immutable launch options and fixture identity accompany 
 
 from __future__ import annotations
 
-import inspect
 import os
 from contextlib import AsyncExitStack
 from typing import Any
@@ -30,11 +29,6 @@ async def readiness(request: Request) -> dict[str, Any]:
         ),
     }
     profiles = getattr(application.state, "main_agent_profiles", None)
-    memory = getattr(profiles, "memory", None)
-    local_status = getattr(memory, "local_status", None)
-    if callable(local_status):
-        value = local_status()
-        components["memory"] = await value if inspect.isawaitable(value) else value
     components["activeProfileId"] = getattr(profiles, "active_profile_id", None)
     options = getattr(application.state, "launch_options", LaunchOptions())
     return {

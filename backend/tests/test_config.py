@@ -30,19 +30,19 @@ class ConfigTests(unittest.TestCase):
             snapshot = {'version': 2, 'revision': 12, 'backend': {
                 'app': {'data_dir': directory}, 'main_agent': {'profile_dir': 'profiles'},
                 'chat_model': {'model_name': 'fixture', 'api_key': 'local-only'},
-            }, 'desktop': {'systemNotificationsEnabled': True}}
+            }, 'desktop': {'pet': {'displayLanguage': 'zh'}}}
             path.write_text(json.dumps(snapshot))
             config = Config().initialize(path)
             self.assertEqual(config.revision, 12)
             self.assertEqual(config['main_agent']['profile_dir'], 'profiles')
-            self.assertNotIn('persona', config.as_dict())
-            self.assertNotIn('desktop', config.as_dict())
+            self.assertNotIn('persona', dict(config))
+            self.assertNotIn('desktop', dict(config))
 
     def test_missing_config_starts_blank_but_invalid_json_is_rejected(self):
         with tempfile.TemporaryDirectory() as directory:
             path = Path(directory) / 'config.json'
             config = Config().initialize(path)
-            self.assertEqual(config.as_dict(), {})
+            self.assertEqual(dict(config), {})
             self.assertEqual(config.revision, 0)
             for raw in ('task: {}', '[]', '{"version":3}', '{"version":true}', '{"version":2.0}', '{"version":1,"backend":[]}'):
                 path.write_text(raw)

@@ -20,10 +20,9 @@ describe('ProfileRepository',()=>{
 
 describe('legacy migration',()=>{
  it('backs up WAL contents and retains complete Soul plus saved persona as pending',async()=>{
-   const {ProfileStorage}=await import('../../../src/core/profiles/profileStorage');
    const Database=(await import('better-sqlite3')).default;
-   const directory=root();const legacy=join(directory,'legacy.sqlite3');const storage=new ProfileStorage(legacy);const old=storage.getOrSeedActiveProfile();storage.close();
-   const open=new Database(legacy);open.pragma('journal_mode = WAL');open.prepare('update souls set boundaries_json = ? where profile_id = ?').run(JSON.stringify(['private boundary']),old.id);
+   const directory=root();const legacy=join(directory,'legacy.sqlite3');const old={id:'profile_default',displayName:'Aura'};
+   const open=new Database(legacy);open.exec(readFileSync(new URL('../../fixtures/legacy-profile.sql',import.meta.url),'utf8'));open.pragma('journal_mode = WAL');open.prepare('update souls set boundaries_json = ? where profile_id = ?').run(JSON.stringify(['private boundary']),old.id);
    const settings=join(directory,'settings.json');writeFileSync(settings,JSON.stringify({persona:{name:'Saved name',shortPersonaDescription:'Saved persona',tone:'warm',relationshipStyle:'friend',proactiveLevel:'balanced',principles:['p'],taboos:[],reminderStyle:'',replyPreference:''}}));
    const repo=new ProfileRepository({profilesRoot:join(directory,'profiles'),legacyDatabasePath:legacy,legacySettingsPath:settings});await repo.initialize();
    expect(repo.selectedId()).toBe(old.id);const detail=repo.get(old.id);expect(detail.saved.soulText).toContain('private boundary');expect(detail.saved.profile.displayName).toBe('Saved name');expect(detail.applied?.profile.displayName).toBe(old.displayName);expect(detail.saved.revision).toBe(2);

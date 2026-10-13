@@ -38,21 +38,6 @@
         "entities": ["阿杰"]
       },
       "expected_contains": ["阿杰", "热拿铁"]
-    },
-    {
-      "id": "forget-excludes-archived",
-      "memories": [
-        {
-          "content": "用户讨厌过甜的咖啡。",
-          "memory_type": "preference",
-          "metadata": {
-            "entities": ["咖啡"]
-          },
-          "forget": true
-        }
-      ],
-      "query": "我讨厌什么咖啡？",
-      "expected_contains": []
     }
   ]
 }

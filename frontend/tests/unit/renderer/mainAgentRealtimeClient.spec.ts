@@ -93,10 +93,11 @@ async function connected(options:ConstructorParameters<typeof MainAgentRealtimeC
  vi.stubGlobal('fetch',vi.fn(async()=>({ok:true,json:async()=>({token:'token',profile_id:profile.profileId,revision:1,generation:7})})));
  vi.stubGlobal('navigator',{mediaDevices:{getUserMedia:vi.fn(async()=>({getTracks:()=>[]}))}});
  vi.stubGlobal('WebSocket',FakeWebSocket);vi.stubGlobal('AudioContext',FakeAudioContext);vi.stubGlobal('AudioWorkletNode',FakeAudioWorkletNode);
- const client=new MainAgentRealtimeClient(options);const connecting=client.start(profile);
+ const onState=vi.fn(options.onState);
+ const client=new MainAgentRealtimeClient({...options,onState});const connecting=client.start(profile);
  await vi.waitFor(()=>expect(FakeWebSocket.instances).toHaveLength(1));
  const socket=FakeWebSocket.instances[0];socket.open();socket.message(JSON.stringify({type:'session.ready',profile_id:profile.profileId,generation:7,config_revision:1}));await connecting;
- return {client,socket};
+ return {client,socket,onState};
 }
 async function voice(client:MainAgentRealtimeClient,socket:FakeWebSocket){
  const enabling=client.toggle(profile);
@@ -120,7 +121,7 @@ describe('formal Pet unified realtime client',()=>{
    await client.stop();
  });
  it('keeps overrun recovery local and discards in-flight PCM until the next offer',async()=>{
-   const {client,socket}=await connected();await voice(client,socket);
+   const {client,socket,onState}=await connected();await voice(client,socket);
    socket.message(JSON.stringify({type:'clause.offer',clause_id:'old',text:'hello',mode:'voice'}));
    const playback=FakeAudioWorkletNode.instances.find(n=>n.processorName==='aurabot-tts-playback')!;
    await vi.waitFor(()=>expect(playback.port.sent).toContainEqual({type:'offer',clauseId:'old'}));
@@ -135,7 +136,7 @@ describe('formal Pet unified realtime client',()=>{
    playback.port.onmessage?.({data:{type:'playback-progress',clauseId:'next',consumedSamples:2}} as MessageEvent);
    expect(sentControls(socket)).toContainEqual({type:'renderer.progress',clause_id:'next',consumed_samples:2});
    expect(sentControls(socket).filter(e=>e.type==='renderer.ack')).toEqual([{type:'renderer.ack',clause_id:'old',complete:false}]);
-   expect(client.currentState).toBe('active');await client.stop();
+   expect(onState).toHaveBeenLastCalledWith('active',undefined);await client.stop();
  });
  afterEach(()=>{vi.unstubAllGlobals();FakeWebSocket.instances.length=0;FakeAudioWorkletNode.instances.length=0;FakeAudioContext.instances.length=0;});
  it('projects only Backend acoustic states and localizes silence',async()=>{
@@ -177,9 +178,9 @@ describe('formal Pet unified realtime client',()=>{
    expect(sentControls(socket)).toContainEqual({type:'renderer.ack',clause_id:'cut',complete:false});await client.stop();
  });
  it('does not ACK failed history writes',async()=>{
-   const {client,socket}=await connected({onMessage:async()=>{throw new Error('disk full');}});
+   const {socket,onState}=await connected({onMessage:async()=>{throw new Error('disk full');}});
    socket.message(JSON.stringify({type:'clause.offer',clause_id:'full',text:'hello',mode:'text'}));
-   await vi.waitFor(()=>expect(client.currentState).toBe('error'));expect(sentControls(socket).filter(e=>e.type==='renderer.ack'&&e.complete)).toHaveLength(0);
+   await vi.waitFor(()=>expect(onState).toHaveBeenLastCalledWith('error',expect.any(String)));expect(sentControls(socket).filter(e=>e.type==='renderer.ack'&&e.complete)).toHaveLength(0);
  });
  it('keeps text available when microphone permission is denied',async()=>{
    const {client,socket}=await connected();vi.stubGlobal('navigator',{mediaDevices:{getUserMedia:async()=>{throw new Error('permission denied');}}});
@@ -187,13 +188,13 @@ describe('formal Pet unified realtime client',()=>{
  });
  it('orders PCM after its offer while accepted-user history is pending',async()=>{
    let finish!:()=>void;const write=new Promise<void>(resolve=>finish=resolve);
-   const {client,socket}=await connected({onMessage:()=>write});await voice(client,socket);
+   const {client,socket,onState}=await connected({onMessage:()=>write});await voice(client,socket);
    socket.message(JSON.stringify({type:'user.message',message_id:'u',text:'hello'}));
    socket.message(JSON.stringify({type:'clause.offer',clause_id:'v',text:'hello',mode:'voice'}));
    socket.message(new Int16Array([1,2]).buffer);finish();
    const playback=FakeAudioWorkletNode.instances.find(n=>n.processorName==='aurabot-tts-playback')!;
    await vi.waitFor(()=>expect(playback.port.sent).toContainEqual({type:'append',samples:new Int16Array([1,2])}));
-   expect(client.currentState).toBe('active');await client.stop();
+   expect(onState).toHaveBeenLastCalledWith('active',undefined);await client.stop();
  });
  it('does not ACK an old persisted clause onto a replacement connection',async()=>{
    let finish!:()=>void;const write=new Promise<void>(resolve=>finish=resolve);const persist=vi.fn(()=>write);
@@ -217,7 +218,7 @@ describe('formal Pet unified realtime client',()=>{
 
  it('suppresses a voice ACK cancelled while its completed history is being persisted',async()=>{
    let finish!:()=>void;const write=new Promise<void>(resolve=>finish=resolve);const persist=vi.fn(()=>write);
-   const {client,socket}=await connected({onMessage:persist});await voice(client,socket);
+   const {client,socket,onState}=await connected({onMessage:persist});await voice(client,socket);
    socket.message(JSON.stringify({type:'clause.offer',clause_id:'late',text:'heard',mode:'voice'}));
    const playback=FakeAudioWorkletNode.instances.find(n=>n.processorName==='aurabot-tts-playback')!;
    await vi.waitFor(()=>expect(playback.port.sent).toContainEqual({type:'offer',clauseId:'late'}));
@@ -225,16 +226,16 @@ describe('formal Pet unified realtime client',()=>{
    await vi.waitFor(()=>expect(persist).toHaveBeenCalledOnce());
    socket.message(JSON.stringify({type:'clause.cancel',clause_id:'late'}));
    await new Promise(resolve=>setTimeout(resolve,0));finish();await new Promise(resolve=>setTimeout(resolve,0));
-   expect(sentControls(socket).filter(e=>e.type==='renderer.ack')).toEqual([]);expect(client.currentState).toBe('active');await client.stop();
+   expect(sentControls(socket).filter(e=>e.type==='renderer.ack')).toEqual([]);expect(onState).toHaveBeenLastCalledWith('active',undefined);await client.stop();
  });
 
  it('does not let a slow old AudioContext shutdown overwrite a replacement session',async()=>{
-   const {client,socket}=await connected();await voice(client,socket);
+   const {client,socket,onState}=await connected();await voice(client,socket);
    let finish!:()=>void;FakeAudioContext.instances[0].close.mockImplementation(()=>new Promise<void>(resolve=>finish=resolve));
    const stopping=client.stop();const connecting=client.start(profile);
    await vi.waitFor(()=>expect(FakeWebSocket.instances).toHaveLength(2));
    const next=FakeWebSocket.instances[1];next.open();next.message(JSON.stringify({type:'session.ready',profile_id:profile.profileId,generation:7,config_revision:1}));await connecting;
-   finish();await stopping;expect(client.currentState).toBe('active');await client.stop();
+   finish();await stopping;expect(onState).toHaveBeenLastCalledWith('active',undefined);await client.stop();
  });
 
  it('emits voice cue only on actual output start, keeps pause identity and closes independently of ACK',async()=>{

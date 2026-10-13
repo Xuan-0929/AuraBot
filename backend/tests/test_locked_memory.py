@@ -12,6 +12,7 @@ from unittest.mock import patch
 
 os.environ.setdefault('AURABOT_CONFIG_PATH', str(Path(__file__).parent / 'fixtures/runtime_config.json'))
 from backend.memory.locked import build_locked_memory
+from backend.tests.memory_fixtures import memory_snapshot
 from backend.main import create_app, config
 from dataclasses import replace
 from backend.main_agent.settings import MainAgentSettings
@@ -32,7 +33,7 @@ class LockedMemoryTests(unittest.IsolatedAsyncioTestCase):
                     self.assertTrue(memory.read_only)
                     with self.assertRaises(sqlite3.OperationalError):
                         memory.metadata_store.write_audit_log(profile_id='profile_a',action='test',input_summary='',result_json={})
-                    before=memory.debug('profile_a')
+                    before=memory_snapshot(memory.metadata_store, 'profile_a')
                     first=await memory.recall_context_async(profile_id='profile_a', query='阿杰项目和咖啡店', max_chars=2400)
                     self.assertIn('阿杰', first['text'])
                     self.assertIn('咖啡店', first['text'])
@@ -40,15 +41,8 @@ class LockedMemoryTests(unittest.IsolatedAsyncioTestCase):
                         self.assertEqual(await memory.recall_context_async(profile_id='profile_a', query='阿杰项目和咖啡店', max_chars=2400), first)
                     self.assertEqual(await memory.recall_context_async(profile_id='other', query='咖啡店'), {'text':'','memory_ids':[],'char_count':27,'max_chars':2400})
                     with self.assertRaisesRegex(RuntimeError, 'memory_read_only'):
-                        memory.remember(profile_id='profile_a',content='must not persist',source_type='test')
-                    with self.assertRaisesRegex(RuntimeError, 'memory_read_only'):
                         await memory.remember_conversation(profile_id='profile_a',turns=[{'role':'user','content':'test'}],source_id='test')
-                    with self.assertRaisesRegex(RuntimeError, 'memory_read_only'):
-                        memory.forget(profile_id='profile_a',memory_ids=first['memory_ids'])
-                    with self.assertRaisesRegex(RuntimeError, 'memory_read_only'):
-                        memory.improve('profile_a')
-                    memory.due('profile_a','2026-10-08T00:00:00+00:00')
-                    self.assertEqual(memory.debug('profile_a'),before)
+                    self.assertEqual(memory_snapshot(memory.metadata_store, 'profile_a'),before)
                     results.append(first)
                 finally:
                     await memory.shutdown()

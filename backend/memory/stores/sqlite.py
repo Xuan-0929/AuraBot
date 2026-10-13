@@ -59,200 +59,6 @@ class SQLiteMemoryStore:
 
         return [row["name"] for row in rows]
 
-    def create_episode(
-        self,
-        *,
-        profile_id: str,
-        source_type: str,
-        source_id: str | None,
-        role: str | None,
-        content: str,
-        metadata: dict[str, Any],
-    ) -> str:
-        episode_id = f"episode_{uuid4().hex}"
-        now = now_iso()
-
-        with self._lock, self._connection:
-            self._connection.execute(
-                """
-                insert into memory_episodes (
-                  id, profile_id, source_type, source_id, role, content, metadata_json, created_at
-                )
-                values (?, ?, ?, ?, ?, ?, ?, ?)
-                """,
-                (
-                    episode_id,
-                    profile_id,
-                    source_type,
-                    source_id,
-                    role,
-                    content,
-                    dumps(metadata),
-                    now,
-                ),
-            )
-
-        return episode_id
-
-    def create_memory(
-        self,
-        *,
-        profile_id: str,
-        episode_id: str,
-        candidate: MemoryCandidate,
-    ) -> str:
-        memory_id = f"memory_{uuid4().hex}"
-        now = now_iso()
-
-        with self._lock, self._connection:
-            self._connection.execute(
-                """
-                insert into memory_items (
-                  id, profile_id, episode_id, memory_type, state, content,
-                  importance, confidence, valid_from, valid_to, metadata_json,
-                  forget_reason, created_at, updated_at
-                )
-                values (?, ?, ?, ?, 'active', ?, ?, ?, ?, ?, ?, null, ?, ?)
-                """,
-                (
-                    memory_id,
-                    profile_id,
-                    episode_id,
-                    candidate.memory_type,
-                    candidate.content,
-                    candidate.importance,
-                    candidate.confidence,
-                    candidate.valid_from,
-                    candidate.valid_to,
-                    dumps(
-                        {
-                            **candidate.metadata,
-                            "entities": candidate.entities,
-                        }
-                    ),
-                    now,
-                    now,
-                ),
-            )
-            self._connection.execute(
-                "insert into memory_items_fts(memory_id, content) values (?, ?)",
-                (memory_id, candidate.content),
-            )
-
-        return memory_id
-
-    def upsert_entity(
-        self,
-        *,
-        profile_id: str,
-        candidate: EntityCandidate,
-    ) -> str:
-        now = now_iso()
-
-        with self._lock, self._connection:
-            existing = self._connection.execute(
-                """
-                select id, aliases_json
-                from memory_entities
-                where profile_id = ? and name = ? and state = 'active'
-                limit 1
-                """,
-                (profile_id, candidate.name),
-            ).fetchone()
-
-            if existing:
-                aliases = sorted(set(loads(existing["aliases_json"], []) + candidate.aliases))
-                self._connection.execute(
-                    """
-                    update memory_entities
-                    set aliases_json = ?, summary = coalesce(nullif(?, ''), summary), updated_at = ?
-                    where id = ?
-                    """,
-                    (dumps(aliases), candidate.summary, now, existing["id"]),
-                )
-                return existing["id"]
-
-            entity_id = f"entity_{uuid4().hex}"
-            self._connection.execute(
-                """
-                insert into memory_entities (
-                  id, profile_id, name, entity_type, aliases_json, summary, state, created_at, updated_at
-                )
-                values (?, ?, ?, ?, ?, ?, 'active', ?, ?)
-                """,
-                (
-                    entity_id,
-                    profile_id,
-                    candidate.name,
-                    candidate.entity_type,
-                    dumps(candidate.aliases),
-                    candidate.summary,
-                    now,
-                    now,
-                ),
-            )
-            return entity_id
-
-    def create_relation(
-        self,
-        *,
-        profile_id: str,
-        source_id: str,
-        target_id: str,
-        relation_type: str,
-        weight: float,
-        confidence: float,
-        episode_id: str,
-        valid_from: str | None = None,
-        valid_to: str | None = None,
-    ) -> str:
-        relation_id = f"relation_{uuid4().hex}"
-        now = now_iso()
-
-        with self._lock, self._connection:
-            existing = self._connection.execute(
-                """
-                select id
-                from memory_relations
-                where profile_id = ?
-                  and source_id = ?
-                  and target_id = ?
-                  and relation_type = ?
-                  and state = 'active'
-                limit 1
-                """,
-                (profile_id, source_id, target_id, relation_type),
-            ).fetchone()
-
-            if existing:
-                return existing["id"]
-
-            self._connection.execute(
-                """
-                insert into memory_relations (
-                  id, profile_id, source_id, target_id, relation_type, state,
-                  weight, confidence, valid_from, valid_to, episode_id, created_at, updated_at
-                )
-                values (?, ?, ?, ?, ?, 'active', ?, ?, ?, ?, ?, ?, ?)
-                """,
-                (
-                    relation_id,
-                    profile_id,
-                    source_id,
-                    target_id,
-                    relation_type,
-                    weight,
-                    confidence,
-                    valid_from,
-                    valid_to,
-                    episode_id,
-                    now,
-                    now,
-                ),
-            )
-
-        return relation_id
-
     def persist_conversation(
         self,
         *,
@@ -439,18 +245,6 @@ class SQLiteMemoryStore:
             ).fetchall()
         return {row["name"]: row["id"] for row in rows}
 
-    def get_memory(self, memory_id: str) -> dict[str, Any]:
-        with self._lock:
-            row = self._connection.execute(
-                "select * from memory_items where id = ?",
-                (memory_id,),
-            ).fetchone()
-
-        if row is None:
-            raise KeyError(memory_id)
-
-        return memory_row_to_dict(row)
-
     def get_active_memories(self, memory_ids: list[str], profile_id: str) -> list[dict[str, Any]]:
         if not memory_ids:
             return []
@@ -607,57 +401,6 @@ class SQLiteMemoryStore:
 
         return [relation_row_to_dict(row) for row in rows]
 
-    def get_due_memories(self, *, profile_id: str, now_iso_value: str) -> list[dict[str, Any]]:
-        with self._lock:
-            rows = self._connection.execute(
-                """
-                select *
-                from memory_items
-                where profile_id = ?
-                  and state = 'active'
-                  and memory_type in ('follow_up', 'event')
-                  and valid_from is not null
-                  and valid_from <= ?
-                order by valid_from asc, importance desc
-                """,
-                (profile_id, now_iso_value),
-            ).fetchall()
-
-        return [memory_row_to_dict(row) for row in rows]
-
-    def archive_memories(
-        self,
-        *,
-        profile_id: str,
-        memory_ids: list[str],
-        reason: str | None,
-    ) -> int:
-        if not memory_ids:
-            return 0
-
-        placeholders = ",".join("?" for _ in memory_ids)
-        now = now_iso()
-
-        with self._lock, self._connection:
-            cursor = self._connection.execute(
-                f"""
-                update memory_items
-                set state = 'archived',
-                    forget_reason = ?,
-                    updated_at = ?
-                where profile_id = ?
-                  and state != 'archived'
-                  and id in ({placeholders})
-                """,
-                (reason, now, profile_id, *memory_ids),
-            )
-            self._connection.executemany(
-                "delete from memory_items_fts where memory_id = ?",
-                [(memory_id,) for memory_id in memory_ids],
-            )
-
-        return cursor.rowcount
-
     def memory_ids_for_episodes(self, *, profile_id: str, episode_ids: list[str]) -> list[str]:
         if not episode_ids:
             return []
@@ -678,54 +421,6 @@ class SQLiteMemoryStore:
             ).fetchall()
 
         return [row["id"] for row in rows]
-
-    def mark_memories_stale(self, *, profile_id: str, memory_ids: list[str]) -> int:
-        if not memory_ids:
-            return 0
-
-        placeholders = ",".join("?" for _ in memory_ids)
-        now = now_iso()
-
-        with self._lock, self._connection:
-            cursor = self._connection.execute(
-                f"""
-                update memory_items
-                set state = 'stale',
-                    updated_at = ?
-                where profile_id = ? and id in ({placeholders})
-                """,
-                (now, profile_id, *memory_ids),
-            )
-            self._connection.executemany(
-                "delete from memory_items_fts where memory_id = ?",
-                [(memory_id,) for memory_id in memory_ids],
-            )
-
-        return cursor.rowcount
-
-    def mark_memories_superseded(self, *, profile_id: str, memory_ids: list[str]) -> int:
-        if not memory_ids:
-            return 0
-
-        placeholders = ",".join("?" for _ in memory_ids)
-        now = now_iso()
-
-        with self._lock, self._connection:
-            cursor = self._connection.execute(
-                f"""
-                update memory_items
-                set state = 'superseded',
-                    updated_at = ?
-                where profile_id = ? and id in ({placeholders})
-                """,
-                (now, profile_id, *memory_ids),
-            )
-            self._connection.executemany(
-                "delete from memory_items_fts where memory_id = ?",
-                [(memory_id,) for memory_id in memory_ids],
-            )
-
-        return cursor.rowcount
 
     def write_audit_log(
         self,
@@ -758,54 +453,6 @@ class SQLiteMemoryStore:
             )
 
         return audit_id
-
-    def debug_snapshot(self, profile_id: str) -> dict[str, Any]:
-        with self._lock:
-            episodes = self._connection.execute(
-                "select * from memory_episodes where profile_id = ? order by created_at desc limit 50",
-                (profile_id,),
-            ).fetchall()
-            memories = self._connection.execute(
-                "select * from memory_items where profile_id = ? order by updated_at desc limit 100",
-                (profile_id,),
-            ).fetchall()
-            entities = self._connection.execute(
-                "select * from memory_entities where profile_id = ? order by updated_at desc limit 100",
-                (profile_id,),
-            ).fetchall()
-            relations = self._connection.execute(
-                "select * from memory_relations where profile_id = ? order by updated_at desc limit 100",
-                (profile_id,),
-            ).fetchall()
-            audit_logs = self._connection.execute(
-                "select * from memory_audit_logs where profile_id = ? order by created_at desc limit 50",
-                (profile_id,),
-            ).fetchall()
-
-        return {
-            "episodes": [episode_row_to_dict(row) for row in episodes],
-            "memories": [memory_row_to_dict(row) for row in memories],
-            "entities": [entity_row_to_dict(row) for row in entities],
-            "relations": [relation_row_to_dict(row) for row in relations],
-            "audit_logs": [audit_row_to_dict(row) for row in audit_logs],
-        }
-
-    def health(self) -> dict[str, Any]:
-        with self._lock:
-            memories = self._connection.execute("select count(*) from memory_items").fetchone()[0]
-            episodes = self._connection.execute("select count(*) from memory_episodes").fetchone()[0]
-            entities = self._connection.execute("select count(*) from memory_entities").fetchone()[0]
-            relations = self._connection.execute("select count(*) from memory_relations").fetchone()[0]
-
-        return {
-            "backend": "sqlite",
-            "path": str(self.path),
-            "schema_version": self.schema_version(),
-            "episodes": episodes,
-            "memories": memories,
-            "entities": entities,
-            "relations": relations,
-        }
 
     def _migrate(self) -> None:
         with self._lock, self._connection:
@@ -1078,20 +725,6 @@ def memory_row_to_dict(row: sqlite3.Row) -> dict[str, Any]:
     }
 
 
-def entity_row_to_dict(row: sqlite3.Row) -> dict[str, Any]:
-    return {
-        "entity_id": row["id"],
-        "profile_id": row["profile_id"],
-        "name": row["name"],
-        "entity_type": row["entity_type"],
-        "aliases": loads(row["aliases_json"], []),
-        "summary": row["summary"],
-        "state": row["state"],
-        "created_at": row["created_at"],
-        "updated_at": row["updated_at"],
-    }
-
-
 def relation_row_to_dict(row: sqlite3.Row) -> dict[str, Any]:
     return {
         "relation_id": row["id"],
@@ -1107,16 +740,4 @@ def relation_row_to_dict(row: sqlite3.Row) -> dict[str, Any]:
         "episode_id": row["episode_id"],
         "created_at": row["created_at"],
         "updated_at": row["updated_at"],
-    }
-
-
-def audit_row_to_dict(row: sqlite3.Row) -> dict[str, Any]:
-    return {
-        "audit_id": row["id"],
-        "profile_id": row["profile_id"],
-        "action": row["action"],
-        "input_summary": row["input_summary"],
-        "result": loads(row["result_json"], {}),
-        "error": row["error"],
-        "created_at": row["created_at"],
     }

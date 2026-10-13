@@ -1,4 +1,5 @@
-/** Defines the initial desktop Profile and Soul used once by ProfileStorage when identity is absent. */
+/** Supplies ProfileRepository with the initial identity and legacy Soul defaults.
+ * The repository converts defaults to its current Profile files; this module owns no storage. */
 import type { Profile, Soul } from "@shared/schemas/profile";
 
 export const DEFAULT_PROFILE_ID = "profile_default";

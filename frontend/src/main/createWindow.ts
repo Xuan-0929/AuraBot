@@ -2,7 +2,7 @@
  * 创建并管理 AuraBot 桌宠、控制台、设置和独立 Live Debug 窗口及其非 Task broadcasts。
  * Debug 窗口按桌宠所在屏幕工作区限制初始及最小尺寸；关闭只销毁视图，采集与日志生命周期由 Main 的 LiveDebugService 管理。
  *
- * 模块负责窗口位置、尺寸、点击穿透、Live2D/聊天/通知事件投影；macOS 内容窗口隐藏
+ * 模块负责窗口位置、尺寸、点击穿透、Live2D/聊天事件投影；macOS 内容窗口隐藏
  * 原生标题栏，由渲染层提供同色背景、窗口按钮留白和拖动区域。仅为 Pet 窗口安装
  * Main Agent 本地网关 Origin 桥；不发送 Task changed/deleted 事件或持有 Task DTO。
  */
@@ -12,7 +12,6 @@ import { BrowserWindow, nativeTheme, screen } from "electron";
 import { IPC_CHANNELS, type PetResizeDirection } from "@shared/contracts/ipc";
 import type { AgentStatus } from "@shared/contracts/chat";
 import type { Live2DModelState } from "@shared/contracts/live2dModel";
-import type { NotificationSettings } from "@shared/contracts/notificationSettings";
 import { PET_WINDOW_DEFAULT_SIZE, PET_WINDOW_MIN_SIZE } from "@shared/contracts/petWindow";
 import type { Message } from "@shared/schemas/message";
 import type { PetActivity } from "@shared/contracts/pet";
@@ -184,7 +183,6 @@ export function openLiveDebugWindow():BrowserWindow {
   window.once('closed',()=>{liveDebugWindow=undefined;});
   loadRenderer(window,'live-debug');return window;
 }
-export function closeLiveDebugWindow():void {liveDebugWindow?.close();}
 export function broadcastLiveDebug(value:import('../shared/contracts/liveDebug').LiveDebugUpdate):void {
   if(liveDebugWindow&&!liveDebugWindow.isDestroyed())liveDebugWindow.webContents.send(IPC_CHANNELS.liveDebugChanged,value);
 }
@@ -266,16 +264,8 @@ export function broadcastLive2DModelState(state: Live2DModelState): void {
   sendToRenderer(IPC_CHANNELS.live2dModelStateChanged, state);
 }
 
-export function broadcastNotificationSettings(settings: NotificationSettings): void {
-  sendToRenderer(IPC_CHANNELS.notificationSettingsChanged, settings);
-}
-
 export function broadcastAgentStatus(status: AgentStatus): void {
   sendToRenderer(IPC_CHANNELS.agentStatusChanged, status);
-}
-
-export function broadcastChatMessage(message: Message): void {
-  sendToRenderer(IPC_CHANNELS.chatMessageCreated, message);
 }
 
 export function broadcastChatMessageUpdated(message: Message): void {

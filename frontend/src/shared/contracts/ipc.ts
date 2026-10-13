@@ -24,7 +24,7 @@ export const IPC_CHANNELS = {
  taskSubscribe:'tasks:subscribe',tasksChanged:'tasks:changed',getLive2DModelState:'live2d:get-model-state',
  setPetMousePassthrough:'pet:set-mouse-passthrough',movePetWindowBy:'pet:move-window-by',resizePetWindowCorner:'pet:resize-window-corner',
  petSettingsChanged:'pet:settings-changed',petActivity:'pet:activity',live2dModelStateChanged:'live2d:model-state-changed',
- notificationSettingsChanged:'notifications:settings-changed',petCursorPosition:'pet:cursor-position',agentStatusChanged:'agent:status-changed',chatMessageCreated:'chat:message-created',chatMessageUpdated:'chat:message-updated'
+ petCursorPosition:'pet:cursor-position',agentStatusChanged:'agent:status-changed',chatMessageUpdated:'chat:message-updated'
 } as const;
 export interface PetCursorPosition {
   screenX: number;
@@ -34,7 +34,6 @@ export interface PetCursorPosition {
 }
 
 export type PetResizeDirection = "n" | "s" | "e" | "w" | "nw" | "ne" | "sw" | "se";
-export type PetResizeCorner = Extract<PetResizeDirection, "nw" | "ne" | "sw" | "se">;
 
 export interface AuraBotApi {
  getLiveDebugState():Promise<LiveDebugState>;
@@ -68,9 +67,7 @@ export interface AuraBotApi {
  onPetSettingsChanged(listener:(value:PetSettings)=>void):()=>void;
  onPetActivity(listener:(value:PetActivity)=>void):()=>void;
  onLive2DModelStateChanged(listener:(value:Live2DModelState)=>void):()=>void;
- onNotificationSettingsChanged(listener:(value:import('./notificationSettings').NotificationSettings)=>void):()=>void;
  onPetCursorPosition(listener:(value:PetCursorPosition)=>void):()=>void;
  onAgentStatusChanged(listener:(value:AgentStatus)=>void):()=>void;
- onChatMessageCreated(listener:(value:Message)=>void):()=>void;
  onChatMessageUpdated(listener:(value:Message)=>void):()=>void;
 }

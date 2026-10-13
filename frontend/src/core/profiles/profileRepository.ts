@@ -33,8 +33,6 @@ function json<T>(path:string):T{return JSON.parse(readFileSync(path,'utf8')) as 
 function resourceJson(path:string):any{if(lstatSync(path).size>4*1024*1024)throw new Error('import_failed');return json(path);}
 function atomic(path:string,value:unknown):void{mkdirSync(dirname(path),{recursive:true});const tmp=path+'.tmp';writeFileSync(tmp,JSON.stringify(value,null,2)+'\n',{mode:0o600});renameSync(tmp,path);}
 function checkedId(id:string):string{if(!ID.test(id))throw new Error('invalid_resource');return id;}
-/** Resolves the same relative path chain as Python MainAgentSettings.from_config. */
-export function resolveProfilesRoot(configPath:string,dataDir:string,profileDir:string):string{return resolve(resolve(dirname(resolve(configPath)),dataDir),profileDir);}
 function resourcePath(file:string):string {
   if(!file || /[\\\x00-\x1f?#]/.test(file) || file.includes('%') || isAbsolute(file) || /^[A-Za-z][A-Za-z0-9+.-]*:/.test(file))throw new Error('invalid_resource');
   if(file.split('/').some(part=>!part || part==='.' || part==='..'))throw new Error('invalid_resource');

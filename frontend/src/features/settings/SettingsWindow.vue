@@ -57,7 +57,6 @@
                 <label class="settings-page-field"><span>{{ t(displayLanguage, 'displayLanguage') }}</span><select v-model="draft.desktop.pet.displayLanguage"><option value="zh">中文</option><option value="en">English</option><option value="ja">日本語</option></select></label>
                 <label class="settings-page-toggle"><input v-model="draft.desktop.pet.clickThroughPet" type="checkbox" /> {{ t(displayLanguage, 'clickThroughPet') }}</label>
 
-                <label class="settings-page-toggle"><input v-model="draft.desktop.systemNotificationsEnabled" type="checkbox" /> {{ t(displayLanguage, 'systemNotifications') }}</label>
                 <section v-if="state.launchOptions?.debug" data-debug-settings>
                   <h3>{{ debugText(displayLanguage, 'launchMode') }}</h3>
                   <p class="settings-hint">{{ debugText(displayLanguage, 'hint') }}</p>

@@ -1,29 +1,18 @@
+/** Lists bundled Live2D manifests for initial model import by Electron Main.
+ * ProfileRepository owns imported packages and active model selection, not this registry.
+ */
 import { existsSync, readdirSync } from "node:fs";
 import { basename, join } from "node:path";
 import type { Live2DModelDescriptor } from "@shared/contracts/live2dModel";
 
 export interface Live2DModelRegistry {
   listAvailableModels(): Live2DModelDescriptor[];
-  resolveCurrentModel(modelId?: string): Live2DModelDescriptor | undefined;
 }
 
 export function createLive2DModelRegistry(options: { modelRootPath: string }): Live2DModelRegistry {
   return {
     listAvailableModels() {
       return listAvailableModels(options.modelRootPath);
-    },
-    resolveCurrentModel(modelId) {
-      const models = listAvailableModels(options.modelRootPath);
-
-      if (models.length === 0) {
-        return undefined;
-      }
-
-      return (
-        models.find((model) => model.id === modelId) ??
-        models.find((model) => model.id === "hiyori") ??
-        models[0]
-      );
     }
   };
 }

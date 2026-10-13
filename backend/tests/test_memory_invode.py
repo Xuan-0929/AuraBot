@@ -1,7 +1,7 @@
 """
 验证 Memory 整段对话提炼、检索流程与持久化适配器的可观察行为。
 
-测试使用临时 SQLite 和内存向量替身覆盖 remember/recall/forget、提取与排序流程；
+测试使用临时 SQLite 和内存向量替身覆盖对话归档、提取与召回排序流程；
 通过当前 Memory module 验证召回降级与预算，不保留旧短期记忆或兼容 façade 测试。
 """
 
@@ -25,16 +25,12 @@ from backend.memory.extraction.schemas import (
     parse_structured_extraction_payload,
 )
 from backend.memory.extraction.providers import OpenAICompatibleMemoryExtractionModel
-from backend.memory.consolidation.strategies import (
-    ConflictingPreferenceStrategy,
-    DuplicateMemoryStrategy,
-)
+from backend.tests.memory_fixtures import memory_snapshot
 from backend.memory.retrieval.fusion import fuse_candidates
 from backend.memory.retrieval.context import pack_context
 from backend.memory.retrieval.query import QueryAnalyzer
 from backend.memory.retrieval.ranking import hydrate_and_rank_memories
 from backend.memory.retrieval.rerank import RuleBasedMemoryReranker
-from backend.memory.retrieval.relations import expand_relation_candidates
 from backend.memory.retrieval.trace import build_recall_trace
 from backend.memory.validators import validate_memory_candidate
 from backend.memory.types import MemoryCandidate
@@ -66,13 +62,6 @@ class InMemoryVectorStore:
             matches.append({"memory_id": memory_id, "score": score})
 
         return sorted(matches, key=lambda item: item["score"], reverse=True)[:limit]
-
-    def delete(self, memory_ids):
-        for memory_id in memory_ids:
-            self.points.pop(memory_id, None)
-
-    def health(self):
-        return {"backend": "in-memory", "points": len(self.points)}
 
 
 class FailingSearchVectorStore(InMemoryVectorStore):
@@ -192,7 +181,7 @@ class MemoryConversationTests(unittest.IsolatedAsyncioTestCase):
         self.assertEqual(first, repeated)
         self.assertEqual(first["summary"], "用户喜欢红茶，并已得到确认。")
         self.assertEqual(self.model.contents, ["user: 我喜欢红茶\nassistant: 我记住了。"])
-        snapshot = self.store.debug_snapshot("profile-a")
+        snapshot = memory_snapshot(self.store, "profile-a")
         self.assertEqual(len(snapshot["episodes"]), 1)
         self.assertEqual(snapshot["episodes"][0]["source_type"], "main_agent_conversation")
         self.assertEqual(snapshot["episodes"][0]["source_id"], "context:1:2")
@@ -235,7 +224,7 @@ class MemoryConversationTests(unittest.IsolatedAsyncioTestCase):
         )
         self.assertEqual(first["memory_ids"], [])
         self.assertEqual(len(self.model.contents), 1)
-        snapshot = self.store.debug_snapshot("profile-a")
+        snapshot = memory_snapshot(self.store, "profile-a")
         self.assertEqual(len(snapshot["episodes"]), 1)
         self.assertEqual(snapshot["episodes"][0]["summary"], first["summary"])
         self.assertEqual(snapshot["memories"], [])
@@ -305,7 +294,7 @@ class MemoryConversationTests(unittest.IsolatedAsyncioTestCase):
                 profile_id="profile-a", turns=turns, source_id="context:1:1",
             )
 
-        failed = self.store.debug_snapshot("profile-a")
+        failed = memory_snapshot(self.store, "profile-a")
         self.assertEqual(failed["episodes"], [])
         self.assertEqual(failed["memories"], [])
         self.assertEqual(failed["entities"], [])
@@ -319,7 +308,7 @@ class MemoryConversationTests(unittest.IsolatedAsyncioTestCase):
             profile_id="profile-a", turns=turns, source_id="context:1:1",
         )
 
-        completed = self.store.debug_snapshot("profile-a")
+        completed = memory_snapshot(self.store, "profile-a")
         self.assertEqual(len(completed["episodes"]), 1)
         self.assertEqual(len(completed["memories"]), 2)
         self.assertEqual(len(result["memory_ids"]), 2)
@@ -359,7 +348,7 @@ class MemoryConversationTests(unittest.IsolatedAsyncioTestCase):
                 profile_id="profile-a", turns=turns, source_id="context:1:1",
             )
 
-        sqlite_truth = self.store.debug_snapshot("profile-a")
+        sqlite_truth = memory_snapshot(self.store, "profile-a")
         self.assertEqual(len(sqlite_truth["episodes"]), 1)
         self.assertEqual(len(sqlite_truth["memories"]), 2)
         self.assertEqual(len(vectors.points), 1)
@@ -372,19 +361,17 @@ class MemoryConversationTests(unittest.IsolatedAsyncioTestCase):
         self.assertEqual(len(result["memory_ids"]), 2)
         self.assertEqual(set(vectors.points), set(result["memory_ids"]))
         self.assertEqual(len(vectors.attempts), 4)
-        completed = self.store.debug_snapshot("profile-a")
+        completed = memory_snapshot(self.store, "profile-a")
         self.assertEqual(len(completed["episodes"]), 1)
         self.assertEqual(len(completed["memories"]), 2)
 
     async def test_existing_incomplete_episode_is_rebuilt_instead_of_reported_success(self):
-        incomplete_episode = self.store.create_episode(
-            profile_id="profile-a",
-            source_type="main_agent_conversation",
-            source_id="context:1:1",
-            role=None,
-            content="user: 我喜欢红茶",
-            metadata={"turn_count": 1},
-        )
+        incomplete_episode = "incomplete-episode"
+        with sqlite3.connect(self.store.path) as connection:
+            connection.execute("""insert into memory_episodes
+                (id, profile_id, source_type, source_id, content, metadata_json, created_at)
+                values (?, 'profile-a', 'main_agent_conversation', 'context:1:1',
+                        'user: 我喜欢红茶', '{"turn_count":1}', '2026-01-01')""", (incomplete_episode,))
         self.model.release.set()
 
         result = await self.service.remember_conversation(
@@ -397,7 +384,7 @@ class MemoryConversationTests(unittest.IsolatedAsyncioTestCase):
         self.assertEqual(result["summary"], "用户喜欢红茶，并已得到确认。")
         self.assertEqual(len(result["memory_ids"]), 1)
         self.assertEqual(len(self.model.contents), 1)
-        snapshot = self.store.debug_snapshot("profile-a")
+        snapshot = memory_snapshot(self.store, "profile-a")
         self.assertEqual(len(snapshot["episodes"]), 1)
         self.assertEqual(len(snapshot["memories"]), 1)
 
@@ -413,7 +400,7 @@ class MemoryConversationTests(unittest.IsolatedAsyncioTestCase):
         with self.assertRaises(asyncio.CancelledError):
             await task
 
-        snapshot = self.store.debug_snapshot("profile-a")
+        snapshot = memory_snapshot(self.store, "profile-a")
         self.assertEqual(snapshot["episodes"], [])
         self.assertEqual(snapshot["memories"], [])
         self.assertEqual(self.vector_store.points, {})
@@ -451,13 +438,10 @@ class MemoryConversationTests(unittest.IsolatedAsyncioTestCase):
 
     async def test_recall_context_async_returns_only_bounded_public_memory_fields(self):
         self.model.release.set()
-        remembered = self.service.remember(
-            profile_id="profile-a",
-            content="用户喜欢红茶",
-            source_type="chat",
+        self.model.payload["memories"][0]["metadata"] = {"private_blob": "secret-" + "x" * 5000}
+        remembered = await self.service.remember_conversation(
+            profile_id="profile-a", turns=({"role": "user", "content": "用户喜欢红茶"},),
             source_id="red-tea",
-            memory_type="preference",
-            metadata={"private_blob": "secret-" + "x" * 5000},
         )
 
         result = await self.service.recall_context_async(
@@ -523,7 +507,7 @@ class MemoryConversationTests(unittest.IsolatedAsyncioTestCase):
         self.assertEqual(calls, 1)
 
 
-class MemoryInvodeTests(unittest.TestCase):
+class MemoryInvodeTests(unittest.IsolatedAsyncioTestCase):
     def test_context_packer_rejects_budget_smaller_than_fixed_json_envelope(self):
         with self.assertRaisesRegex(ValueError, "fixed JSON envelope"):
             pack_context([], max_chars=20)
@@ -589,54 +573,48 @@ class MemoryInvodeTests(unittest.TestCase):
                         default_importance=0.5,
                     )
 
-    def setUp(self):
+    async def asyncSetUp(self):
         self.tmpdir = tempfile.TemporaryDirectory()
         sqlite_path = Path(self.tmpdir.name) / "memory.sqlite3"
         self.store = SQLiteMemoryStore(sqlite_path)
         self.vector_store = InMemoryVectorStore()
+        self.model = FakeExtractionModel({})
         self.service = MemoryService(
             metadata_store=self.store,
             vector_store=self.vector_store,
             embedding_provider=HashEmbeddingProvider(dimension=32),
+            extractor=StructuredMemoryExtractor(self.model),
         )
 
-    def tearDown(self):
+    async def _archive(self, *, profile_id, content, source_id, memory_type="semantic", metadata=None, service=None):
+        metadata = metadata or {}
+        entities = metadata.get("entities", [])
+        self.model.payload = {
+            "memories": [{"content": content, "memory_type": memory_type, "metadata": metadata,
+                          "entities": entities, "valid_from": metadata.get("valid_from"),
+                          "valid_to": metadata.get("valid_to")}],
+            "entities": [{"name": name} for name in entities],
+        }
+        return await (service or self.service).remember_conversation(
+            profile_id=profile_id, source_id=source_id, turns=({"role": "user", "content": content},),
+        )
+
+    async def asyncTearDown(self):
         self.store.close()
         self.tmpdir.cleanup()
 
-    def test_remember_persists_episode_metadata_and_vector_payload(self):
-        result = self.service.remember(
-            profile_id="user-1",
-            content="用户喜欢热拿铁，工作日上午经常喝。",
-            source_type="chat",
-            source_id="message-1",
-            memory_type="preference",
-            importance=0.8,
-            metadata={"channel": "desktop"},
+    async def test_recall_uses_vector_candidates_and_hydrates_from_sqlite(self):
+        first = await self._archive(
+            profile_id='user-1',
+            content='用户喜欢热拿铁。',
+            source_id='message-1',
+            memory_type='preference',
         )
-
-        stored = self.store.get_memory(result["memory_id"])
-
-        self.assertEqual(stored["profile_id"], "user-1")
-        self.assertEqual(stored["episode_id"], result["episode_id"])
-        self.assertEqual(stored["memory_type"], "preference")
-        self.assertEqual(stored["metadata"]["channel"], "desktop")
-        self.assertIn(result["memory_id"], self.vector_store.points)
-
-    def test_recall_uses_vector_candidates_and_hydrates_from_sqlite(self):
-        first = self.service.remember(
-            profile_id="user-1",
-            content="用户喜欢热拿铁。",
-            source_type="chat",
-            source_id="message-1",
-            memory_type="preference",
-        )
-        second = self.service.remember(
-            profile_id="user-1",
-            content="用户明天要提交项目周报。",
-            source_type="chat",
-            source_id="message-2",
-            memory_type="event",
+        second = await self._archive(
+            profile_id='user-1',
+            content='用户明天要提交项目周报。',
+            source_id='message-2',
+            memory_type='event',
         )
 
         result = self.service.recall(
@@ -650,19 +628,20 @@ class MemoryInvodeTests(unittest.TestCase):
         self.assertNotIn(second["memory_id"], [item["memory_id"] for item in result["memories"]])
         self.assertEqual(result["memories"][0]["content"], "用户喜欢热拿铁。")
 
-    def test_recall_falls_back_to_fts_when_vector_search_fails(self):
+    async def test_recall_falls_back_to_fts_when_vector_search_fails(self):
         vector_store = FailingSearchVectorStore()
         service = MemoryService(
             metadata_store=self.store,
             vector_store=vector_store,
             embedding_provider=HashEmbeddingProvider(dimension=32),
+            extractor=StructuredMemoryExtractor(self.model),
         )
-        remembered = service.remember(
-            profile_id="user-1",
-            content="用户喜欢红茶",
-            source_type="chat",
-            source_id="red-tea",
-            memory_type="preference",
+        remembered = await self._archive(
+            profile_id='user-1',
+            content='用户喜欢红茶',
+            source_id='red-tea',
+            memory_type='preference',
+            service=service,
         )
 
         result = service.recall(profile_id="user-1", query="红茶", limit=5)
@@ -671,14 +650,13 @@ class MemoryInvodeTests(unittest.TestCase):
         self.assertEqual(result["memories"][0]["content"], "用户喜欢红茶")
         self.assertEqual(result["trace"]["failed_branches"], ["vector"])
 
-    def test_recall_uses_entity_seed_when_vector_is_empty(self):
-        remembered = self.service.remember(
-            profile_id="user-1",
-            content="用户喜欢红茶",
-            source_type="chat",
-            source_id="red-tea",
-            memory_type="preference",
-            metadata={"entities": ["红茶"]},
+    async def test_recall_uses_entity_seed_when_vector_is_empty(self):
+        remembered = await self._archive(
+            profile_id='user-1',
+            content='用户喜欢红茶',
+            source_id='red-tea',
+            memory_type='preference',
+            metadata={'entities': ['红茶']},
         )
         self.vector_store.points.clear()
 
@@ -697,6 +675,7 @@ class MemoryInvodeTests(unittest.TestCase):
             metadata_store=self.store,
             vector_store=FailingSearchVectorStore(),
             embedding_provider=HashEmbeddingProvider(dimension=32),
+            extractor=StructuredMemoryExtractor(self.model),
         )
 
         def fail_branch(**_kwargs):
@@ -710,25 +689,6 @@ class MemoryInvodeTests(unittest.TestCase):
         self.assertEqual(result["memories"], [])
         self.assertEqual(result["packed_context"]["text"], "")
         self.assertEqual(result["trace"]["failed_branches"], ["vector", "fts", "entity"])
-
-    def test_forget_archives_sqlite_rows_and_removes_vectors(self):
-        remembered = self.service.remember(
-            profile_id="user-1",
-            content="用户讨厌过甜的咖啡。",
-            source_type="chat",
-            source_id="message-1",
-            memory_type="preference",
-        )
-
-        result = self.service.forget(
-            profile_id="user-1",
-            memory_ids=[remembered["memory_id"]],
-            reason="user requested deletion",
-        )
-
-        self.assertEqual(result["forgotten_count"], 1)
-        self.assertEqual(self.store.get_memory(remembered["memory_id"])["state"], "archived")
-        self.assertNotIn(remembered["memory_id"], self.vector_store.points)
 
     def test_sqlite_store_migrates_phase_zero_schema_without_losing_rows(self):
         with tempfile.TemporaryDirectory() as tmpdir:
@@ -781,50 +741,27 @@ class MemoryInvodeTests(unittest.TestCase):
                 self.assertIn("confidence", migrated.table_columns("memory_items"))
                 self.assertIn("forget_reason", migrated.table_columns("memory_items"))
 
-                memory = migrated.get_memory("memory_legacy")
+                memory = migrated.get_active_memories(["memory_legacy"], "user-1")[0]
                 self.assertEqual(memory["content"], "用户喜欢热拿铁")
                 self.assertEqual(memory["confidence"], 0.7)
                 self.assertEqual(memory["state"], "active")
             finally:
                 migrated.close()
 
-    def test_remember_extracts_multiple_memories_entities_relations_and_audit(self):
-        result = self.service.remember(
-            profile_id="user-1",
-            content="我喜欢热拿铁，明天提醒我提交项目周报。",
-            source_type="chat",
-            source_id="message-1",
-            role="user",
-            metadata={"channel": "desktop"},
+    async def test_recall_combines_vector_fts_entity_relation_and_trace_sources(self):
+        await self._archive(
+            profile_id='user-1',
+            content='用户喜欢热拿铁。',
+            source_id='message-1',
+            memory_type='preference',
+            metadata={'entities': ['热拿铁']},
         )
-
-        self.assertGreaterEqual(len(result["memory_ids"]), 2)
-        self.assertEqual(result["memory_id"], result["memory_ids"][0])
-
-        debug = self.service.debug("user-1")
-        self.assertEqual(len(debug["episodes"]), 1)
-        self.assertGreaterEqual(len(debug["memories"]), 2)
-        self.assertTrue(any(item["memory_type"] == "preference" for item in debug["memories"]))
-        self.assertTrue(any(item["memory_type"] == "follow_up" for item in debug["memories"]))
-        self.assertTrue(any(entity["name"] == "热拿铁" for entity in debug["entities"]))
-        self.assertTrue(any(log["action"] == "remember" for log in debug["audit_logs"]))
-
-    def test_recall_combines_vector_fts_entity_relation_and_trace_sources(self):
-        self.service.remember(
-            profile_id="user-1",
-            content="用户喜欢热拿铁。",
-            source_type="chat",
-            source_id="message-1",
-            memory_type="preference",
-            metadata={"entities": ["热拿铁"]},
-        )
-        self.service.remember(
-            profile_id="user-1",
-            content="用户明天要去咖啡店和阿杰讨论项目。",
-            source_type="chat",
-            source_id="message-2",
-            memory_type="event",
-            metadata={"entities": ["咖啡店", "阿杰", "项目"]},
+        await self._archive(
+            profile_id='user-1',
+            content='用户明天要去咖啡店和阿杰讨论项目。',
+            source_id='message-2',
+            memory_type='event',
+            metadata={'entities': ['咖啡店', '阿杰', '项目']},
         )
 
         result = self.service.recall(
@@ -841,75 +778,7 @@ class MemoryInvodeTests(unittest.TestCase):
         self.assertTrue({"vector", "fts", "entity"} & set(result["trace"]["sources_by_memory"].values()))
         self.assertTrue(result["trace"]["relation_expansions"])
 
-    def test_forget_by_episode_archives_derived_memories_and_removes_vectors(self):
-        remembered = self.service.remember(
-            profile_id="user-1",
-            content="用户喜欢冷萃咖啡，也喜欢晚上写代码。",
-            source_type="chat",
-            source_id="message-1",
-        )
-
-        result = self.service.forget(
-            profile_id="user-1",
-            episode_ids=[remembered["episode_id"]],
-            reason="delete source conversation",
-        )
-
-        self.assertEqual(result["forgotten_count"], len(remembered["memory_ids"]))
-        self.assertTrue(all(memory_id not in self.vector_store.points for memory_id in remembered["memory_ids"]))
-        self.assertFalse(
-            self.service.recall(profile_id="user-1", query="冷萃咖啡", limit=5)["memories"]
-        )
-
-    def test_due_returns_active_time_based_memories(self):
-        due = self.service.remember(
-            profile_id="user-1",
-            content="提醒用户提交周报",
-            source_type="chat",
-            source_id="message-1",
-            memory_type="follow_up",
-            metadata={"valid_from": "2026-06-10T09:00:00+00:00"},
-        )
-        self.service.remember(
-            profile_id="user-1",
-            content="提醒用户下个月整理照片",
-            source_type="chat",
-            source_id="message-2",
-            memory_type="follow_up",
-            metadata={"valid_from": "2026-07-10T09:00:00+00:00"},
-        )
-
-        result = self.service.due("user-1", now_iso="2026-06-11T09:00:00+00:00")
-
-        self.assertEqual([item["memory_id"] for item in result["memories"]], due["memory_ids"])
-
-    def test_improve_marks_older_conflicting_preference_superseded(self):
-        liked = self.service.remember(
-            profile_id="user-1",
-            content="我喜欢热拿铁。",
-            source_type="chat",
-            source_id="message-1",
-        )
-        disliked = self.service.remember(
-            profile_id="user-1",
-            content="我不喜欢热拿铁。",
-            source_type="chat",
-            source_id="message-2",
-        )
-
-        result = self.service.improve("user-1")
-
-        self.assertEqual(result["superseded_count"], 1)
-        self.assertEqual(self.store.get_memory(liked["memory_id"])["state"], "superseded")
-        self.assertEqual(self.store.get_memory(disliked["memory_id"])["state"], "active")
-        self.assertNotIn(liked["memory_id"], self.vector_store.points)
-
-        recall = self.service.recall(profile_id="user-1", query="热拿铁", limit=5)
-        recalled_ids = [memory["memory_id"] for memory in recall["memories"]]
-        self.assertIn(disliked["memory_id"], recalled_ids)
-        self.assertNotIn(liked["memory_id"], recalled_ids)
-
-    def test_structured_extractor_persists_model_candidates_entities_and_trace_metadata(self):
+    async def test_structured_extractor_persists_model_candidates_entities_and_trace_metadata(self):
         service = MemoryService(
             metadata_store=self.store,
             vector_store=self.vector_store,
@@ -940,15 +809,14 @@ class MemoryInvodeTests(unittest.TestCase):
             ),
         )
 
-        result = service.remember(
-            profile_id="user-1",
-            content="我最近在找低酸咖啡豆。",
-            source_type="chat",
-            source_id="message-structured",
+        result = await service.remember_conversation(
+            profile_id='user-1',
+            turns=({'role': 'user', 'content': '我最近在找低酸咖啡豆。'},),
+            source_id='message-structured',
         )
 
-        memory = self.store.get_memory(result["memory_id"])
-        debug = self.service.debug("user-1")
+        memory = self.store.get_active_memories([result["memory_id"]], "user-1")[0]
+        debug = memory_snapshot(self.store, "user-1")
 
         self.assertEqual(memory["content"], "用户喜欢低酸咖啡豆")
         self.assertEqual(memory["metadata"]["preference_polarity"], "positive")
@@ -987,7 +855,7 @@ class MemoryInvodeTests(unittest.TestCase):
                 )
             )
 
-    def test_structured_extractor_rejects_invalid_model_output_and_writes_audit_error(self):
+    async def test_structured_extractor_rejects_invalid_model_output_before_persistence(self):
         service = MemoryService(
             metadata_store=self.store,
             vector_store=self.vector_store,
@@ -1009,81 +877,23 @@ class MemoryInvodeTests(unittest.TestCase):
         )
 
         with self.assertRaises(ValueError):
-            service.remember(
-                profile_id="user-1",
-                content="坏输出不要入库",
-                source_type="chat",
-                source_id="message-invalid",
+            await service.remember_conversation(
+                profile_id='user-1',
+                turns=({'role': 'user', 'content': '坏输出不要入库'},),
+                source_id='message-invalid',
             )
 
-        debug = self.service.debug("user-1")
+        debug = memory_snapshot(self.store, "user-1")
         self.assertEqual(debug["memories"], [])
-        self.assertTrue(
-            any(log["action"] == "remember" and log["error"] for log in debug["audit_logs"])
-        )
+        self.assertEqual(debug["episodes"], [])
+        self.assertEqual(debug["audit_logs"], [])
 
-    def test_improve_marks_near_duplicate_memory_text_stale(self):
-        first = self.service.remember(
-            profile_id="user-1",
-            content="用户喜欢热拿铁。",
-            source_type="chat",
-            source_id="message-1",
-            memory_type="preference",
-            metadata={"entities": ["热拿铁"], "preference_polarity": "positive"},
-        )
-        second = self.service.remember(
-            profile_id="user-1",
-            content="用户喜欢热拿铁",
-            source_type="chat",
-            source_id="message-2",
-            memory_type="preference",
-            metadata={"entities": ["热拿铁"], "preference_polarity": "positive"},
-        )
-
-        result = self.service.improve("user-1")
-
-        self.assertEqual(result["stale_count"], 1)
-        self.assertEqual(self.store.get_memory(first["memory_id"])["state"], "active")
-        self.assertEqual(self.store.get_memory(second["memory_id"])["state"], "stale")
-
-    def test_consolidation_strategies_select_duplicate_and_conflicting_ids(self):
-        memories = [
-            {
-                "memory_id": "old-positive",
-                "memory_type": "preference",
-                "content": "用户喜欢热拿铁。",
-                "metadata": {"entities": ["热拿铁"], "preference_polarity": "positive"},
-                "created_at": "2026-01-01T00:00:00+00:00",
-            },
-            {
-                "memory_id": "new-positive",
-                "memory_type": "preference",
-                "content": "用户喜欢热拿铁",
-                "metadata": {"entities": ["热拿铁"], "preference_polarity": "positive"},
-                "created_at": "2026-01-02T00:00:00+00:00",
-            },
-            {
-                "memory_id": "new-negative",
-                "memory_type": "preference",
-                "content": "用户不喜欢热拿铁",
-                "metadata": {"entities": ["热拿铁"], "preference_polarity": "negative"},
-                "created_at": "2026-01-03T00:00:00+00:00",
-            },
-        ]
-
-        duplicate_result = DuplicateMemoryStrategy().select(memories)
-        conflict_result = ConflictingPreferenceStrategy().select(memories)
-
-        self.assertEqual(duplicate_result.stale_ids, ["new-positive"])
-        self.assertEqual(conflict_result.superseded_ids, ["old-positive", "new-positive"])
-
-    def test_ranking_and_trace_preserve_candidate_sources(self):
-        remembered = self.service.remember(
-            profile_id="user-1",
-            content="用户喜欢热拿铁。",
-            source_type="chat",
-            source_id="message-1",
-            memory_type="preference",
+    async def test_ranking_and_trace_preserve_candidate_sources(self):
+        remembered = await self._archive(
+            profile_id='user-1',
+            content='用户喜欢热拿铁。',
+            source_id='message-1',
+            memory_type='preference',
         )
         candidates = [
             {"memory_id": remembered["memory_id"], "score": 0.8, "source": "vector"},
@@ -1157,18 +967,13 @@ class MemoryInvodeTests(unittest.TestCase):
         self.assertEqual(snapshot.memory_facts, (public_record,))
         self.assertLessEqual(len(snapshot.prompt), 12_000)
 
-    def test_recall_returns_query_analysis_and_packed_context(self):
-        self.service.remember(
-            profile_id="user-1",
-            content="用户今天要和阿杰讨论项目。",
-            source_type="chat",
-            source_id="message-1",
-            memory_type="event",
-            metadata={
-                "entities": ["阿杰", "项目"],
-                "valid_from": "2026-06-11T00:00:00+00:00",
-                "valid_to": "2026-06-12T00:00:00+00:00",
-            },
+    async def test_recall_returns_query_analysis_and_packed_context(self):
+        await self._archive(
+            profile_id='user-1',
+            content='用户今天要和阿杰讨论项目。',
+            source_id='message-1',
+            memory_type='event',
+            metadata={'entities': ['阿杰', '项目'], 'valid_from': '2026-06-11T00:00:00+00:00', 'valid_to': '2026-06-12T00:00:00+00:00'},
         )
 
         result = self.service.recall(
@@ -1217,24 +1022,14 @@ class MemoryInvodeTests(unittest.TestCase):
         self.assertEqual([memory["memory_id"] for memory in reranked], ["event", "preference"])
         self.assertGreater(reranked[0]["rerank_score"], reranked[1]["rerank_score"])
 
-    def test_recall_trace_exposes_rerank_score_changes(self):
-        self.service.remember(
-            profile_id="user-1",
-            content="用户喜欢热拿铁。",
-            source_type="chat",
-            source_id="message-1",
-            memory_type="preference",
-        )
-        self.service.remember(
-            profile_id="user-1",
-            content="用户今天要和阿杰讨论项目。",
-            source_type="chat",
-            source_id="message-2",
-            memory_type="event",
-            metadata={
-                "entities": ["阿杰", "项目"],
-                "valid_from": "2026-06-11T00:00:00+00:00",
-            },
+    async def test_recall_trace_exposes_rerank_score_changes(self):
+        await self._archive(profile_id='user-1', content='用户喜欢热拿铁。', source_id='message-1', memory_type='preference')
+        await self._archive(
+            profile_id='user-1',
+            content='用户今天要和阿杰讨论项目。',
+            source_id='message-2',
+            memory_type='event',
+            metadata={'entities': ['阿杰', '项目'], 'valid_from': '2026-06-11T00:00:00+00:00'},
         )
 
         result = self.service.recall(
@@ -1253,21 +1048,9 @@ class MemoryInvodeTests(unittest.TestCase):
             [memory["memory_id"] for memory in result["memories"]],
         )
 
-    def test_retriever_accepts_custom_reranker_without_changing_seed_components(self):
-        self.service.remember(
-            profile_id="user-1",
-            content="用户喜欢热拿铁。",
-            source_type="chat",
-            source_id="message-1",
-            memory_type="preference",
-        )
-        self.service.remember(
-            profile_id="user-1",
-            content="用户喜欢冷萃咖啡。",
-            source_type="chat",
-            source_id="message-2",
-            memory_type="preference",
-        )
+    async def test_retriever_accepts_custom_reranker_without_changing_seed_components(self):
+        await self._archive(profile_id='user-1', content='用户喜欢热拿铁。', source_id='message-1', memory_type='preference')
+        await self._archive(profile_id='user-1', content='用户喜欢冷萃咖啡。', source_id='message-2', memory_type='preference')
         baseline = self.service.recall(profile_id="user-1", query="咖啡", limit=2)
         baseline_ids = [memory["memory_id"] for memory in baseline["memories"]]
         self.service.retriever.reranker = ReverseMemoryReranker()
@@ -1280,7 +1063,7 @@ class MemoryInvodeTests(unittest.TestCase):
         )
         self.assertTrue(all("rerank_score" not in memory for memory in result["memories"]))
 
-    def test_recall_fixture_cases(self):
+    async def test_recall_fixture_cases(self):
         fixture_path = Path(__file__).parent / "fixtures" / "memory" / "recall_cases.json"
         fixture = json.loads(fixture_path.read_text(encoding="utf-8"))
 
@@ -1290,27 +1073,17 @@ class MemoryInvodeTests(unittest.TestCase):
                     metadata_store=self.store,
                     vector_store=self.vector_store,
                     embedding_provider=HashEmbeddingProvider(dimension=32),
+                    extractor=StructuredMemoryExtractor(self.model),
                 )
-                memory_ids_to_forget = []
 
                 for index, memory in enumerate(case["memories"]):
-                    remembered = service.remember(
-                        profile_id=case["id"],
-                        content=memory["content"],
-                        source_type="fixture",
+                    await self._archive(
+                        profile_id=case['id'],
+                        content=memory['content'],
                         source_id=f"{case['id']}-{index}",
-                        memory_type=memory["memory_type"],
-                        metadata=memory.get("metadata", {}),
-                    )
-
-                    if memory.get("forget"):
-                        memory_ids_to_forget.extend(remembered["memory_ids"])
-
-                if memory_ids_to_forget:
-                    service.forget(
-                        profile_id=case["id"],
-                        memory_ids=memory_ids_to_forget,
-                        reason="fixture forget",
+                        memory_type=memory['memory_type'],
+                        metadata=memory.get('metadata', {}),
+                        service=service,
                     )
 
                 result = service.recall(
@@ -1328,7 +1101,7 @@ class MemoryInvodeTests(unittest.TestCase):
 
 
 class QdrantLocalVectorStoreTests(unittest.TestCase):
-    def test_qdrant_local_store_filters_by_profile_and_memory_type_then_deletes(self):
+    def test_qdrant_local_store_filters_by_profile_and_memory_type(self):
         with tempfile.TemporaryDirectory() as tmpdir:
             store = QdrantLocalVectorStore(
                 path=Path(tmpdir) / "qdrant",
@@ -1366,11 +1139,6 @@ class QdrantLocalVectorStoreTests(unittest.TestCase):
 
                 self.assertEqual([item["memory_id"] for item in result], ["memory-a"])
 
-                store.delete(["memory-a"])
-                self.assertEqual(
-                    store.search([1.0, 0.0, 0.0], profile_id="user-1", limit=5),
-                    [],
-                )
             finally:
                 store.close()
 

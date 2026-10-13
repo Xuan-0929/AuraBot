@@ -1,3 +1,8 @@
+"""Define Memory candidates and the embedding/vector contracts used by ingestion and recall.
+
+Extractors return immutable candidate records; MemoryService validates and persists them through
+SQLite and a vector adapter exposing only the retained upsert and search operations.
+"""
 from __future__ import annotations
 
 from dataclasses import dataclass, field
@@ -47,10 +52,4 @@ class VectorStore(Protocol):
         limit: int,
         filters: dict[str, Any] | None = None,
     ) -> list[dict[str, Any]]:
-        ...
-
-    def delete(self, memory_ids: list[str]) -> None:
-        ...
-
-    def health(self) -> dict[str, Any]:
         ...

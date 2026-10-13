@@ -29,13 +29,13 @@ it.each([[], ['--debug'], ['--lock-memory'], ['--debug', '--lock-memory']])('iso
 it('ignores a legacy enabled setting and keeps launch state outside saved configuration',()=>{
  const root=mkdtempSync(join(tmpdir(),'aurabot-launch-config-'));
  try{
-  const original=new DesktopConfigStore(root,root);
+  const original=new DesktopConfigStore(root);
   const legacy=JSON.parse(readFileSync(original.path,'utf8'));legacy.desktop.liveDebugEnabled=true;
   writeFileSync(original.path,JSON.stringify(legacy));
-  const normal=new DesktopConfigStore(root,root);
+  const normal=new DesktopConfigStore(root);
   expect(normal.status().launchOptions).toEqual({debug:false,lockMemory:false});
   expect(normal.snapshot().desktop).not.toHaveProperty('liveDebugEnabled');
-  const debug=new DesktopConfigStore(root,root,{debug:true,lockMemory:true});
+  const debug=new DesktopConfigStore(root,{debug:true,lockMemory:true});
   debug.save(debug.publicConfig());
   expect(debug.status().launchOptions).toEqual({debug:true,lockMemory:true});
   expect(readFileSync(debug.path,'utf8')).not.toMatch(/liveDebugEnabled|launchOptions|lockMemory/);

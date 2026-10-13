@@ -24,7 +24,7 @@ from typing import Any, Awaitable, Callable
 from urllib.parse import urlsplit, urlunsplit
 
 from fastapi import APIRouter, HTTPException, Request, Response, WebSocket, status
-from pydantic import BaseModel, ConfigDict, Field, field_validator
+from pydantic import BaseModel, ConfigDict, Field
 from starlette.websockets import WebSocketDisconnect
 
 from .lifecycle import ActiveProfileManager, ProfileResources

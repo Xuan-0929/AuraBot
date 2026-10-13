@@ -7,7 +7,7 @@ Only bounded product projections leave this seam; prompts and working directorie
 
 from __future__ import annotations
 
-from collections.abc import AsyncIterator, Callable, Mapping
+from collections.abc import AsyncIterator, Callable
 from typing import Any
 from uuid import UUID, uuid4
 

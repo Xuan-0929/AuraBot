@@ -62,7 +62,7 @@ test('fresh desktop renders Hiyori, exposes unavailable models and applies saved
   const settingsPromise=electronApp.waitForEvent('window');await pet.evaluate(()=>window.aurabot.openSettingsWindow());const settings=await settingsPromise;
   await expect(settings.getByRole('button',{name:'保存',exact:true})).toBeDisabled();
   await settings.getByRole('button',{name:'桌宠状态',exact:true}).click();
-  await settings.getByLabel('系统通知').uncheck();
+  await settings.getByLabel('桌宠鼠标穿透').check();
   await expect(settings.getByRole('button',{name:'应用',exact:true})).toBeDisabled();
   await settings.getByRole('button',{name:'保存',exact:true}).click();
   await expect(settings.getByRole('status')).toHaveText('已保存');
@@ -70,6 +70,10 @@ test('fresh desktop renders Hiyori, exposes unavailable models and applies saved
   await settings.getByRole('button',{name:'应用',exact:true}).click();
   await expect(settings.getByRole('status')).toHaveText('已应用');
   expect((await status()).processId).toBe(initial.processId);
+  await settings.getByLabel('桌宠鼠标穿透').uncheck();
+  await settings.getByRole('button',{name:'保存',exact:true}).click();
+  await settings.getByRole('button',{name:'应用',exact:true}).click();
+  await expect(settings.getByRole('status')).toHaveText('已应用');
   await settings.getByRole('button',{name:'模型接入',exact:true}).click();
   await settings.getByLabel('模型名称',{exact:true}).first().fill('unconfigured-smoke');
   await settings.getByRole('button',{name:'保存',exact:true}).click();

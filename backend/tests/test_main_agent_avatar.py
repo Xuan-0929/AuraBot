@@ -107,8 +107,6 @@ class MemoryMigrationTests(unittest.TestCase):
         with tempfile.TemporaryDirectory() as directory:
             root = Path(directory)
             store = QdrantLocalVectorStore(path=root / "qdrant", vector_size=16)
-            # Lazy Qdrant owner opens on first health check.
-            store.health()
             try:
                 with self.assertRaisesRegex(RuntimeError, "vector_store_in_use"):
                     prepare_memory_directory(root)

@@ -19,7 +19,7 @@ export const test = base.extend<{ renderer: void }>({
     const errors: string[] = [];
     context.on('page', page => page.on('pageerror', error => errors.push(error.message)));
     try {
-      const config = new DesktopConfigStore(root, root);
+      const config = new DesktopConfigStore(root);
       config.markApplied(config.snapshot());
       config.online = true;
       await context.addInitScript(({ settings, profile, adaptor }) => {
@@ -40,9 +40,7 @@ export const test = base.extend<{ renderer: void }>({
           getSettings: async () => settings,
           getInitialState: async () => ({ profile, profileRuntime: runtime, mainSessionId: 'layout', messages,
             agentStatus: 'idle' as const, petSettings: settings.config.desktop.pet,
-            live2dModelState: { currentModelId: '', currentModelPath: '', models: [] }, debugPetOverlay: false,
-            notificationSettings: { systemNotificationsEnabled: true, permissionState: 'system_managed' as const,
-              followUpNotificationsEnabled: false, idleNudgeNotificationsEnabled: false } }),
+            live2dModelState: { currentModelId: '', currentModelPath: '', models: [] }, }),
           getHistory: async () => ({ messages }),
           listProfiles: async () => ({ runtime, profiles: [{ id: profile.id, displayName: profile.displayName,
             selected: true, revision: 1, appliedRevision: null, modelName: null, visualStatus: 'unconfigured' as const }] }),
@@ -61,8 +59,8 @@ export const test = base.extend<{ renderer: void }>({
           },
           onSettingsChanged: subscribe, onProfilesChanged: subscribe, onRealtimeError: subscribe,
           onPetSettingsChanged: subscribe, onPetActivity: subscribe, onLive2DModelStateChanged: subscribe,
-          onNotificationSettingsChanged: subscribe, onPetCursorPosition: subscribe, onAgentStatusChanged: subscribe,
-          onChatMessageCreated: subscribe, onChatMessageUpdated: subscribe
+          onPetCursorPosition: subscribe, onAgentStatusChanged: subscribe,
+          onChatMessageUpdated: subscribe
         } satisfies Partial<AuraBotApi>;
         Object.defineProperty(window, 'aurabot', { value: api });
       }, { settings: config.status(), profile: createDefaultProfile('2025-01-01T00:00:00Z').profile, adaptor: emptyAvatarAdaptor() });

@@ -20,6 +20,7 @@ from backend.memory.extractor import StructuredMemoryExtractor
 from backend.memory.service import MemoryService
 from backend.memory.stores.qdrant import QdrantLocalVectorStore
 from backend.memory.stores.sqlite import SQLiteMemoryStore
+from backend.tests.memory_fixtures import memory_snapshot
 
 
 def tool_delta(call_id: str, name: str, arguments: str) -> dict:
@@ -64,8 +65,8 @@ class SilentMainAgentE2ETests(unittest.IsolatedAsyncioTestCase):
                 embedding_provider=embedding,
                 extractor=StructuredMemoryExtractor(ExtractionModel()),
             )
-            prior = memory.remember(
-                profile_id="profile_a", content="以前聊过咖啡", source_type="chat",
+            prior = await memory.remember_conversation(
+                profile_id="profile_a", turns=({"role": "user", "content": "以前聊过咖啡"},),
                 source_id="prior",
             )
             requests = []
@@ -111,7 +112,7 @@ class SilentMainAgentE2ETests(unittest.IsolatedAsyncioTestCase):
                 self.assertEqual(context.fold().conversation_turns, ())
                 self.assertTrue(any(
                     episode["source_type"] == "main_agent_conversation"
-                    for episode in memory.debug("profile_a")["episodes"]
+                    for episode in memory_snapshot(memory.metadata_store, "profile_a")["episodes"]
                 ))
             finally:
                 await runtime.shutdown()

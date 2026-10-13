@@ -3,7 +3,7 @@
  * change live state. Settings previews expose only the first/last four code points and length-matched
  * bullets; first-run defaults register the installation root and user home, and keep Pi dependencies
  * under that root independently of the source checkout. Launch options are immutable process state returned alongside settings, never persisted.
- * Legacy debug preferences are stripped by the schema.
+ * Legacy debug and notification preferences are stripped by the schema.
  * Legacy search credentials normalize on read; secrets never leave Main except masked previews.
  */
 import {speechAssetPaths} from './speechAssetManifest';
@@ -30,7 +30,7 @@ export class DesktopConfigStore {
   online=false;
   error?:string;
   capabilities?:SettingsState["capabilities"];
-  constructor(readonly root:string, projectRoot:string, readonly launchOptions:LaunchOptions=Object.freeze({debug:false,lockMemory:false})) {
+  constructor(readonly root:string, readonly launchOptions:LaunchOptions=Object.freeze({debug:false,lockMemory:false})) {
     root=resolve(root);mkdirSync(root,{recursive:true});root=realpathSync(root);this.root=root;
     this.path=join(root,'settings.json');
     const blankModel={base_url:'',model_name:'',api_key:'',timeout_seconds:60};
@@ -39,7 +39,7 @@ export class DesktopConfigStore {
       main_agent:{profile_dir:'profiles',web:{provider:'tavily',api_key:''},speech:{enabled:false,api_key:'',stt_model_name:'fun-asr-realtime',tts_model_name:'cosyvoice-v3-flash',tts_voice:'longanyang',
         ...speechAssetPaths(root)}},
       memory:{embedding:{provider:'hash',dimension:384}},task:{user_data_dir:root,pi_runtime_dir:join(root,'pi-runtime'),node_executable:process.execPath.includes('Electron')?'node':process.execPath,default_timeout_seconds:1800,model:{...blankModel}}
-    },desktop:{pet:{clickThroughPet:false,displayLanguage:'zh'},systemNotificationsEnabled:true}};
+    },desktop:{pet:{clickThroughPet:false,displayLanguage:'zh'}}};
     const existing=existsSync(this.path)?JSON.parse(readFileSync(this.path,'utf8')):null;
     this.saved=existing?desktopConfigSchema.parse({...existing,version:2}):defaults;
     // The repository must back up and import v1 persona before the old file is replaced.

@@ -11,7 +11,7 @@ from __future__ import annotations
 
 import asyncio
 import logging
-from collections.abc import Awaitable, Callable, Mapping
+from collections.abc import Awaitable, Callable
 from dataclasses import dataclass, replace
 from enum import StrEnum
 from typing import Any
@@ -170,11 +170,6 @@ class TaskOperations:
             await self.error('task_context_failed')
             raise
         return result
-
-    async def wait_for_proposals(self) -> None:
-        workers = tuple(self._workers.values())
-        if workers:
-            await asyncio.gather(*(asyncio.shield(task) for task in workers), return_exceptions=True)
 
     async def shutdown(self) -> None:
         async with self.lock:

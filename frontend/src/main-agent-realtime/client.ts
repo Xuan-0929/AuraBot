@@ -95,8 +95,6 @@ export class MainAgentRealtimeClient {
     this.onClause = options.onClause ?? (() => undefined);
   }
 
-  get currentState(): MainAgentRealtimeState { return this.state; }
-
   setDebugCapture(captureId:string|null):void {
     if(this.debugCaptureId===captureId)return;
     this.debugCaptureId=captureId;
@@ -229,7 +227,7 @@ export class MainAgentRealtimeClient {
       // PCM must follow its offer even while an earlier history write is awaiting IPC.
       this.controls=this.controls.then(async()=>{
         if(!this.current(socket,generation))return;
-        if(typeof message.data==="string")await this.handleControl(JSON.parse(message.data),generation);
+        if(typeof message.data==="string")await this.handleControl(JSON.parse(message.data));
         else this.appendTts(message.data as ArrayBuffer);
       }).catch(error=>{if(this.current(socket,generation))return this.fail(error,"control_failed",debugCaptureId);});
     };
@@ -237,7 +235,7 @@ export class MainAgentRealtimeClient {
     socket.onclose = () => { if (this.current(socket, generation)) void this.fail("realtime connection closed","transport_closed"); };
   }
 
-  private async handleControl(event: Record<string, unknown>, generation: number): Promise<void> {
+  private async handleControl(event: Record<string, unknown>): Promise<void> {
     if(!this.matchesIdentity(event)){this.visualDiagnostics.dropped++;return;}
     switch (event.type) {
       case "session.ready":

@@ -37,11 +37,9 @@ from .runtime import (
     InputSegment,
     InvokeRequest,
     MainAgentRuntime,
-    PendingTaskProposal,
     PendingTrigger,
     PrepareAdmissionPolicy,
     RendererClause,
-    TaskProposalStatus,
 )
 from .settings import MainAgentSettings, WorkspaceRegistry, WorkspaceRegistryError
 from .snapshot import Snapshot, SnapshotBudget, SnapshotProjector
@@ -49,13 +47,13 @@ from .tasks import TaskBridge
 
 __all__ = [
     "ActiveInput", "CapabilityTokens", "ClauseState", "ContextStore", "ConversationBatch", "FoldedContext", "InputSegment", "InvokeRequest",
-    "MainAgentRuntime", "MainAgentSettings", "PendingConversationArchive", "PendingTaskProposal",
+    "MainAgentRuntime", "MainAgentSettings", "PendingConversationArchive",
     "PendingTrigger", "PrepareAdmissionPolicy",
     "ObservationExecutorError", "ObservationLedger", "ObservationSecurityError", "WebTools",
     "WorkspaceListExecutor", "WorkspaceReadExecutor",
     "WorkspaceReader",
     "ActiveProfileManager", "ProfileResources", "RendererClause", "Snapshot", "TaskBridge",
     "SnapshotBudget", "SnapshotProjector", "SpeechClause", "WorkspaceRegistry",
-    "MicFrameQueue", "ProtocolError", "RealtimeHub", "RendererPort", "SUBPROTOCOL", "TaskProposalStatus",
+    "MicFrameQueue", "ProtocolError", "RealtimeHub", "RendererPort", "SUBPROTOCOL",
     "WorkspaceRegistryError",
 ]

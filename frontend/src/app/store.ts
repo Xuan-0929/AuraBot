@@ -1,5 +1,5 @@
 /**
- * 管理 Renderer 可见聊天、Live2D、桌宠与通知状态，不包含 Memory 管理。
+ * 管理 Renderer 可见聊天、Live2D 与桌宠状态，不包含 Memory 管理。
  *
  * Store 通过 preload API 初始化和发送普通聊天，并协调 pet activity 队列；它不保存
  * Task 列表/详情/debug，也不订阅或调用任何 Task IPC。
@@ -13,7 +13,6 @@ import type {
 } from "@shared/contracts/chat";
 import type { Live2DModelState } from "@shared/contracts/live2dModel";
 import type { PetCursorPosition } from "@shared/contracts/ipc";
-import type { NotificationSettings } from "@shared/contracts/notificationSettings";
 import type { PetActivity } from "@shared/contracts/pet";
 import type { Message } from "@shared/schemas/message";
 import {
@@ -37,12 +36,10 @@ interface AuraBotState {
   agentStatus: AgentStatus;
   petSettings: PetSettings;
   live2dModelState?: Live2DModelState;
-  notificationSettings?: NotificationSettings;
   petActivity?: PetActivity;
   petActivityQueue: PetActivity[];
   petCursorPosition?: PetCursorPosition;
   focusAt: { x: number; y: number };
-  debugPetOverlay: boolean;
   isInitialized: boolean;
 }
 
@@ -53,7 +50,6 @@ export const useAuraBotStore = defineStore("auraBot", {
     profile:undefined,
     mainSessionId:undefined,
     live2dModelState:undefined,
-    notificationSettings:undefined,
     petActivity:undefined,
     petCursorPosition:undefined,
     messages: [],
@@ -63,7 +59,6 @@ export const useAuraBotStore = defineStore("auraBot", {
     petSettings: { ...DEFAULT_PET_SETTINGS },
     petActivityQueue: [],
     focusAt: { x: 0, y: 0 },
-    debugPetOverlay: false,
     isInitialized: false
   }),
   getters: {
@@ -105,21 +100,12 @@ export const useAuraBotStore = defineStore("auraBot", {
         window.aurabot.onLive2DModelStateChanged((value) => {
           this.live2dModelState = value;
         }),
-        window.aurabot.onNotificationSettingsChanged((value) => {
-          this.notificationSettings = value;
-        }),
         window.aurabot.onPetCursorPosition((value) => {
           this.petCursorPosition = value;
           this.focusAt = { x: value.localX, y: value.localY };
         }),
         window.aurabot.onAgentStatusChanged((value) => {
           this.agentStatus = value;
-        }),
-        window.aurabot.onChatMessageCreated((value) => {
-          if(value.profileId!==this.profile?.id)return;
-          if (!this.messages.some((message) => message.id === value.id)) {
-            this.messages = [...this.messages, value];
-          }
         }),
         window.aurabot.onChatMessageUpdated((value) => {
           if(value.profileId!==this.profile?.id)return;
@@ -183,14 +169,6 @@ export const useAuraBotStore = defineStore("auraBot", {
         throw error;
       }
     },
-    showPetNotice(message: string) {
-      this.enqueuePetActivity({
-        id: `local-${Date.now()}`,
-        kind: "voice_notice",
-        message,
-        createdAt: new Date().toISOString()
-      });
-    },
     enqueuePetActivity(activity: PetActivity) {
       if (!this.petActivity) {
         this.petActivity = activity;
@@ -198,12 +176,7 @@ export const useAuraBotStore = defineStore("auraBot", {
         this.petActivity.id !== activity.id &&
         !this.petActivityQueue.some((queued) => queued.id === activity.id)
       ) {
-        if (isPriorityPetActivity(activity) && !isPriorityPetActivity(this.petActivity)) {
-          this.petActivity = activity;
-          this.petActivityQueue = this.petActivityQueue.filter(isPriorityPetActivity);
-        } else {
-          this.petActivityQueue = [...this.petActivityQueue, activity];
-        }
+        this.petActivityQueue = [...this.petActivityQueue, activity];
       }
     },
     clearPetActivity(id?: string) {
@@ -219,10 +192,6 @@ export const useAuraBotStore = defineStore("auraBot", {
     }
   }
 });
-
-function isPriorityPetActivity(activity: PetActivity): boolean {
-  return activity.kind !== "chat_reply";
-}
 
 function upsertMessage(messages: Message[], changed: Message): Message[] {
   return messages.some((message) => message.id === changed.id)
@@ -240,12 +209,6 @@ function reconcileMessages(
   );
   if (!next.some((message) => message.id === result.userMessage.id)) {
     next.push(result.userMessage);
-  }
-  if (
-    result.assistantMessage &&
-    !next.some((message) => message.id === result.assistantMessage?.id)
-  ) {
-    next.push(result.assistantMessage);
   }
   return next.filter((message,index)=>next.findIndex(item=>item.id===message.id)===index);
 }

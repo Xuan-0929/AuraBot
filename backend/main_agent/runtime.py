@@ -18,21 +18,19 @@ Read-only Memory keeps normal recall while suppressing idle timers and archive w
 from __future__ import annotations
 
 import asyncio
-import inspect
 import json
 import re
 import time
 import uuid
 from collections.abc import AsyncIterable, Awaitable, Callable, Mapping, Sequence
-from dataclasses import dataclass, replace
-from enum import StrEnum
+from dataclasses import dataclass
 from typing import Any
 
 from .context import ClauseState, ContextStore, PendingConversationArchive
 from .observations import ObservationLedger
 from .snapshot import Snapshot, SnapshotProjector
 from .tasks import TaskBridge
-from .task_operations import TaskOperations, PendingTaskProposal, TaskProposalStatus
+from .task_operations import TaskOperations
 from .tool_runtime import (
     EffectFence,
     InvokeMode,
@@ -296,22 +294,8 @@ class MainAgentRuntime:
             debug.emit("model", name, inputId=active.input_id if active else None, **details)
 
     @property
-    def latest_context_version(self) -> int:
-        return self._latest_context_version
-
-    @property
     def current_response_grant(self) -> ResponseGrant | None:
         return self._response_grant
-
-    @property
-    def pending_trigger(self) -> PendingTrigger | None:
-        return self._pending_trigger
-
-    @property
-    def task_proposals(self) -> tuple[PendingTaskProposal, ...]:
-        """Return immutable proposal views in acceptance order for diagnostics and UI projection."""
-
-        return self._task_operations.proposals if self._task_operations is not None else ()
 
     def restart_busy(self) -> bool:
         """Read active work while the restart route holds this runtime's admission lock."""
@@ -350,14 +334,6 @@ class MainAgentRuntime:
         effective = _required_text(soul, "soul")
         async with self._lock:
             self.soul = effective
-
-    async def wait_for_task_proposals(self) -> None:
-        if self._task_operations is not None:
-            await self._task_operations.wait_for_proposals()
-
-    async def cancel_task_proposal(self, proposal_id: str) -> bool:
-        async with self._lock:
-            return self._task_operations.cancel(proposal_id) if self._task_operations is not None else False
 
     async def update_transcript(
         self, text: str, *, segment_id: str | None = None, request_prepare: bool = True
@@ -600,27 +576,6 @@ class MainAgentRuntime:
             )
             self._kick_locked()
             return admitted
-
-    async def request_continue(self, reason: str) -> bool:
-        """Request CONTINUE for current facts without creating response permission."""
-
-        async with self._lock:
-            if not self.accepting or self._shutdown:
-                raise RuntimeError("backend_restarting")
-            if self._active_input is None or self._shutdown:
-                self._debug("trigger_suppressed", mode="CONTINUE", reason="input_unavailable")
-                return False
-            self._merge_trigger_locked(InvokeMode.CONTINUE, _required_text(reason, "reason"))
-            self._kick_locked()
-            return True
-
-    async def mark_external_commit(self) -> None:
-        """Record a TaskManager-accepted durable fact so the next real input gets a new causal scope."""
-
-        async with self._lock:
-            if self._active_input is None:
-                raise RuntimeError("external commit requires an active input")
-            self._has_external_commit = True
 
     async def renderer_ack(self, clause_id: str, *, complete: bool, mode: str = "voice") -> bool:
         """Commit only a complete, current Renderer ACK; stale/partial clauses remain unheard."""
@@ -1628,8 +1583,6 @@ __all__ = [
     "InvokeRequest",
     "MainAgentRuntime",
     "PendingTrigger",
-    "PendingTaskProposal",
     "PrepareAdmissionPolicy",
     "RendererClause",
-    "TaskProposalStatus",
 ]

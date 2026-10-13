@@ -8,7 +8,7 @@ import {SpeechAssets} from './speechAssets';
 import {LiveDebugService} from './liveDebug';
 import {LaunchSession,readLaunchOptions} from './launchOptions';
 import {openLiveDebugWindow,broadcastLiveDebug} from './createWindow';
-import { app, net, BrowserWindow, ipcMain, Notification, dialog, shell } from 'electron';
+import { app, net, BrowserWindow, ipcMain, dialog, shell } from 'electron';
 import { join, resolve, dirname } from 'node:path';
 import { randomUUID } from 'node:crypto';
 import { existsSync,readFileSync } from 'node:fs';
@@ -50,7 +50,7 @@ async function bootstrap(){
  const root=resolve(process.env.AURABOT_USER_DATA_DIR??join(app.getPath('userData'),'desktop-v2'));
  const settingsPath=join(root,'settings.json');
  const legacySettings=existsSync(settingsPath)?JSON.parse(readFileSync(settingsPath,'utf8')):null;
- const config=desktopConfig=new DesktopConfigStore(root,projectRoot,launch.options);
+ const config=desktopConfig=new DesktopConfigStore(root,launch.options);
  speechAssets=new SpeechAssets(root,state=>broadcast(C.speechAssetsChanged,state),undefined,net.fetch.bind(net));
  history=new ConversationHistory(root);
  const shared=config.snapshot().backend;
@@ -91,7 +91,7 @@ async function bootstrap(){
    if(!BrowserWindow.fromWebContents(event.sender)||event.senderFrame!==event.sender.mainFrame)throw new Error('未知窗口');
    return listener(event,...args);
  });
- handle(C.getInitialState,()=>{const profile=(applied??profileStore.get(runtime.selectedId).saved).profile;const page=history!.list(profile.id);return {profile,profileRuntime:runtime,mainSessionId:`main:${profile.id}`,messages:page.messages,historyCursor:page.nextCursor,agentStatus:agentState,chatError:realtimeError,petSettings:config.current().desktop.pet,live2dModelState:modelState(),notificationSettings:{systemNotificationsEnabled:config.current().desktop.systemNotificationsEnabled,followUpNotificationsEnabled:false,idleNudgeNotificationsEnabled:false,permissionState:Notification.isSupported()?'system_managed':'unsupported'},debugPetOverlay:false};});
+ handle(C.getInitialState,()=>{const profile=(applied??profileStore.get(runtime.selectedId).saved).profile;const page=history!.list(profile.id);return {profile,profileRuntime:runtime,mainSessionId:`main:${profile.id}`,messages:page.messages,historyCursor:page.nextCursor,agentStatus:agentState,chatError:realtimeError,petSettings:config.current().desktop.pet,live2dModelState:modelState()};});
  handle(C.openConsoleWindow,()=>{openConsoleWindow();});
  handle(C.openSettingsWindow,()=>{openSettingsWindow();});
  handle(C.getSettings,()=>config.status());

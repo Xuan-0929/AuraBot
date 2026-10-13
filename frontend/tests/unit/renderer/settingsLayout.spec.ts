@@ -15,7 +15,7 @@ import { t } from '../../../src/i18n';
 let dispose:()=>void=()=>{};
 afterEach(()=>{dispose();vi.unstubAllGlobals();});
 it('preserves untouched keys and lets password inputs replace or delete every saved key',async()=>{
- const root=mkdtempSync(join(tmpdir(),'aura-secrets-'));const config=new DesktopConfigStore(root,root);
+ const root=mkdtempSync(join(tmpdir(),'aura-secrets-'));const config=new DesktopConfigStore(root);
  const seed=config.snapshot();seed.backend.chat_model.api_key='chat-fixture';seed.backend.task.model.api_key='task-fixture';seed.backend.main_agent.web.api_key='search-fixture';seed.backend.main_agent.speech.api_key='speech-fixture';config.save(seed);
  const saveSettings=vi.fn(async(value,clear)=>config.save(structuredClone(value),structuredClone(clear)));
  Object.assign(window,{aurabot:{onSpeechAssetsChanged:()=>()=>{},getSpeechAssets:async()=>({phase:'idle',assets:[],paths:{},received:0,total:1}),getSettings:async()=>config.status(),saveSettings,onSettingsChanged:()=>()=>{}}});
@@ -44,7 +44,7 @@ it('preserves untouched keys and lets password inputs replace or delete every sa
  expect(saveSettings.mock.calls.every(([value])=>!JSON.stringify(value).includes('•'))).toBe(true);
 });
 it('requires save before apply and defaults the busy dialog to cancel',async()=>{
- const root=mkdtempSync(join(tmpdir(),'aura-form-'));const config=new DesktopConfigStore(root,root);config.markApplied(config.snapshot());config.online=true;
+ const root=mkdtempSync(join(tmpdir(),'aura-form-'));const config=new DesktopConfigStore(root);config.markApplied(config.snapshot());config.online=true;
  const saveSettings=vi.fn(async(value,clear)=>config.save(structuredClone(value),structuredClone(clear)));
  const applySettings=vi.fn(async()=>({state:config.status(),busy:{tasks:1,memoryWriting:false,mainAgent:false}}));
  Object.assign(window,{aurabot:{onSpeechAssetsChanged:()=>()=>{},getSpeechAssets:async()=>({phase:'idle',assets:[],paths:{},received:0,total:1}),getSettings:async()=>config.status(),saveSettings,applySettings,onSettingsChanged:()=>()=>{}}});
@@ -62,7 +62,7 @@ it('requires save before apply and defaults the busy dialog to cancel',async()=>
 });
 
 it('keeps advanced fields collapsed until invalid or a save failure needs attention',async()=>{
- const root=mkdtempSync(join(tmpdir(),'aura-advanced-'));const config=new DesktopConfigStore(root,root);
+ const root=mkdtempSync(join(tmpdir(),'aura-advanced-'));const config=new DesktopConfigStore(root);
  const saveSettings=vi.fn(async()=>{throw new Error('配置校验失败：请检查请求超时');});
  Object.assign(window,{aurabot:{onSpeechAssetsChanged:()=>()=>{},getSpeechAssets:async()=>({phase:'idle',assets:[],paths:{},received:0,total:1}),getSettings:async()=>config.status(),saveSettings,onSettingsChanged:()=>()=>{}}});
  const host=document.createElement('div');document.body.append(host);const app=createApp(SettingsWindow);app.use(createPinia());app.mount(host);
@@ -94,7 +94,7 @@ it('keeps advanced fields collapsed until invalid or a save failure needs attent
 });
 
 it.each([false,true])('shows debug actions only for a debug launch (%s), without altering drafts',async(debug)=>{
- const root=mkdtempSync(join(tmpdir(),'aura-debug-setting-'));const config=new DesktopConfigStore(root,root,{debug,lockMemory:false});config.markApplied(config.snapshot());config.online=true;
+ const root=mkdtempSync(join(tmpdir(),'aura-debug-setting-'));const config=new DesktopConfigStore(root,{debug,lockMemory:false});config.markApplied(config.snapshot());config.online=true;
  let changed:(value:ReturnType<typeof config.status>)=>void=()=>{};
  const openLiveDebugWindow=vi.fn(async()=>{});
  const saveSettings=vi.fn(async(value)=>config.save(structuredClone(value)));

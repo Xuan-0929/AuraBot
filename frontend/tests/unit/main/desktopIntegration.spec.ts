@@ -10,7 +10,7 @@ function directory() { const root = mkdtempSync(join(tmpdir(), 'aura-desktop-'))
 afterEach(() => roots.splice(0).forEach(root => rmSync(root, { recursive: true, force: true })));
 it('saves without changing the applied configuration and never returns stored keys', () => {
   const root = directory();
-  const store = new DesktopConfigStore(root, root);
+  const store = new DesktopConfigStore(root);
   store.markApplied(store.snapshot());
   const before = store.status();
   const draft = store.publicConfig();

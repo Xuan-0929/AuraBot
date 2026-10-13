@@ -53,10 +53,8 @@ const api:AuraBotApi={
  onPetSettingsChanged:(listener)=>subscribe(IPC_CHANNELS.petSettingsChanged,listener),
  onPetActivity:(listener)=>subscribe(IPC_CHANNELS.petActivity,listener),
  onLive2DModelStateChanged:(listener)=>subscribe(IPC_CHANNELS.live2dModelStateChanged,listener),
- onNotificationSettingsChanged:(listener)=>subscribe(IPC_CHANNELS.notificationSettingsChanged,listener),
  onPetCursorPosition:(listener)=>subscribe(IPC_CHANNELS.petCursorPosition,listener),
  onAgentStatusChanged:(listener)=>subscribe(IPC_CHANNELS.agentStatusChanged,listener),
- onChatMessageCreated:(listener)=>subscribe(IPC_CHANNELS.chatMessageCreated,listener),
  onChatMessageUpdated:(listener)=>subscribe(IPC_CHANNELS.chatMessageUpdated,listener),
 };
 contextBridge.exposeInMainWorld('aurabot',api);

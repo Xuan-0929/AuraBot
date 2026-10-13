@@ -8,7 +8,6 @@ from __future__ import annotations
 
 import os
 from collections.abc import Iterator, Mapping
-from copy import deepcopy
 from pathlib import Path
 from threading import RLock
 from typing import Any
@@ -48,10 +47,6 @@ class Config(Mapping[str, Any]):
         self.revision = 0
 
     @property
-    def initialized(self) -> bool:
-        return self._data is not None
-
-    @property
     def path(self) -> Path:
         if self._path is None:
             raise ConfigNotInitializedError("AuraBot configuration has not been initialized.")
@@ -85,11 +80,6 @@ class Config(Mapping[str, Any]):
             self._data = {key: value for key, value in backend.items() if key in RETAINED_TOP_LEVEL_KEYS}
             self._path = resolved_path
             return self
-
-    def as_dict(self) -> dict[str, Any]:
-        """Return a defensive copy suitable for serialization or inspection."""
-
-        return deepcopy(self._require_data())
 
     def __getitem__(self, key: str) -> Any:
         return self._require_data()[key]
@@ -136,14 +126,6 @@ def initialize_config(config_path: str | Path | None = None) -> Config:
     return config.initialize(config_path)
 
 
-def get_config() -> Config:
-    """Return the initialized process-wide configuration singleton."""
-
-    if not config.initialized:
-        raise ConfigNotInitializedError("AuraBot configuration has not been initialized.")
-    return config
-
-
 __all__ = [
     "CONFIG_PATH_ENV",
     "DEFAULT_CONFIG_PATH",
@@ -151,7 +133,6 @@ __all__ = [
     "ConfigError",
     "ConfigNotInitializedError",
     "config",
-    "get_config",
     "initialize_config",
     "resolve_config_path",
 ]

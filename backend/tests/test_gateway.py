@@ -38,7 +38,6 @@ class GatewayEndpointTests(unittest.TestCase):
         with TestClient(application) as client:
             response = client.get("/health")
 
-        self.assertTrue(global_config.initialized)
         self.assertEqual(response.status_code, 200)
         self.assertEqual(response.json(), {"ok": True, "service": "backend"})
         self.assertIsNone(application.state.main_agent_profiles.active_profile_id)

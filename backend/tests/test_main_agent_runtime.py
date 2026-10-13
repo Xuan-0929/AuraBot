@@ -391,7 +391,7 @@ class ActiveInputAndSchedulingTests(RuntimeTestCase):
         old_id = runtime.active_input.input_id
         await runtime.speech_input_failed("old")
         self.assertIsNone(runtime.active_input)
-        self.assertIsNone(runtime.pending_trigger)
+        await runtime.wait_until_idle()
         self.assertNotIn("uncertain command", str(self.store.fold().conversation_turns))
         self.assertFalse(self.store.fold().think_note)
         await runtime.update_transcript("new words", segment_id="new", request_prepare=False)
@@ -399,7 +399,6 @@ class ActiveInputAndSchedulingTests(RuntimeTestCase):
         await runtime.speech_input_failed("old")
         self.assertEqual(runtime.active_input.latest_transcript, "new words")
         self.assertEqual(errors, ["stt_transcription_failed"])
-
 
     async def test_stable_segment_replaces_in_place_and_new_utterance_appends(self) -> None:
         runtime = self.runtime(ScriptedProvider())
@@ -414,7 +413,7 @@ class ActiveInputAndSchedulingTests(RuntimeTestCase):
         ])
         self.assertEqual(active.latest_transcript, "我想查天气\n再看看上海")
 
-    async def test_pending_triggers_coalesce_to_respond_over_continue_over_prepare(self) -> None:
+    async def test_pending_response_supersedes_running_prepare(self) -> None:
         started = asyncio.Event()
         release = asyncio.Event()
 
@@ -429,7 +428,6 @@ class ActiveInputAndSchedulingTests(RuntimeTestCase):
         await runtime.update_transcript("first", segment_id="seg-1", request_prepare=False)
         await runtime.request_prepare("checkpoint", high_priority=True)
         await asyncio.wait_for(started.wait(), 1)
-        await runtime.request_continue("observation")
         await runtime.submit_text("second")
         release.set()
         await runtime.wait_until_idle()
@@ -540,7 +538,7 @@ class EffectsObservationAndDeliveryTests(RuntimeTestCase):
         self.assertEqual(events, [("state", "idle")])
         self.assertEqual(metrics.snapshot()["counters"].get("main.receipt.schema_invalid"), 1)
         self.assertEqual(metrics.snapshot()["counters"].get("main.invoke.silent"), 1)
-        self.assertEqual(runtime.task_proposals, ())
+        self.assertEqual(self.store.fold().task_facts, ())
 
     async def test_no_say_is_silent_with_or_without_ordinary_content(self) -> None:
         from backend.main_agent.metrics import LifecycleMetrics

@@ -154,14 +154,14 @@ class ProposalTests(unittest.IsolatedAsyncioTestCase):
     async def _propose(self) -> None:
         await self.runtime.submit_text("do research")
         await self.runtime.wait_until_idle()
-        self.assertEqual(self.runtime.task_proposals[0].status.value, "pending")
+        self.assertEqual(next(fact["status"] for fact in self.context.fold().task_facts if fact["kind"] == "task_proposal"), "pending")
 
     async def test_exact_three_second_proposal_commits_once_and_projects_durable_fact(self) -> None:
         await self._propose()
         await self.timers.advance(2.9)
         self.assertEqual(self.manager.created, [])
         await self.timers.advance(0.1)
-        await self.runtime.wait_for_task_proposals()
+        await self.runtime.wait_until_idle()
 
         self.assertEqual(len(self.manager.created), 1)
         self.assertEqual(self.manager.created[0].owner_profile_id, "profile_a")
@@ -173,9 +173,9 @@ class ProposalTests(unittest.IsolatedAsyncioTestCase):
         await self.runtime.vad_start()
         await self.runtime.confirm_speech()
         await self.timers.advance(3.0)
-        await self.runtime.wait_for_task_proposals()
+        await self.runtime.wait_until_idle()
         self.assertEqual(self.manager.created, [])
-        self.assertEqual(self.runtime.task_proposals[0].status.value, "cancelled")
+        self.assertEqual(next(fact["status"] for fact in self.context.fold().task_facts if fact["kind"] == "task_proposal"), "cancelled")
 
     async def test_profile_shutdown_cancels_uncommitted_proposal(self) -> None:
         await self._propose()
@@ -194,7 +194,7 @@ class ProposalTests(unittest.IsolatedAsyncioTestCase):
         await self.timers.advance(1.9)
         self.assertEqual(self.manager.created, [])
         await self.timers.advance(0.1)
-        await self.runtime.wait_for_task_proposals()
+        await self.runtime.wait_until_idle()
         self.assertEqual(len(self.manager.created), 1)
 
     async def test_context_failure_after_commit_does_not_retry_or_lose_task(self):
@@ -208,16 +208,16 @@ class ProposalTests(unittest.IsolatedAsyncioTestCase):
             return original(fact)
         with patch.object(self.context, 'upsert_task_fact', side_effect=fail_task):
             await self.timers.advance(3)
-            await asyncio.wait_for(self.runtime.wait_for_task_proposals(), 1)
+            await asyncio.wait_for(self.runtime.wait_until_idle(), 1)
         self.assertEqual(len(self.manager.created), 1)
         self.assertEqual(len(attempts), 1)
-        self.assertEqual(self.runtime.task_proposals[0].status.value, 'committed')
+        self.assertEqual(len(self.manager.records), 1)
 
     async def test_duplicate_task_event_does_not_split_new_utterance(self):
         await self.runtime.startup()
         await self._propose()
         await self.timers.advance(3)
-        await self.runtime.wait_for_task_proposals()
+        await self.runtime.wait_until_idle()
         await self.runtime.update_transcript('new', segment_id='next', request_prepare=False)
         input_id = self.runtime.active_input.input_id
         task_id = next(iter(self.manager.records))
@@ -238,7 +238,7 @@ class ProposalTests(unittest.IsolatedAsyncioTestCase):
             return original(fact)
         with patch.object(self.context, 'upsert_task_fact', side_effect=fail_proposal):
             await self.timers.advance(3)
-            await self.runtime.wait_for_task_proposals()
+            await self.runtime.wait_until_idle()
         self.assertEqual(len(self.manager.created), 1)
         await self.runtime.update_transcript('next', segment_id='next', request_prepare=False)
         self.assertNotEqual(self.runtime.active_input.input_id, old_input)

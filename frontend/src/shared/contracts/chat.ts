@@ -7,7 +7,6 @@
 
 import type { Message } from "../schemas/message";
 import type { Live2DModelState } from "./live2dModel";
-import type { NotificationSettings } from "./notificationSettings";
 import type { PetSettings } from "../schemas/petSettings";
 import type { Profile } from "../schemas/profile";
 
@@ -19,7 +18,6 @@ export interface SendChatMessageInput {
 
 export interface SendChatMessageResult {
   userMessage: Message;
-  assistantMessage?: Message;
   agentStatus: AgentStatus;
 }
 
@@ -33,6 +31,4 @@ export interface AppInitialState {
   agentStatus: AgentStatus;
   petSettings: PetSettings;
   live2dModelState: Live2DModelState;
-  notificationSettings: NotificationSettings;
-  debugPetOverlay: boolean;
 }

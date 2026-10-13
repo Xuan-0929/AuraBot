@@ -39,7 +39,6 @@ describe("useAuraBotStore", () => {
   it("reconciles an optimistic chat message without Task state", async () => {
     const result: SendChatMessageResult = {
       userMessage: message("user-server", "user", "你好"),
-      assistantMessage: message("assistant", "assistant", "我在"),
       agentStatus: "idle"
     };
     vi.stubGlobal("window", {
@@ -57,7 +56,7 @@ describe("useAuraBotStore", () => {
 
     await store.sendMessage("  你好  ");
 
-    expect(store.messages.map((entry) => entry.id)).toEqual(["user-server", "assistant"]);
+    expect(store.messages.map((entry) => entry.id)).toEqual(["user-server"]);
     expect(store.agentStatus).toBe("idle");
     expect(store).not.toHaveProperty("tasks");
   });
@@ -73,13 +72,11 @@ describe("useAuraBotStore", () => {
         onPetSettingsChanged: vi.fn(() => unsubscribe),
         onPetActivity: vi.fn(() => unsubscribe),
         onLive2DModelStateChanged: vi.fn(() => unsubscribe),
-        onNotificationSettingsChanged: vi.fn(() => unsubscribe),
         onPetCursorPosition: vi.fn((listener) => {
           cursorListener = listener;
           return unsubscribe;
         }),
         onAgentStatusChanged: vi.fn(() => unsubscribe),
-        onChatMessageCreated: vi.fn(() => unsubscribe),
         onChatMessageUpdated: vi.fn(() => unsubscribe)
       }
     });
@@ -90,7 +87,7 @@ describe("useAuraBotStore", () => {
 
     expect(store.focusAt).toEqual({ x: 3, y: 4 });
     stop();
-    expect(unsubscribe).toHaveBeenCalledTimes(9);
+    expect(unsubscribe).toHaveBeenCalledTimes(7);
   });
 
   it('loads older visible history without duplicating existing messages',async()=>{

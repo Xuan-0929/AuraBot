@@ -1,4 +1,4 @@
-"""Own long-term Memory ingestion, retrieval, forgetting, and conversation extraction.
+"""Own Profile conversation extraction and long-term Memory retrieval.
 
 Main Agent submits each sealed Profile conversation through ``remember_conversation``. Remote extraction
 remains cancellable; source-id idempotency, atomic SQLite persistence, vector repair, and audit stay inside
@@ -15,7 +15,6 @@ from collections.abc import Mapping, Sequence
 from typing import Any
 from uuid import uuid4
 
-from .consolidator import AddFirstConsolidator
 from .extractor import MemoryExtractor, RuleBasedMemoryExtractor
 from .retrieval.context import pack_context
 from .retriever import HybridMemoryRetriever
@@ -44,7 +43,6 @@ class MemoryService:
             vector_store=vector_store,
             embedding_provider=embedding_provider,
         )
-        self.consolidator = AddFirstConsolidator(metadata_store)
         self._recall_operation: asyncio.Task[dict[str, Any]] | None = None
         self._closed = False
 
@@ -78,61 +76,6 @@ class MemoryService:
         if operation is not None:
             await asyncio.gather(asyncio.shield(operation), return_exceptions=True)
         self.close()
-
-    def remember(
-        self,
-        *,
-        profile_id: str,
-        content: str,
-        source_type: str,
-        source_id: str | None = None,
-        role: str | None = None,
-        memory_type: str | None = None,
-        importance: float = 0.5,
-        metadata: dict[str, Any] | None = None,
-    ) -> dict[str, Any]:
-        self._require_writable()
-        metadata = metadata or {}
-        episode_id = self.metadata_store.create_episode(
-            profile_id=profile_id,
-            source_type=source_type,
-            source_id=source_id,
-            role=role,
-            content=content,
-            metadata=metadata,
-        )
-        try:
-            candidates, entities = self.extractor.extract(
-                content=content,
-                metadata=metadata,
-                memory_type=memory_type,
-                importance=importance,
-            )
-            candidates = [validate_memory_candidate(candidate) for candidate in candidates]
-        except Exception as exc:
-            self.metadata_store.write_audit_log(
-                profile_id=profile_id,
-                action="remember",
-                input_summary=content,
-                result_json={"episode_id": episode_id, "memory_ids": []},
-                error=str(exc),
-            )
-            raise
-
-        result = self._persist_candidates(
-            profile_id=profile_id,
-            episode_id=episode_id,
-            source_type=source_type,
-            candidates=candidates,
-            entities=entities,
-        )
-        self.metadata_store.write_audit_log(
-            profile_id=profile_id,
-            action="remember",
-            input_summary=content,
-            result_json=result,
-        )
-        return result
 
     async def remember_conversation(
         self,
@@ -357,127 +300,6 @@ class MemoryService:
         if operation.done() and not operation.cancelled():
             operation.exception()
 
-    def forget(
-        self,
-        *,
-        profile_id: str,
-        memory_ids: list[str] | None = None,
-        episode_ids: list[str] | None = None,
-        reason: str | None = None,
-    ) -> dict[str, Any]:
-        self._require_writable()
-        if not memory_ids and not episode_ids:
-            raise ValueError("forget requires memory_ids or episode_ids")
-
-        target_ids = list(memory_ids or [])
-        target_ids.extend(
-            self.metadata_store.memory_ids_for_episodes(
-                profile_id=profile_id,
-                episode_ids=episode_ids or [],
-            )
-        )
-        target_ids = list(dict.fromkeys(target_ids))
-        forgotten_count = self.metadata_store.archive_memories(
-            profile_id=profile_id,
-            memory_ids=target_ids,
-            reason=reason,
-        )
-        self.vector_store.delete(target_ids)
-        result = {
-            "forgotten_count": forgotten_count,
-            "memory_ids": target_ids,
-        }
-        self.metadata_store.write_audit_log(
-            profile_id=profile_id,
-            action="forget",
-            input_summary=reason or "forget",
-            result_json=result,
-        )
-        return result
-
-    def improve(self, profile_id: str) -> dict[str, Any]:
-        self._require_writable()
-        result = self.consolidator.improve(profile_id)
-        inactive_ids = [
-            memory["memory_id"]
-            for memory in self.metadata_store.debug_snapshot(profile_id)["memories"]
-            if memory["state"] in {"stale", "superseded"}
-        ]
-        self.vector_store.delete(inactive_ids)
-        return result
-
-    def due(self, profile_id: str, now_iso: str) -> dict[str, Any]:
-        memories = self.metadata_store.get_due_memories(
-            profile_id=profile_id,
-            now_iso_value=now_iso,
-        )
-        result = {"memories": memories}
-        if not self.read_only:
-            self.metadata_store.write_audit_log(
-                profile_id=profile_id,
-                action="due",
-                input_summary=now_iso,
-                result_json={"memory_ids": [memory["memory_id"] for memory in memories]},
-            )
-        return result
-
-    def debug(self, profile_id: str) -> dict[str, Any]:
-        return self.metadata_store.debug_snapshot(profile_id)
-
-    def health(self) -> dict[str, Any]:
-        return {
-            "sqlite": self.metadata_store.health(),
-            "qdrant": self.vector_store.health(),
-            "embedding": {
-                "provider": self.embedding_provider.__class__.__name__,
-                "dimension": self.embedding_provider.dimension,
-            },
-        }
-
-    def _persist_candidates(
-        self,
-        *,
-        profile_id: str,
-        episode_id: str,
-        source_type: str,
-        candidates: Sequence[MemoryCandidate],
-        entities: Sequence[Any],
-    ) -> dict[str, Any]:
-        entity_ids_by_name = {
-            entity.name: self.metadata_store.upsert_entity(
-                profile_id=profile_id,
-                candidate=entity,
-            )
-            for entity in entities
-        }
-        memory_ids: list[str] = []
-        for candidate in candidates:
-            memory_id = self.metadata_store.create_memory(
-                profile_id=profile_id,
-                episode_id=episode_id,
-                candidate=candidate,
-            )
-            memory_ids.append(memory_id)
-            self._index_memory(
-                profile_id=profile_id,
-                memory_id=memory_id,
-                episode_id=episode_id,
-                source_type=source_type,
-                candidate=candidate,
-                entity_ids=[
-                    entity_ids_by_name[name]
-                    for name in candidate.entities
-                    if name in entity_ids_by_name
-                ],
-            )
-            self._create_relations_for_new_memory(
-                profile_id=profile_id,
-                episode_id=episode_id,
-                memory_id=memory_id,
-                candidate=candidate,
-            )
-        return _result(episode_id, memory_ids)
-
     def _conversation_relations(
         self,
         *,
@@ -590,37 +412,6 @@ class MemoryService:
                 **scalar_payload(candidate.metadata),
             },
         )
-
-    def _create_relations_for_new_memory(
-        self,
-        *,
-        profile_id: str,
-        episode_id: str,
-        memory_id: str,
-        candidate: MemoryCandidate,
-    ) -> None:
-        existing = [
-            memory
-            for memory in self.metadata_store.list_active_memories(profile_id)
-            if memory["memory_id"] != memory_id
-        ]
-        candidate_entities = set(candidate.entities)
-
-        for memory in existing:
-            memory_entities = set(memory["metadata"].get("entities", []))
-
-            if candidate_entities & memory_entities or same_broad_topic(candidate.content, memory["content"]):
-                self.metadata_store.create_relation(
-                    profile_id=profile_id,
-                    source_id=memory_id,
-                    target_id=memory["memory_id"],
-                    relation_type=choose_relation_type(candidate.memory_type, memory["memory_type"]),
-                    weight=0.78,
-                    confidence=0.72,
-                    episode_id=episode_id,
-                    valid_from=candidate.valid_from,
-                    valid_to=candidate.valid_to,
-                )
 
 
 def choose_relation_type(source_type: str, target_type: str) -> str:

@@ -82,13 +82,6 @@ class ResourceVectorStore:
     def search(self, vector, *, profile_id, limit, filters=None):
         return []
 
-    def delete(self, memory_ids):
-        for memory_id in memory_ids:
-            self.points.pop(memory_id, None)
-
-    def health(self):
-        return {"backend": "test", "points": len(self.points)}
-
     def close(self):
         self.closed = True
 
@@ -275,12 +268,10 @@ class ActiveProfileManagerTests(unittest.IsolatedAsyncioTestCase):
             first_a_context.append_event("user_segment", {
                 "segment_id": "a-1", "input_id": "a", "text": "only A",
             })
-            first_a.memory.remember(
+            await first_a.memory.remember_conversation(
                 profile_id="profile_a",
-                content="用户喜欢红茶",
-                source_type="test",
+                turns=({"role": "user", "content": "用户喜欢红茶"},),
                 source_id="a-memory",
-                memory_type="preference",
             )
             await manager.activate("profile_a", "Soul A refreshed")
             self.assertIs(manager.runtime, first_a.runtime)
@@ -292,7 +283,7 @@ class ActiveProfileManagerTests(unittest.IsolatedAsyncioTestCase):
             with self.assertRaises(sqlite3.ProgrammingError):
                 first_a_context.fold()
             with self.assertRaises(sqlite3.ProgrammingError):
-                first_a.memory.health()
+                first_a.memory.metadata_store.list_active_memories("profile_a")
             current_b = builds["profile_b"][0]
             current_b_context = contexts["profile_b"][0]
             self.assertEqual(current_b.runtime.soul, "Soul B")
@@ -304,12 +295,10 @@ class ActiveProfileManagerTests(unittest.IsolatedAsyncioTestCase):
             current_b_context.append_event("user_segment", {
                 "segment_id": "b-1", "input_id": "b", "text": "only B",
             })
-            current_b.memory.remember(
+            await current_b.memory.remember_conversation(
                 profile_id="profile_b",
-                content="用户喜欢咖啡",
-                source_type="test",
+                turns=({"role": "user", "content": "用户喜欢咖啡"},),
                 source_id="b-memory",
-                memory_type="preference",
             )
 
             await manager.activate("profile_a", "Soul A restored")

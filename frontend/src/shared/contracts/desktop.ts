@@ -24,7 +24,7 @@ export const desktopConfigSchema = z.object({
     memory:z.object({embedding:z.object({provider:z.literal('hash'),dimension:z.literal(384)})}),
     task:z.object({user_data_dir:z.string(),pi_runtime_dir:z.string(),node_executable:z.string().min(1),default_timeout_seconds:z.number().int().min(1).max(86400),model:model})
   }),
-  desktop:z.object({pet:petSettingsSchema,systemNotificationsEnabled:z.boolean()})
+  desktop:z.object({pet:petSettingsSchema})
 });
 export type DesktopConfig = z.infer<typeof desktopConfigSchema>;
 export interface LaunchOptions { readonly debug:boolean; readonly lockMemory:boolean; }

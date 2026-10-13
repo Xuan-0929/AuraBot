@@ -1,7 +1,7 @@
 """Provide the local Qdrant vector index used synchronously by one Profile's ``MemoryService``.
 
 SQLite remains authoritative for Memory state and Profile filtering. This adapter only normalizes vector
-payloads, performs local upsert/search/delete operations, and closes its embedded client with the active
+payloads, performs local upsert/search operations, and closes its embedded client with the active
 Profile lifecycle; it does not own workers, retries, or conversation buffering.
 """
 
@@ -92,17 +92,6 @@ class QdrantLocalVectorStore:
             if (point.payload or {}).get("memory_id") and matches_valid_at(point.payload or {}, valid_at)
         ][:limit]
 
-    def delete(self, memory_ids: list[str]) -> None:
-        from qdrant_client.models import PointIdsList
-
-        if not memory_ids:
-            return
-
-        self.client.delete(
-            collection_name=self.collection_name,
-            points_selector=PointIdsList(points=[point_id(memory_id) for memory_id in memory_ids]),
-        )
-
     def close(self) -> None:
         if self._closed:
             return
@@ -127,17 +116,6 @@ class QdrantLocalVectorStore:
             inner_close()
 
         self._closed = True
-
-    def health(self) -> dict[str, Any]:
-        info = self.client.get_collection(self.collection_name)
-
-        return {
-            "backend": "qdrant-local",
-            "path": str(self.path),
-            "collection": self.collection_name,
-            "vectors": getattr(info, "vectors_count", None),
-            "points": getattr(info, "points_count", None),
-        }
 
     def _build_filter(self, profile_id: str, filters: dict[str, Any]):
         from qdrant_client.models import FieldCondition, Filter, MatchValue

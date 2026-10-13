@@ -42,10 +42,6 @@ class SayTextStream:
         return self.decoded[self.emitted:]
 
     @property
-    def emitted_length(self) -> int:
-        return self.emitted
-
-    @property
     def invalid(self) -> bool:
         return self.error_code is not None
 

@@ -7,7 +7,7 @@
  */
 import type {Application,DisplayObject} from 'pixi.js';
 import {UPDATE_PRIORITY} from 'pixi.js';
-import type {AvatarAdaptor,AvatarState,AvatarCue,AvatarInstruction,AvatarEntry} from '@shared/contracts/avatar';
+import type {AvatarAdaptor,AvatarState,AvatarInstruction,AvatarEntry} from '@shared/contracts/avatar';
 import {avatarResourceUrl,emptyAvatarAdaptor} from '@shared/contracts/avatar';
 import {loadLive2DModel,removeAndDestroyLive2DModel,type Live2DModelRuntime} from './runtime';
 import {CubismSampler,type SampledClip} from './cubismSampler';

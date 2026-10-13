@@ -101,10 +101,6 @@ class ActiveProfileManager:
         return self._active.profile_id if self._active is not None else None
 
     @property
-    def active_revision(self) -> int:
-        return self._active.revision if self._active is not None else 0
-
-    @property
     def runtime(self) -> Any | None:
         return self._active.runtime if self._active is not None else None
 

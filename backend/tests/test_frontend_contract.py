@@ -161,9 +161,9 @@ class DesktopContractTests(unittest.IsolatedAsyncioTestCase):
         self.assertFalse(coordinator.audio or coordinator.pre_roll)
         stt.sessions[0].close.assert_awaited_once()
         self.assertFalse(self.runtime._user_speaking or self.runtime._speech_candidate or self.runtime._confirmed_speech)
-        old_version = self.runtime.latest_context_version
+        old_context = self.context.fold()
         await stt.sessions[0].sink(TranscriptUpdate('late forbidden', '', 'late forbidden', 'partial'))
-        self.assertEqual(self.runtime.latest_context_version, old_version)
+        self.assertEqual(self.context.fold(), old_context)
         await self.hub.command(new_session, {'type': 'text.submit', 'command_id': 'after-disconnect', 'text': 'Fresh text'})
         users = [event for event in new_socket.sent if event.get('type') == 'user.message']
         self.assertEqual([event['text'] for event in users], ['Fresh text'])
@@ -254,9 +254,9 @@ class DesktopContractTests(unittest.IsolatedAsyncioTestCase):
         self.assertIs(speech._mic_task, mic_worker)
         self.assertIs(delivery._worker, delivery_worker)
         self.assertFalse(mic_worker.done() or delivery_worker.done())
-        old_version = self.runtime.latest_context_version
+        old_context = self.context.fold()
         await old_sink(TranscriptUpdate('late forbidden', '', 'late forbidden', 'partial'))
-        self.assertEqual(self.runtime.latest_context_version, old_version)
+        self.assertEqual(self.context.fold(), old_context)
         users = [event for event in self.socket.sent if isinstance(event, dict) and event.get('type') == 'user.message']
         self.assertEqual([(event['text'], event['source']) for event in users], [('Typed while talking', 'text')])
         ack = next(event for event in self.socket.sent if isinstance(event, dict) and event.get('type') == 'command.ack')
