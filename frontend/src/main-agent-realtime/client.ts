@@ -12,6 +12,8 @@
  * Opt-in scalar debug events observe these existing boundaries, sampling PCM on existing messages only;
  * capture/session fences and isolated callbacks keep diagnostics independent of voice and durable ACKs.
  * Recognition failures use the existing public error channel to request a repeat of unconfirmed speech.
+ * Realtime engine mode disables typed sends and accepts current-clause text/avatar amendments while
+ * audio plays. The final amended text still waits for physical completion before durable history.
  */
 
 import type { DebugScalar, LiveDebugEvent } from "../shared/contracts/liveDebug";
@@ -34,6 +36,7 @@ export interface MainAgentRealtimeClientOptions {
   onDebug?: (event: LiveDebugEvent) => void;
   onPerformance?: (event: PerformanceEvent) => void;
   onState?: (state: MainAgentRealtimeState, detail?: string) => void;
+  onVoiceState?: (active:boolean) => void;
   onClause?: (text: string | null) => void;
   onMessage?: (entry: {profileId:string;generation:number;id:string;role:"user"|"assistant";content:string}) => Promise<void>;
   onAgentState?: (state: "idle"|"no_audio"|"listening"|"thinking"|"speaking")=>void;
@@ -71,6 +74,7 @@ export class MainAgentRealtimeClient {
   private clause: CurrentClause | null = null;
   private discardAudio = false;
   private voice = false;
+  private voiceMode:"pipeline"|"realtime"="pipeline";
   private toggling = false;
   private profile:VoiceProfile|null=null;
   private ready:Promise<void>|null=null;
@@ -171,6 +175,7 @@ export class MainAgentRealtimeClient {
   async submitText(text:string, commandId=crypto.randomUUID()):Promise<void> {
     if(!this.profile)throw new Error("桌宠尚未建立会话");
     await this.start(this.profile);
+    if(this.voice&&this.voiceMode==='realtime')throw new Error(publicError('realtime_text_disabled',this.options.displayLanguage?.()));
     await this.command("text.submit",{text},commandId);
   }
   async stop():Promise<void> {
@@ -186,14 +191,14 @@ export class MainAgentRealtimeClient {
       await this.start(profile);
       const generation=this.generation;
       if(this.voice){
-        this.voice=false;this.interruptClause();await this.stopAudio();
+        this.voice=false;this.options.onVoiceState?.(false);this.interruptClause();await this.stopAudio();
         if(generation===this.generation)await this.command("voice.stop");
       }else{
         try {
           await this.startAudio(generation);
           if(generation!==this.generation)return;
           await this.command("voice.start", {audio_settings:this.microphoneSettings});
-          if(generation===this.generation){this.voice=true;if(this.debugCaptureId)this.debug("capture","voice.started",{voiceEnabled:true});}
+          if(generation===this.generation){this.voice=true;this.options.onVoiceState?.(true);if(this.debugCaptureId)this.debug("capture","voice.started",{voiceEnabled:true});}
         } catch(error){await this.stopAudio();throw error;}
       }
     } finally {this.toggling=false;}
@@ -239,6 +244,7 @@ export class MainAgentRealtimeClient {
     if(!this.matchesIdentity(event)){this.visualDiagnostics.dropped++;return;}
     switch (event.type) {
       case "session.ready":
+        this.voiceMode=event.voice_mode==='realtime'?'realtime':'pipeline';
         this.setState("active");this.readyResolve?.();this.readyResolve=null;this.readyReject=null;
         break;
       case "playback.pause":
@@ -259,6 +265,18 @@ export class MainAgentRealtimeClient {
         if(event.mode==="text") { await this.completeClause(id); }
         else { this.playback?.port.postMessage({ type: "offer", clauseId: id }); }
 
+        break;
+      }
+      case "clause.text": {
+        if(this.clause&&this.clause.id===event.clause_id&&!this.clause.settled&&typeof event.text==='string'&&event.text.length<=8000)this.clause.text=event.text;
+        break;
+      }
+      case "clause.avatar": {
+        const clause=this.clause;
+        if(clause&&clause.id===event.clause_id&&!clause.settled&&clause.cue){
+          const updated=this.cueFrom({...clause.cue,avatar:event.avatar});
+          if(updated){clause.cue=updated;this.performance({type:'update',cue:updated,clauseId:clause.id,mode:clause.mode});}
+        }
         break;
       }
       case "say.closed": {
@@ -504,7 +522,7 @@ export class MainAgentRealtimeClient {
       socket.onclose = null;
       socket.close();
     }
-    this.voice=false;this.clearCueTimer();this.clearLevels();this.performance({type:"reset"});
+    this.voice=false;this.options.onVoiceState?.(false);this.clearCueTimer();this.clearLevels();this.performance({type:"reset"});
     this.options.onAgentState?.("idle");
     this.clause=null;
     this.discardAudio=false;

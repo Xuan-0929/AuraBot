@@ -2,6 +2,7 @@
  * Live debug uses startup-gated capture, bounded Pet reports and read-only timeline updates;
  * Main owns immediate preferences, log paths and clearing. Speech assets accept no arbitrary destinations.
  * Electron validates callers and payloads; Task is read-only and Memory has no renderer surface.
+ * Pet voice-state reports let Main block typed input globally for an active Realtime session.
  */
 import type {SpeechAssetsState} from './speechAssets';
 import type {LiveDebugCapture,LiveDebugEvent,LiveDebugState,LiveDebugUpdate} from './liveDebug';
@@ -57,7 +58,7 @@ export interface AuraBotApi {
  sendChatMessage(input:SendChatMessageInput):Promise<SendChatMessageResult>;
  onPetCommand(listener:(command:PetCommand)=>void):()=>void;
  petCommandResult(result:PetCommandResult):Promise<void>; petReady():Promise<void>;
- reportRealtimeState(state:AgentStatus):Promise<void>;
+ reportRealtimeState(state:AgentStatus,voiceActive?:boolean):Promise<void>;
  reportRealtimeError(error:string):Promise<void>; onRealtimeError(listener:(error:string)=>void):()=>void;
  subscribeTasks(enabled:boolean):Promise<void>; onTasksChanged(listener:(value:{tasks:TaskSummary[];error?:string})=>void):()=>void;
  getLive2DModelState():Promise<Live2DModelState>;

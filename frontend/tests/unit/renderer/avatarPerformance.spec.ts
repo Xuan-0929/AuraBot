@@ -1,9 +1,19 @@
 /** Exercises SAY-level cue ownership, completion and pause independently of network arrival.
  * Production director callbacks stand in for rendering only; all identity/timer decisions run here.
+ * Late Realtime cues may update a live reply but cannot resurrect a completed/cancelled scope.
  */
 import {it,expect} from 'vitest';
 import {PerformanceDirector,type PerformanceEvent} from '../../../src/features/live2d/performance';
 const cue={profile_id:'a',generation:2,config_revision:3,say_id:'s',invoke_id:'i',call_id:'c',avatar:{motion:'nod',expression:'smile'}};
+it('accepts late actions only within the live playback scope',()=>{
+ const starts:any[]=[];const p=new PerformanceDirector(cue,{start:a=>starts.push(a),finish:()=>{},level:()=>{}});
+ const empty={...cue,avatar:{}};
+ p.accept({type:'offer',cue:empty,clauseId:'c1'});p.accept({type:'start',cue:empty,clauseId:'c1'});
+ p.accept({type:'update',cue,clauseId:'c1'});
+ expect(starts).toEqual([{},cue.avatar]);
+ p.accept({type:'closed',cue,clauseCount:1});p.accept({type:'complete',cue,clauseId:'c1'});
+ p.accept({type:'update',cue,clauseId:'c1'});expect(starts).toHaveLength(2);
+});
 it('starts once on actual playback, keeps expression across clauses, and fences revisions',()=>{
  const starts:any[]=[];let finishes=0;
  const p=new PerformanceDirector(cue,{start:a=>starts.push(a),finish:()=>finishes++,level:()=>{}});

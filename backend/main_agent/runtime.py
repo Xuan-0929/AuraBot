@@ -13,6 +13,8 @@ intentional silence; tool rejections and discarded ordinary content do not becom
 Failed STT segments replace uncertain context with a failure marker and retire their causal authority;
 the existing error listener asks the user to retry without admitting a response from partial text.
 Read-only Memory keeps normal recall while suppressing idle timers and archive workers.
+ConversationCapabilities owns shared tools; ConversationMemory owns recall and archive scheduling. Pipeline supplies only settlement and
+causal-scope retirement hooks, allowing a Realtime engine to use the same Profile memory owner.
 """
 
 from __future__ import annotations
@@ -26,7 +28,8 @@ from collections.abc import AsyncIterable, Awaitable, Callable, Mapping, Sequenc
 from dataclasses import dataclass
 from typing import Any
 
-from .context import ClauseState, ContextStore, PendingConversationArchive
+from .context import ClauseState, ContextStore
+from .capabilities import ConversationCapabilities, ConversationMemory
 from .observations import ObservationLedger
 from .snapshot import Snapshot, SnapshotProjector
 from .tasks import TaskBridge
@@ -228,19 +231,27 @@ class MainAgentRuntime:
             self._task_bridge, self._lock, self._accept_task_fact_locked, self._task_error,
             self.clock, proposal_sleep or asyncio.sleep,
         ) if self._task_bridge is not None else None
-        self._memory_idle_task: asyncio.Task[None] | None = None
-        self._memory_archive_task: asyncio.Task[None] | None = None
+        self.conversation_memory = ConversationMemory(
+            context_store, memory_service, owner_profile_id, idle_seconds=self.memory_idle_seconds,
+            wall_clock=self.wall_clock, lock=self._lock,
+            eligible=lambda: not self._shutdown and self.accepting and not self._user_speaking and not self._confirmed_speech,
+            wait_settled=self._wait_for_memory_settlement,
+            on_seal=self._retire_sealed_input_locked, on_commit=self._context_changed_locked,
+        )
         self.accepting = True
         self.user_message_listener = None
         self.state_listener = None
         self.error_listener = None
         self.say_closed_listener = None
         self.generation = 0
+        self.external_voice_active = False
+        self.task_fact_listener = None
         self._published_segments: set[str] = set()
-        self._speech_settled = asyncio.Event()
-        self._speech_settled.set()
+        self._speech_settled = self.conversation_memory.playback_settled
 
         runtime_executors = dict(executors)
+        self.capabilities = ConversationCapabilities(context_store, self.conversation_memory, tool_policy,
+                                                    dict(executors), self._task_operations)
         for task_tool in (
             "task_assign", "inspect_tasks", "answer_task_question",
             "pause_task", "resume_task", "cancel_task", "delete_task", "rerun_task",
@@ -259,6 +270,9 @@ class MainAgentRuntime:
                 "delete_task": self._task_operations.execute_control,
                 "rerun_task": self._task_operations.execute_control,
             })
+        for name in self.capabilities.executors:
+            if name in runtime_executors:
+                runtime_executors[name] = self._execute_capability
         self.harness = ToolHarness(
             tool_policy,
             runtime_executors,
@@ -299,7 +313,7 @@ class MainAgentRuntime:
 
     def restart_busy(self) -> bool:
         """Read active work while the restart route holds this runtime's admission lock."""
-        return bool(self._active_invoke or self._pending_trigger or self._barrier_intent or self._preinvoke_settled
+        return bool(self.external_voice_active or self._active_invoke or self._pending_trigger or self._barrier_intent or self._preinvoke_settled
                     or self._user_speaking or self._speech_candidate or self._confirmed_speech
                     or self.context_store.has_unsettled_clauses()
                     or (self._task_operations is not None and self._task_operations.busy))
@@ -613,7 +627,7 @@ class MainAgentRuntime:
                 self._context_changed_locked()
             return accepted
 
-    async def renderer_disconnected(self) -> None:
+    async def renderer_disconnected(self, *, preserve_tasks: bool = False) -> None:
         """Clear transient desktop speech state when no Renderer owns playback or microphone capture."""
 
         async with self._lock:
@@ -624,7 +638,8 @@ class MainAgentRuntime:
             self._pending_trigger = None
             self._control_generation += 1
             self._barrier_intent = None
-            self._cancel_pending_proposals_locked("renderer_disconnected")
+            if not self.external_voice_active and not preserve_tasks:
+                self._cancel_pending_proposals_locked("renderer_disconnected")
             if self._active_invoke is not None:
                 self.harness.cancel(self._active_invoke.request.invoke_id)
             if self._active_input is not None:
@@ -682,6 +697,8 @@ class MainAgentRuntime:
                 await asyncio.gather(memory_task, return_exceptions=True)
         if self._task_operations is not None:
             await self._task_operations.shutdown()
+        await self.capabilities.shutdown()
+        await self.conversation_memory.shutdown()
         await self.harness.cancel_observations()
         if first_shutdown:
             self._increment_metric("main.runtime.shutdown")
@@ -914,10 +931,8 @@ class MainAgentRuntime:
                 else:
                     try:
                         recalled = await asyncio.wait_for(
-                            self.memory_service.recall_context_async(
-                                profile_id=self.owner_profile_id,
+                            self.conversation_memory.recall(
                                 query=recall_query,
-                                limit=6,
                                 max_chars=self.snapshot_projector.budget.memory_chars,
                             ),
                             timeout=self.memory_recall_timeout_seconds,
@@ -1148,12 +1163,12 @@ class MainAgentRuntime:
             self._context_changed_locked()
 
     async def _assign_task(self, call: ToolCall) -> dict[str, Any]:
-        async with self._lock:
-            if self._shutdown or not self.accepting or self._active_input is None or self._task_operations is None:
-                raise ToolExecutorError("task_runtime_unavailable")
-            result = self._task_operations.propose(self._active_input.input_id, call)
-        await asyncio.sleep(0)
-        return result
+        return await self._execute_capability(call)
+
+    async def _execute_capability(self, call: ToolCall) -> Any:
+        if self._shutdown or not self.accepting or self._active_input is None:
+            raise ToolExecutorError("task_runtime_unavailable")
+        return await self.capabilities.execute(self._active_input.input_id, call)
 
     def _accept_task_fact_locked(self, fact: Mapping[str, Any], *, accepted: bool = False) -> None:
         if accepted:
@@ -1163,8 +1178,10 @@ class MainAgentRuntime:
         if fact.get("kind") == "task":
             self._has_external_commit = True
         self._context_changed_locked()
+        if self.task_fact_listener is not None:
+            self.task_fact_listener()
         should_continue = fact.get("kind") == "task" or fact.get("status") == "failed"
-        if should_continue and self._active_input is not None and not self._shutdown:
+        if should_continue and self._active_input is not None and not self._shutdown and not self.external_voice_active:
             self._merge_trigger_locked(InvokeMode.CONTINUE, "task_fact_updated")
             self._kick_locked()
 
@@ -1316,132 +1333,39 @@ class MainAgentRuntime:
             "response_grant_id": grant.grant_id if grant else None,
         }
 
-    def _start_memory_idle_locked(self) -> None:
-        """Persist confirmed activity and replace only the Profile's idle timer."""
+    @property
+    def _memory_idle_task(self):
+        return self.conversation_memory.idle_task
 
-        if self.memory_service is None or getattr(self.memory_service, "read_only", False) or self._shutdown or not self.accepting:
-            return
-        self.context_store.set_last_user_activity(self.wall_clock())
-        self._schedule_memory_idle_locked(self.memory_idle_seconds)
+    @_memory_idle_task.setter
+    def _memory_idle_task(self, task):
+        self.conversation_memory.idle_task = task
+
+    @property
+    def _memory_archive_task(self):
+        return self.conversation_memory.archive_task
+
+    @_memory_archive_task.setter
+    def _memory_archive_task(self, task):
+        self.conversation_memory.archive_task = task
+
+    def _start_memory_idle_locked(self) -> None:
+        self.conversation_memory.idle_seconds = self.memory_idle_seconds
+        self.conversation_memory.confirm_activity()
 
     def _resume_memory_idle_locked(self) -> None:
-        """Resume one persisted boundary or raw conversation without moving its deadline."""
-
-        if (
-            self.memory_service is None
-            or getattr(self.memory_service, "read_only", False)
-            or self._shutdown
-            or not self.accepting
-            or self._user_speaking
-            or self._confirmed_speech
-            or (
-                self.context_store.pending_conversation_archive() is None
-                and self.context_store.conversation_batch() is None
-            )
-        ):
-            return
-        last_activity = self.context_store.get_last_user_activity()
-        if last_activity is None:
-            last_activity = self.wall_clock()
-            self.context_store.set_last_user_activity(last_activity)
-        self._schedule_memory_idle_locked(
-            max(0.0, last_activity + self.memory_idle_seconds - self.wall_clock())
-        )
-
-    def _schedule_memory_idle_locked(self, delay: float) -> None:
-        if not self.accepting or self._shutdown:
-            return
-        self._cancel_memory_idle_task_locked()
-        self._memory_idle_task = asyncio.create_task(
-            self._archive_conversation_after(delay),
-            name=f"main-memory-idle-{self.owner_profile_id}",
-        )
+        self.conversation_memory.idle_seconds = self.memory_idle_seconds
+        self.conversation_memory.resume()
 
     def _cancel_memory_idle_task_locked(self) -> None:
-        task, self._memory_idle_task = self._memory_idle_task, None
-        if task is not None and task is not asyncio.current_task() and not task.done():
-            task.cancel()
+        self.conversation_memory.cancel_idle()
 
     def _cancel_memory_archive_task_locked(self) -> None:
-        task, self._memory_archive_task = self._memory_archive_task, None
-        if task is not None and task is not asyncio.current_task() and not task.done():
-            task.cancel()
+        self.conversation_memory.cancel_archive()
 
-    async def _archive_conversation_after(self, delay: float) -> None:
-        """Wait for idle settlement, seal one boundary, and launch the independent worker."""
-
-        current = asyncio.current_task()
-        try:
-            if delay > 0:
-                await asyncio.sleep(delay)
-            await self.wait_until_idle()
-            await self._wait_for_speech_settlement()
-            async with self._lock:
-                if self._shutdown or not self.accepting or self._user_speaking or self._confirmed_speech:
-                    return
-                pending = self.context_store.pending_conversation_archive()
-                if pending is None:
-                    pending = self.context_store.freeze_conversation_archive()
-                    if pending is not None:
-                        self._retire_sealed_input_locked()
-                if pending is None:
-                    self.context_store.clear_last_user_activity_if_idle()
-                    return
-                if self._memory_idle_task is current:
-                    self._memory_idle_task = None
-                self._start_memory_archive_locked(pending)
-        finally:
-            if self._memory_idle_task is current:
-                self._memory_idle_task = None
-
-    def _start_memory_archive_locked(self, pending: PendingConversationArchive) -> None:
-        """Start the sole sealed-boundary worker, leaving any existing worker untouched."""
-
-        if self.memory_service is None or getattr(self.memory_service, "read_only", False):
-            return
-        task = self._memory_archive_task
-        if task is not None and not task.done():
-            return
-        self._memory_archive_task = asyncio.create_task(
-            self._archive_pending_conversation(pending),
-            name=f"main-memory-archive-{self.owner_profile_id}",
-        )
-
-    async def _archive_pending_conversation(
-        self, pending: PendingConversationArchive,
-    ) -> None:
-        """Submit one canonical boundary and commit only its Context cleanup on success."""
-
-        current = asyncio.current_task()
-        try:
-            turns = self.context_store.conversation_archive_turns(pending)
-            remembered = await self.memory_service.remember_conversation(
-                profile_id=self.owner_profile_id,
-                turns=turns,
-                source_id=pending.source_id,
-            )
-            async with self._lock:
-                if self._shutdown:
-                    return
-                self.context_store.commit_conversation_archive(
-                    pending, remembered["summary"],
-                )
-                self._context_changed_locked()
-                if self._memory_archive_task is current:
-                    self._memory_archive_task = None
-                self._resume_memory_idle_locked()
-        except asyncio.CancelledError:
-            raise
-        except Exception:
-            async with self._lock:
-                if (
-                    not self._shutdown
-                    and (self._memory_idle_task is None or self._memory_idle_task.done())
-                ):
-                    self._schedule_memory_idle_locked(self.memory_idle_seconds)
-        finally:
-            if self._memory_archive_task is current:
-                self._memory_archive_task = None
+    async def _wait_for_memory_settlement(self) -> None:
+        await self.wait_until_idle()
+        await self._wait_for_speech_settlement()
 
     async def _wait_for_speech_settlement(self) -> None:
         while True:
@@ -1453,8 +1377,7 @@ class MainAgentRuntime:
             await self._speech_settled.wait()
 
     def _refresh_speech_settled_locked(self) -> None:
-        if not self.context_store.has_unsettled_clauses():
-            self._speech_settled.set()
+        self.conversation_memory.delivery_changed()
 
     def _context_changed_locked(self, *, refresh_grant: bool = True) -> None:
         self._latest_context_version += 1
@@ -1487,6 +1410,7 @@ class MainAgentRuntime:
         active = self._active_input
         if active is not None:
             self._retire_proposals_for_input_locked(active.input_id)
+            self.capabilities.retire_scope(active.input_id)
         self._published_segments.clear()
         self._active_input = None
         self._has_external_commit = False

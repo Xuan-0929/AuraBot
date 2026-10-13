@@ -3,6 +3,8 @@
  * token acquisition, opt-in debug capture fencing/redaction, one shared AudioContext, raw microphone/TTS PCM, server playback gates, consumption
  * credit, redacted device settings, and physical cursor ACK. Cancellation drains old PCM without ending
  * the session; hardware/browser boundaries are controlled while the production client runs unchanged.
+ * Realtime provider mode rejects typed input and accepts late transcript/avatar updates for the
+ * current reply without persisting text before the physical output cursor completes.
  */
 
 import { afterEach, describe, expect, it, vi } from "vitest";
@@ -106,6 +108,27 @@ async function voice(client:MainAgentRealtimeClient,socket:FakeWebSocket){
  socket.message(JSON.stringify({type:'command.ack',command_id:command.command_id,status:'accepted'}));await enabling;
 }
 describe('formal Pet unified realtime client',()=>{
+ it('updates streaming text and late cues before committing the physically played reply',async()=>{
+   const persist=vi.fn(async()=>undefined),perform=vi.fn();
+   const {client,socket}=await connected({onMessage:persist,onPerformance:perform});await voice(client,socket);
+   socket.message(JSON.stringify({type:'clause.offer',clause_id:'stream',text:'',mode:'voice',...cue,avatar:{}}));
+   const playback=FakeAudioWorkletNode.instances.find(n=>n.processorName==='aurabot-tts-playback')!;
+   await vi.waitFor(()=>expect(playback.port.sent).toContainEqual({type:'offer',clauseId:'stream'}));
+   socket.message(JSON.stringify({type:'clause.text',clause_id:'stream',text:'Final transcript'}));
+   socket.message(JSON.stringify({type:'clause.avatar',clause_id:'stream',avatar:{expression:'smile'}}));
+   await vi.waitFor(()=>expect(perform.mock.calls.some(([event])=>event.type==='update'&&event.cue.avatar.expression==='smile')).toBe(true));
+   expect(persist).not.toHaveBeenCalled();
+   playback.port.onmessage?.({data:{type:'clause-complete',clauseId:'stream',endContextTime:0}} as MessageEvent);
+   await vi.waitFor(()=>expect(persist).toHaveBeenCalledWith(expect.objectContaining({content:'Final transcript'})));
+   await client.stop();
+ });
+ it('blocks typed submissions only while Realtime voice is enabled',async()=>{
+   const {client,socket}=await connected();
+   socket.message(JSON.stringify({type:'session.ready',voice_mode:'realtime'}));await voice(client,socket);
+   await expect(client.submitText('blocked')).rejects.toThrow();
+   expect(sentControls(socket).some(e=>e.type==='text.submit')).toBe(false);
+   await client.stop();
+ });
  it('does not pause playback for a local loud frame and requests stable microphone gain',async()=>{
    const {client,socket}=await connected();
    vi.mocked(navigator.mediaDevices.getUserMedia).mockResolvedValue({getTracks:()=>[{

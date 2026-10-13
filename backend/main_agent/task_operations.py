@@ -6,6 +6,8 @@ be cancelled; accepted controls and committing proposals finish under this owner
 Runtime's existing lock serializes fact publication with input/grant changes. TaskBridge is the
 internal owner-scoped adapter; TaskManager alone owns durable Task state. Projection failures are
 reported once, while the next startup reconciles current records before following newer events.
+Explicit cancel tools accept a proposal ID as well as a Task ID: pending proposals are cancelled
+locally, committing proposals finish creating their Task before cancellation targets that Task.
 """
 from __future__ import annotations
 
@@ -161,6 +163,23 @@ class TaskOperations:
             worker.exception()  # Consume a failure even if the original invoke stopped waiting.
 
     async def _control(self, call: ToolCall, started: Callable[[], None]) -> dict[str, Any]:
+        identifier = call.arguments.get('task_id')
+        if call.name == 'cancel_task' and isinstance(identifier, str) and identifier.startswith('proposal-'):
+            async with self.lock:
+                proposal = self._proposals.get(identifier)
+                if proposal is None:
+                    raise ToolExecutorError('task_not_found')
+                started()
+                if proposal.status is TaskProposalStatus.PENDING:
+                    self.cancel(identifier)
+                    return self._proposal_fact(self._proposals[identifier])
+                worker = self._workers.get(identifier)
+            if worker is not None:
+                await asyncio.shield(worker)
+            proposal = self._proposals[identifier]
+            if proposal.task_id is None:
+                return self._proposal_fact(proposal)
+            call = replace(call, arguments={'task_id': proposal.task_id})
         result = await self.bridge.execute_control(call, action_started=started)
         try:
             async with self.lock:

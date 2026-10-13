@@ -3,7 +3,8 @@
  * AURABOT_USER_DATA_DIR selects the installation/data root independently of source code.
  * Main owns sequential speech downloads and profile readiness; migrates configuration, serves owned model packages, serializes selection/application and
  * opens only a repository-owned Profile SOUL path through shell; fences history receipts by their original Profile/generation. Pet alone owns realtime media;
- * Backend exclusively owns Context, Memory, task state and the active business lifecycle. */
+ * Backend exclusively owns Context, Memory, task state and the active business lifecycle.
+ * Authenticated Pet voice-state reports gate typed sends in all windows while Realtime is active. */
 import {SpeechAssets} from './speechAssets';
 import {LiveDebugService} from './liveDebug';
 import {LaunchSession,readLaunchOptions} from './launchOptions';
@@ -81,7 +82,7 @@ async function bootstrap(){
  let realtimeError='';
  const pending=new Map<string,{resolve:(result?:PetCommandResult)=>void;reject:(error:Error)=>void;timer:ReturnType<typeof setTimeout>}>();
  const syncDebugIdentity=()=>liveDebug?.setIdentity(runtime.online&&runtime.activeId?{profileId:runtime.activeId,generation:runtime.generation,configRevision:runtime.revision??0}:undefined);
- const changed=()=>{if(config.online&&!quitting&&runtime.online)tasks?.start();else {tasks?.stop();if(!config.online){runtime={...runtime,activeId:null,online:false};broadcast(C.profilesChanged,runtime);}}liveDebug?.setOnline(config.online&&!quitting);syncDebugIdentity();broadcast(C.settingsChanged,config.status());};
+ const changed=()=>{if(config.online&&!quitting&&runtime.online)tasks?.start();else {tasks?.stop();if(!config.online){runtime={...runtime,activeId:null,online:false,textInputBlocked:false};broadcast(C.profilesChanged,runtime);}}liveDebug?.setOnline(config.online&&!quitting);syncDebugIdentity();broadcast(C.settingsChanged,config.status());};
  const profilesChanged=()=>{syncDebugIdentity();broadcast(C.profilesChanged,runtime);};
  backend=new BackendProcess(config,projectRoot,changed,()=>tasks?.stop(),launch);
  const sendPet=(command:PetCommand)=>{if(!petReady||pet.isDestroyed())throw new Error('桌宠尚未就绪');pet.webContents.send(C.petCommand,command);};
@@ -134,8 +135,9 @@ async function bootstrap(){
  handle(C.petReady,event=>{assertPet(event);petReady=true;});
  handle(C.petCommandResult,(event,result)=>{assertPet(event);const waiting=pending.get(result.id);if(!waiting)return;clearTimeout(waiting.timer);pending.delete(result.id);result.error?waiting.reject(new Error(result.error)):waiting.resolve(result);});
  handle(C.realtimeError,(event,error)=>{assertPet(event);if(typeof error!=='string'||error.length>1024)throw new Error('无效错误状态');realtimeError=error;broadcast(C.realtimeError,error);});
- handle(C.realtimeStatus,(event,state)=>{assertPet(event);if(!['idle','no_audio','listening','thinking','typing','speaking'].includes(state))throw new Error('无效状态');agentState=state;broadcastAgentStatus(state);});
+ handle(C.realtimeStatus,(event,state,voiceActive)=>{assertPet(event);if(!['idle','no_audio','listening','thinking','typing','speaking'].includes(state))throw new Error('无效状态');if(voiceActive!==undefined){if(typeof voiceActive!=='boolean')throw new Error('无效语音状态');runtime={...runtime,textInputBlocked:voiceActive&&config.current().backend.main_agent.speech.mode==='realtime'};profilesChanged();}agentState=state;broadcastAgentStatus(state);});
  handle(C.sendChatMessage,async(_event,input)=>{
+   if(runtime.textInputBlocked)throw new Error('请先关闭 Realtime 语音，再发送文字消息。');
    if(!config.online||!runtime.online||switching)throw new Error('Backend 未就绪，请先在设置中应用配置。');
    if(typeof input?.content!=='string'||!input.content.trim()||input.content.length>8000)throw new Error('请输入有效消息（最多 8000 字符）');
    const id=randomUUID();const owner=runtime.activeId!;const revision=runtime.revision;

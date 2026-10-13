@@ -1,12 +1,15 @@
 /** Defines desktop-owned configuration, delivered history and the read-only Task projection.
  * LaunchOptions is read-only process state, separate from persisted settings. ProfileRuntimeState exposes activation in progress to fence Pet media controls. Main validates and persists these DTOs; renderer forms never own runtime configuration or saved secrets. Legacy Tavily fields normalize into provider/api_key before validation; SettingsState carries masked
  * first/last-four previews separately from redacted configuration for editable key fields.
+ * Speech settings migrate absent engine choices to Pipeline and keep SeedDuplex credentials independent.
+ * ProfileRuntimeState projects Realtime text-input ownership to every desktop window.
  */
 import { z } from 'zod';
 import type { Message } from '../schemas/message';
 import { petSettingsSchema } from '../schemas/petSettings';
 
 const model = z.object({ base_url:z.string().max(2048), model_name:z.string().max(256), api_key:z.string().max(8192), timeout_seconds:z.number().positive().max(600) });
+const realtimeVoice = z.object({provider:z.literal('seeduplex'),api_key:z.string().max(8192),model:z.literal('1.2.6.1'),voice:z.string().max(256)});
 const webSettings = z.preprocess((raw) => {
   if (!raw || typeof raw !== 'object' || Array.isArray(raw)) return raw;
   const web = raw as Record<string, unknown>;
@@ -18,6 +21,8 @@ export const desktopConfigSchema = z.object({
     app:z.object({data_dir:z.string().min(1),workspaces:z.array(z.object({id:z.string().min(1).max(128),path:z.string().min(1)})).max(100)}),
     chat_model:model,
     main_agent:z.object({profile_dir:z.string().min(1),web:webSettings,speech:z.object({
+      mode:z.enum(['pipeline','realtime']).default('pipeline'),
+      realtime:realtimeVoice.default({provider:'seeduplex',api_key:'',model:'1.2.6.1',voice:''}),
       enabled:z.boolean(),api_key:z.string().max(8192),stt_model_name:z.string().min(1),tts_model_name:z.string().min(1),tts_voice:z.string().min(1),
       silero_model_path:z.string(),silero_license_path:z.string(),smart_turn_model_path:z.string(),smart_turn_license_path:z.string()
     })}),
@@ -36,7 +41,7 @@ export interface HistoryPage { messages:Message[]; nextCursor?:number; }
 export interface TaskSummary { id:string; title:string; status:string; }
 export interface PetCommand { id:string; type:'text'|'reconnect'|'disconnect'; text?:string; }
 
-export interface ProfileRuntimeState { activating?:boolean; selectedId:string; activeId:string|null; revision:number|null; generation:number; online:boolean; error?:string; visualStatus?:'unconfigured'|'degraded'|'ready'|'unavailable'; visualError?:string; capabilityNames?:{motions:string[];expressions:string[]} }
+export interface ProfileRuntimeState { textInputBlocked?:boolean; activating?:boolean; selectedId:string; activeId:string|null; revision:number|null; generation:number; online:boolean; error?:string; visualStatus?:'unconfigured'|'degraded'|'ready'|'unavailable'; visualError?:string; capabilityNames?:{motions:string[];expressions:string[]} }
 export interface RealtimeToken { token:string; expiresInMs:number; subprotocol:string; profile_id:string; revision:number; generation:number }
 
 export interface PetCommandResult { id:string; error?:string; visual?:{available:boolean;error?:string} }

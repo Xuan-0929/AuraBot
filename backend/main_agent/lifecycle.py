@@ -4,6 +4,7 @@ Electron sends one saved/applied Soul and adaptor snapshot. Activation revokes t
 before changing resources; same-Profile application waits for cancelled invokes before freezing new tools.
 Token issuance only checks the active snapshot. Failed retirement blocks every activation until the
 remaining owners close; completed shutdown steps are never repeated. Dormant Profiles own no active handles.
+The selected voice engine is lazy and has a shorter lifetime than the Profile's shared capabilities.
 """
 
 # SOUL remains complete; the bound includes the controlled name envelope above a 32 KiB document.
@@ -39,6 +40,11 @@ class ProfileResources:
     snapshot_key: str = ""
     speech_factory: Callable[[], Any] | None = None
     _shutdown_stage: int = 0
+    voice_mode: str = "pipeline"
+
+    @property
+    def capabilities(self) -> Any:
+        return self.runtime.capabilities
 
     async def start_speech(self) -> None:
         """Open speech lazily for an explicitly activated voice session."""
@@ -149,7 +155,7 @@ class ActiveProfileManager:
                 await self.hub.clear_active(current.profile_id, current.generation)
                 disconnect = getattr(current.runtime, "renderer_disconnected", None)
                 if disconnect is not None:
-                    await disconnect()
+                    await disconnect(**({"preserve_tasks": True} if current.voice_mode == "realtime" else {}))
                 wait_idle = getattr(current.runtime, "wait_until_idle", None)
                 if wait_idle is not None:
                     await wait_idle()
@@ -203,7 +209,7 @@ class ActiveProfileManager:
             if current is None or current.profile_id != profile_id or current.revision != revision:
                 raise RuntimeError("profile_snapshot_not_active")
             await self.hub.clear_active(current.profile_id, current.generation)
-            await current.runtime.renderer_disconnected()
+            await current.runtime.renderer_disconnected(**({"preserve_tasks": True} if current.voice_mode == "realtime" else {}))
             await current.runtime.wait_until_idle()
             self._next_generation += 1
             generation = self._next_generation

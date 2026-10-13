@@ -1,7 +1,8 @@
 /** Exercises settings draft/apply IPC and compact advanced controls through the real Vue form.
  * Controlled desktop configuration fixtures verify save safety, native invalid-field revelation,
  * recoverable server errors, and masked-key preservation/replacement/deletion through the real save
- * store, separate workspace and pet status navigation with actionable runtime reminders and localized status labels and native search-provider dropdown selection, including length-matched first/last-four previews and launch-gated debug actions that preserve unrelated drafts, without starting Electron or a backend. */
+ * store, separate workspace and pet status navigation with actionable runtime reminders and localized status labels and native search-provider dropdown selection, including length-matched first/last-four previews and launch-gated debug actions that preserve unrelated drafts, without starting Electron or a backend.
+ * Realtime selection exposes SeedDuplex credentials and hides Pipeline-only model downloads. */
 // @vitest-environment jsdom
 import { createApp, nextTick } from 'vue';
 import { createPinia } from 'pinia';
@@ -14,6 +15,25 @@ import { DesktopConfigStore } from '../../../src/main/desktopConfigStore';
 import { t } from '../../../src/i18n';
 let dispose:()=>void=()=>{};
 afterEach(()=>{dispose();vi.unstubAllGlobals();});
+it('switches voice settings to SeedDuplex without requiring Pipeline resources',async()=>{
+ const root=mkdtempSync(join(tmpdir(),'aura-realtime-form-'));const config=new DesktopConfigStore(root);
+ const saveSettings=vi.fn(async(value,clear)=>config.save(structuredClone(value),structuredClone(clear)));
+ Object.assign(window,{aurabot:{getSettings:async()=>config.status(),saveSettings,onSettingsChanged:()=>()=>{},onSpeechAssetsChanged:()=>()=>{},getSpeechAssets:async()=>({phase:'idle',assets:[],paths:{},received:0,total:1})}});
+ const host=document.createElement('div');document.body.append(host);const app=createApp(SettingsWindow);app.use(createPinia());app.mount(host);
+ dispose=()=>{app.unmount();host.remove();rmSync(root,{recursive:true,force:true});};
+ await vi.waitFor(()=>expect(host.querySelector('input')).not.toBeNull());
+ host.querySelectorAll<HTMLButtonElement>('nav button')[1]!.click();await nextTick();
+ const select=host.querySelector<HTMLSelectElement>('select[name="voice-mode"]');expect(select).not.toBeNull();
+ select!.value='realtime';select!.dispatchEvent(new Event('change',{bubbles:true}));await nextTick();
+ expect(host.textContent).toContain('SeedDuplex');expect(host.textContent).not.toContain('DashScope Key');
+ expect(host.querySelector('details')).toBeNull();
+ const input=host.querySelector<HTMLInputElement>('input[name="realtime-voice"]')!;
+ input.value='voice-id';input.dispatchEvent(new Event('input',{bubbles:true}));await nextTick();
+ host.querySelector('form')!.dispatchEvent(new Event('submit',{bubbles:true,cancelable:true}));
+ await vi.waitFor(()=>expect(saveSettings).toHaveBeenCalledOnce());
+ expect(config.snapshot().backend.main_agent.speech.mode).toBe('realtime');
+ expect(config.snapshot().backend.main_agent.speech.realtime.voice).toBe('voice-id');
+});
 it('preserves untouched keys and lets password inputs replace or delete every saved key',async()=>{
  const root=mkdtempSync(join(tmpdir(),'aura-secrets-'));const config=new DesktopConfigStore(root);
  const seed=config.snapshot();seed.backend.chat_model.api_key='chat-fixture';seed.backend.task.model.api_key='task-fixture';seed.backend.main_agent.web.api_key='search-fixture';seed.backend.main_agent.speech.api_key='speech-fixture';config.save(seed);

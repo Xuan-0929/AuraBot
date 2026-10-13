@@ -23,6 +23,8 @@ session-specific STT finalization alongside EOU/TTS transitions synchronously;
 they never retain audio, provider payloads, exceptions, or add workers to the speech pipeline.
 STT sends and finalization share one coordinator lock; the adapter serializes actual SDK calls and
 owns one stop task even after timeout. Failed recognition retires Runtime input instead of using partials.
+SpeechService implements the same voice lifecycle and renderer ACK interface as RealtimeVoiceEngine;
+Pipeline keeps its local turn policy while Profile capabilities own shared business effects.
 """
 
 # Acoustic edges are sent to RealtimeHub independently of STT confirmation and Smart Turn completion.
@@ -1230,6 +1232,8 @@ class SpeechInputCoordinator:
 class SpeechService:
     """Own the active Profile's coordinator, delivery worker, and one microphone consumer."""
 
+    mode = "pipeline"
+
     def __init__(self, hub: Any, coordinator: Any, delivery: Any) -> None:
         self.hub = hub
         self.coordinator = coordinator
@@ -1273,6 +1277,9 @@ class SpeechService:
 
     def acknowledge(self, clause_id: str, *, complete: bool) -> bool:
         return self.delivery.acknowledge(clause_id, complete=complete)
+
+    async def renderer_ack(self, clause_id: str, *, complete: bool) -> bool:
+        return await self.delivery.runtime.renderer_ack(clause_id, complete=complete)
 
     async def cancel_current(self, reason: str) -> None:
         await self.delivery.cancel_current(reason)

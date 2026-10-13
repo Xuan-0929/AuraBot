@@ -1,10 +1,11 @@
 /** Tracks bounded SAY scopes between delivery events and one player's expression/body layers.
  * Offers only prepare ownership; actual audio consumption or text display starts a gesture once.
  * Closure plus completed clauses releases voice expression, while text uses a bounded local hold.
+ * Realtime amendments update a known live scope without delaying audio or resurrecting retired replies.
  */
 import type {AvatarCue,AvatarInstruction} from '@shared/contracts/avatar';
 export interface PerformanceEvent {
- type:'offer'|'start'|'complete'|'closed'|'cancel'|'level'|'pause'|'resume'|'reset';
+ type:'offer'|'start'|'update'|'complete'|'closed'|'cancel'|'level'|'pause'|'resume'|'reset';
  cue?:AvatarCue;clauseId?:string;clauseCount?:number;mode?:'text'|'voice';text?:string;level?:number;
 }
 interface Scope {cue:AvatarCue;started:boolean;completed:Set<string>;count?:number;holdUntil:number;mode:'text'|'voice';}
@@ -26,6 +27,13 @@ export class PerformanceDirector {
   const cue=event.cue;
   if(!cue||!this.matches(cue)||this.seen.has(cue.say_id)){this.diagnostics.dropped++;return;}
   let scope=this.scopes.get(cue.say_id);
+  if(event.type==='update'){
+   if(!scope){this.diagnostics.dropped++;return;}
+   if(JSON.stringify(scope.cue.avatar)!==JSON.stringify(cue.avatar)){
+    scope.cue=cue;if(scope.started&&this.active===scope)this.output.start(cue.avatar??{});
+   }
+   return;
+  }
   if(!scope){
    if(this.scopes.size>=4){this.diagnostics.dropped++;return;}
    scope={cue,started:false,completed:new Set(),holdUntil:0,mode:event.mode??'voice'};this.scopes.set(cue.say_id,scope);
@@ -38,7 +46,7 @@ export class PerformanceDirector {
    if(this.active&&this.active!==scope)this.finish(this.active);
    this.active=scope;scope.started=true;scope.mode=event.mode??scope.mode;
    scope.holdUntil=this.timeMs+(scope.mode==='text'?Math.min(4000,Math.max(1500,(event.text?.length??0)*50)):0);
-   this.output.voice?.(scope.mode==='voice');this.output.start(cue.avatar??{});this.diagnostics.starts++;
+   this.output.voice?.(scope.mode==='voice');this.output.start(scope.cue.avatar??{});this.diagnostics.starts++;
   }
   this.maybeFinish(scope);
  }

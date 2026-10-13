@@ -1,6 +1,7 @@
 /**
  * Composer renderer 测试：覆盖纯文本发送、换行、自适应高度与发送按钮的状态提示；状态文字不再单独占用输入栏。
  * 新附件输入在 Task Runtime 空窗期已移除，组件不得暴露文件选择或拖放入口。
+ * Realtime 禁用态必须同时阻止按钮与键盘发送，并保留草稿。
  */
 // @vitest-environment jsdom
 
@@ -19,6 +20,16 @@ describe("Composer", () => {
   afterEach(() => {
     container.remove();
     vi.restoreAllMocks();
+  });
+
+  it('blocks keyboard submission while Realtime owns input',async()=>{
+    const onSend=vi.fn(async()=>undefined);
+    const app=createApp(Composer,{onSend,disabled:true,disabledReason:'Close Realtime voice first'});app.mount(container);
+    const input=container.querySelector('textarea')!;
+    input.value='draft';input.dispatchEvent(new Event('input',{bubbles:true}));
+    input.dispatchEvent(new KeyboardEvent('keydown',{key:'Enter',bubbles:true}));await nextTick();
+    expect(onSend).not.toHaveBeenCalled();expect(input.value).toBe('draft');expect(input.disabled).toBe(true);
+    expect(container.textContent).toContain('Close Realtime voice first');app.unmount();
   });
 
   it("sends on Enter and inserts a line break on Shift+Enter", async () => {

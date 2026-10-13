@@ -4,7 +4,8 @@
 WorkspaceRegistry 只接受由配置声明的真实目录，TaskManager 用它将 workspace_id 解析为
 内部 cwd。聊天与语音设置只记录 Provider 地址、密钥、模型名及本地模型/许可证路径，
 真正的网络连接、可选 SDK 和 ONNX 资产由 composition/provider 模块按需检查加载，因此
-关闭、缺少密钥或未安装语音能力时 Backend 仍能正常启动。
+关闭、缺少密钥或未安装语音能力时 Backend 仍能正常启动。语音模式默认沿用 Pipeline；
+Realtime 设置独立保存 SeedDuplex 凭据和音色，不依赖流水线的密钥或本地推理资产。
 """
 
 from __future__ import annotations
@@ -130,6 +131,30 @@ class WorkspaceRegistry:
 
 
 @dataclass(frozen=True, slots=True)
+class RealtimeVoiceSettings:
+    """SeedDuplex connection settings; an empty voice/key is allowed until voice activation."""
+
+    provider: str = "seeduplex"
+    api_key: str = ""
+    model: str = "1.2.6.1"
+    voice: str = ""
+
+    @classmethod
+    def from_config(cls, raw: Mapping[str, Any]) -> "RealtimeVoiceSettings":
+        if not isinstance(raw, Mapping):
+            raise ValueError("main_agent.speech.realtime must be a mapping.")
+        values = {}
+        for name, default in (("provider", "seeduplex"), ("api_key", ""), ("model", "1.2.6.1"), ("voice", "")):
+            value = raw.get(name, default)
+            if not isinstance(value, str):
+                raise ValueError(f"main_agent.speech.realtime.{name} must be text.")
+            values[name] = value.strip()
+        if values["provider"] != "seeduplex" or values["model"] != "1.2.6.1":
+            raise ValueError("main_agent.speech.realtime provider/model is unsupported.")
+        return cls(**values)
+
+
+@dataclass(frozen=True, slots=True)
 class SpeechSettings:
     """Configured provider model identities and explicitly checked local model/license assets."""
 
@@ -142,6 +167,8 @@ class SpeechSettings:
     silero_license_path: Path
     smart_turn_model_path: Path
     smart_turn_license_path: Path
+    mode: str = "pipeline"
+    realtime: RealtimeVoiceSettings = RealtimeVoiceSettings()
 
     @classmethod
     def from_config(cls, raw: Mapping[str, Any], *, config_root: Path) -> "SpeechSettings":
@@ -158,8 +185,14 @@ class SpeechSettings:
         if not isinstance(enabled, bool):
             raise ValueError("main_agent.speech.enabled must be a boolean.")
 
+        mode = raw.get("mode", "pipeline")
+        if mode not in ("pipeline", "realtime"):
+            raise ValueError("main_agent.speech.mode must be pipeline or realtime.")
+
         return cls(
             enabled=enabled,
+            mode=mode,
+            realtime=RealtimeVoiceSettings.from_config(raw.get("realtime", {})),
             api_key=str(raw.get("api_key", "")).strip(),
             stt_model_name=text("stt_model_name", "fun-asr-realtime"),
             tts_model_name=text("tts_model_name", "cosyvoice-v3-flash"),

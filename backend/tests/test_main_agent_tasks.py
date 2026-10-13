@@ -3,7 +3,8 @@
 The public contract is small: ``task_assign`` creates a cancellable three-second proposal, confirmed
 speech or Profile shutdown cancels an uncommitted proposal, TaskManager acceptance becomes a durable
 fact, and controls fresh-read owner/version truth. Race scaffolding for task factories, private caches,
-and projection retries was deleted with the speculative implementation branches.
+and projection retries was deleted with the speculative implementation branches. Explicit cancellation
+also resolves proposal identifiers across the commit race for both voice engines.
 """
 
 from __future__ import annotations
@@ -110,6 +111,46 @@ class Manager:
     async def iter_events(self, after_event_id: int, task_id=None, *, event_types=None):
         while True:
             yield await self.events.get()
+
+
+class ExplicitProposalCancellationTests(unittest.IsolatedAsyncioTestCase):
+    async def test_cancel_resolves_pending_and_committing_proposals(self):
+        for during_commit in (False, True):
+            with self.subTest(during_commit=during_commit):
+                manager, timers = Manager(), Timers()
+                started, release = asyncio.Event(), asyncio.Event()
+                original = manager.create_task
+
+                async def create(command):
+                    started.set()
+                    await release.wait()
+                    return await original(command)
+
+                async def cancel(task_id, expected_version):
+                    current = manager.records[task_id]
+                    manager.records[task_id] = replace(current, status=TaskStatus.CANCELLED, version=current.version + 1)
+                    manager.controls.append(("cancel", task_id, expected_version))
+                    return manager.records[task_id]
+
+                async def error(_code):
+                    pass
+
+                manager.create_task, manager.cancel_task = create, cancel
+                operations = TaskOperations(TaskBridge(manager, "owner"), asyncio.Lock(), lambda *_args, **_kwargs: None,
+                                            error, timers.clock, timers.sleep)
+                self.addAsyncCleanup(operations.shutdown)
+                result = operations.propose("input", ToolCall("assign", "task_assign", {"title": "T", "prompt": "P", "workspace_id": "repo"}))
+                await asyncio.sleep(0)
+                if during_commit:
+                    await timers.advance(3)
+                    await started.wait()
+                cancellation = asyncio.create_task(operations.execute_control(ToolCall("cancel", "cancel_task", {"task_id": result["proposal_id"]})))
+                await asyncio.sleep(0)
+                release.set()
+                outcome = await asyncio.wait_for(cancellation, 1)
+                self.assertEqual(outcome["status"], "cancelled")
+                self.assertEqual(len(manager.created), int(during_commit))
+                self.assertEqual(len(manager.controls), int(during_commit))
 
 
 class ProposalTests(unittest.IsolatedAsyncioTestCase):

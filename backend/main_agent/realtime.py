@@ -1,5 +1,9 @@
 """Own the profile-bound WebSocket, renderer delivery, and opt-in live diagnostics.
 
+The selected voice engine handles physical ACK semantics. Realtime voice does not require a text
+model or local inference assets; it disables text submission until voice stops and preserves Task
+proposals across voice teardown. session.ready exposes the selected engine to desktop controls.
+
 Acoustic activity overlays the session work state; silent voice sessions report no_audio.
 Controlled speech preparation errors reach the renderer without provider details. Sessions begin in text mode; explicit commands activate speech or submit text. Only accepted user segments
 and say_to_user clauses cross into desktop history. Text ACKs commit draft delivery, while voice ACKs
@@ -325,7 +329,8 @@ class RealtimeHub:
             self.mic_queue.clear()
             self.debug.scope.emit("connection", "attached", connected=True, mode="text")
         await session.send({"type": "session.ready", "profile_id": session.profile_id,
-            "generation": session.generation, "config_revision": self.profile.revision if self.profile else 0})
+            "generation": session.generation, "config_revision": self.profile.revision if self.profile else 0,
+            **({"voice_mode": "realtime"} if getattr(self.profile, "voice_mode", "pipeline") == "realtime" else {})})
         return session
 
     async def detach(self, session: VoiceSession) -> None:
@@ -338,6 +343,9 @@ class RealtimeHub:
     ) -> None:
         if session.closed:
             return
+        if getattr(self.speech, "mode", "pipeline") == "realtime":
+            # End provider ownership before transport ACKs; this session needs no cloud repair.
+            await self.profile.stop_speech()
         async with self._lock:
             if session.current_clause is not None:
                 await self._settle_locked(session, session.current_clause, complete=False)
@@ -347,13 +355,14 @@ class RealtimeHub:
                 self.session = None
             self.mic_queue.clear()
         # Hold session lifetime ownership, never the ACK lock while provider cleanup drains callbacks.
+        preserve_tasks = session.mode == "voice" and getattr(self.profile, "voice_mode", "pipeline") == "realtime"
         async def cleanup() -> None:
             try:
                 if self.profile is not None:
                     await self.profile.stop_speech()
             finally:
                 if self.runtime is not None:
-                    await self.runtime.renderer_disconnected()
+                    await self.runtime.renderer_disconnected(**({"preserve_tasks": True} if preserve_tasks else {}))
                 if close_socket:
                     try:
                         await session.socket.close(code=4001, reason=reason)
@@ -503,7 +512,9 @@ class RealtimeHub:
         if complete and session.clause_mode == "voice" and not session.audio_finished:
             raise ProtocolError("audio_incomplete")
         kwargs = {"mode": "text"} if session.clause_mode == "text" else {}
-        accepted = bool(await self.runtime.renderer_ack(clause_id, complete=complete, **kwargs)) if self.runtime else False
+        engine_ack = getattr(self.speech, "renderer_ack", None) if session.clause_mode == "voice" else None
+        accepted = (bool(await engine_ack(clause_id, complete=complete)) if engine_ack is not None else
+                    bool(await self.runtime.renderer_ack(clause_id, complete=complete, **kwargs)) if self.runtime else False)
         self.debug.scope.emit("playback", "ack", clauseId=clause_id, complete=complete, accepted=bool(complete and accepted))
         speech_logger.info("playback_settled clause=%s complete=%s accepted=%s sent=%d consumed=%d", clause_id, complete, accepted, session.sent_samples, session.consumed_samples)
         session.retired_clauses[clause_id] = None
@@ -592,7 +603,10 @@ class RealtimeHub:
         try:
             if not self.accepting or self.session is not session:
                 raise ProtocolError("backend_restarting")
-            if kind in {"text.submit", "voice.start"} and not getattr(self.runtime, "text_available", True):
+            realtime = getattr(self.profile, "voice_mode", "pipeline") == "realtime"
+            if kind == "text.submit" and session.mode == "voice" and realtime:
+                raise ProtocolError("realtime_text_disabled")
+            if (kind == "text.submit" or (kind == "voice.start" and not realtime)) and not getattr(self.runtime, "text_available", True):
                 raise ProtocolError("text_model_unavailable")
             if kind == "text.submit":
                 async with self.activation_lock, self._session_lock:
@@ -630,7 +644,8 @@ class RealtimeHub:
                             except Exception as exc:
                                 from .speech import SPEECH_PREPARATION_ERRORS
                                 code = str(exc)
-                                raise ProtocolError(code if code in SPEECH_PREPARATION_ERRORS else "speech_unavailable") from None
+                                allowed_errors = SPEECH_PREPARATION_ERRORS | {"realtime_api_key_missing", "realtime_voice_missing", "realtime_connection_failed"}
+                                raise ProtocolError(code if code in allowed_errors else "speech_unavailable") from None
                         session.mode = "voice"
                         speech_logger.info("voice_started audio_settings=%s", settings)
                         session.input_active = False
@@ -639,7 +654,7 @@ class RealtimeHub:
                         if session.current_clause is not None:
                             await self.cancel_clause(RendererPort(self, session), session.current_clause, "voice_stopped")
                         await self.profile.stop_speech()
-                        await self.runtime.renderer_disconnected()
+                        await self.runtime.renderer_disconnected(**({"preserve_tasks": True} if realtime else {}))
                         self.mic_queue.clear()
                         session.mode = "text"
                         session.input_active = False

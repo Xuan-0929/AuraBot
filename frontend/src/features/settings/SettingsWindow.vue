@@ -5,7 +5,8 @@
      provide compact navigation and responsive forms. Pet status groups desktop preferences with actionable runtime reminders only; a separate workspace page describes user-provided task locations;
      Profile detail headings own the top back action and name; localized headings and status labels expose save/apply state without revision numbers. Workspace actions
      keep equal spacing between separators. Model connections groups a native search-provider dropdown with its secret field. Desktop-only changes apply without restarting. Live debug actions appear only for debug launches; startup flags are read-only,
-     unrelated unsaved edits survive incoming settings events. -->
+     unrelated unsaved edits survive incoming settings events. Voice mode selection preserves both providers' settings;
+     SeedDuplex uses its own secret and voice ID while Pipeline alone exposes local inference resources. -->
 <template>
   <main class="settings-window">
     <div class="settings-window-shell settings-v2-layout" :inert="busy ? true : undefined">
@@ -47,10 +48,18 @@
               <section v-else-if="page==='voice'" class="settings-page-section">
                 <label class="settings-page-toggle"><input v-model="draft.backend.main_agent.speech.enabled" type="checkbox" /> {{ t(displayLanguage, 'enableVoiceCapability') }}</label>
                 <p class="settings-hint">{{ t(displayLanguage, 'voiceCaptureHint') }}</p>
+                <label class="settings-page-field"><span>{{ SPEECH_TEXT[displayLanguage].voiceMode }}</span><select v-model="draft.backend.main_agent.speech.mode" name="voice-mode"><option value="pipeline">Pipeline · STT / LLM / TTS</option><option value="realtime">Realtime · SeedDuplex</option></select></label>
+                <p class="settings-hint">{{ SPEECH_TEXT[displayLanguage].voiceModeHint }}</p>
+                <template v-if="draft.backend.main_agent.speech.mode==='realtime'">
+                  <label class="settings-page-field"><span>SeedDuplex API Key</span><SecretInput v-model="draft.backend.main_agent.speech.realtime.api_key" :display-language="displayLanguage" :preview="state.secretPreviews?.['main_agent.speech.realtime.api_key']" :cleared="clearSecrets.includes('main_agent.speech.realtime.api_key')" @update:model-value="updateSecretIntent('main_agent.speech.realtime.api_key', $event)" /></label>
+                  <label class="settings-page-field"><span>{{ t(displayLanguage, 'voiceTone') }} ID</span><input v-model="draft.backend.main_agent.speech.realtime.voice" name="realtime-voice" autocomplete="off" /></label>
+                </template>
+                <template v-else>
                 <label class="settings-page-field"><span>DashScope Key</span><SecretInput v-model="draft.backend.main_agent.speech.api_key" :display-language="displayLanguage" :preview="state.secretPreviews?.['main_agent.speech.api_key']" :cleared="clearSecrets.includes('main_agent.speech.api_key')" @update:model-value="updateSecretIntent('main_agent.speech.api_key', $event)" /></label>
                 <label class="settings-page-field"><span>{{ t(displayLanguage, 'voiceTone') }}</span><input v-model="draft.backend.main_agent.speech.tts_voice" /></label>
                 <SpeechResources :display-language="displayLanguage" :applied="!dirty && !state.backendPending && state.online" @prepared="Object.assign(draft.backend.main_agent.speech,$event)" />
                 <details class="settings-advanced"><summary>{{ t(displayLanguage, 'voiceModelsAndResources') }}</summary><label v-for="field in speechFields" :key="field.key" class="settings-page-field"><span>{{ t(displayLanguage, field.labelKey) }}</span><input v-model="draft.backend.main_agent.speech[field.key]" /></label></details>
+                </template>
               </section>
               <section v-else-if="page==='general'" class="settings-page-section">
                 <article class="settings-model-card"><h2>{{ t(displayLanguage, 'desktopPet') }}</h2>
@@ -116,6 +125,7 @@ const backIcon={...solarIcons.icons['arrow-left-linear'],width:24,height:24};
 const editingName=ref<string|null>(null);
 import ProfilesPage from '../profiles/ProfilesPage.vue';
 import SpeechResources from './SpeechResources.vue';
+import { SPEECH_TEXT } from './speechText';
 import SecretInput from './SecretInput.vue';
 import { interpolate, t, type UiTextKey } from '../../i18n';
 import { debugText } from '../live-debug/text';

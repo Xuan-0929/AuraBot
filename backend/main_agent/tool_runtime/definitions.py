@@ -3,6 +3,8 @@
 The policy builds only tools backed by the active product composition, physically omits effects forbidden by
 mode/grant state, and validates the small emitted JSON-Schema subset. ToolSurface retains immutable definition
 records directly; it does not serialize and re-validate its own trusted construction on every invoke.
+Cancellation schemas admit a Profile-owned proposal identity so the shared Task owner can resolve
+the grace-window/commit race before delegating to the durable TaskManager.
 """
 
 from __future__ import annotations
@@ -328,8 +330,8 @@ def _catalog(
                                       _object({"task_id": task_id}, ("task_id",))),
         "resume_task": ToolDefinition("resume_task", "Resume an owned Task.", EffectClass.DURABLE_ACTION,
                                        _object({"task_id": task_id}, ("task_id",))),
-        "cancel_task": ToolDefinition("cancel_task", "Cancel an owned Task.", EffectClass.DURABLE_ACTION,
-                                       _object({"task_id": task_id}, ("task_id",))),
+        "cancel_task": ToolDefinition("cancel_task", "Cancel an owned Task or pending proposal using its task_id or proposal_id as task_id.", EffectClass.DURABLE_ACTION,
+                                       _object({"task_id": _text(maximum=128)}, ("task_id",))),
     }
     for name, description in (("delete_task", "Delete an owned terminal Task."), ("rerun_task", "Rerun an owned terminal Task as a new Task.")):
         task[name] = ToolDefinition(name, description, EffectClass.DURABLE_ACTION, _object({"task_id": task_id}, ("task_id",)))

@@ -5,6 +5,8 @@ Task facts are upserted by stable identity/version in a dedicated latest-state t
 turns are always reconstructed from canonical events; a singleton pending row stores only a stable sequence
 boundary across retry/restart. A successful Memory result is committed atomically with its summary, boundary
 cleanup, terminal Speech Ledger cleanup, pending deletion, and conditional idle-metadata removal.
+Realtime may register an empty streaming clause before text arrives, then update it while nonterminal;
+the complete renderer ACK remains the only path that promotes its final text into conversation history.
 """
 
 from __future__ import annotations
@@ -201,6 +203,19 @@ class ContextStore:
         if row is None:
             raise KeyError(clause_id)
         return _clause_from_row(row)
+
+    def create_streaming_clause(self, clause_id: str) -> None:
+        if not isinstance(clause_id, str) or not clause_id:
+            raise ValueError("clause id is required")
+        with self._transaction() as db:
+            db.execute("INSERT INTO speech_clauses(clause_id, text, state) VALUES (?, '', 'draft')", (clause_id,))
+
+    def update_clause_text(self, clause_id: str, text: str) -> bool:
+        if not isinstance(text, str) or len(text) > 8000:
+            raise ValueError("streaming clause text is invalid")
+        with self._transaction() as db:
+            return bool(db.execute("UPDATE speech_clauses SET text = ? WHERE clause_id = ? AND state IN ('draft','tts_queued','playing')",
+                                   (text, clause_id)).rowcount)
 
     def transition_clause(self, clause_id: str, state: ClauseState) -> SpeechClause:
         """Advance a clause through queue/play states or close it without creating context text."""

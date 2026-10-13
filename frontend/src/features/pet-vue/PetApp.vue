@@ -1,6 +1,7 @@
 <!-- Connects realtime voice/state delivery to the resident Live2D scene and desktop controls.
      Backend no_audio maps to Profile idle; only Backend VAD selects listening. Scene actions
-     and state requests share the opt-in Live Debug log to trace acoustic-to-animation handoffs. -->
+     and state requests share the opt-in Live Debug log to trace acoustic-to-animation handoffs.
+     Voice ownership is reported through Main so Realtime can disable text input across windows. -->
 <!-- Gates token and microphone access on the active Profile snapshot; Main reconnect commands complete activation. -->
 <!--
   桌宠窗口：组合 Live2D 舞台、唯一的 Main Agent 文字／语音连接、已交付消息气泡与窗口控制。
@@ -148,6 +149,7 @@ const mainAgentRealtime = new MainAgentRealtimeClient({
   },
   onMessage: async(entry)=>{await window.aurabot.recordDelivery(entry);},
   onAgentState:state=>{void window.aurabot.reportRealtimeState(state);},
+  onVoiceState:active=>{void window.aurabot.reportRealtimeState(petStore.agentStatus,active);},
   onClause: (text) => {
     mainAgentClauseText.value = text;
     if(text)setTimeout(()=>{if(mainAgentClauseText.value===text)mainAgentClauseText.value=null;},7000);

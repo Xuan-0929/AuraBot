@@ -5,6 +5,7 @@
  * under that root independently of the source checkout. Launch options are immutable process state returned alongside settings, never persisted.
  * Legacy debug and notification preferences are stripped by the schema.
  * Legacy search credentials normalize on read; secrets never leave Main except masked previews.
+ * Pipeline and Realtime credentials are retained separately across engine switches and redacted equally.
  */
 import {speechAssetPaths} from './speechAssetManifest';
 import { existsSync, mkdirSync, realpathSync, readFileSync, writeFileSync, renameSync, chmodSync } from 'node:fs';
@@ -12,7 +13,7 @@ import { join, isAbsolute, resolve } from 'node:path';
 import { homedir } from 'node:os';
 import { desktopConfigSchema, type DesktopConfig, type SettingsState, type LaunchOptions } from '../shared/contracts/desktop';
 
-const secretPaths = ['chat_model.api_key','task.model.api_key','main_agent.speech.api_key','main_agent.web.api_key'];
+const secretPaths = ['chat_model.api_key','task.model.api_key','main_agent.speech.api_key','main_agent.speech.realtime.api_key','main_agent.web.api_key'];
 function secretPreview(value:string):string {
   const characters=Array.from(value);
   return characters.length<=8 ? value : characters.slice(0,4).join('')+'•'.repeat(characters.length-8)+characters.slice(-4).join('');
@@ -37,6 +38,7 @@ export class DesktopConfigStore {
     const defaults:DesktopConfig={version:2,revision:0,backend:{
       app:{data_dir:root,workspaces:[{id:'default',path:root},{id:'home',path:homedir()}]},chat_model:{...blankModel},
       main_agent:{profile_dir:'profiles',web:{provider:'tavily',api_key:''},speech:{enabled:false,api_key:'',stt_model_name:'fun-asr-realtime',tts_model_name:'cosyvoice-v3-flash',tts_voice:'longanyang',
+        mode:'pipeline',realtime:{provider:'seeduplex',api_key:'',model:'1.2.6.1',voice:''},
         ...speechAssetPaths(root)}},
       memory:{embedding:{provider:'hash',dimension:384}},task:{user_data_dir:root,pi_runtime_dir:join(root,'pi-runtime'),node_executable:process.execPath.includes('Electron')?'node':process.execPath,default_timeout_seconds:1800,model:{...blankModel}}
     },desktop:{pet:{clickThroughPet:false,displayLanguage:'zh'}}};

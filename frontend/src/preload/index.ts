@@ -1,6 +1,7 @@
 /** Bridges resource preparation and live diagnostics through typed IPC; Main owns paths, capture
  * permission fixed at launch and bounded logging. Pet is the sole permitted source of renderer diagnostic facts. */
 /** Exposes only typed desktop IPC; Pet delivery and command methods are checked by Main against its webContents.
+ * Realtime status carries optional microphone ownership for global text-input gating.
  * SOUL opening carries only a Profile identity. Renderer has no filesystem or Memory API access. Every subscription has an explicit disposer.
  */
 import { contextBridge, ipcRenderer } from 'electron';
@@ -41,7 +42,7 @@ const api:AuraBotApi={
  petReady:()=>ipcRenderer.invoke(IPC_CHANNELS.petReady),
  reportRealtimeError:(error)=>ipcRenderer.invoke(IPC_CHANNELS.realtimeError,error),
  onRealtimeError:(listener)=>subscribe(IPC_CHANNELS.realtimeError,listener),
- reportRealtimeState:(state)=>ipcRenderer.invoke(IPC_CHANNELS.realtimeStatus, state),
+ reportRealtimeState:(state,voiceActive)=>ipcRenderer.invoke(IPC_CHANNELS.realtimeStatus, state, voiceActive),
  subscribeTasks:(enabled)=>ipcRenderer.invoke(IPC_CHANNELS.taskSubscribe, enabled),
  getLive2DModelState:()=>ipcRenderer.invoke(IPC_CHANNELS.getLive2DModelState),
  setPetMousePassthrough:(enabled)=>ipcRenderer.invoke(IPC_CHANNELS.setPetMousePassthrough, enabled),

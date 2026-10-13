@@ -201,6 +201,7 @@ dependencies = [
     { name = "httpx", extra = ["socks"] },
     { name = "qdrant-client" },
     { name = "uvicorn", extra = ["standard"] },
+    { name = "websockets" },
 ]
 
 [package.optional-dependencies]
@@ -222,6 +223,7 @@ requires-dist = [
     { name = "qdrant-client", specifier = ">=1.18.0" },
     { name = "transformers", marker = "extra == 'speech'", specifier = ">=4.48.0" },
     { name = "uvicorn", extras = ["standard"], specifier = ">=0.32.0" },
+    { name = "websockets", specifier = ">=14.0" },
 ]
 provides-extras = ["speech"]
 

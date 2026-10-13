@@ -6,7 +6,9 @@ closing Profile workers and the durable Task control plane. ProfileResources own
 keeps Hub.render as its renderer for the entire Profile lifetime. Applied workspaces enter the model
 snapshot as user-provided names and paths without scanning directories. WebTools uses the configured search adapter for search and read.
 LaunchOptions gates diagnostics and selects isolated Profile storage for fixed-memory runs.
-The production lifespan opens speech log files only for an explicit debug launch."""
+The production lifespan opens speech log files only for an explicit debug launch.
+Global voice mode selects lazy Pipeline or SeedDuplex resources. Realtime readiness and activation
+use independent credentials and never probe DashScope, VAD or SmartTurn assets."""
 
 from __future__ import annotations
 
@@ -66,6 +68,20 @@ from .task.settings import TaskSettings, TaskSettingsError
 
 
 logger = logging.getLogger(__name__)
+
+
+def voice_available(settings: MainAgentSettings) -> bool:
+    """Report configured capability without loading optional Pipeline assets for Realtime."""
+    speech = settings.speech
+    if not speech.enabled:
+        return False
+    if speech.mode == "realtime":
+        return bool(speech.realtime.api_key and speech.realtime.voice)
+    return bool(settings.chat_model.base_url and settings.chat_model.model_name and settings.chat_model.api_key
+        and speech.api_key
+        and SileroVadDetector(speech.silero_model_path, speech.silero_license_path).status().available
+        and SmartTurnDetector(speech.smart_turn_model_path, speech.smart_turn_license_path).status().available
+        and all(importlib.util.find_spec(name) is not None for name in ("dashscope", "onnxruntime", "numpy", "transformers")))
 
 
 def build_task_manager() -> TaskManager:
@@ -140,11 +156,7 @@ def create_app(
         application.state.config_revision = config.revision
         application.state.capabilities = {
             "text": bool(settings.chat_model.base_url and settings.chat_model.model_name and settings.chat_model.api_key),
-            "voice": bool(settings.chat_model.base_url and settings.chat_model.model_name and settings.chat_model.api_key
-                and settings.speech.enabled and settings.speech.api_key
-                and SileroVadDetector(settings.speech.silero_model_path, settings.speech.silero_license_path).status().available
-                and SmartTurnDetector(settings.speech.smart_turn_model_path, settings.speech.smart_turn_license_path).status().available
-                and all(importlib.util.find_spec(name) is not None for name in ("dashscope", "onnxruntime", "numpy", "transformers"))),
+            "voice": voice_available(settings),
             "tasks": bool(getattr(manager, "capability_available", True)),
         }
         application.state.task_manager = manager
@@ -258,13 +270,18 @@ async def _build_profile(
         if web_tools is not None:
             closeables.append(web_tools)
         resources = ProfileResources(
-            profile_id, runtime, None, memory, closeables=tuple(closeables)
+            profile_id, runtime, None, memory, closeables=tuple(closeables), voice_mode=settings.speech.mode
         )
-        def create_speech() -> SpeechService:
+        def create_speech() -> Any:
             if not settings.speech.enabled:
                 raise RuntimeError("speech_disabled")
-            return (speech_factory(settings.speech, hub, runtime) if speech_factory else
-                    _build_speech(settings.speech, hub, runtime, *_prepare_speech(settings.speech)))
+            if speech_factory is not None:
+                return speech_factory(settings.speech, hub, runtime)
+            if settings.speech.mode == "realtime":
+                from .main_agent.realtime_voice import RealtimeVoiceEngine
+                from .main_agent.seeduplex import SeedDuplexAdaptor
+                return RealtimeVoiceEngine(hub, runtime, SeedDuplexAdaptor(settings.speech.realtime))
+            return _build_speech(settings.speech, hub, runtime, *_prepare_speech(settings.speech))
 
         resources.speech_factory = create_speech
         await runtime.startup()
