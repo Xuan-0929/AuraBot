@@ -7,6 +7,7 @@ keeps Hub.render as its renderer for the entire Profile lifetime. Applied worksp
 snapshot as user-provided names and paths without scanning directories. WebTools uses the configured search adapter for search and read.
 LaunchOptions gates diagnostics and selects isolated Profile storage for fixed-memory runs.
 The production lifespan opens speech log files only for an explicit debug launch.
+Lazy SeedDuplex adaptors share the Profile debug scope for bounded connection/upload diagnostics.
 Global voice mode selects lazy Pipeline or SeedDuplex resources; only microphone sessions activate them, independent of legacy enabled flags. Realtime readiness and activation
 use independent credentials and never probe DashScope, VAD or SmartTurn assets."""
 
@@ -276,7 +277,7 @@ async def _build_profile(
             if settings.speech.mode == "realtime":
                 from .main_agent.realtime_voice import RealtimeVoiceEngine
                 from .main_agent.seeduplex import SeedDuplexAdaptor
-                return RealtimeVoiceEngine(hub, runtime, SeedDuplexAdaptor(settings.speech.realtime))
+                return RealtimeVoiceEngine(hub, runtime, SeedDuplexAdaptor(settings.speech.realtime, debug=runtime.debug))
             return _build_speech(settings.speech, hub, runtime, *_prepare_speech(settings.speech))
 
         resources.speech_factory = create_speech

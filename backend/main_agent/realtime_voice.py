@@ -5,6 +5,8 @@ normalized events feed canonical user transcripts, bounded output queues and sha
 only physical renderer acknowledgements commit assistant text. Barge-in retires old replies
 and repairs their cloud context or ends the session, never replaying tools or recorded audio.
 Closing this engine leaves the Profile memory archive and accepted Task operations alive.
+Sparse diagnostics join provider identities to renderer clauses, time local waits with a
+monotonic clock, and summarize outcomes without recording audio or changing control flow.
 """
 
 from __future__ import annotations
@@ -47,6 +49,11 @@ class _Reply:
     settled: bool = False
     buffered_bytes: int = 0
     worker: asyncio.Task[None] | None = None
+    observed_at: float = field(default_factory=time.monotonic)
+    first_audio_at: float | None = None
+    received_bytes: int = 0
+    question_id: str = ""
+    text_observed: bool = False
 
 
 class RealtimeVoiceEngine:
@@ -58,6 +65,9 @@ class RealtimeVoiceEngine:
         self.capabilities = runtime.capabilities
         self.memory, self.context = self.capabilities.memory, self.capabilities.context
         self.scope = f"realtime-{uuid.uuid4().hex}"
+        self._started_at = time.monotonic()
+        self._dropped_events = 0
+        self._stop_reason = "voice_stopped"
         self._replies: dict[str, _Reply] = {}
         self._tasks: set[asyncio.Task[Any]] = set()
         self._closed = False
@@ -79,9 +89,31 @@ class RealtimeVoiceEngine:
         self._context_ready.set()
         self._pending_avatar: tuple[int, dict[str, str]] | None = None
 
-    def _trace(self, stage: str, name: str, **details: Any) -> None:
+    def _trace(self, stage: str, name: str, *, reply: _Reply | None = None,
+               event: VoiceEvent | None = None, summary: bool = False, **details: Any) -> None:
+        facts = {"inputId": self.scope, "mode": "realtime"}
+        connection_id = getattr(self.adaptor, "connection_id", None)
+        if connection_id:
+            facts["connectionId"] = connection_id
+        if reply is not None:
+            facts.update(clauseId=reply.clause_id, invokeId=reply.response_id, responseId=reply.response_id,
+                itemId=reply.item_id, questionId=reply.question_id,
+                elapsedMs=round((time.monotonic() - reply.observed_at) * 1000, 1))
+        if event is not None:
+            facts.update({key: value[:256] for key, value in (
+                ("responseId", event.response_id), ("itemId", event.item_id),
+                ("questionId", event.question_id), ("eventId", event.event_id)) if value})
+        facts.update(details)
+        facts = {key: value[:256] if isinstance(value, str) else value for key, value in facts.items()}
         if self.debug is not None:
-            self.debug.emit(stage, name, **details)
+            self.debug.emit(stage, name, **facts)
+        if summary or details.get("level") in {"warning", "error"}:
+            try:
+                speech_logger.log(30 if details.get("level") in {"warning", "error"} else 20,
+                    "%s profile=%s generation=%s facts=%s", name, self.runtime.owner_profile_id,
+                    self.runtime.generation, json.dumps(facts, ensure_ascii=True))
+            except Exception:
+                pass  # Diagnostics must never interrupt speech or its cleanup.
 
     def _spawn(self, operation: Any, name: str) -> asyncio.Task[Any]:
         async def guarded():
@@ -93,6 +125,8 @@ class RealtimeVoiceEngine:
                 code = str(exc)
                 if code not in {"realtime_protocol_error", "realtime_provider_error", "realtime_context_unconfirmed", "realtime_session_limit"}:
                     code = "realtime_disconnected"
+                self._trace("system", "realtime.worker.failed", level="error", operation=name,
+                    exceptionType=type(exc).__name__, code=code)
                 await self._fail(code)
         task = asyncio.create_task(guarded(), name=name)
         self._tasks.add(task)
@@ -157,26 +191,32 @@ class RealtimeVoiceEngine:
                 for pair in pairs for role, text in zip(("user", "assistant"), pair)]
 
     async def startup(self) -> None:
+        self._trace("connection", "realtime.starting")
         self._port = await self.hub.acquire_renderer_port()
         if self._port is None:
             raise RuntimeError("realtime_disconnected")
         self.runtime.external_voice_active = True
         await self.runtime.renderer_disconnected()
         await self.runtime.wait_until_idle()
+        operation = "provider_start"
         try:
             await self.adaptor.start(instructions=self._instructions(), tools=self._tools())
             history = self._history()
             if history:
+                operation = "initialize_history"
                 await self.adaptor.initialize_history(history)
-        except BaseException:
+        except BaseException as exc:
+            self._trace("connection", "realtime.start.failed", level="warning", operation=operation,
+                exceptionType=type(exc).__name__, cancelled=isinstance(exc, asyncio.CancelledError),
+                elapsedMs=(time.monotonic() - self._started_at) * 1000)
             self.runtime.external_voice_active = False
             raise
         self.runtime.task_fact_listener = self._facts_changed.set
         self._spawn(self._receive(), "realtime-events")
         self._spawn(self._microphone(), "realtime-microphone")
         self._spawn(self._update_facts(), "realtime-task-facts")
-        speech_logger.info("realtime_started profile=%s generation=%s scope=%s", self.runtime.owner_profile_id, self.runtime.generation, self.scope)
-        self._trace("connection", "realtime.started", mode="realtime", inputId=self.scope)
+        self._trace("connection", "realtime.started", summary=True,
+            elapsedMs=(time.monotonic() - self._started_at) * 1000)
 
     async def _microphone(self) -> None:
         next_send = 0.0
@@ -208,6 +248,7 @@ class RealtimeVoiceEngine:
     async def _event(self, event: VoiceEvent) -> None:
         kind = event.kind
         if kind == "closed":
+            self._trace("connection", "realtime.provider.closed", event=event, level="warning")
             raise RuntimeError("realtime_disconnected")
         if kind == "input_started":
             self._input_epoch += 1
@@ -216,10 +257,10 @@ class RealtimeVoiceEngine:
                 self._transcript_epochs[event.item_id] = self._input_epoch
             self._pending_avatar = None
             self.memory.activity_started()
-            self._trace("input", "realtime.input.started", segmentId=event.item_id, inputId=self.scope, active=True)
+            self._trace("input", "realtime.input.started", event=event,
+                segmentId=f"{self.scope}:{event.item_id}" if event.item_id else None, active=True)
             await self.hub.speech_activity(active=True)
             await self.cancel_current("realtime_barge_in")
-            speech_logger.info("realtime_input_started scope=%s", self.scope)
             return
         if kind in {"transcript_delta", "transcript_done", "transcript_failed"}:
             if not event.item_id:
@@ -229,8 +270,10 @@ class RealtimeVoiceEngine:
                 raise RuntimeError("realtime_session_limit")
             epoch = self._transcript_epochs.setdefault(event.item_id, self._input_epoch)
             if identifier in self._published:
+                self._dropped_events += 1
                 return
             if kind == "transcript_failed":
+                self._trace("stt", "realtime.transcript.failed", event=event, segmentId=identifier, level="warning")
                 self._transcripts.pop(identifier, None)
                 if epoch == self._input_epoch:
                     self.memory.end_activity()
@@ -247,7 +290,9 @@ class RealtimeVoiceEngine:
                     self.context.append_event("user_segment", {"segment_id": identifier, "input_id": identifier, "text": text})
                     self._published.add(identifier)
                     await self.hub.user_message(identifier, text, "voice")
-                    self._trace("stt", "realtime.transcript.completed", segmentId=identifier, charCount=len(text))
+                self._trace("stt", "realtime.transcript.completed", event=event,
+                    segmentId=identifier, charCount=len(text), accepted=bool(text.strip()),
+                    reason="completed" if text.strip() else "empty_transcript")
                 self._transcripts.pop(identifier, None)
                 if epoch == self._input_epoch:
                     self.memory.confirm_activity()
@@ -264,6 +309,7 @@ class RealtimeVoiceEngine:
             return
         if event.question_id:
             if event.question_id in self._retired_questions:
+                self._dropped_events += 1
                 return
             self._questions.add(event.question_id)
             if len(self._questions) > 4096:
@@ -272,13 +318,20 @@ class RealtimeVoiceEngine:
             # The official started example has an empty response_id; audio deltas identify it.
             return
         if kind == "response_done":
+            known = self._replies.get(event.response_id)
+            self._trace("model", "realtime.response.completed", event=event, reply=known,
+                hasAudio=bool(known.received_bytes) if known else None,
+                hasTranscript=bool(known.text.strip()) if known else None)
             replies = [self._replies[event.response_id]] if event.response_id in self._replies else list(self._replies.values())
             for reply in replies:
                 if not reply.cancelled and not reply.settled and reply.worker is None:
+                    self._trace("model", "realtime.response.discarded", reply=reply, level="warning", reason="no_audio")
                     self._discard(reply)
                     self._schedule_repair(reply)
             return
         if kind not in {"text_delta", "text_done", "audio_started", "audio", "audio_done"}:
+            if kind in {"cancel_ack", "session_updated"}:
+                self._trace("connection", "realtime.control.confirmed", event=event, operation=kind)
             return
         if not event.response_id:
             raise RuntimeError("realtime_protocol_error")
@@ -291,13 +344,21 @@ class RealtimeVoiceEngine:
                 reply.avatar = self._pending_avatar[1]
                 self._pending_avatar = None
             self._replies[event.response_id] = reply
+            reply.question_id = event.question_id
+            self._trace("model", "realtime.response.first", reply=reply, event=event, eventKind=kind)
             self.context.create_streaming_clause(reply.clause_id)
             self.memory.delivery_changed()
         if reply.cancelled or reply.settled:
+            self._dropped_events += 1
             return
+        if event.question_id:
+            reply.question_id = event.question_id
         if event.item_id:
             reply.item_id = event.item_id
         if kind in {"text_delta", "text_done"}:
+            if event.text and not reply.text_observed:
+                reply.text_observed = True
+                self._trace("model", "realtime.text.first", reply=reply, event=event, charCount=len(event.text))
             reply.text = event.text if kind == "text_done" and event.text else reply.text + event.text
             if len(reply.text) > 8000:
                 raise RuntimeError("realtime_protocol_error")
@@ -305,18 +366,25 @@ class RealtimeVoiceEngine:
             if self._port.session.current_clause == reply.clause_id:
                 await self._port.session.send({"type": "clause.text", "clause_id": reply.clause_id, "text": reply.text})
             if kind == "text_done":
+                self._trace("model", "realtime.text.completed", reply=reply, event=event, charCount=len(reply.text))
                 reply.text_ready.set()
         if kind == "audio":
             if reply.audio_ended:
+                self._dropped_events += 1
                 return
+            reply.received_bytes += len(event.audio)
             reply.buffered_bytes += len(event.audio)
             if sum(r.buffered_bytes for r in self._replies.values()) > 24_000 * 2 * 120:
                 raise RuntimeError("realtime_protocol_error")
             reply.queue.put_nowait(event.audio)
             if reply.worker is None:
-                self._trace("tts", "realtime.audio.first", clauseId=reply.clause_id, invokeId=reply.response_id, firstAudio=True)
+                reply.first_audio_at = time.monotonic()
+                self._trace("tts", "realtime.audio.first", reply=reply, event=event, firstAudio=True,
+                    firstAudioMs=(reply.first_audio_at - reply.observed_at) * 1000)
                 reply.worker = self._spawn(self._play(reply), "realtime-playback")
         if kind == "audio_done" and not reply.audio_ended:
+            self._trace("tts", "realtime.audio.completed", reply=reply, event=event,
+                receivedBytes=reply.received_bytes, audioMs=reply.received_bytes / 48)
             reply.audio_ended = True
             reply.queue.put_nowait(None)
 
@@ -327,51 +395,78 @@ class RealtimeVoiceEngine:
             reply.clause_id, reply.response_id, reply.avatar)
 
     async def _play(self, reply: _Reply) -> None:
-        async with self._play_lock:
-            await self._context_ready.wait()
-            if reply.cancelled or self._closed:
-                return
-            self.context.transition_clause(reply.clause_id, ClauseState.TTS_QUEUED)
-            error = await self._port.offer_clause(self._clause(reply))
-            if error:
-                raise RuntimeError("realtime_disconnected")
-            self.context.transition_clause(reply.clause_id, ClauseState.PLAYING)
-            first = True
-            while True:
-                audio = await reply.queue.get()
-                if audio is None:
-                    break
-                reply.buffered_bytes -= len(audio)
-                error = await self._port.send_audio(audio)
+        started = reply.first_audio_at if reply.first_audio_at is not None else time.monotonic()
+        operation, error = "playback_lock", None
+        try:
+            async with self._play_lock:
+                locked = time.monotonic()
+                operation = "context_ready"
+                await self._context_ready.wait()
+                if reply.cancelled or self._closed:
+                    return
+                ready = time.monotonic()
+                self._trace("playback", "realtime.playback.delivering", reply=reply,
+                    playbackWaitMs=(locked - started) * 1000, contextWaitMs=(ready - locked) * 1000,
+                    elapsedMs=(ready - started) * 1000)
+                operation = "offer_clause"
+                self.context.transition_clause(reply.clause_id, ClauseState.TTS_QUEUED)
+                error = await self._port.offer_clause(self._clause(reply))
                 if error:
-                    if reply.cancelled:
-                        return
                     raise RuntimeError("realtime_disconnected")
-                if first:
-                    speech_logger.info("realtime_first_audio scope=%s response=%s", self.scope, reply.response_id)
-                    first = False
-            await asyncio.wait_for(reply.text_ready.wait(), 5)
-            if not reply.text.strip():
-                raise RuntimeError("realtime_protocol_error")
-            await self._port.session.send({"type": "say.closed", "profile_id": self._port.session.profile_id,
-                "generation": self._port.session.generation, "config_revision": self.hub.profile.revision,
-                "say_id": reply.clause_id, "call_id": reply.response_id, "invoke_id": reply.response_id, "clause_count": 1})
-            error = await self._port.finish_audio(reply.clause_id)
-            if error:
-                raise RuntimeError("realtime_disconnected")
-            await asyncio.wait_for(reply.played.wait(), 30)
+                self.context.transition_clause(reply.clause_id, ClauseState.PLAYING)
+                first = True
+                while True:
+                    operation = "audio_queue"
+                    audio = await reply.queue.get()
+                    if audio is None:
+                        break
+                    reply.buffered_bytes -= len(audio)
+                    operation = "send_audio"
+                    error = await self._port.send_audio(audio)
+                    if error:
+                        if reply.cancelled:
+                            return
+                        raise RuntimeError("realtime_disconnected")
+                    if first:
+                        self._trace("playback", "realtime.playback.first_chunk_sent", reply=reply,
+                            elapsedMs=(time.monotonic() - started) * 1000)
+                        first = False
+                operation = "text_ready"
+                await asyncio.wait_for(reply.text_ready.wait(), 5)
+                if not reply.text.strip():
+                    raise RuntimeError("realtime_protocol_error")
+                operation = "say_closed"
+                await self._port.session.send({"type": "say.closed", "profile_id": self._port.session.profile_id,
+                    "generation": self._port.session.generation, "config_revision": self.hub.profile.revision,
+                    "say_id": reply.clause_id, "call_id": reply.response_id, "invoke_id": reply.response_id, "clause_count": 1})
+                operation = "finish_audio"
+                error = await self._port.finish_audio(reply.clause_id)
+                if error:
+                    raise RuntimeError("realtime_disconnected")
+                operation = "playback_ack"
+                await asyncio.wait_for(reply.played.wait(), 30)
+        except Exception as exc:
+            self._trace("playback", "realtime.playback.failed", reply=reply, level="error",
+                operation=operation, code=error, exceptionType=type(exc).__name__,
+                elapsedMs=(time.monotonic() - started) * 1000)
+            raise
 
     async def renderer_ack(self, clause_id: str, *, complete: bool) -> bool:
         reply = next((r for r in self._replies.values() if r.clause_id == clause_id), None)
         if reply is None or reply.settled:
             return False
         accepted = self.context.ack_clause(clause_id, complete=bool(complete and not reply.cancelled and reply.audio_ended and reply.text_ready.is_set()))
+        self._trace("playback", "realtime.reply.settled", reply=reply, summary=True,
+            complete=complete, accepted=accepted, cancelled=reply.cancelled,
+            receivedBytes=reply.received_bytes, charCount=len(reply.text))
         reply.settled = True
         reply.played.set()
         self._clear_audio(reply)
         self.memory.delivery_changed()
         if not accepted and not reply.cancelled and not self._closed:
             reply.cancelled = True
+            self._trace("playback", "realtime.reply.cancelled", reply=reply, reason="ack_rejected",
+                receivedBytes=reply.received_bytes)
             if reply.worker is not None:
                 reply.worker.cancel()
             self._schedule_repair(reply)
@@ -387,6 +482,8 @@ class RealtimeVoiceEngine:
             if reply.settled or reply.cancelled:
                 continue
             reply.cancelled = True
+            self._trace("playback", "realtime.reply.cancelled", reply=reply, reason=reason,
+                receivedBytes=reply.received_bytes)
             if reply.worker is not None:
                 reply.worker.cancel()
             self._clear_audio(reply)
@@ -424,15 +521,30 @@ class RealtimeVoiceEngine:
         self._spawn(self._repair(reply), "realtime-context-repair")
 
     async def _repair(self, reply: _Reply) -> None:
+        started = time.monotonic()
+        operation = "require_item_id"
+        self._trace("model", "realtime.context.repairing", reply=reply)
         try:
             if not reply.item_id:
                 raise RuntimeError("realtime_context_unconfirmed")
             waiter = asyncio.get_running_loop().create_future()
             self._repairs[reply.item_id] = waiter
+            operation = "cancel_response"
             await self.adaptor.cancel_response()
+            operation = "replace_assistant"
             await self.adaptor.replace_assistant(reply.item_id, "[这条回复被打断，未确认用户听到其内容。]")
+            operation = "context_confirmation"
             await asyncio.wait_for(waiter, 2)
-        except Exception:
+            self._trace("model", "realtime.context.repaired", reply=reply,
+                elapsedMs=(time.monotonic() - started) * 1000)
+        except asyncio.CancelledError:
+            self._trace("model", "realtime.context.repair_cancelled", reply=reply,
+                operation=operation, elapsedMs=(time.monotonic() - started) * 1000)
+            raise
+        except Exception as exc:
+            self._trace("model", "realtime.context.repair_failed", reply=reply, level="error",
+                operation=operation, exceptionType=type(exc).__name__,
+                elapsedMs=(time.monotonic() - started) * 1000)
             self._repair_failed = True
             raise RuntimeError("realtime_context_unconfirmed") from None
         finally:
@@ -444,6 +556,8 @@ class RealtimeVoiceEngine:
     async def _tools_called(self, event: VoiceEvent, epoch: int) -> None:
         async def execute(call):
             started = time.monotonic()
+            status, code = "completed", None
+            self._trace("model", "realtime.tool.started", event=event, callId=call.call_id, toolName=call.name)
             try:
                 if call.name == "set_avatar":
                     fingerprint = json.dumps(call.arguments, sort_keys=True, ensure_ascii=False)
@@ -460,6 +574,7 @@ class RealtimeVoiceEngine:
                     avatar = capabilities.validate(call.arguments)
                     reply = self._replies.get(event.response_id)
                     if epoch != self._input_epoch or event.question_id in self._retired_questions or (reply is not None and (reply.cancelled or reply.settled)):
+                        status = "expired"
                         return {"status": "expired"}
                     if reply is None:
                         self._pending_avatar = (epoch, avatar)
@@ -474,21 +589,37 @@ class RealtimeVoiceEngine:
                 admit = epoch == self._input_epoch and event.question_id not in self._retired_questions and not (reply and reply.cancelled)
                 return await self.capabilities.execute(self.scope, call, admit=admit)
             except ToolExecutorError as exc:
+                status, code = "failed", str(exc)
                 return {"error": str(exc)}
             except TimeoutError:
+                status, code = "failed", "tool_timeout"
                 return {"error": "tool_timeout"}
             except Exception:
+                status, code = "failed", "tool_failed"
                 return {"error": "tool_failed"}
+            except asyncio.CancelledError:
+                status = "cancelled"
+                raise
             finally:
-                self._trace("model", "realtime.tool.settled", invokeId=call.call_id,
-                    inputId=self.scope, toolName=call.name, elapsedMs=round((time.monotonic() - started) * 1000, 1))
+                self._trace("model", "realtime.tool.settled", event=event, invokeId=call.call_id,
+                    callId=call.call_id, toolName=call.name, status=status, code=code,
+                    level="warning" if code else "info", elapsedMs=round((time.monotonic() - started) * 1000, 1))
         results = await asyncio.gather(*(execute(call) for call in event.calls))
         if not self._closed:
-            await self.adaptor.tool_results({call.call_id: result for call, result in zip(event.calls, results)})
+            started = time.monotonic()
+            try:
+                await self.adaptor.tool_results({call.call_id: result for call, result in zip(event.calls, results)})
+            except Exception as exc:
+                self._trace("model", "realtime.tool.results_failed", event=event, level="error",
+                    operation="tool_results", exceptionType=type(exc).__name__)
+                raise
+            self._trace("model", "realtime.tool.results_sent", event=event, count=len(results),
+                elapsedMs=(time.monotonic() - started) * 1000)
 
     async def _fail(self, code: str) -> None:
         if not self._closed:
-            speech_logger.warning("realtime_failed scope=%s code=%s", self.scope, code)
+            self._stop_reason = code
+            self._trace("connection", "realtime.failed", level="error", code=code)
             await self.hub.session_error(code)
             await self.shutdown()
 
@@ -511,3 +642,6 @@ class RealtimeVoiceEngine:
             self.memory.end_activity()
             self.capabilities.retire_scope(self.scope)
             self.runtime.external_voice_active = False
+            self._trace("connection", "realtime.stopped", summary=True, reason=self._stop_reason,
+                count=len(self._replies), droppedEvents=self._dropped_events,
+                elapsedMs=(time.monotonic() - self._started_at) * 1000)

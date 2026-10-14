@@ -14,6 +14,8 @@
  * Recognition failures use the existing public error channel to request a repeat of unconfirmed speech.
  * Realtime engine mode disables typed sends and accepts current-clause text/avatar amendments while
  * audio plays. The final amended text still waits for physical completion before durable history.
+ * First PCM receipt and physical start share a capture-fenced monotonic timer; diagnostics
+ * report local playback delay once per clause without timestamp subtraction across processes.
  */
 
 import type { DebugScalar, LiveDebugEvent } from "../shared/contracts/liveDebug";
@@ -42,7 +44,7 @@ export interface MainAgentRealtimeClientOptions {
   onAgentState?: (state: "idle"|"no_audio"|"listening"|"thinking"|"speaking")=>void;
 }
 
-interface CurrentClause { receivedSamples:number; consumedSamples:number; id: string; text:string; settled: boolean; cancelled: boolean; draining?:boolean; cue?:AvatarCue; mode:"text"|"voice"; profileId:string; serverGeneration:number; started:boolean; startContextTime?:number; startDeadline?:number; }
+interface CurrentClause { firstAudioAt?:number; receivedSamples:number; consumedSamples:number; id: string; text:string; settled: boolean; cancelled: boolean; draining?:boolean; cue?:AvatarCue; mode:"text"|"voice"; profileId:string; serverGeneration:number; started:boolean; startContextTime?:number; startDeadline?:number; }
 interface WorkletMessage {
   type: "frame" | "clause-complete" | "clause-start" | "playback-level" | "playback-progress" | "overrun";
   samples?: Int16Array;
@@ -103,6 +105,7 @@ export class MainAgentRealtimeClient {
     if(this.debugCaptureId===captureId)return;
     this.debugCaptureId=captureId;
     if(!captureId)return;
+    if(this.clause)this.clause.firstAudioAt=undefined;
     this.debugLastSample=-Infinity;
     this.micSentFrames=this.micDroppedFrames=this.micSentSamples=this.micDroppedSamples=0;
     this.debug("transport","transport.snapshot",{state:this.state});
@@ -402,6 +405,10 @@ export class MainAgentRealtimeClient {
       void this.fail("TTS PCM has no active clause or is malformed");
       return;
     }
+    if(this.clause.receivedSamples===0&&this.debugCaptureId){
+      this.clause.firstAudioAt=performance.now();
+      this.debug("devicePlayback","devicePlayback.audio.first",{firstAudio:true});
+    }
     this.clause.receivedSamples+=encoded.byteLength/2;this.sampleAudio("devicePlayback");
     const samples = new Int16Array(encoded);
     this.playback?.port.postMessage({ type: "append", samples }, [samples.buffer]);
@@ -579,7 +586,7 @@ export class MainAgentRealtimeClient {
       const remaining=clause.startContextTime!-outputTime;
       if(remaining>0.001){this.cueTimer=setTimeout(check,Math.max(5,Math.min(50,remaining*1000)));return;}
       clause.started=true;this.visualDiagnostics.starts++;this.visualDiagnostics.clockSkewMs=Math.max(0,-remaining*1000);
-      if(this.debugCaptureId)this.debug("devicePlayback","devicePlayback.physical.started",{state:"playing",contextTime:outputTime,clockSkewMs:this.visualDiagnostics.clockSkewMs});
+      if(this.debugCaptureId)this.debug("devicePlayback","devicePlayback.physical.started",{state:"playing",contextTime:outputTime,clockSkewMs:this.visualDiagnostics.clockSkewMs,...(clause.firstAudioAt===undefined?{}:{firstAudioMs:performance.now()-clause.firstAudioAt})});
       if(clause.cue)this.performance({type:"start",cue:clause.cue,clauseId:clause.id,mode:"voice",text:clause.text});
     };
     check();

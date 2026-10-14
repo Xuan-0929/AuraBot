@@ -95,3 +95,56 @@ STT 失败会使当前未确认输入失效，并通过现有错误通道提示�
 诊断是观测层，不修改 VAD/EOU 阈值、语音打断、TTS 背压或 ACK 次序。后端没有新增常驻采集任务，声学和音频计数最多每 500ms 汇总一次。Main 使用不重叠的 HTTP 请求，不占用语音 WebSocket 发送锁。采集持续到应用退出；关闭 Debug 窗口不改变采集状态。
 
 Main 为合并时间线分配 `id`；事件保留来源进程、序号、采集批次、Profile、generation 和关联分句／调用身份。阶段耗时由同一进程的单调时钟计算，不跨进程相减。清除和会话替换会撤销旧身份，迟到数据不能恢复已清除历史。
+
+## Realtime 模式诊断
+
+Realtime 复用同一 `--debug` 启动入口、Debug 窗口和两个滚动日志。服务端内部的 VAD、断句、推理与合成状态不由本地模拟；只记录客户端实际观察到的事件、操作结果和本地等待。
+
+`inputId` 在 Realtime 引擎事件中表示本次语音会话 scope；`segmentId` 统一为 `scope:item_id`。`connectionId` 连接适配器日志与引擎日志；`responseId`、`questionId`、`itemId`、`eventId`、`callId` 在提供方实际给出时保留在 details，`clauseId` 连接后端与桌宠播放事件。工具调用可以没有回复身份，此时不猜测它属于最近一条回复。身份缺失不等于事件失败。
+
+```mermaid
+flowchart TD
+  Connect[connection.starting → connected → ready] --> Upload[upload.first / muted / unmuted]
+  Upload --> Cloud[云端会话]
+  Cloud --> Input[input.started / transcript.completed 或 failed]
+  Cloud --> Reply[response.first：首个文字或音频类事件]
+  Reply --> Text[text.first → text.completed]
+  Reply --> Audio[audio.first → audio.completed]
+  Cloud --> Tool[tool.started → settled → results_sent]
+  Audio --> Deliver[playback.delivering → first_chunk_sent]
+  Deliver --> Receive[桌宠 devicePlayback.audio.first]
+  Receive --> Start[devicePlayback.physical.started]
+  Start --> Ack[播放完成 → ACK → reply.settled]
+  Input -.打断.-> Cancel[reply.cancelled]
+  Cancel --> Repair[context.repairing → repaired / repair_failed]
+```
+
+图中的输入转写和回复输出没有固定先后关系；音频可以先于最终转写、最终回复文字。`response.first` 是客户端首次观察到某条回复的文字或音频类事件，不代表服务端开始推理。`audio_started` 没有回复 ID 时仍只作为协议提示处理，不创建虚构回复。
+
+| 事件（省略 `realtime.` 前缀） | 主要用途 |
+|---|---|
+| `connection.starting / connected / ready / failed / closed` | 区分连接建立、创建会话、等待 `session.created`、关闭；失败包含 `operation` 与异常类型 |
+| `upload.first / muted / unmuted` | 确认上行首帧发送成功和传输静音状态变化；mute 表示麦克风帧暂时缺失，不代表用户停嘴 |
+| `send.failed / receive.failed / provider.failed` | 区分发送、JSON 解码、事件形状、协议转换和云端错误；仅保留数值型 providerCode，不记录原始错误正文 |
+| `input.started / transcript.completed / transcript.failed` | 关联输入；完成事件以 `accepted=false, reason=empty_transcript` 表示空结果 |
+| `response.first / text.first / text.completed / audio.first / audio.completed / response.completed` | 观察回复里程碑、字符数、音频字节数；`response.completed` 不等于播放完成 |
+| `response.discarded` | 回复结束但未收到可播放音频，记录 `reason=no_audio` |
+| `playback.delivering / first_chunk_sent / failed` | 记录本地等待、首音频块交付、失败的具体操作 |
+| `reply.cancelled / reply.settled` | 记录取消原因和最终 ACK 结果；沿用 Hub 与桌宠现有背压、取消及物理播放事件 |
+| `context.repairing / repaired / repair_failed / repair_cancelled` | 区分缺少 item ID、取消请求、替换上下文、等待确认；关闭中的取消不会报告成修复失败 |
+| `tool.started / settled / results_sent / results_failed` | 区分工具执行与结果回传，保留调用身份、状态、受控错误码和耗时；不记录参数与结果正文 |
+| `worker.failed / failed / stopped` | 关联失败任务和最终会话结局；停止摘要包含回复数量及 `droppedEvents` |
+
+耗时口径：
+
+- `connection.connected/ready.elapsedMs`：从适配器开始建立连接计时。`started.elapsedMs`：从引擎创建至语音启动完成，包括本地准备和历史初始化。
+- 回复事件默认的 `elapsedMs`：从本地首次观察到该回复的文字或音频类事件计时。`audio.first.firstAudioMs` 使用相同起点，不代表完整云端推理或用户停嘴后的等待。
+- `playback.delivering.elapsedMs`：从首音频到达到本地可以交付；`playbackWaitMs` 包括任务调度及等待前一条回复，`contextWaitMs` 为随后等待上下文修复的时长。
+- `playback.first_chunk_sent.elapsedMs`：从首音频到达到该首块全部交给语音 WebSocket；可能包含背压等待，不代表设备已经起播。`playback.failed.elapsedMs` 同样从首音频到达计时，`operation` 区分 `text_ready`、`playback_ack`、`send_audio` 等阶段，保留已有播放器错误码。
+- `context.repaired/repair_failed/repair_cancelled.elapsedMs`、`tool.settled.elapsedMs`、`tool.results_sent.elapsedMs` 分别从本次修复、工具执行、结果发送开始计时。
+- 桌宠 `devicePlayback.physical.started.firstAudioMs`：从该进程收到首块 PCM 到观察到设备输出游标越过起播位置，包含观察定时器的调度开销。采集清空后不沿用旧计时，半途开始采集也不补造首包；此时省略该字段。
+- `audio.completed.audioMs` 根据实际收到的 PCM16 / 24 kHz 字节数计算音频长度，不是生成耗时。
+
+真正的“用户停嘴 → 首次可听声音”仍需统一录音或测试装置标注。后端和桌宠时钟不直接相减；没有可靠输入与回复对应关系时，不生成话轮级首句延迟。
+
+音频块、文字 delta 不逐条写日志；每条回复只写首次和结束里程碑。被过滤的重复转写、退役问题、已结算回复和音频结束后的迟到块累计到会话停止摘要，不为每个丢弃事件写一行。普通 `speech-diagnostics.log` 只增加生命周期、结算摘要和异常；完整事件时间线仍在 `live-debug.jsonl`。新增诊断不保存文字正文、音频、工具参数/结果、凭据或完整云端消息，原有 Live Debug 的对话文字展示仍保留。

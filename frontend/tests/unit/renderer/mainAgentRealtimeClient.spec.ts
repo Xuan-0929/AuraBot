@@ -1,4 +1,5 @@
 /**
+ * Checks first-audio timing and capture fencing through the production playback client.
  * Verifies the Pet's minimal voice-session contract at browser boundaries. The suite covers profile-bound
  * token acquisition, opt-in debug capture fencing/redaction, one shared AudioContext, raw microphone/TTS PCM, server playback gates, consumption
  * credit, redacted device settings, and physical cursor ACK. Cancellation drains old PCM without ending
@@ -341,6 +342,22 @@ describe('formal Pet unified realtime client',()=>{
    staleMessage?.({data:{type:'clause-complete',clauseId:'current',endContextTime:0}} as MessageEvent);
    expect(onDebug).not.toHaveBeenCalled();
  });
+ it('does not carry first-audio timing across a capture clear or invent a later first packet',async()=>{
+   const onDebug=vi.fn();const {client,socket}=await connected({onDebug});await voice(client,socket);client.setDebugCapture('before');
+   socket.message(JSON.stringify({type:'clause.offer',clause_id:'capture-clock',text:'reply',mode:'voice',...cue}));
+   socket.message(new Int16Array(2400).buffer);
+   await vi.waitFor(()=>expect(onDebug.mock.calls.some(([e])=>e.name==='devicePlayback.audio.first')).toBe(true));
+   client.setDebugCapture('after');onDebug.mockClear();
+   socket.message(new Int16Array(2400).buffer);
+   const playback=FakeAudioWorkletNode.instances.find(n=>n.processorName==='aurabot-tts-playback')!;
+   await vi.waitFor(()=>expect(playback.port.sent.filter((e:any)=>e.type==='append')).toHaveLength(2));
+   FakeAudioContext.instances[0].outputTime=0.1;
+   playback.port.onmessage?.({data:{type:'clause-start',clauseId:'capture-clock',contextTime:0.1}} as MessageEvent);
+   const started=onDebug.mock.calls.find(([e])=>e.name==='devicePlayback.physical.started')?.[0];
+   expect(started.captureId).toBe('after');expect(started.details.firstAudioMs).toBeUndefined();
+   expect(onDebug.mock.calls.some(([e])=>e.name==='devicePlayback.audio.first')).toBe(false);
+   await client.stop();
+ });
  it('samples PCM statistics and separates consumed start from physical output and history ACK',async()=>{
    const onDebug=vi.fn();const {client,socket}=await connected({onDebug});await voice(client,socket);client.setDebugCapture('capture');
    const mic=FakeAudioWorkletNode.instances.find(n=>n.processorName==='aurabot-mic-capture')!;
@@ -355,6 +372,8 @@ describe('formal Pet unified realtime client',()=>{
    expect(onDebug.mock.calls.some(([e])=>e.name==='devicePlayback.physical.started')).toBe(false);
    FakeAudioContext.instances[0].outputTime=0.1;
    await vi.waitFor(()=>expect(onDebug.mock.calls.some(([e])=>e.name==='devicePlayback.physical.started')).toBe(true));
+   expect(onDebug.mock.calls.filter(([e])=>e.name==='devicePlayback.audio.first')).toHaveLength(1);
+   expect(onDebug.mock.calls.find(([e])=>e.name==='devicePlayback.physical.started')?.[0].details.firstAudioMs).toBeGreaterThanOrEqual(0);
    playback.port.onmessage?.({data:{type:'playback-progress',clauseId:'clocked',consumedSamples:2400}} as MessageEvent);
    playback.port.onmessage?.({data:{type:'clause-complete',clauseId:'clocked',endContextTime:0.1}} as MessageEvent);
    await vi.waitFor(()=>expect(onDebug.mock.calls.some(([e])=>e.name==='renderer.ack.sent')).toBe(true));

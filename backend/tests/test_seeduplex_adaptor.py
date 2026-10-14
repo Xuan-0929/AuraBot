@@ -3,6 +3,7 @@
 The real adaptor must create a PCM16 session, pace input through one-frame sends,
 normalize provider events, preserve real tool identities and reject malformed audio.
 No provider credentials or external speech service are needed by these protocol tests.
+Real diagnostic scopes verify sparse upload summaries and redacted wire failure facts.
 """
 
 import asyncio
@@ -12,6 +13,7 @@ import unittest
 
 from backend.main_agent.seeduplex import SeedDuplexAdaptor
 from backend.main_agent.settings import RealtimeVoiceSettings
+from backend.main_agent.debug import DebugRecorder
 
 
 class Socket:
@@ -59,6 +61,44 @@ class SeedDuplexAdaptorTests(unittest.IsolatedAsyncioTestCase):
             await self.adaptor.send_audio(bytes(638))
         await self.adaptor.mute()
         self.assertEqual(self.socket.sent[-1]["type"], "input_audio_mute.commit")
+
+    async def test_upload_diagnostics_are_sparse_and_provider_errors_are_redacted(self):
+        recorder = DebugRecorder()
+        recorder.configure(True, "capture")
+        self.adaptor.debug = recorder.scope
+        for _ in range(100):
+            await self.adaptor.send_audio(bytes(640))
+        await self.adaptor.mute()
+        self.socket.frames.put_nowait(json.dumps({"type": "error", "event_id": "e1",
+            "error": {"code": 429, "message": "secret credential private transcript"}}))
+        with self.assertRaisesRegex(RuntimeError, "realtime_provider_error"):
+            await self.adaptor.receive()
+        await self.adaptor.close()
+        events = recorder.snapshot()["events"]
+        self.assertEqual(sum(e["name"] == "realtime.upload.first" for e in events), 1)
+        self.assertLess(len(events), 10)
+        error = next(e for e in events if e["name"] == "realtime.provider.failed")
+        self.assertEqual(error["details"]["providerCode"], 429)
+        self.assertEqual(error["details"]["eventId"], "e1")
+        closed = next(e for e in events if e["name"] == "realtime.connection.closed")
+        self.assertEqual(closed["details"]["sentFrames"], 100)
+        self.assertEqual(closed["details"]["sentBytes"], 64000)
+        self.assertNotIn("private transcript", json.dumps(events))
+
+    async def test_protocol_diagnostics_do_not_stringify_identity_payloads(self):
+        recorder = DebugRecorder()
+        recorder.configure(True, "capture")
+        self.adaptor.debug = recorder.scope
+        self.socket.frames.put_nowait(json.dumps({"type": "response.output_text.done", "response_id": "r1",
+            "event_id": {"secret": "private-payload"}, "text": "reply"}))
+        event = await self.adaptor.receive()
+        self.assertEqual(event.event_id, "")
+        self.socket.frames.put_nowait(json.dumps({"type": "response.output_audio.delta", "response_id": "r1", "delta": "bad-base64"}))
+        with self.assertRaisesRegex(RuntimeError, "realtime_protocol_error"):
+            await self.adaptor.receive()
+        failed = next(e for e in recorder.snapshot()["events"] if e["name"] == "realtime.receive.failed")
+        self.assertEqual(failed["details"]["eventKind"], "audio")
+        self.assertNotIn("bad-base64", json.dumps(recorder.snapshot()))
 
     async def test_normalizes_audio_and_preserves_reply_identity(self):
         self.socket.frames.put_nowait(json.dumps({"type": "response.output_audio.delta", "response_id": "r1", "delta": base64.b64encode(b"\x01\x02").decode()}))

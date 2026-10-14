@@ -1,6 +1,7 @@
 /** Exercises bounded debug collection, bounded diagnostics, and real rotating files.
  * Main's collector is tested with an injected HTTP boundary, including acoustic windows
- * and VAD-only onset identity surviving sanitization and disk writes, never a second voice connection. */
+ * and VAD-only onset identity surviving sanitization and disk writes, never a second voice connection.
+ * Realtime identities and timing summaries must also survive the real collector and JSONL writer. */
 import { mkdtempSync, mkdirSync, readFileSync, readdirSync, rmSync, writeFileSync, statSync } from 'node:fs';
 import { join } from 'node:path';
 import { tmpdir } from 'node:os';
@@ -31,7 +32,9 @@ it('preserves acoustic window and teardown facts from backend polling to JSONL',
   maxConfirmMs:240,confirmMs:0,resetRmsCount:0,resetVadCount:1,resetBothCount:0,resetUnavailableCount:0,
   lastResetReason:'vad_below_threshold',lastResetFromMs:240,partial:false,vadStatus:'ready',vadReason:null,
   vadWarmupFrames:1,vadUnavailableFrames:0,vadErrorFrames:0,operation:'send_audio',finalizing:true,
-  endpointPending:true,exceptionType:'RuntimeError'};
+  endpointPending:true,exceptionType:'RuntimeError',connectionId:'conn',responseId:'r1',questionId:'q1',eventId:'e1',
+  charCount:25,modelName:'1.2.6.1',flushReason:'object_closed',providerCode:429,receivedBytes:4800,
+  playbackWaitMs:15,contextWaitMs:10,firstAudioMs:100,droppedEvents:3};
  let capture='';
  const service=new LiveDebugService(root(),async(path,init)=>{
   if(path.endsWith('/configure')){

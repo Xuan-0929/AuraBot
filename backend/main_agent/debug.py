@@ -8,6 +8,8 @@ capture epochs fence partial windows across clears and enable/disable transition
 Passing-frame statistics follow the coordinator's current gate; onset resets are VAD-only,
 while independent RMS measurements and legacy reset counters remain available for comparison.
 Speech-stream milestones admit only model names, character counts and flush reasons, never raw deltas.
+Realtime observations admit bounded identity and timing scalars through the same recorder;
+no provider payloads or additional collectors participate in speech control.
 """
 from __future__ import annotations
 
@@ -37,6 +39,9 @@ DETAILS = frozenset({
     "vadWarmupFrames", "vadUnavailableFrames", "vadErrorFrames", "vadThreshold",
     "operation", "finalizing", "exceptionType",
     "charCount", "flushReason", "modelName", "debug", "lockMemory", "memoryFixture",
+    "connectionId", "responseId", "questionId", "eventId", "itemId", "callId", "providerCode",
+    "sentFrames", "sentBytes", "receivedBytes", "droppedEvents", "firstAudioMs",
+    "playbackWaitMs", "contextWaitMs", "audioMs", "hasAudio", "eventKind", "count",
 })
 IDENTITIES = frozenset({"segmentId", "inputId", "invokeId", "sayId", "clauseId"})
 

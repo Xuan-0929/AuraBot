@@ -1,7 +1,8 @@
 /** Defines the opt-in diagnostic boundary shared by Pet, Main and the debug window.
  * Startup mode and fixture identity accompany approved diagnostic fields. Only approved scalar facts cross IPC; byte/count caps apply before caching, displaying or logging.
  * Source sequence preserves local order; Main assigns id for its merged, bounded timeline.
- * Acoustic window counters, onset gate identity and STT teardown facts pass the same scalar whitelist into disk and UI. */
+ * Acoustic windows and Realtime identities, outcomes and monotonic timings pass the same scalar
+ * whitelist into disk and UI; raw provider payloads and audio never cross this diagnostic interface. */
 export type DebugScalar = string | number | boolean | null;
 export type DebugState = Record<string, Record<string, DebugScalar>>;
 export interface LiveDebugEvent {
@@ -37,7 +38,9 @@ const fields=new Set(`debug lockMemory memoryFixture state enabled voiceEnabled 
  windowMs windowFrames vadPassFrames rmsPassFrames qualifiedFrames maxQualifiedRunMs rmsMin rmsMax thresholdMin thresholdMax maxConfirmMs
  resetRmsCount resetVadCount resetBothCount resetUnavailableCount lastResetReason lastResetFromMs
  vadStatus vadReason vadWarmupFrames vadUnavailableFrames vadErrorFrames operation finalizing
- backendOnline connectionState recording truncation error droppedEvents instanceId source`.split(/\s+/));
+ backendOnline connectionState recording truncation error droppedEvents instanceId source
+ connectionId responseId questionId eventId itemId callId providerCode charCount modelName flushReason
+ playbackWaitMs contextWaitMs audioMs hasAudio`.split(/\s+/));
 const encoder=new TextEncoder();
 export const debugByteLength=(value:unknown):number=>encoder.encode(JSON.stringify(value)).byteLength;
 export function sanitizeDebugDetails(raw:unknown):Record<string,DebugScalar> {

@@ -3,12 +3,15 @@
 Only the external speech model is scripted. Tests cover audio-before-text delivery,
 physical playback acknowledgements, interruption fencing, tool deduplication and the
 Realtime-only text-input restriction without loading local VAD, STT or TTS models.
+Diagnostic assertions use the real Hub recorder to check identities, bounded milestones,
+tool outcomes and interrupted-context repair without changing physical ACK semantics.
 """
 
 import asyncio
 import tempfile
 import unittest
 from pathlib import Path
+from unittest.mock import patch
 
 from backend.main_agent.context import ContextStore
 from backend.main_agent.lifecycle import ProfileResources
@@ -107,6 +110,87 @@ class RealtimeVoiceEngineTests(unittest.IsolatedAsyncioTestCase):
                 if events:
                     return events[-1]
                 await asyncio.sleep(0)
+
+    async def test_diagnostics_link_input_and_sparse_audio_milestones(self):
+        self.hub.debug.configure(True, "capture")
+        engine = self.profile.speech
+        await engine._event(VoiceEvent("input_started", item_id="u1"))
+        await engine._event(VoiceEvent("transcript_done", item_id="u1", text="hello"))
+        for _ in range(100):
+            await engine._event(VoiceEvent("audio", response_id="r1", item_id="a1", question_id="q1", audio=bytes(2)))
+        await engine._event(VoiceEvent("text_done", response_id="r1", text="reply"))
+        await engine._event(VoiceEvent("audio_done", response_id="r1"))
+        await engine._event(VoiceEvent("response_done", response_id="r1"))
+        offer = await self.wait_event("clause.audio_end")
+        await self.hub.renderer_ack(self.session, offer["clause_id"], complete=True)
+        events = self.hub.debug.snapshot()["events"]
+        named = {e["name"]: e for e in events}
+        self.assertEqual(named["realtime.input.started"]["segmentId"], named["realtime.transcript.completed"]["segmentId"])
+        self.assertEqual(sum(e["name"] == "realtime.audio.first" for e in events), 1)
+        self.assertLess(len(events), 25)
+        done = named["realtime.audio.completed"]
+        self.assertEqual(done["details"]["receivedBytes"], 200)
+        self.assertEqual(done["details"]["questionId"], "q1")
+        self.assertGreaterEqual(named["realtime.playback.first_chunk_sent"]["details"]["elapsedMs"], 0)
+
+    async def test_diagnostics_report_failed_transcription_tool_and_repair(self):
+        self.hub.debug.configure(True, "capture")
+        engine = self.profile.speech
+        await engine._event(VoiceEvent("transcript_failed", item_id="u1"))
+        await engine._tools_called(VoiceEvent("tools", response_id="r1", calls=(
+            ToolCall("bad-tool", "unknown_tool", {}),)), engine._input_epoch)
+        await engine._event(VoiceEvent("audio", response_id="r1", item_id="a1", question_id="q1", audio=bytes(2)))
+        await self.wait_event("clause.offer")
+        await engine._event(VoiceEvent("input_started", item_id="u2"))
+        async with asyncio.timeout(1):
+            while engine._repair_count:
+                await asyncio.sleep(0)
+        for _ in range(50):
+            await engine._event(VoiceEvent("audio", response_id="r1", question_id="q1", audio=bytes(2)))
+        await engine.shutdown()
+        events = {e["name"]: e for e in self.hub.debug.snapshot()["events"]}
+        self.assertEqual(events["realtime.transcript.failed"]["level"], "warning")
+        self.assertEqual(events["realtime.tool.settled"]["details"]["code"], "tool_not_exposed")
+        self.assertEqual(events["realtime.tool.results_sent"]["details"]["responseId"], "r1")
+        self.assertIn("realtime.context.repaired", events)
+        self.assertEqual(events["realtime.stopped"]["details"]["droppedEvents"], 50)
+
+    async def assert_playback_timeout(self, timeout, operation):
+        self.hub.debug.configure(True, "capture")
+        original_wait = asyncio.wait_for
+
+        async def fail_selected_wait(awaitable, seconds):
+            if seconds == timeout:
+                awaitable.close()
+                raise TimeoutError("private timeout detail")
+            return await original_wait(awaitable, seconds)
+
+        engine = self.profile.speech
+        with patch("backend.main_agent.realtime_voice.asyncio.wait_for", side_effect=fail_selected_wait):
+            await engine._event(VoiceEvent("audio", response_id="r1", item_id="a1", audio=bytes(2)))
+            if timeout == 30:
+                await engine._event(VoiceEvent("text_done", response_id="r1", text="reply"))
+            await engine._event(VoiceEvent("audio_done", response_id="r1"))
+            error = await self.wait_event("session.error")
+            self.assertEqual(error["code"], "realtime_disconnected")
+            await engine.shutdown()
+        events = self.hub.debug.snapshot()["events"]
+        failed = next(e for e in events if e["name"] == "realtime.playback.failed")
+        self.assertEqual(failed["details"]["operation"], operation)
+        self.assertEqual(failed["details"]["exceptionType"], "TimeoutError")
+        self.assertNotIn("private timeout detail", str(events))
+
+    async def test_text_timeout_keeps_stage_in_diagnostics(self):
+        await self.assert_playback_timeout(5, "text_ready")
+
+    async def test_ack_timeout_keeps_stage_in_diagnostics(self):
+        await self.assert_playback_timeout(30, "playback_ack")
+
+    async def test_diagnostic_sink_failure_does_not_break_transcription(self):
+        self.hub.debug.configure(True, "capture")
+        with patch("backend.main_agent.realtime_voice.speech_logger.log", side_effect=OSError("disk failed")):
+            await self.profile.speech._event(VoiceEvent("transcript_failed", item_id="u1"))
+        self.assertFalse(self.adaptor.closed)
 
     async def test_audio_starts_before_final_text_and_only_ack_commits_history(self):
         self.assertEqual(self.session.mode, "voice")
