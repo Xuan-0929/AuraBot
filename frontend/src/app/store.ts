@@ -5,6 +5,7 @@
  * Task 列表/详情/debug，也不订阅或调用任何 Task IPC。
  * 并发角色快照只应用最新结果；所有等待者等待最新刷新落地后再继续，
  * 防止 Main 配置应用后的桌宠重连读取仍在激活中的旧状态。
+ * 等待记录以稳定的 $state 为键，跨 Pinia 开发工具为每次 action 创建的代理共享。
  */
 
 import { defineStore } from "pinia";
@@ -92,11 +93,11 @@ export const useAuraBotStore = defineStore("auraBot", {
           if (request === this.snapshotRequest) this.isInitialized = true;
         }
       })();
-      snapshotLoads.set(this, loading);
+      snapshotLoads.set(this.$state, loading);
       let pending = loading;
       for (;;) {
         await pending;
-        const latest = snapshotLoads.get(this)!;
+        const latest = snapshotLoads.get(this.$state)!;
         if (latest === pending) return;
         pending = latest;
       }

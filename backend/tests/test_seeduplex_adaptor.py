@@ -4,6 +4,7 @@ The real adaptor must create a PCM16 session, pace input through one-frame sends
 normalize provider events, preserve real tool identities and reject malformed audio.
 No provider credentials or external speech service are needed by these protocol tests.
 Real diagnostic scopes verify sparse upload summaries and redacted wire failure facts.
+Wire-shaped audio streams cover identity-free deltas, stream boundaries and cancelled tails.
 """
 
 import asyncio
@@ -98,6 +99,7 @@ class SeedDuplexAdaptorTests(unittest.IsolatedAsyncioTestCase):
             await self.adaptor.receive()
         failed = next(e for e in recorder.snapshot()["events"] if e["name"] == "realtime.receive.failed")
         self.assertEqual(failed["details"]["eventKind"], "audio")
+        self.assertEqual(failed["details"]["reason"], "invalid_audio_base64")
         self.assertNotIn("bad-base64", json.dumps(recorder.snapshot()))
 
     async def test_normalizes_audio_and_preserves_reply_identity(self):
@@ -107,6 +109,60 @@ class SeedDuplexAdaptorTests(unittest.IsolatedAsyncioTestCase):
         self.socket.frames.put_nowait(json.dumps({"type": "response.output_audio.delta", "response_id": "r1", "delta": "not base64"}))
         with self.assertRaisesRegex(RuntimeError, "realtime_protocol_error"):
             await self.adaptor.receive()
+
+    async def test_audio_deltas_inherit_the_started_stream_not_latest_text(self):
+        recorder = DebugRecorder()
+        recorder.configure(True, "capture")
+        self.adaptor.debug = recorder.scope
+        frames = [
+            {"type": "response.output_audio.started", "response_id": "r1", "question_id": "q1"},
+            {"type": "response.output_text.delta", "response_id": "r2", "delta": "next reply"},
+            {"type": "response.output_audio.delta", "event_id": "e3", "delta": "AQI="},
+            {"type": "response.output_audio.done", "response_id": "r1", "question_id": "q1"},
+            {"type": "response.output_audio.started", "response_id": "r2", "question_id": "q2"},
+            {"type": "response.output_audio.delta", "delta": "AwQ="},
+        ]
+        events = []
+        for frame in frames:
+            self.socket.frames.put_nowait(json.dumps(frame))
+            events.append(await self.adaptor.receive())
+        self.assertEqual((events[2].response_id, events[2].question_id, events[2].audio), ("r1", "q1", b"\x01\x02"))
+        self.assertEqual(events[2].event_id, "e3")
+        self.assertEqual((events[5].response_id, events[5].question_id, events[5].audio), ("r2", "q2", b"\x03\x04"))
+        streams = [e for e in recorder.snapshot()["events"] if e["name"] == "realtime.audio.stream_started"]
+        self.assertEqual([e["details"]["responseId"] for e in streams], ["r1", "r2"])
+
+    async def test_audio_identity_does_not_survive_reconnection(self):
+        self.socket.frames.put_nowait(json.dumps({"type": "response.output_audio.started", "response_id": "old"}))
+        await self.adaptor.receive()
+        await self.adaptor.close()
+        self.socket = Socket()
+        await self.adaptor.start(instructions="persona", tools=[])
+        self.socket.frames.put_nowait(json.dumps({"type": "response.output_audio.delta", "delta": "AQI="}))
+        with self.assertRaisesRegex(RuntimeError, "realtime_protocol_error"):
+            await self.adaptor.receive()
+
+    async def test_audio_identity_is_cleared_at_stream_boundaries(self):
+        for boundary in (
+            {"type": "response.output_audio.done", "response_id": "r1"},
+            {"type": "response.output_audio.started", "response_id": ""},
+        ):
+            with self.subTest(boundary=boundary["type"]):
+                for frame in ({"type": "response.output_audio.started", "response_id": "r1"}, boundary):
+                    self.socket.frames.put_nowait(json.dumps(frame))
+                    await self.adaptor.receive()
+                self.socket.frames.put_nowait(json.dumps({"type": "response.output_audio.delta", "delta": "AQI="}))
+                with self.assertRaisesRegex(RuntimeError, "realtime_protocol_error"):
+                    await self.adaptor.receive()
+
+    async def test_cancel_keeps_late_audio_bound_to_cancelled_reply(self):
+        self.socket.frames.put_nowait(json.dumps({"type": "response.output_audio.started", "response_id": "old"}))
+        await self.adaptor.receive()
+        await self.adaptor.cancel_response()
+        self.socket.frames.put_nowait(json.dumps({"type": "response.canceled"}))
+        await self.adaptor.receive()
+        self.socket.frames.put_nowait(json.dumps({"type": "response.output_audio.delta", "delta": "AQI="}))
+        self.assertEqual((await self.adaptor.receive()).response_id, "old")
 
     async def test_only_real_tool_call_ids_can_receive_results(self):
         self.socket.frames.put_nowait(json.dumps({"type": "response.function_call_arguments.done", "response_id": "r1", "items": [

@@ -7,6 +7,8 @@ explicit mute events keep the remote session alive while microphone frames are a
 Failures expose stable codes rather than credentials or provider payloads to the renderer.
 The shared debug scope observes connection phases, upload edges and bounded error facts;
 one connection identity joins engine events, while audio frames only increment counters.
+Identity-free audio deltas inherit the active audio-start event, never the latest text;
+cancelled streams retain their identity for late data until audio ends or a new stream starts.
 """
 
 from __future__ import annotations
@@ -88,6 +90,7 @@ class SeedDuplexAdaptor:
         self._muted = False
         self._session: dict[str, Any] = {}
         self._calls: dict[str, str] = {}
+        self._audio_identity: tuple[str, str, str] = ("", "", "")
 
     def _trace(self, name: str, *, level: str = "info", **details: Any) -> None:
         if self.debug is not None:
@@ -231,22 +234,41 @@ class SeedDuplexAdaptor:
     async def receive(self) -> VoiceEvent:
         event = await self._read()
         kind = _KINDS.get(event["type"], "other")
+        reason = "invalid_event_fields"
+        pcm = b""
         try:
             response_id = event.get("response_id", "")
             item_id = event.get("item_id", "")
             question_id = event.get("question_id", "")
             if any(not isinstance(value, str) or len(value) > 256 for value in (response_id, item_id, question_id)):
                 raise RuntimeError("realtime_protocol_error")
+            if kind == "audio_started":
+                self._audio_identity = (response_id, item_id, question_id)
+                self._trace("realtime.audio.stream_started", responseId=response_id,
+                    itemId=item_id, questionId=question_id)
+            elif kind == "audio" and not response_id:
+                # SeedDuplex sends bare audio deltas between identified start/done events.
+                response_id, stream_item, stream_question = self._audio_identity
+                if (item_id and item_id != stream_item) or (question_id and question_id != stream_question):
+                    reason = "audio_identity_conflict"
+                    raise RuntimeError("realtime_protocol_error")
+                item_id, question_id = stream_item, stream_question
+            elif kind == "audio_done" and response_id == self._audio_identity[0]:
+                self._audio_identity = ("", "", "")
             text = event.get("transcript", event.get("text", event.get("delta", ""))) if kind in {"transcript_delta", "transcript_done", "text_delta", "text_done"} else ""
             if not isinstance(text, str):
                 raise RuntimeError("realtime_protocol_error")
-            pcm = b""
             if kind == "audio":
+                if not response_id:
+                    reason = "audio_identity_missing"
+                    raise RuntimeError("realtime_protocol_error")
                 try:
                     pcm = base64.b64decode(event["delta"], validate=True)
                 except (KeyError, TypeError, ValueError, binascii.Error):
+                    reason = "invalid_audio_base64"
                     raise RuntimeError("realtime_protocol_error") from None
-                if not response_id or not pcm or len(pcm) % 2:
+                if not pcm or len(pcm) % 2:
+                    reason = "invalid_audio_pcm"
                     raise RuntimeError("realtime_protocol_error")
             calls = []
             items = event.get("items", [])
@@ -281,7 +303,7 @@ class SeedDuplexAdaptor:
                 text, pcm, tuple(calls), tuple(items), question_id)
         except Exception as exc:
             self._trace("realtime.receive.failed", level="error", operation="normalize", eventKind=kind,
-                exceptionType=type(exc).__name__)
+                exceptionType=type(exc).__name__, reason=reason, receivedBytes=len(pcm))
             raise
 
     async def close(self) -> None:
@@ -303,4 +325,5 @@ class SeedDuplexAdaptor:
             self._trace("realtime.connection.closed", sentFrames=self._sent_frames,
                 sentBytes=self._sent_frames * 640, elapsedMs=(time.monotonic() - self._started) * 1000)
         self._calls.clear()
+        self._audio_identity = ("", "", "")
         self._muted = False

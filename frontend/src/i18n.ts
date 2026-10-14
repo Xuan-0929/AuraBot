@@ -3,7 +3,7 @@
 /**
  * 提供 Renderer 当前保留界面的英中日文案与 Agent 状态标签。
  *
- * 文案服务覆盖 Chat、Profile、Live2D、模型与桌宠设置；聊天输入提示与
+ * 文案服务覆盖 Chat、Profile、Live2D、模型与桌宠设置，以及 Realtime 语音进行中的输入替代提示；聊天输入提示与
  * 无障碍名称共用“输入消息”的三语文案，配置状态统一为未保存、已保存、已应用；语音采集提示指向桌宠麦克风这一唯一开关。旧 Task 状态格式化、
  * runner 文案和旧执行专属状态不再属于运行时类型。
  */
@@ -33,6 +33,7 @@ const UI_TEXT = {
     conversationMessages: "Conversation messages",
     readyWhenYouAre: "I'm here. What feels easiest to start with today?",
     saySomething: "Enter a message",
+    realtimeVoiceActive: "Realtime voice in progress",
     send: "Send",
     you: "You",
     aura: "Aura",
@@ -199,6 +200,7 @@ const UI_TEXT = {
     conversationMessages: "对话消息",
     readyWhenYouAre: "我在，今天想先从哪件事开始？",
     saySomething: "输入消息",
+    realtimeVoiceActive: "Realtime语音进行中",
     send: "发送",
     you: "你",
     aura: "Aura",
@@ -368,6 +370,7 @@ const JAPANESE_UI_TEXT: Record<UiTextKey, string> = {
   conversationMessages: "会話メッセージ",
   readyWhenYouAre: "ここにいるよ。今日は何から始めようか？",
   saySomething: "メッセージを入力",
+  realtimeVoiceActive: "Realtime 音声で会話中",
   send: "送信",
   you: "あなた",
   aura: "Aura",

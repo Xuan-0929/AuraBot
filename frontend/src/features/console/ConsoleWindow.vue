@@ -4,7 +4,8 @@
   标题复用 i18n 三语文案，任务状态使用无外圈 SVG；Vue Transition 配合共享 CSS 横向收展任务面板。
   窄窗口使用带焦点管理的覆盖面板，顶部开关保持可用，并与面板关闭按钮构成键盘焦点循环；
   聊天与设置在覆盖期间暂停交互，不改变任务订阅或执行生命周期。
-  Realtime 语音占用输入时，读取 Main 广播的状态禁用文字输入并保留草稿。
+  Realtime 语音占用输入时，读取 Main 广播的状态隐藏并禁用输入框、保留草稿，
+  改为居中的本地化状态文字；CSS 透明度呼吸提示语音工作中，并遵循减少动态效果偏好。
 -->
 <template>
   <main class="console-window" :aria-label="t(store.displayLanguage, 'consoleTitle')" @keydown="handleSidebarKeydown">
@@ -37,7 +38,10 @@
           <p v-if="store.chatError" role="alert" class="inline-error">{{ store.chatError }}</p>
         </div>
         <MessageList :messages="store.messages" :display-language="store.displayLanguage" />
-        <div class="console-composer"><Composer :disabled="store.profileRuntime?.textInputBlocked" :disabled-reason="SPEECH_TEXT[store.displayLanguage].realtime_text_disabled" :display-language="store.displayLanguage" :agent-status="store.agentStatus" :on-send="(content) => store.sendMessage(content, 'console')" /></div>
+        <div class="console-composer">
+          <p v-if="store.profileRuntime?.textInputBlocked" class="realtime-voice-status" role="status"><strong>{{ t(store.displayLanguage, 'realtimeVoiceActive') }}</strong></p>
+          <Composer v-show="!store.profileRuntime?.textInputBlocked" :disabled="store.profileRuntime?.textInputBlocked" :display-language="store.displayLanguage" :agent-status="store.agentStatus" :on-send="(content) => store.sendMessage(content, 'console')" />
+        </div>
       </section>
     </div>
   </main>
@@ -45,7 +49,6 @@
 
 <script setup lang="ts">
 import { computed, nextTick, onMounted, onBeforeUnmount, ref } from 'vue';
-import { SPEECH_TEXT } from '../settings/speechText';
 import { Icon, addCollection } from '@iconify/vue';
 import solarIcons from '@iconify-json/solar/icons.json';
 import type { TaskSummary } from '../../shared/contracts/desktop';
@@ -124,3 +127,26 @@ onBeforeUnmount(() => {
   void window.aurabot.subscribeTasks(false);
 });
 </script>
+
+<style scoped>
+.realtime-voice-status {
+  display: grid;
+  place-items: center;
+  min-height: 88px;
+  margin: 0;
+  text-align: center;
+  color: var(--aura-text);
+}
+.realtime-voice-status strong {
+  font-size: 16px;
+  font-weight: 700;
+  animation: realtime-breathe 2.8s ease-in-out infinite;
+}
+@keyframes realtime-breathe {
+  0%, 100% { opacity: .65; }
+  50% { opacity: 1; }
+}
+@media (prefers-reduced-motion: reduce) {
+  .realtime-voice-status strong { animation: none; }
+}
+</style>
