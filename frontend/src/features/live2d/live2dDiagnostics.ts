@@ -1,3 +1,8 @@
+/** Computes shared model placement and normalizes Profile-local view transforms for preview and Pet.
+ * Full-model framing constrains the model canvas to the viewport; portrait framing fits its upper
+ * 55 percent vertically and allows cropping. Both modes preserve the renderer's fixed anchor and
+ * support the same pointer-focused zoom calculation without changing animation or GPU ownership.
+ */
 export interface Live2DSize {
   width: number;
   height: number;
@@ -43,23 +48,33 @@ export function calculateLive2DPlacement({
   hostSize,
   modelSize,
   compact,
-  viewTransform
+  viewTransform,
+  showFullModel = true
 }: {
   hostSize: Live2DSize;
   modelSize: Live2DSize;
   compact: boolean;
   viewTransform?: Partial<Live2DViewTransform>;
+  showFullModel?: boolean;
 }): Live2DPlacement {
   const transform = normalizeLive2DViewTransform(viewTransform);
   const widthScale = hostSize.width / Math.max(modelSize.width, 1);
   const heightScale = hostSize.height / Math.max(modelSize.height, 1);
-  const scale = Math.min(widthScale, heightScale) * (compact ? 1.06 : 0.92) * transform.scale;
+  const fitScale = Math.min(widthScale, heightScale);
+  const requestedScale = (showFullModel ? fitScale * (compact ? 1.06 : 0.92) : heightScale * 0.92 / 0.55) * transform.scale;
+  const scale = showFullModel ? Math.min(requestedScale, fitScale) : requestedScale;
   const scaledWidth = modelSize.width * scale;
   const scaledHeight = modelSize.height * scale;
 
+  const x = hostSize.width / 2 + transform.offset.x;
+  const y = (showFullModel
+    ? hostSize.height / 2 + (DEFAULT_LIVE2D_ANCHOR.y - 0.5) * scaledHeight
+    : hostSize.height * 0.04 + DEFAULT_LIVE2D_ANCHOR.y * scaledHeight) + transform.offset.y;
+  const contain = (position:number, size:number, host:number, anchor:number) =>
+    Math.max(anchor * size, Math.min(host - (1 - anchor) * size, position));
   return {
-    x: roundPlacementValue(hostSize.width / 2 + (DEFAULT_LIVE2D_ANCHOR.x - 0.5) * scaledWidth + transform.offset.x),
-    y: roundPlacementValue(hostSize.height / 2 + (DEFAULT_LIVE2D_ANCHOR.y - 0.5) * scaledHeight + transform.offset.y),
+    x: roundPlacementValue(showFullModel ? contain(x, scaledWidth, hostSize.width, DEFAULT_LIVE2D_ANCHOR.x) : x),
+    y: roundPlacementValue(showFullModel ? contain(y, scaledHeight, hostSize.height, DEFAULT_LIVE2D_ANCHOR.y) : y),
     scale
   };
 }

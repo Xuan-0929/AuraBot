@@ -1,3 +1,7 @@
+/** Checks real placement math and host-size fallbacks used by preview and Pet.
+ * Full framing must contain the model canvas even after zoom/pan; portrait framing keeps its top
+ * visible while permitting a lower-body crop without changing the anchor convention.
+ */
 import { describe, expect, test } from "vitest";
 import {
   calculateLive2DPlacement,
@@ -46,8 +50,8 @@ describe("calculateLive2DPlacement", () => {
       })
     ).toEqual({
       x: 135,
-      y: 371.26,
-      scale: 0.25175
+      y: 361,
+      scale: 0.2375
     });
   });
 
@@ -65,4 +69,19 @@ describe("calculateLive2DPlacement", () => {
       scale: 0.125875
     });
   });
+});
+
+test.each([{width:900,height:1600},{width:1600,height:900}])('contains the full model after extreme zoom and pan: %o',modelSize=>{
+ const hostSize={width:270,height:380};
+ for(const scale of [0.35,1,2.4])for(const direction of [-1,1]){
+  const p=calculateLive2DPlacement({hostSize,modelSize,compact:false,showFullModel:true,viewTransform:{scale,offset:{x:direction*1000,y:direction*1000}}});
+  expect(p.x-modelSize.width*p.scale*0.5).toBeGreaterThanOrEqual(-0.0001);expect(p.x+modelSize.width*p.scale*0.5).toBeLessThanOrEqual(hostSize.width+0.0001);
+  expect(p.y-modelSize.height*p.scale*0.95).toBeGreaterThanOrEqual(-0.0001);expect(p.y+modelSize.height*p.scale*0.05).toBeLessThanOrEqual(hostSize.height+0.0001);
+ }
+});
+test('portrait framing enlarges the upper portion while full framing keeps the existing default fit',()=>{
+ const args={hostSize:{width:270,height:380},modelSize:{width:900,height:1600},compact:false};
+ const full=calculateLive2DPlacement(args),portrait=calculateLive2DPlacement({...args,showFullModel:false});
+ expect(full.scale).toBeCloseTo(0.2185);expect(portrait.scale).toBeGreaterThan(full.scale);
+ expect(portrait.y-1600*portrait.scale*0.95).toBeCloseTo(380*0.04);expect(portrait.y+1600*portrait.scale*0.05).toBeGreaterThan(380);
 });

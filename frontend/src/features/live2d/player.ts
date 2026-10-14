@@ -1,5 +1,8 @@
 /** Owns a resident Live2D instance's SDK sampling, composition and resource lifetime.
  * Audio candidate gates pause SAY through PerformanceDirector; unowned resident actions keep responding to VAD state.
+ * Profile-local speech-mouth gain scales the output envelope before bounded attack/release smoothing.
+ * Gaze uses a 2x response clock for the SDK focus controller only; Profile-local gain still sets amplitude.
+ * Motion, speech, physics and resident clocks remain real-time and independently owned.
  * One Pixi ticker advances random resident rounds, body, expression, output-lip envelope and physics.
  * Loaded resident snapshots are adopted atomically; SAY temporarily owns the expression override. Preview and Pet create
  * separate players; only versioned delivery events reach PerformanceDirector. Framework's high-level
@@ -8,7 +11,7 @@
 import type {Application,DisplayObject} from 'pixi.js';
 import {UPDATE_PRIORITY} from 'pixi.js';
 import type {AvatarAdaptor,AvatarState,AvatarInstruction,AvatarEntry} from '@shared/contracts/avatar';
-import {avatarResourceUrl,emptyAvatarAdaptor} from '@shared/contracts/avatar';
+import {AVATAR_LIMITS,avatarResourceUrl,emptyAvatarAdaptor} from '@shared/contracts/avatar';
 import {loadLive2DModel,removeAndDestroyLive2DModel,type Live2DModelRuntime} from './runtime';
 import {CubismSampler,type SampledClip} from './cubismSampler';
 import {PoseChannel,ease} from './poseChannel';
@@ -49,6 +52,8 @@ export class AvatarPlayer {
  private expressionBase:Float32Array;
  private expressionTarget:Float32Array;
  private gazeWeight=0.35;
+ private gazeSensitivity=1;
+ private lipSensitivity=1;
  private voiceOwned=false;
  private configFingerprint:string;
  private pinned=new Set<string>();
@@ -58,6 +63,8 @@ export class AvatarPlayer {
  adaptor:AvatarAdaptor;
  constructor(readonly app:Application,readonly model:Live2DModelRuntime,public config:PlayerConfig,sdk:any,private readonly onError:(message:string)=>void=()=>{},private readonly random:()=>number=Math.random){
   this.configFingerprint=JSON.stringify(config.adaptor??emptyAvatarAdaptor());this.adaptor=config.adaptor??emptyAvatarAdaptor();this.generation=config.generation??0;
+  this.setGazeSensitivity(config.adaptor?.gaze_sensitivity);
+  this.setLipSensitivity(config.adaptor?.lip_sensitivity);
   this.sampler=new CubismSampler(model.internalModel.coreModel,sdk);this.channel=new PoseChannel(this.sampler.rest);
   this.expressionFrom=this.sampler.rest.map(()=>0);this.expressionDelta=this.expressionFrom.slice();this.expressionBase=this.sampler.rest.slice();this.expressionTarget=this.sampler.rest.slice();
   this.resident=new ResidentScheduler(id=>this.startResident(id),random);
@@ -65,7 +72,11 @@ export class AvatarPlayer {
   app.stage.addChild(model as unknown as DisplayObject);app.ticker.add(this.tick,this,UPDATE_PRIORITY.HIGH);
   avatarInstances.created++;avatarInstances.active++;
  }
+ setGazeSensitivity(value=1){this.gazeSensitivity=Number.isFinite(value)?Math.max(0,Math.min(AVATAR_LIMITS.gazeSensitivity,value)):1;}
+ setLipSensitivity(value=1){this.lipSensitivity=Number.isFinite(value)?Math.max(0,Math.min(AVATAR_LIMITS.lipSensitivity,value)):1;}
  async configure(config:PlayerConfig){
+  this.setGazeSensitivity(config.adaptor?.gaze_sensitivity);
+  this.setLipSensitivity(config.adaptor?.lip_sensitivity);
   const fingerprint=JSON.stringify(config.adaptor??emptyAvatarAdaptor());
   if(this.config.revision===config.revision&&this.configFingerprint===fingerprint){this.setGeneration(config.generation??this.generation);return;}
   this.configFingerprint=fingerprint;this.stateEpoch++;this.failedResources.clear();
@@ -202,12 +213,14 @@ export class AvatarPlayer {
     this.expressionTarget[i]=this.expressionBase[i]!+this.expressionDelta[i]!;
    }
    this.sampler.write(this.expressionTarget);
-   internal.focusController.update(dt);
+   // Accelerate only the SDK gaze easing; its millisecond step stays bounded by our 120 Hz substeps.
+   internal.focusController.update(dt*2);
    const focus=internal.focusController;this.gazeWeight+=((this.channel.activeGesture?0.15:0.35)-this.gazeWeight)*(1-Math.exp(-dt/150));const headWeight=this.gazeWeight;
-   for(const [id,value]of [['ParamEyeBallX',focus.x],['ParamEyeBallY',focus.y],['ParamAngleX',focus.x*10*headWeight],['ParamAngleY',focus.y*10*headWeight]] as const){const i=this.sampler.index(id);if(i>=0)core.addParameterValueByIndex(i,value);}
+   for(const [id,value]of [['ParamEyeBallX',focus.x],['ParamEyeBallY',focus.y],['ParamAngleX',focus.x*10*headWeight],['ParamAngleY',focus.y*10*headWeight]] as const){const i=this.sampler.index(id);if(i>=0)core.addParameterValueByIndex(i,value*this.gazeSensitivity);}
    const breath=this.sampler.index('ParamBreath');const baseline=this.channel.currentBaseline as SampledClip|undefined;
    if(breath>=0&&!this.channel.fadingIds.has('ParamBreath')&&!baseline?.ids.has('ParamBreath')&&!(this.channel.currentGesture as SampledClip|undefined)?.ids.has('ParamBreath'))core.setParameterValueByIndex(breath,0.5+Math.sin(seconds*2*Math.PI/4)*0.25);
-   this.mouth+=(this.mouthTarget-this.mouth)*(1-Math.exp(-dt/(this.mouthTarget>this.mouth?35:90)));
+   const mouthTarget=Math.min(1,this.mouthTarget*this.lipSensitivity);
+   this.mouth+=(mouthTarget-this.mouth)*(1-Math.exp(-dt/(mouthTarget>this.mouth?35:90)));
    const mouthIndex=this.sampler.index('ParamMouthOpenY');const lipOwned=this.voiceOwned||this.mouth>0.001||this.mouthTarget>0;
    if(mouthIndex>=0&&lipOwned)core.setParameterValueByIndex(mouthIndex,this.mouth);
    for(let remaining=dt;remaining>0;){const step=Math.min(1000/60,remaining);internal.physics?.evaluate(core,step/1000);internal.pose?.updateParameters(core,step/1000);remaining-=step;}

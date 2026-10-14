@@ -1,7 +1,7 @@
 """Compile one verified Profile adaptor into immutable, bounded Main Agent capabilities.
 
 Electron owns configuration and SDK verification; this boundary validates execution semantics and file
-ownership and natural-language display names again before activation. The same frozen capability record supplies provider enums, descriptions,
+ownership, natural-language display names and bounded gaze/speech-mouth settings and framing preference again before activation. The same frozen capability record supplies provider enums, descriptions,
 and optional avatar validation, so visual failures never discard an otherwise valid SAY text envelope.
 """
 from __future__ import annotations
@@ -62,6 +62,14 @@ class AvatarCapabilities:
             raise ValueError("unsupported_adaptor_schema")
         if type(adaptor.get("revision")) is not int or adaptor["revision"] < 1 or (revision and adaptor["revision"] != revision):
             raise ValueError("adaptor_revision_mismatch")
+        sensitivity = adaptor.get("gaze_sensitivity", 1)
+        if type(sensitivity) not in (int, float) or not math.isfinite(sensitivity) or not 0 <= sensitivity <= 16:
+            raise ValueError("invalid_gaze_sensitivity")
+        lip_sensitivity = adaptor.get("lip_sensitivity", 1)
+        if type(lip_sensitivity) not in (int, float) or not math.isfinite(lip_sensitivity) or not 0 <= lip_sensitivity <= 16:
+            raise ValueError("invalid_lip_sensitivity")
+        if type(adaptor.get("show_full_model", True)) is not bool:
+            raise ValueError("invalid_show_full_model")
         model = adaptor.get("model")
         manifest = model.get("manifest") if isinstance(model, Mapping) else None
         if model is not None and (not isinstance(manifest, str) or not _safe_reference(manifest) or not manifest.endswith(".model3.json")):

@@ -1,4 +1,5 @@
 <!-- Provides an isolated model workbench: persistent preview beside a bounded resource list and editor.
+     Full-model framing and Profile-local gaze and speech-mouth sliders update the preview draft without applying to the Pet.
      Draft entries use immutable IDs and natural-language labels. The production player validates each
      resource before enabling conversation/state use. Selecting a resource loops its preview and opens
      its editor; resident bindings are listed per state and added through a native modal picker.
@@ -9,6 +10,16 @@
    <Live2DPreview ref="preview" :key="config.modelVersion" :model-path="modelPath" :adaptor="config.adaptor" :profile-id="config.profile.id" :revision="config.revision" :model-version="config.modelVersion" @playback-change="playing=$event" @ready="ready=true" @error="failure" />
    <p class="preview-now" role="status">{{ playing || tr('pIdle') }}</p>
    <div class="workbench-actions"><button :disabled="!ready" @click="stop">{{ tr('pStop') }}</button></div>
+   <label class="full-model-setting"><input type="checkbox" :checked="config.adaptor.show_full_model ?? true" @change="config.adaptor.show_full_model=($event.target as HTMLInputElement).checked" />{{ tr('pShowFullModel') }}</label>
+   <p class="hint gaze-help">{{ tr('pShowFullModelHelp') }}</p>
+   <label class="gaze-setting">{{ tr('pGazeSensitivity') }} <output>{{ (config.adaptor.gaze_sensitivity ?? 1).toFixed(1) }}×</output>
+    <input type="range" min="0" :max="AVATAR_LIMITS.gazeSensitivity" step="0.1" :value="config.adaptor.gaze_sensitivity ?? 1" @input="config.adaptor.gaze_sensitivity=Number(($event.target as HTMLInputElement).value)" />
+   </label>
+   <p class="hint gaze-help">{{ tr('pGazeHelp') }}</p>
+   <label class="gaze-setting lip-setting">{{ tr('pLipSensitivity') }} <output>{{ (config.adaptor.lip_sensitivity ?? 1).toFixed(1) }}×</output>
+    <input type="range" min="0" :max="AVATAR_LIMITS.lipSensitivity" step="0.1" :value="config.adaptor.lip_sensitivity ?? 1" @input="config.adaptor.lip_sensitivity=Number(($event.target as HTMLInputElement).value)" />
+   </label>
+   <p class="hint gaze-help">{{ tr('pLipHelp') }}</p>
    <p v-if="!ready" role="status">{{ tr('pNotReady') }}</p>
   </aside>
   <section class="resource-pane">
@@ -123,11 +134,13 @@ function previewState(state:AvatarState){preview.value?.setState(state);}
 <style scoped>
 .model-workbench{display:grid;grid-template-columns:minmax(240px,.9fr) minmax(300px,1.1fr);gap:24px;align-items:start;height:clamp(480px,65vh,760px)}
 .preview-pane{min-width:0;position:sticky;top:0}.preview-pane :deep(.avatar-preview){height:clamp(150px,40vh,480px);min-height:150px;background:var(--aura-accent-soft);border-radius:12px}
+.full-model-setting{display:flex;align-items:center;gap:8px;margin-top:16px}.full-model-setting input{width:auto;accent-color:var(--aura-accent)}
+.gaze-setting{display:block;margin-top:16px}.gaze-setting output{float:right}.gaze-setting input{display:block;width:100%;margin-top:8px;accent-color:var(--aura-accent)}.gaze-help{margin:6px 0}
 .preview-now{min-height:20px;text-align:center;color:var(--aura-muted)}.resource-pane{height:100%;overflow:auto;min-width:0;padding-right:8px;overscroll-behavior:contain}
 .resource-tabs,.workbench-actions{display:flex;gap:8px;align-items:center;flex-wrap:wrap}.preview-pane>.workbench-actions{justify-content:center}.resource-tabs{position:sticky;top:0;z-index:1;background:var(--aura-bg);padding-bottom:8px;margin-bottom:12px}.resource-tabs [aria-selected=true],.is-selected{background:var(--aura-accent-soft)}
 .resource-list{max-height:210px;overflow:auto;border:1px solid var(--aura-border);border-radius:8px}.resource-row{display:flex;align-items:center;border-bottom:1px solid var(--aura-border)}.resource-row:last-child{border:0}.resource-row>.resource-choice{justify-content:flex-start;flex:1;min-width:0;width:100%;padding:16px 20px;border:0;border-radius:0;overflow:hidden;text-overflow:ellipsis;text-align:left;background:transparent;border-color:transparent}
 .resident-state{border-bottom:1px solid var(--aura-border);padding:12px 0}.resident-heading{display:flex;align-items:center;justify-content:space-between;gap:12px}.resident-heading h3{margin:0}.resource-editor{padding-top:16px}.resource-editor label,.resident-settings label{display:flex;flex-direction:column;gap:8px;margin:12px 0}.resource-editor .check-field,.resident-settings .check-field{flex-direction:row;align-items:center}input[type=checkbox]{width:auto}.workbench-actions label{display:flex;align-items:center;gap:8px}textarea,input,select{max-width:100%;box-sizing:border-box}textarea{resize:vertical}.hint{font-size:12px;color:var(--aura-muted)}summary{cursor:pointer;padding:10px 0}code,pre{white-space:pre-wrap;overflow-wrap:anywhere;font-size:12px}pre{max-height:180px;overflow:auto}
 .resident-items{list-style:none;padding:0;margin:12px 0 0}.resident-items li{display:flex;align-items:center;justify-content:space-between;gap:12px;padding:8px 0;border-top:1px solid var(--aura-border)}.resident-items li span{overflow-wrap:anywhere;min-width:0}.resident-items button{flex-shrink:0}
 .resident-picker{box-sizing:border-box;width:min(520px,calc(100vw - 40px));max-height:80vh;padding:24px;border:1px solid var(--aura-border);border-radius:12px;background:var(--aura-bg);color:var(--aura-text)}.resident-picker::backdrop{background:#0005}.picker-resources{max-height:50vh;overflow:auto;margin-top:16px}.picker-resources fieldset{border:0;padding:0;margin:12px 0}.picker-resources legend{font-weight:600;margin-bottom:8px}.picker-resources .picker-choice{display:flex;flex-direction:row;align-items:center;gap:12px;margin:0;padding:12px;border-radius:6px;cursor:pointer}.picker-choice span{overflow-wrap:anywhere;min-width:0}
-@media(max-width:900px){.model-workbench{grid-template-columns:1fr;grid-template-rows:auto minmax(0,1fr);height:100%;gap:12px}.preview-pane :deep(.avatar-preview){height:clamp(100px,22vh,180px);min-height:100px}.preview-pane{position:static;display:grid;grid-template-columns:minmax(120px,1fr) minmax(160px,1fr);grid-template-rows:auto 1fr;gap:8px 12px}.preview-pane :deep(.avatar-preview){grid-row:1 / 3;height:clamp(100px,20vh,160px)}.preview-now{margin:6px;align-self:end}.preview-pane .workbench-actions{align-content:start;justify-content:center}.preview-now{margin:6px}.resource-pane{padding:0}.resource-list{max-height:150px}}
+@media(max-width:900px){.model-workbench{grid-template-columns:1fr;grid-template-rows:auto minmax(0,1fr);height:100%;gap:12px}.preview-pane :deep(.avatar-preview){height:clamp(100px,22vh,180px);min-height:100px}.preview-pane{position:static;display:grid;grid-template-columns:minmax(120px,1fr) minmax(160px,1fr);grid-template-rows:auto 1fr;gap:8px 12px}.preview-pane .full-model-setting,.preview-pane .gaze-setting,.preview-pane .gaze-help{grid-column:1 / -1}.preview-pane :deep(.avatar-preview){grid-row:1 / 3;height:clamp(100px,20vh,160px)}.preview-now{margin:6px;align-self:end}.preview-pane .workbench-actions{align-content:start;justify-content:center}.preview-now{margin:6px}.resource-pane{padding:0}.resource-list{max-height:150px}}
 </style>

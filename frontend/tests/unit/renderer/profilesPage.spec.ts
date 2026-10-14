@@ -1,5 +1,5 @@
 /** Mounts the actual editor/workbench and controlled IPC to verify drafts, three-language text,
- * conflict decisions, click-to-loop resource selection, modal resident bindings and stable action IDs.
+ * Profile-local framing, gaze and speech-mouth drafts, conflict decisions, click-to-loop resource selection, modal resident bindings and stable action IDs.
  * Controlled IPC and GPU preview isolate the editor; per-dialog shims supply native methods absent
  * from jsdom, while tests exercise the actual Add/select/Done workflow and saved adaptor. */
 // @vitest-environment jsdom
@@ -86,4 +86,25 @@ it.each(['zh','en','ja'] as const)('enables an unnamed resource with an optional
 });
 it('retains a resident pool after a failed resource verification',async()=>{
  const detail=fixture();detail.saved.modelVersion='v1';detail.saved.adaptor.model={manifest:'model/Test.model3.json'};detail.resources=[{file:'model/bad.motion3.json',kind:'motion',referenced:true,verified:false}];const {host,api}=mount(detail);await openB(host);button(host,'模型与动作').click();await nextTick();button(host,'常驻').click();await nextTick();api.verifyProfileResources.mockRejectedValueOnce(new Error('resource_unverified'));const {dialog,check}=await residentChoice(host,'idle');check.click();await vi.waitFor(()=>expect(dialog.querySelector('[role=alert]')).not.toBeNull());await finishResident(dialog);expect(check.checked).toBe(false);expect(host.querySelectorAll('[data-state=idle] .resident-items li')).toHaveLength(0);expect(api.saveProfile).not.toHaveBeenCalled();
+});
+
+it.each(['zh','en','ja'] as const)('saves gaze sensitivity from the actual workbench in %s without activating',async(language)=>{
+ const detail=fixture();detail.saved.modelVersion='v1';detail.saved.adaptor.model={manifest:'model/Test.model3.json'};
+ const {host,api}=mount(detail,'a',language);await openB(host,language);button(host,t(language,'pModelTab')).click();await nextTick();
+ const slider=host.querySelector<HTMLInputElement>('.gaze-setting input')!;expect(slider.value).toBe('1');expect(slider.max).toBe('16');expect(host.textContent).toContain(t(language,'pGazeSensitivity'));
+ input(slider,'16');await nextTick();expect(host.querySelector('.gaze-setting output')?.textContent).toBe('16.0×');button(host,t(language,'pSave')).click();await vi.waitFor(()=>expect(api.saveProfile).toHaveBeenCalledOnce());expect(api.saveProfile.mock.calls[0]![1].adaptor.gaze_sensitivity).toBe(16);expect(api.activateProfile).not.toHaveBeenCalled();expect(playback.active).toBe(1);
+});
+
+it.each(['zh','en','ja'] as const)('saves speech-mouth sensitivity separately from gaze in %s',async(language)=>{
+ const detail=fixture();detail.saved.modelVersion='v1';detail.saved.adaptor.model={manifest:'model/Test.model3.json'};
+ const {host,api}=mount(detail,'a',language);await openB(host,language);button(host,t(language,'pModelTab')).click();await nextTick();
+ const slider=host.querySelector<HTMLInputElement>('.lip-setting input')!;expect(slider.value).toBe('1');expect(slider.max).toBe('16');expect(host.textContent).toContain(t(language,'pLipSensitivity'));
+ input(slider,'4');await nextTick();expect(host.querySelector('.lip-setting output')?.textContent).toBe('4.0×');button(host,t(language,'pSave')).click();await vi.waitFor(()=>expect(api.saveProfile).toHaveBeenCalledOnce());expect(api.saveProfile.mock.calls[0]![1].adaptor.lip_sensitivity).toBe(4);expect(api.saveProfile.mock.calls[0]![1].adaptor.gaze_sensitivity).toBeUndefined();expect(api.activateProfile).not.toHaveBeenCalled();
+});
+
+it.each(['zh','en','ja'] as const)('saves optional full-model framing in %s without activating',async(language)=>{
+ const detail=fixture();detail.saved.modelVersion='v1';detail.saved.adaptor.model={manifest:'model/Test.model3.json'};
+ const {host,api}=mount(detail,'a',language);await openB(host,language);button(host,t(language,'pModelTab')).click();await nextTick();
+ const checkbox=host.querySelector<HTMLInputElement>('.full-model-setting input')!;expect(checkbox.checked).toBe(true);expect(host.textContent).toContain(t(language,'pShowFullModel'));
+ checkbox.click();await nextTick();expect(checkbox.checked).toBe(false);button(host,t(language,'pSave')).click();await vi.waitFor(()=>expect(api.saveProfile).toHaveBeenCalledOnce());expect(api.saveProfile.mock.calls[0]![1].adaptor.show_full_model).toBe(false);expect(api.activateProfile).not.toHaveBeenCalled();expect(playback.active).toBe(1);
 });

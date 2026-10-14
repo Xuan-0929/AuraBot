@@ -1,6 +1,6 @@
 /** Defines stable IDs and user-authored display names in the persisted Profile capability table and versioned SAY visual metadata.
  * Main validates assets and compiles capabilities; preview and Pet consume these same semantics
- * while retaining independent mutable playback state. Times ending in _ms are milliseconds.
+ * while retaining independent mutable playback state. Optional gaze and speech-mouth sensitivities are Profile-local and default to 1. Full-model framing defaults to true. Times ending in _ms are milliseconds.
  */
 export type AvatarState = 'idle' | 'listening' | 'thinking' | 'speaking';
 export interface AvatarEntry {
@@ -13,6 +13,9 @@ export interface AvatarEntry {
 }
 export interface AvatarAdaptor {
   schema_version: 2;
+  gaze_sensitivity?: number;
+  lip_sensitivity?: number;
+  show_full_model?: boolean;
   revision: number;
   model: { manifest: string } | null;
   entries: Record<string, AvatarEntry>;
@@ -40,7 +43,7 @@ export interface AvatarCue {
   invoke_id: string;
   avatar?: AvatarInstruction;
 }
-export const AVATAR_LIMITS = Object.freeze({ entries: 128, agentEntries: 32, nameLength: 64, descriptionLength: 256, fadeMs: 5000, stateEntries: 8, stateBindings: 32 });
+export const AVATAR_LIMITS = Object.freeze({ entries: 128, agentEntries: 32, nameLength: 64, descriptionLength: 256, fadeMs: 5000, stateEntries: 8, stateBindings: 32, gazeSensitivity: 16, lipSensitivity: 16 });
 export function emptyAvatarAdaptor(): AvatarAdaptor {
   return { schema_version: 2, revision: 1, model: null, entries: {}, states: { idle: [], listening: [], thinking: [], speaking: [] } };
 }

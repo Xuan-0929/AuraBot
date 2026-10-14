@@ -1,6 +1,6 @@
 <!-- Holds one resident AvatarPlayer and applies existing placement/hit-testing to its renderer.
      Only app/model identity changes replace the model. Configuration/generation updates are forwarded
-     explicitly; placement, focus, hover and semantic delivery never rebuild GPU resources. -->
+     explicitly; full-model/portrait framing only changes placement; gaze and speech-mouth gains update independently without restarting playback; placement, focus, hover and semantic delivery never rebuild GPU resources. -->
 <template><div class="live2d-vue-model-anchor" aria-hidden="true" :data-avatar-state="status" :data-motion-starts="starts" :data-cue-drops="drops" /></template>
 <!-- Configuration watches exclude human-readable labels, so typing a name never restarts playback. -->
 <script setup lang="ts">
@@ -33,18 +33,21 @@ watch(()=>[props.app,props.modelPath] as const,async([app,path])=>{
   next.setGeneration(props.generation??0);status.value='ready';emit('modelReady');
  }catch(error){if(!disposed&&generation===loadGeneration&&(configuration===0||configuration===configurationGeneration)){status.value='error';loadError.value=error instanceof Error?error.message:'模型加载失败';emit('error',loadError.value);}}
 },{immediate:true});
-watch([()=>props.revision,()=>JSON.stringify(props.adaptor?{...props.adaptor,entries:Object.fromEntries(Object.entries(props.adaptor.entries).map(([id,{display_name,description,...playback}])=>[id,playback]))}:undefined)],async()=>{
+watch([()=>props.revision,()=>JSON.stringify(props.adaptor?{...props.adaptor,gaze_sensitivity:undefined,lip_sensitivity:undefined,show_full_model:undefined,entries:Object.fromEntries(Object.entries(props.adaptor.entries).map(([id,{display_name,description,...playback}])=>[id,playback]))}:undefined)],async()=>{
  const current=player;if(!current)return;const generation=loadGeneration,configuration=++configurationGeneration;status.value='loading';loadError.value='';
  const active=()=>!disposed&&generation===loadGeneration&&configuration===configurationGeneration&&player===current;
  try{await current.configure(config());if(active()){status.value='ready';emit('modelReady');}}
  catch(error){if(active()){status.value='error';loadError.value=String(error);emit('error',loadError.value);}}
 });
+watch(()=>props.adaptor?.gaze_sensitivity,value=>player?.setGazeSensitivity(value));
+watch(()=>props.adaptor?.lip_sensitivity,value=>player?.setLipSensitivity(value));
 watch(()=>props.generation,value=>player?.setGeneration(value??0));
+watch(()=>props.adaptor?.show_full_model,resize);
 watch(()=>props.canvasSize,resize,{deep:true});watch(()=>props.viewTransform,resize);
 watch(()=>props.focusAt,point=>player?.model.focus(point.x,point.y),{deep:true});
 watch(()=>props.pointerAt,point=>{const model=player?.model;emit('interactiveChange',Boolean(model&&point&&normalizeLive2DHitAreaNames(model.internalModel?.hitAreas).some(name=>model.hitTest(name,point.x,point.y))));},{deep:true});
-watch(()=>props.zoomRequest,request=>{if(request&&player&&natural)emit('viewTransformChange',calculateFocusedLive2DViewTransform({hostSize:props.canvasSize,modelSize:natural,compact:false,current:props.viewTransform,focalPoint:request.focalPoint,wheelDeltaY:request.deltaY}));});
-function resize(){if(!player||!natural)return;const placement=calculateLive2DPlacement({hostSize:props.canvasSize,modelSize:natural,compact:false,viewTransform:props.viewTransform});player.model.scale.set(placement.scale);player.model.x=placement.x;player.model.y=placement.y;renderLive2DFrame(props.app);}
+watch(()=>props.zoomRequest,request=>{if(request&&player&&natural)emit('viewTransformChange',calculateFocusedLive2DViewTransform({hostSize:props.canvasSize,modelSize:natural,compact:false,showFullModel:props.adaptor?.show_full_model??true,current:props.viewTransform,focalPoint:request.focalPoint,wheelDeltaY:request.deltaY}));});
+function resize(){if(!player||!natural)return;const placement=calculateLive2DPlacement({hostSize:props.canvasSize,modelSize:natural,compact:false,showFullModel:props.adaptor?.show_full_model??true,viewTransform:props.viewTransform});player.model.scale.set(placement.scale);player.model.x=placement.x;player.model.y=placement.y;renderLive2DFrame(props.app);}
 function requirePlayer(){if(!player)throw new Error('模型尚未加载');return player;}
 function ready():Promise<{available:boolean;error?:string}>{
  if(disposed)return Promise.resolve({available:false,error:'模型已关闭'});

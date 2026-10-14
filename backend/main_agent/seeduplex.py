@@ -9,6 +9,8 @@ The shared debug scope observes connection phases, upload edges and bounded erro
 one connection identity joins engine events, while audio frames only increment counters.
 Identity-free audio deltas inherit the active audio-start event, never the latest text;
 cancelled streams retain their identity for late data until audio ends or a new stream starts.
+Context retrieval exposes real conversation identities so the engine can verify interruption
+repairs without guessing an assistant item from the latest conversation entry.
 """
 
 from __future__ import annotations
@@ -72,6 +74,7 @@ class RealtimeVoiceAdaptor(Protocol):
     async def update_instructions(self, instructions: str) -> str: ...
     async def initialize_history(self, items: list[dict[str, Any]]) -> str: ...
     async def replace_assistant(self, item_id: str, text: str) -> str: ...
+    async def retrieve_items(self) -> str: ...
     async def cancel_response(self) -> None: ...
     async def tool_results(self, results: dict[str, Any]) -> None: ...
     async def close(self) -> None: ...
@@ -222,6 +225,11 @@ class SeedDuplexAdaptor:
 
     async def cancel_response(self) -> None:
         await self._send("response.cancel")
+
+    async def retrieve_items(self) -> str:
+        # Query recent QA pairs: a cancelled response may not have been committed yet.
+        # Looking up its candidate ID directly can turn that temporary absence into an error.
+        return await self._send("conversation.item.retrieve", items=[])
 
     async def tool_results(self, results: dict[str, Any]) -> None:
         if not results or not set(results).issubset(self._calls):

@@ -1,6 +1,7 @@
 /** Localizes speech resource preparation and controlled backend errors for settings and Pet.
  * No raw provider response is translated or forwarded; callers use fixed public error codes.
- * Voice engine configuration, official documentation buttons and SeedDuplex failures use the same language selection; voice help distinguishes full-duplex support from general TTS voices. */
+ * Voice engine configuration, official documentation buttons and SeedDuplex failures use the same language selection; voice help distinguishes full-duplex support from general TTS voices.
+ * Empty provider audio is reported separately from protocol decoding and interrupted-context repair. */
 const en={
  realtimeVoiceHint:'Use a voice ID supported by SeedDuplex full duplex. Voices in the general TTS library are not necessarily compatible.',
  apiKeyGuide:'Get an API key',voiceGuide:'Browse voices',openDocumentationFailed:'Could not open the documentation. Please try again.',
@@ -9,6 +10,7 @@ const en={
  realtime_connection_failed:'SeedDuplex could not connect. Check the key, voice ID and network, then restart voice.',
  realtime_disconnected:'Voice disconnected. Start voice again to reconnect.',realtime_protocol_error:'The voice response could not be processed. Start voice again.',
  realtime_provider_error:'SeedDuplex returned an error. Check your service configuration and restart voice.',
+ realtime_audio_missing:'SeedDuplex returned text without audio. Check the voice ID or try another supported voice, then restart voice.',
  realtime_context_unconfirmed:'The interrupted response could not be synchronized. Start voice again to continue.',
  realtime_text_disabled:'Close Realtime voice before sending a text message.',realtime_session_limit:'Start voice again to begin a new session.',
  speechResources:'Local speech resources',speechPrepare:'Prepare resources',speechPreparing:'Downloading…',speechReady:'Ready',speechMissing:'Missing or invalid',speechPrepared:'Resources prepared. Save and apply to use them.',speechCancelled:'Download cancelled. You can retry.',speechDownloadNetwork:'Download failed. Check your network and retry.',speechDownloadIntegrity:'Resource verification failed. Please retry.',speechDownloadFilesystem:'Cannot write resources. Check available space and directory permissions.',profilePreparing:'Preparing character. Please wait.',
@@ -24,6 +26,7 @@ const zh:Record<keyof typeof en,string>={
  realtime_connection_failed:'SeedDuplex 连接失败，请检查密钥、音色 ID 和网络后重新开启语音。',
  realtime_disconnected:'语音连接已断开，请重新开启语音。',realtime_protocol_error:'语音响应无法处理，请重新开启语音。',
  realtime_provider_error:'SeedDuplex 返回错误，请检查服务配置后重新开启语音。',
+ realtime_audio_missing:'SeedDuplex 返回了文字，但没有音频。请检查音色 ID 或尝试其他支持的音色，再重新开启语音。',
  realtime_context_unconfirmed:'被打断的回复未能同步，请重新开启语音继续。',
  realtime_text_disabled:'请先关闭 Realtime 语音，再发送文字消息。',realtime_session_limit:'请重新开启语音，开始新的会话。',
  speechResources:'本地语音资源',speechPrepare:'一键准备',speechPreparing:'正在下载…',speechReady:'已就绪',speechMissing:'缺失或未通过校验',speechPrepared:'资源已准备，请保存并应用。',speechCancelled:'下载已取消，可以重试。',speechDownloadNetwork:'下载失败，请检查网络后重试。',speechDownloadIntegrity:'资源校验失败，请重新准备。',speechDownloadFilesystem:'无法写入资源，请检查磁盘空间和目录权限。',profilePreparing:'正在准备角色，请稍候。',
@@ -39,6 +42,7 @@ const ja:Record<keyof typeof en,string>={
  realtime_connection_failed:'SeedDuplex に接続できません。キー、音声 ID と接続を確認し、音声を再開してください。',
  realtime_disconnected:'音声が切断されました。音声を再開してください。',realtime_protocol_error:'音声応答を処理できません。音声を再開してください。',
  realtime_provider_error:'SeedDuplex エラーです。設定を確認し、音声を再開してください。',
+ realtime_audio_missing:'SeedDuplex からテキストのみ届き、音声がありません。音声 ID を確認するか、別の対応音声に変更して再開してください。',
  realtime_context_unconfirmed:'中断した応答を同期できません。音声を再開してください。',
  realtime_text_disabled:'文字を送信する前に Realtime 音声を終了してください。',realtime_session_limit:'音声を再開して新しいセッションを開始してください。',
  speechResources:'ローカル音声リソース',speechPrepare:'リソースを準備',speechPreparing:'ダウンロード中…',speechReady:'準備完了',speechMissing:'未取得または検証失敗',speechPrepared:'リソースを準備しました。保存して適用してください。',speechCancelled:'ダウンロードを中止しました。再試行できます。',speechDownloadNetwork:'ダウンロードに失敗しました。接続を確認してください。',speechDownloadIntegrity:'リソースの検証に失敗しました。再試行してください。',speechDownloadFilesystem:'書き込めません。空き容量とアクセス権を確認してください。',profilePreparing:'キャラクターを準備中です。',

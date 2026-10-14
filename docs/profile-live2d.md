@@ -187,3 +187,28 @@ npm run test:e2e
 Electron 曾完整通过 7/7。最终构建的最新完整运行是 6/7：Profile 管理/常驻多轮随机预览/重启、真实模型渲染、SAY 指令和陈旧回执隔离均通过；合成 AudioWorklet 场景出现 `capture timeout`，独立复测三次同样失败。进一步用不加载 AuraBot 或 Live2D 的独立静音 Electron 探针复现：AudioContext 为 running，2.5 秒后 currentTime 仅约 0.0053 秒，输出 contextTime 为 0，无 Worklet 帧。说明本机音频时钟当时未正常推进，具体系统原因未定位；没有重启音频服务、改设备或将失败记为通过。此前另有一次端口占用导致启动失败，占用消失后完整复跑通过，未终止未知进程。
 
 本机临时诊断记录：`/private/tmp/aurabot-resident-{unit,backend,typecheck,e2e}.log`、`/private/tmp/aurabot-resident-e2e-port-conflict.log`、`/private/tmp/aurabot-resident-e2e-audio-timeout.log`、`/private/tmp/aurabot-resident-audio-repeat.log`、`/private/tmp/aurabot-audio-probe.log`。系统音频恢复后，在 frontend 目录运行 `npm run test:e2e` 重新验收；真实麦克风/扬声器、付费 Provider 和签名安装包仍未实机验证。测试和探针均未使用真实用户数据。
+
+
+### 查看方向灵敏度
+
+“模型与动作”预览下方提供 `0–16×` 滑块，默认 `1×`；`0×` 关闭鼠标视线贡献。
+数值保存在该角色 `adaptor.json` 的可选字段 `gaze_sensitivity`，旧配置缺省按 `1` 处理。
+Main 与 Backend 均拒绝非有限数值和越界值。它不进入 Agent 工具能力。
+拖动滑块立即更新独立预览，鼠标在预览内移动即可观察；保存、应用后才影响桌宠。
+调节不会重建模型或重新开始动作。系数同时缩放眼球与头部的鼠标贡献，保留手势期间降低头部跟随权重的规则，最终受模型自身参数范围限制。
+
+
+### 说话口型灵敏度
+
+预览下方的独立 `0–16×` 滑块设置 `lip_sensitivity`，默认 `1`，`0` 关闭语音口型。
+设置按角色保存并在应用后生效；不修改音量、鼠标视线、表情嘴型或 TTS 交付时钟。
+播放器把实际输出音量包络乘以该系数并限制到 `0–1`，再沿用开口/闭口平滑；最后由 Core 限制到模型参数范围。
+暂停、取消、结束继续闭口，调节草稿不重建模型或重启播放。倍数过高会更容易饱和为最大张嘴。
+
+
+### 显示完整模型
+
+预览下方的“显示完整模型”复选框按角色保存在 `show_full_model`，旧配置默认 `true`。
+勾选时保留原有默认缩放，并在缩放/偏移后约束模型画布完整位于显示框内；取消后按模型画布上部约 55% 取景，允许下半身和两侧裁切，并继续支持原有聚焦缩放。
+预览即时调整，桌宠保存并应用后生效；仅重算位置和比例，不重建播放器或重播动作。
+取景依据模型画布尺寸，不做人脸或身体识别；留白较多或非人形素材的实际裁切效果取决于素材布局。

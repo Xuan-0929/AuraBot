@@ -4,6 +4,7 @@
  * Electron validates callers and payloads; Task is read-only and Memory has no renderer surface.
  * Pet voice-state reports let Main block typed input globally for an active Realtime session.
  * Voice help accepts fixed documentation identities; Main alone opens their official URLs.
+ * SeedDuplex voice help targets the voice list linked by its API reference, rather than console onboarding.
  */
 import type {SpeechAssetsState} from './speechAssets';
 import type {LiveDebugCapture,LiveDebugEvent,LiveDebugState,LiveDebugUpdate} from './liveDebug';
@@ -31,7 +32,7 @@ export const IPC_CHANNELS = {
 } as const;
 export const VOICE_DOCUMENTATION_URLS = {
  'seeduplex-key':'https://docs.volcengine.com/docs/DoubaoVoice/console-guidance?lang=zh',
- 'seeduplex-voices':'https://docs.volcengine.com/docs/DoubaoVoice/QuickStartNewConsole?lang=zh',
+ 'seeduplex-voices':'https://docs.volcengine.com/docs/DoubaoVoice/Tonelist-1?lang=zh',
  'dashscope-key':'https://help.aliyun.com/zh/model-studio/get-api-key',
  'cosyvoice-voices':'https://help.aliyun.com/zh/model-studio/cosyvoice-voice-list',
 } as const;

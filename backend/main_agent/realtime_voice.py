@@ -7,6 +7,11 @@ and repairs their cloud context or ends the session, never replaying tools or re
 Closing this engine leaves the Profile memory archive and accepted Task operations alive.
 Sparse diagnostics join provider identities to renderer clauses, time local waits with a
 monotonic clock, and summarize outcomes without recording audio or changing control flow.
+Completed responses without audio end the session with a distinct provider-output error;
+they never enter interruption repair or become confirmed conversation history.
+Interruption repair serializes cloud cancellation, delayed item discovery and verified
+replacement; microphone reception stays live, but output generated during repair fails
+closed because buffering it cannot correct the context used by the remote model.
 """
 
 from __future__ import annotations
@@ -45,6 +50,7 @@ class _Reply:
     text_ready: asyncio.Event = field(default_factory=asyncio.Event)
     played: asyncio.Event = field(default_factory=asyncio.Event)
     audio_ended: bool = False
+    generation_done: bool = False
     cancelled: bool = False
     settled: bool = False
     buffered_bytes: int = 0
@@ -58,6 +64,8 @@ class _Reply:
 
 class RealtimeVoiceEngine:
     mode = "realtime"
+    REPAIR_TIMEOUT = 2.0
+    INTERRUPTED_TEXT = "[这条回复被打断，未确认用户听到其内容。]"
 
     def __init__(self, hub: Any, runtime: Any, adaptor: RealtimeVoiceAdaptor) -> None:
         self.hub, self.runtime, self.adaptor = hub, runtime, adaptor
@@ -81,7 +89,8 @@ class RealtimeVoiceEngine:
         self._transcript_epochs: dict[str, int] = {}
         self._published: set[str] = set()
         self._facts_changed = asyncio.Event()
-        self._repairs: dict[str, asyncio.Future[None]] = {}
+        self._pending_repairs: list[_Reply] = []
+        self._control_waiter: tuple[str, str, asyncio.Future[VoiceEvent]] | None = None
         self._repair_count = 0
         self._repair_failed = False
         self._avatar_calls: dict[str, tuple[str, dict[str, str]]] = {}
@@ -123,7 +132,7 @@ class RealtimeVoiceEngine:
                 raise
             except Exception as exc:
                 code = str(exc)
-                if code not in {"realtime_protocol_error", "realtime_provider_error", "realtime_context_unconfirmed", "realtime_session_limit"}:
+                if code not in {"realtime_protocol_error", "realtime_provider_error", "realtime_audio_missing", "realtime_context_unconfirmed", "realtime_session_limit"}:
                     code = "realtime_disconnected"
                 self._trace("system", "realtime.worker.failed", level="error", operation=name,
                     exceptionType=type(exc).__name__, code=code)
@@ -298,12 +307,25 @@ class RealtimeVoiceEngine:
                     self.memory.confirm_activity()
                     await self.hub.speech_activity(active=False)
             return
-        if kind == "items_updated":
-            for item in event.items:
-                waiter = self._repairs.get(item.get("id"))
-                if waiter is not None and not waiter.done():
-                    waiter.set_result(None)
+        if kind in {"items_updated", "items_retrieved", "cancel_ack"}:
+            if kind == "cancel_ack":
+                self._trace("connection", "realtime.control.confirmed", event=event, operation=kind)
+            pending = self._control_waiter
+            if pending is not None:
+                expected, item_id, waiter = pending
+                if kind == expected and not waiter.done() and (
+                    not item_id or not event.items or any(item.get("id") == item_id for item in event.items)
+                ):
+                    waiter.set_result(event)
             return
+        if not self._context_ready.is_set() and kind in {
+            "tools", "text_delta", "text_done", "audio_started", "audio", "audio_done",
+        }:
+            old = self._replies.get(event.response_id)
+            if not (old and old.cancelled) and event.question_id not in self._retired_questions:
+                self._trace("model", "realtime.context.repair_raced", event=event, level="warning",
+                    operation="new_response_during_repair")
+                raise RuntimeError("realtime_context_unconfirmed")
         if kind == "tools":
             self._spawn(self._tools_called(event, self._input_epoch), "realtime-tools")
             return
@@ -324,13 +346,16 @@ class RealtimeVoiceEngine:
                 hasTranscript=bool(known.text.strip()) if known else None)
             replies = [self._replies[event.response_id]] if event.response_id in self._replies else list(self._replies.values())
             for reply in replies:
+                reply.generation_done = True
                 if not reply.cancelled and not reply.settled and reply.worker is None:
                     self._trace("model", "realtime.response.discarded", reply=reply, level="warning", reason="no_audio")
                     self._discard(reply)
-                    self._schedule_repair(reply)
+                    # No playback occurred: report the absent provider audio, not a failed barge-in repair.
+                    # End this cloud session so its unheard answer cannot contaminate the next exchange.
+                    raise RuntimeError("realtime_audio_missing")
             return
         if kind not in {"text_delta", "text_done", "audio_started", "audio", "audio_done"}:
-            if kind in {"cancel_ack", "session_updated"}:
+            if kind == "session_updated":
                 self._trace("connection", "realtime.control.confirmed", event=event, operation=kind)
             return
         if not event.response_id:
@@ -516,27 +541,73 @@ class RealtimeVoiceEngine:
         self.memory.delivery_changed()
 
     def _schedule_repair(self, reply: _Reply) -> None:
+        self._pending_repairs.append(reply)
         self._repair_count += 1
         self._context_ready.clear()
-        self._spawn(self._repair(reply), "realtime-context-repair")
+        if self._repair_count == 1:
+            self._spawn(self._repair(), "realtime-context-repair")
 
-    async def _repair(self, reply: _Reply) -> None:
-        started = time.monotonic()
-        operation = "require_item_id"
-        self._trace("model", "realtime.context.repairing", reply=reply)
+    async def _control(self, kind: str, send: Any, *, item_id: str = "") -> VoiceEvent:
+        # The provider does not promise to echo request IDs. Only one control request
+        # is outstanding. Sparse update ACKs have no items; populated ACKs must match
+        # the intended identity, and a separate readback always verifies actual content.
+        waiter = asyncio.get_running_loop().create_future()
+        self._control_waiter = (kind, item_id, waiter)
         try:
-            if not reply.item_id:
-                raise RuntimeError("realtime_context_unconfirmed")
-            waiter = asyncio.get_running_loop().create_future()
-            self._repairs[reply.item_id] = waiter
-            operation = "cancel_response"
-            await self.adaptor.cancel_response()
-            operation = "replace_assistant"
-            await self.adaptor.replace_assistant(reply.item_id, "[这条回复被打断，未确认用户听到其内容。]")
-            operation = "context_confirmation"
-            await asyncio.wait_for(waiter, 2)
-            self._trace("model", "realtime.context.repaired", reply=reply,
-                elapsedMs=(time.monotonic() - started) * 1000)
+            await send()
+            return await waiter
+        finally:
+            self._control_waiter = None
+
+    @staticmethod
+    def _assistant_item(event: VoiceEvent, reply: _Reply) -> dict[str, Any] | None:
+        # response_id is a lookup candidate, not authority: verify role and identity
+        # against retrieved context before issuing any update. Never select "latest".
+        candidate = reply.item_id or reply.response_id
+        matches = [item for item in event.items if item.get("id") == candidate and item.get("role") == "assistant"]
+        return matches[0] if len(matches) == 1 else None
+
+    async def _repair(self) -> None:
+        started = time.monotonic()
+        operation = "cancel_response"
+        reply = self._pending_repairs[0]
+        try:
+            async with asyncio.timeout(self.REPAIR_TIMEOUT):
+                # One global cancellation covers unfinished retired replies. Natural
+                # provider interruption may already have ended generation; in that case
+                # it need not ACK another cancel. Context readback, not this ACK, proves
+                # repair. Never cancel again later, when a new answer could be running.
+                if any(not r.generation_done and not r.audio_ended for r in self._pending_repairs):
+                    self._trace("model", "realtime.context.cancel_requested", reply=reply,
+                        count=len(self._pending_repairs))
+                    await self.adaptor.cancel_response()
+                while self._pending_repairs:
+                    reply = self._pending_repairs.pop(0)
+                    self._trace("model", "realtime.context.repairing", reply=reply)
+                    operation = "retrieve_assistant"
+                    attempts = 0
+                    while True:
+                        attempts += 1
+                        snapshot = await self._control("items_retrieved", self.adaptor.retrieve_items)
+                        item = self._assistant_item(snapshot, reply)
+                        if item is not None:
+                            break
+                        # A cancel ACK can precede the assistant's context commit.
+                        # An absent item is not proof that the unheard answer is gone.
+                        await asyncio.sleep(.1)
+                    reply.item_id = item["id"]
+                    self._trace("model", "realtime.context.item_resolved", reply=reply, attempts=attempts)
+                    operation = "replace_assistant"
+                    await self._control("items_updated", lambda: self.adaptor.replace_assistant(
+                        reply.item_id, self.INTERRUPTED_TEXT), item_id=reply.item_id)
+                    operation = "verify_assistant"
+                    snapshot = await self._control("items_retrieved", self.adaptor.retrieve_items)
+                    item = self._assistant_item(snapshot, reply)
+                    if item is None or item.get("content") != [{"type": "input_text", "text": self.INTERRUPTED_TEXT}]:
+                        raise RuntimeError("realtime_context_unconfirmed")
+                    self._repair_count -= 1
+                    self._trace("model", "realtime.context.repaired", reply=reply,
+                        elapsedMs=(time.monotonic() - started) * 1000)
         except asyncio.CancelledError:
             self._trace("model", "realtime.context.repair_cancelled", reply=reply,
                 operation=operation, elapsedMs=(time.monotonic() - started) * 1000)
@@ -548,9 +619,9 @@ class RealtimeVoiceEngine:
             self._repair_failed = True
             raise RuntimeError("realtime_context_unconfirmed") from None
         finally:
-            self._repairs.pop(reply.item_id, None)
-            self._repair_count -= 1
-            if self._repair_count == 0 and not self._repair_failed and not self._closed:
+            self._pending_repairs.clear()
+            self._repair_count = 0
+            if not self._repair_failed and not self._closed:
                 self._context_ready.set()
 
     async def _tools_called(self, event: VoiceEvent, epoch: int) -> None:
@@ -606,6 +677,12 @@ class RealtimeVoiceEngine:
                     level="warning" if code else "info", elapsedMs=round((time.monotonic() - started) * 1000, 1))
         results = await asyncio.gather(*(execute(call) for call in event.calls))
         if not self._closed:
+            # Accepted business work survives interruption, but returning its stale
+            # result must not trigger an old spoken continuation in the cloud session.
+            reply = self._replies.get(event.response_id)
+            if epoch != self._input_epoch or event.question_id in self._retired_questions or (reply and reply.cancelled):
+                self._trace("model", "realtime.tool.results_discarded", event=event, reason="reply_expired")
+                return
             started = time.monotonic()
             try:
                 await self.adaptor.tool_results({call.call_id: result for call, result in zip(event.calls, results)})

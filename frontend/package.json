@@ -30,7 +30,7 @@
     "@iconify-json/solar": "^1.2.5",
     "@iconify/vue": "^5.0.1",
     "better-sqlite3": "^12.9.0",
-    "live2dcubismcore": "1.0.2",
+    "live2dcubismcore": "npm:@hazart-pkg/live2d-core@1.0.1",
     "pinia": "^3.0.4",
     "pixi-live2d-display": "0.4.0",
     "pixi.js": "6.5.10",

@@ -5,6 +5,8 @@ normalize provider events, preserve real tool identities and reject malformed au
 No provider credentials or external speech service are needed by these protocol tests.
 Real diagnostic scopes verify sparse upload summaries and redacted wire failure facts.
 Wire-shaped audio streams cover identity-free deltas, stream boundaries and cancelled tails.
+Context checks exercise retrieve/update wire shapes and preserve assistant IDs and roles
+for the engine's cancellation repair and readback verification.
 """
 
 import asyncio
@@ -62,6 +64,19 @@ class SeedDuplexAdaptorTests(unittest.IsolatedAsyncioTestCase):
             await self.adaptor.send_audio(bytes(638))
         await self.adaptor.mute()
         self.assertEqual(self.socket.sent[-1]["type"], "input_audio_mute.commit")
+
+    async def test_context_repair_queries_recent_pairs_and_updates_only_selected_item(self):
+        await self.adaptor.retrieve_items()
+        self.assertEqual(self.socket.sent[-1]["type"], "conversation.item.retrieve")
+        self.assertEqual(self.socket.sent[-1]["items"], [])
+        items = [{"id": "q1", "role": "user", "content": [{"type": "input_text", "text": "question"}]},
+                 {"id": "r1", "role": "assistant", "content": [{"type": "input_text", "text": "unheard"}]}]
+        self.socket.frames.put_nowait(json.dumps({"type": "conversation.item.retrieved", "items": items}))
+        event = await self.adaptor.receive()
+        self.assertEqual((event.kind, event.items), ("items_retrieved", tuple(items)))
+        await self.adaptor.replace_assistant("r1", "interrupted")
+        self.assertEqual(self.socket.sent[-1]["items"], [{"id": "r1", "content": [{"type": "input_text", "text": "interrupted"}]}])
+        self.assertNotIn("conversation.item.delete", [event["type"] for event in self.socket.sent])
 
     async def test_upload_diagnostics_are_sparse_and_provider_errors_are_redacted(self):
         recorder = DebugRecorder()

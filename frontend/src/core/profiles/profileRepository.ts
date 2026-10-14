@@ -1,4 +1,5 @@
 /** Owns Profile configuration files and model packages inside the configured shared profiles root.
+ * Validates and persists bounded Profile-local gaze and speech-mouth settings and framing preference alongside the adaptor.
  * SOUL.md is the only editable persona; fingerprints detect external changes.
  * A replayable journal commits SOUL/adaptor/identity together; immutable applied snapshots isolate
  * running conversations from edits. Legacy SQLite is backed up consistently before import. Context,
@@ -26,6 +27,9 @@ const adaptorSchema = z.object({
   schema_version: z.literal(2), revision: z.number().int().positive(),
   model: z.object({manifest:z.string()}).strict().nullable(),
   validated_resources:z.array(z.string()).optional(),
+  show_full_model:z.boolean().optional(),
+  gaze_sensitivity:z.number().finite().min(0).max(AVATAR_LIMITS.gazeSensitivity).optional(),
+  lip_sensitivity:z.number().finite().min(0).max(AVATAR_LIMITS.lipSensitivity).optional(),
   entries:z.record(z.string(),z.object({kind:z.enum(['motion','expression']),display_name:z.string().min(1).max(128).optional(),source:z.object({file:z.string()}).strict(),description:z.string().max(AVATAR_LIMITS.descriptionLength),agent_enabled:z.boolean(),playback:z.object({mode:z.enum(['once','loop','hold']),fade_in_ms:finiteFade,fade_out_ms:finiteFade}).strict()}).strict()),
   states:z.object({idle:z.array(z.string()).max(AVATAR_LIMITS.stateEntries),listening:z.array(z.string()).max(AVATAR_LIMITS.stateEntries),thinking:z.array(z.string()).max(AVATAR_LIMITS.stateEntries),speaking:z.array(z.string()).max(AVATAR_LIMITS.stateEntries)}).strict()
 }).strict();

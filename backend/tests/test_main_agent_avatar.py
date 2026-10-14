@@ -1,5 +1,6 @@
 """Exercise Profile capability compilation, partial visual degradation and streaming SAY ownership.
 
+Framing is type checked; gaze and speech-mouth configuration is bounded independently of the LLM-visible capabilities.
 The tests use real policy/parser/harness implementations and deterministic provider chunks; fixtures never
 open user storage or external providers. Lifecycle tests separately cover the transport and storage owners.
 """
@@ -408,3 +409,36 @@ class ResidentPoolTests(unittest.TestCase):
             value['states'] = {'idle': pool, 'thinking': [], 'listening': [], 'speaking': []}
             with self.assertRaises(ValueError, msg=repr(pool)):
                 AvatarCapabilities.compile(value)
+
+
+class GazeConfigurationTests(unittest.TestCase):
+    def test_bounded_gaze_does_not_change_tool_capabilities(self):
+        original = adaptor()
+        expected = AvatarCapabilities.compile(original)
+        for value in (0, 1, 2.5, 5, 16):
+            self.assertEqual(AvatarCapabilities.compile({**original, "gaze_sensitivity": value}), expected)
+        for value in (-1, 16.1, float("nan"), float("inf"), True, "2", None):
+            with self.assertRaisesRegex(ValueError, "invalid_gaze_sensitivity"):
+                AvatarCapabilities.compile({**original, "gaze_sensitivity": value})
+
+
+class LipConfigurationTests(unittest.TestCase):
+    def test_bounded_lip_gain_does_not_change_tool_capabilities(self):
+        original = adaptor()
+        expected = AvatarCapabilities.compile(original)
+        for value in (0, 1, 4, 16):
+            self.assertEqual(AvatarCapabilities.compile({**original, "lip_sensitivity": value}), expected)
+        for value in (-1, 16.1, float("nan"), float("inf"), True, "2", None):
+            with self.assertRaisesRegex(ValueError, "invalid_lip_sensitivity"):
+                AvatarCapabilities.compile({**original, "lip_sensitivity": value})
+
+
+class FramingConfigurationTests(unittest.TestCase):
+    def test_boolean_framing_does_not_change_tool_capabilities(self):
+        original = adaptor()
+        expected = AvatarCapabilities.compile(original)
+        for value in (True, False):
+            self.assertEqual(AvatarCapabilities.compile({**original, "show_full_model": value}), expected)
+        for value in (None, 0, 1, "false", []):
+            with self.assertRaisesRegex(ValueError, "invalid_show_full_model"):
+                AvatarCapabilities.compile({**original, "show_full_model": value})

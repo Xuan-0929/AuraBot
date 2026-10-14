@@ -5,6 +5,10 @@ physical playback acknowledgements, interruption fencing, tool deduplication and
 Realtime-only text-input restriction without loading local VAD, STT or TTS models.
 Diagnostic assertions use the real Hub recorder to check identities, bounded milestones,
 tool outcomes and interrupted-context repair without changing physical ACK semantics.
+Empty provider audio streams must report their own error without pretending an interruption
+occurred or committing unheard text; the event-worker path performs the same cleanup as live voice.
+Scripted context snapshots cover delayed assistant commits, serialized cancellation,
+readback mismatch and new generations racing repair while accepted tools remain durable.
 """
 
 import asyncio
@@ -32,6 +36,14 @@ class Adaptor:
         self.results = []
         self.updates = []
         self.closed = False
+        self.cancel_count = 0
+        self.retrieve_count = 0
+        self.replacements = []
+        self.items = [
+            {"id": "u1", "role": "user", "content": [{"type": "input_text", "text": "hello"}]},
+            *({"id": id, "role": "assistant", "content": [{"type": "input_text", "text": "unheard"}]}
+              for id in ("a1", "r1")),
+        ]
 
     async def start(self, **config):
         self.config = config
@@ -58,10 +70,20 @@ class Adaptor:
         self.updates.append(instructions)
 
     async def cancel_response(self):
-        pass
+        self.cancel_count += 1
+        self.events.put_nowait(VoiceEvent("cancel_ack"))
+
+    async def retrieve_items(self):
+        self.retrieve_count += 1
+        self.events.put_nowait(VoiceEvent("items_retrieved", items=tuple(dict(item) for item in self.items)))
 
     async def replace_assistant(self, item_id, text):
-        self.events.put_nowait(VoiceEvent("items_updated", event_id="repair-1", items=({"id": item_id},)))
+        self.replacements.append(item_id)
+        for item in self.items:
+            if item["id"] == item_id:
+                item["content"] = [{"type": "input_text", "text": text}]
+        # Real SeedDuplex ACKs may contain only type and event_id, without items.
+        self.events.put_nowait(VoiceEvent("items_updated", event_id="repair-1"))
         return "repair-1"
 
 
@@ -249,7 +271,7 @@ class RealtimeVoiceEngineTests(unittest.IsolatedAsyncioTestCase):
         await engine._tools_called(VoiceEvent("tools", response_id="r1", calls=(
             ToolCall("late", "web_search", {"query": "obsolete"}),)), engine._input_epoch)
         self.assertEqual(self.searches, [])
-        self.assertEqual(self.adaptor.results[-1]["late"], {"error": "reply_expired"})
+        self.assertEqual(self.adaptor.results, [])
 
     async def test_new_response_id_from_retired_question_cannot_restart_audio(self):
         engine = self.profile.speech
@@ -260,6 +282,8 @@ class RealtimeVoiceEngineTests(unittest.IsolatedAsyncioTestCase):
         self.assertNotIn("late-r2", engine._replies)
 
     async def test_no_item_identity_on_interrupt_ends_session_without_inventing_history(self):
+        self.adaptor.items = [item for item in self.adaptor.items if item["role"] == "user"]
+        self.profile.speech.REPAIR_TIMEOUT = .15
         self.adaptor.events.put_nowait(VoiceEvent("audio", response_id="r1", audio=bytes(640)))
         await self.wait_event("clause.offer")
         self.adaptor.events.put_nowait(VoiceEvent("input_started"))
@@ -270,6 +294,162 @@ class RealtimeVoiceEngineTests(unittest.IsolatedAsyncioTestCase):
                 await asyncio.sleep(0)
         self.assertFalse(self.context.has_unsettled_clauses())
         self.assertEqual(self.context.fold().conversation_turns, ())
+
+    async def wait_repaired(self):
+        async with asyncio.timeout(1):
+            while self.profile.speech._repair_count:
+                await asyncio.sleep(0)
+        self.assertFalse(self.profile.speech._repair_failed)
+        self.assertTrue(self.profile.speech._context_ready.is_set())
+
+    async def interrupt(self, *, audio_done=False):
+        engine = self.profile.speech
+        await engine._event(VoiceEvent("audio", response_id="r1", question_id="u1", audio=bytes(640)))
+        await self.wait_event("clause.offer")
+        if audio_done:
+            await engine._event(VoiceEvent("text_done", response_id="r1", text="unheard"))
+            await engine._event(VoiceEvent("audio_done", response_id="r1"))
+            await self.wait_event("clause.audio_end")
+        await engine._event(VoiceEvent("input_started", item_id="u2"))
+        await self.wait_event("clause.cancel")
+
+    async def test_missing_wire_item_id_is_resolved_and_next_turn_plays_in_same_session(self):
+        await self.interrupt(audio_done=True)
+        await self.wait_repaired()
+        self.assertFalse(self.adaptor.closed)
+        self.assertEqual(self.adaptor.replacements, ["r1"])
+        self.assertEqual(self.adaptor.cancel_count, 0)
+        self.assertEqual(self.adaptor.items[0]["content"][0]["text"], "hello")
+        engine = self.profile.speech
+        await engine._event(VoiceEvent("audio", response_id="r1", audio=bytes(640)))
+        self.assertIsNone(self.session.current_clause)
+        for event in (
+            VoiceEvent("transcript_done", item_id="u2", text="new question"),
+            VoiceEvent("audio", response_id="r2", question_id="u2", audio=bytes(640)),
+            VoiceEvent("text_done", response_id="r2", text="new reply"),
+            VoiceEvent("audio_done", response_id="r2"),
+        ):
+            await engine._event(event)
+        async with asyncio.timeout(1):
+            while not (self.session.current_clause or "").endswith(":r2") or not self.session.audio_finished:
+                await asyncio.sleep(0)
+        await self.hub.renderer_ack(self.session, self.session.current_clause, complete=True)
+        self.assertEqual([t["content"] for t in self.context.fold().conversation_turns], ["new question", "new reply"])
+
+    async def test_delayed_item_commit_and_repeated_interrupts_share_one_cancel(self):
+        original = self.adaptor.retrieve_items
+        first = True
+
+        async def delayed():
+            nonlocal first
+            if first:
+                first = False
+                self.adaptor.events.put_nowait(VoiceEvent("items_retrieved", items=()))
+            else:
+                await original()
+
+        self.adaptor.retrieve_items = delayed
+        await self.interrupt()
+        await self.profile.speech._event(VoiceEvent("input_started", item_id="u3"))
+        await self.wait_repaired()
+        self.assertEqual(self.adaptor.cancel_count, 1)
+        self.assertEqual(self.adaptor.retrieve_count, 2)
+        self.assertEqual(self.adaptor.replacements, ["r1"])
+
+    async def test_multiple_retired_replies_use_one_cancel_and_serial_updates(self):
+        engine = self.profile.speech
+        await engine._event(VoiceEvent("audio", response_id="r1", item_id="a1", audio=bytes(640)))
+        await engine._event(VoiceEvent("audio", response_id="r2", item_id="r1", audio=bytes(640)))
+        await self.wait_event("clause.offer")
+        await engine._event(VoiceEvent("input_started", item_id="u2"))
+        await self.wait_repaired()
+        self.assertEqual(self.adaptor.cancel_count, 1)
+        self.assertEqual(self.adaptor.replacements, ["a1", "r1"])
+        self.assertFalse(self.context.has_unsettled_clauses())
+
+    async def test_update_ack_without_matching_readback_fails_closed(self):
+        async def ack_only(item_id, text):
+            self.adaptor.events.put_nowait(VoiceEvent("items_updated", items=({"id": item_id},)))
+        self.adaptor.replace_assistant = ack_only
+        await self.interrupt()
+        error = await self.wait_event("session.error")
+        self.assertEqual(error["code"], "realtime_context_unconfirmed")
+        self.assertFalse(any(t["role"] == "assistant" for t in self.context.fold().conversation_turns))
+
+    async def test_user_item_with_response_id_is_never_overwritten(self):
+        self.profile.speech.REPAIR_TIMEOUT = .15
+        self.adaptor.items = [{"id": "r1", "role": "user"}]
+        await self.interrupt()
+        self.assertEqual((await self.wait_event("session.error"))["code"], "realtime_context_unconfirmed")
+        self.assertEqual(self.adaptor.replacements, [])
+
+    async def test_new_generation_during_repair_is_not_played_or_allowed_tools(self):
+        await self.interrupt()
+        self.adaptor.events.put_nowait(VoiceEvent("tools", response_id="r2", question_id="u2",
+            calls=(ToolCall("unsafe", "web_search", {"query": "unrepaired"}),)))
+        self.assertEqual((await self.wait_event("session.error"))["code"], "realtime_context_unconfirmed")
+        self.assertEqual(self.searches, [])
+        self.assertEqual(self.adaptor.results, [])
+
+    async def test_new_audio_during_repair_cannot_be_buffered_as_safe_continuation(self):
+        await self.interrupt()
+        self.adaptor.events.put_nowait(VoiceEvent("audio", response_id="r2", question_id="u2", audio=bytes(640)))
+        self.assertEqual((await self.wait_event("session.error"))["code"], "realtime_context_unconfirmed")
+        self.assertNotIn("r2", self.profile.speech._replies)
+
+    async def test_update_ack_for_another_item_cannot_confirm_repair(self):
+        self.profile.speech.REPAIR_TIMEOUT = .15
+        async def wrong_ack(item_id, text):
+            self.adaptor.events.put_nowait(VoiceEvent("items_updated", items=({"id": "unrelated"},)))
+        self.adaptor.replace_assistant = wrong_ack
+        await self.interrupt()
+        self.assertEqual((await self.wait_event("session.error"))["code"], "realtime_context_unconfirmed")
+        self.assertEqual(self.adaptor.retrieve_count, 1)
+
+    async def test_stop_during_repair_cancels_wait_without_session_error(self):
+        async def no_snapshot():
+            pass
+        self.adaptor.retrieve_items = no_snapshot
+        await self.interrupt()
+        await self.hub.command(self.session, {"type": "voice.stop", "command_id": "stop"})
+        self.assertTrue(self.adaptor.closed)
+        self.assertFalse(any(isinstance(e, dict) and e.get("type") == "session.error" for e in self.socket.sent))
+
+    async def test_missing_cancel_ack_does_not_block_verified_context_repair(self):
+        async def no_ack():
+            self.adaptor.cancel_count += 1
+        self.adaptor.cancel_response = no_ack
+        await self.interrupt()
+        await self.wait_repaired()
+        self.assertEqual(self.adaptor.cancel_count, 1)
+        self.assertEqual(self.adaptor.replacements, ["r1"])
+
+    async def test_provider_completed_generation_before_barge_in_needs_no_cancel(self):
+        await self.profile.speech._event(VoiceEvent("audio", response_id="r1", audio=bytes(640)))
+        await self.wait_event("clause.offer")
+        await self.profile.speech._event(VoiceEvent("response_done"))
+        await self.profile.speech._event(VoiceEvent("input_started", item_id="u2"))
+        await self.wait_repaired()
+        self.assertEqual(self.adaptor.cancel_count, 0)
+
+    async def test_accepted_tool_survives_interrupt_without_old_cloud_continuation(self):
+        started, release, completed = asyncio.Event(), asyncio.Event(), asyncio.Event()
+        self.addCleanup(release.set)
+        async def search(call):
+            started.set()
+            await release.wait()
+            completed.set()
+            return {"sources": []}
+        self.runtime.capabilities.executors["web_search"] = search
+        self.adaptor.events.put_nowait(VoiceEvent("tools", response_id="r1",
+            calls=(ToolCall("slow", "web_search", {"query": "slow"}),)))
+        await asyncio.wait_for(started.wait(), 1)
+        await self.interrupt()
+        await self.wait_repaired()
+        release.set()
+        await asyncio.wait_for(completed.wait(), 1)
+        await asyncio.sleep(.01)
+        self.assertEqual(self.adaptor.results, [])
 
     async def test_queued_audio_is_released_on_stop_and_no_history_is_committed(self):
         engine = self.profile.speech
@@ -300,14 +480,24 @@ class RealtimeVoiceEngineTests(unittest.IsolatedAsyncioTestCase):
         self.assertIn("remember my request", engine._instructions())
 
     async def test_text_only_response_end_does_not_leave_memory_blocked(self):
-        engine = self.profile.speech
-        await engine._event(VoiceEvent("text_done", response_id="r1", text="unheard"))
-        await engine._event(VoiceEvent("response_done", response_id="r1"))
-        await self.wait_event("session.error")
+        self.hub.debug.configure(True, "capture")
+        for event in (
+            VoiceEvent("text_done", response_id="r1", text="unheard"),
+            VoiceEvent("audio_started", response_id="r1"),
+            VoiceEvent("audio_done", response_id="r1"),
+            VoiceEvent("response_done"),
+        ):
+            self.adaptor.events.put_nowait(event)
+        error = await self.wait_event("session.error")
+        self.assertEqual(error["code"], "realtime_audio_missing")
         async with asyncio.timeout(1):
             while not self.adaptor.closed:
                 await asyncio.sleep(0)
         self.assertFalse(self.context.has_unsettled_clauses())
+        self.assertFalse(any(t["role"] == "assistant" for t in self.context.fold().conversation_turns))
+        names = [e["name"] for e in self.hub.debug.snapshot()["events"]]
+        self.assertIn("realtime.response.discarded", names)
+        self.assertNotIn("realtime.context.repairing", names)
 
     async def test_realtime_input_and_voice_stop_preserve_accepted_task_proposal(self):
         engine = self.profile.speech

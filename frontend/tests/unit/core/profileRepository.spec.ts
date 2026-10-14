@@ -1,4 +1,4 @@
-/** Exercises Profile file ownership, resource confinement and revision transactions using temporary data only. */
+/** Exercises Profile file ownership, resource confinement and revision transactions including Profile-local gaze and speech-mouth bounds and framing/applied snapshot isolation, using temporary data only. */
 import { afterEach, describe, expect, it } from 'vitest';
 import { mkdtempSync, mkdirSync, writeFileSync, rmSync, readFileSync, symlinkSync, truncateSync } from 'node:fs';
 import { tmpdir } from 'node:os';
@@ -112,4 +112,25 @@ it('accepts verified mixed resident pools and empty descriptions but rejects dup
  const saved=repo.save(id,{profile:imported.saved.profile,adaptor});expect(saved.saved.adaptor.states).toEqual(adaptor.states);expect(saved.saved.adaptor.entries.face!.description).toBe('');
  for(const pool of [['body','body'],['missing'],Array.from({length:9},()=> 'body')])expect(()=>repo.save(id,{profile:saved.saved.profile,adaptor:{...adaptor,states:{...adaptor.states,idle:pool}}})).toThrow();
  adaptor.entries.body!.playback.mode='once';expect(()=>repo.save(id,{profile:saved.saved.profile,adaptor})).toThrow('invalid_adaptor');
+});
+
+it('persists bounded gaze per Profile without changing the applied snapshot',async()=>{
+ const repo=await repository(),a=repo.create('A'),b=repo.create('B');repo.markApplied(a.saved.profile.id,1);
+ const saved=repo.save(a.saved.profile.id,{profile:a.saved.profile,adaptor:{...a.saved.adaptor,gaze_sensitivity:16}});
+ expect(repo.get(a.saved.profile.id).saved.adaptor.gaze_sensitivity).toBe(16);expect(saved.applied?.adaptor.gaze_sensitivity).toBeUndefined();expect(repo.get(b.saved.profile.id).saved.adaptor.gaze_sensitivity).toBeUndefined();
+ for(const value of [-1,16.1,NaN,Infinity])expect(()=>repo.save(a.saved.profile.id,{profile:a.saved.profile,adaptor:{...saved.saved.adaptor,gaze_sensitivity:value}})).toThrow();
+});
+
+it('persists bounded speech-mouth gain with Profile and applied isolation',async()=>{
+ const repo=await repository(),a=repo.create('A'),b=repo.create('B');repo.markApplied(a.saved.profile.id,1);
+ const saved=repo.save(a.saved.profile.id,{profile:a.saved.profile,adaptor:{...a.saved.adaptor,lip_sensitivity:16}});
+ expect(repo.get(a.saved.profile.id).saved.adaptor.lip_sensitivity).toBe(16);expect(saved.applied?.adaptor.lip_sensitivity).toBeUndefined();expect(repo.get(b.saved.profile.id).saved.adaptor.lip_sensitivity).toBeUndefined();
+ for(const value of [-1,16.1,NaN,Infinity])expect(()=>repo.save(a.saved.profile.id,{profile:a.saved.profile,adaptor:{...saved.saved.adaptor,lip_sensitivity:value}})).toThrow();
+});
+
+it('persists full-model framing independently of applied and other Profiles',async()=>{
+ const repo=await repository(),a=repo.create('A'),b=repo.create('B');repo.markApplied(a.saved.profile.id,1);
+ const saved=repo.save(a.saved.profile.id,{profile:a.saved.profile,adaptor:{...a.saved.adaptor,show_full_model:false}});
+ expect(repo.get(a.saved.profile.id).saved.adaptor.show_full_model).toBe(false);expect(saved.applied?.adaptor.show_full_model).toBeUndefined();expect(repo.get(b.saved.profile.id).saved.adaptor.show_full_model).toBeUndefined();
+ for(const value of [null,0,1,'false'])expect(()=>repo.save(a.saved.profile.id,{profile:a.saved.profile,adaptor:{...saved.saved.adaptor,show_full_model:value as any}})).toThrow();
 });

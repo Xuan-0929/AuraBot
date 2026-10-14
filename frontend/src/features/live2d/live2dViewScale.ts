@@ -1,4 +1,5 @@
 /** Computes avatar placement zoom and persists renderer view transforms per stable Profile ID.
+ * Focused zoom uses the same full-model/portrait framing as placement.
  * Existing default-profile layout is read once as a legacy fallback; other Profiles never inherit it.
  */
 import {
@@ -24,7 +25,8 @@ export function calculateFocusedLive2DViewTransform({
   compact,
   current,
   focalPoint,
-  wheelDeltaY
+  wheelDeltaY,
+  showFullModel = true
 }: {
   hostSize: Live2DSize;
   modelSize: Live2DSize;
@@ -32,6 +34,7 @@ export function calculateFocusedLive2DViewTransform({
   current: Live2DViewTransform;
   focalPoint: { x: number; y: number };
   wheelDeltaY: number;
+  showFullModel?: boolean;
 }): Live2DViewTransform {
   const normalizedCurrent = normalizeLive2DViewTransform(current);
   const nextScale = calculateNextLive2DViewScale(normalizedCurrent.scale, wheelDeltaY);
@@ -39,12 +42,14 @@ export function calculateFocusedLive2DViewTransform({
     hostSize,
     modelSize,
     compact,
+    showFullModel,
     viewTransform: normalizedCurrent
   });
   const nextBasePlacement = calculateLive2DPlacement({
     hostSize,
     modelSize,
     compact,
+    showFullModel,
     viewTransform: { scale: nextScale, offset: { x: 0, y: 0 } }
   });
   const modelPoint = {

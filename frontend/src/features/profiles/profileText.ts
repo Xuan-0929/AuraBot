@@ -1,7 +1,13 @@
 /** Supplies complete Chinese, English and Japanese text for the Profile workflow.
- * i18n.ts merges these keys into the shared t() interface; user-authored SOUL and labels are never translated. */
+ * Includes model framing, preview gaze and speech-mouth controls; i18n.ts merges these keys into the shared t() interface; user-authored SOUL and labels are never translated. */
 export const PROFILE_TEXT = {
   "zh": {
+    "pShowFullModel": "显示完整模型",
+    "pShowFullModelHelp": "取消勾选后采用上半身取景，允许模型超出显示框。保存并应用后影响桌宠。",
+    "pLipSensitivity": "说话口型灵敏度",
+    "pLipHelp": "仅调整语音驱动的嘴部开合，不改变音量。0 为关闭，1 为默认；保存并应用后在说话时生效。",
+    "pGazeSensitivity": "查看方向灵敏度",
+    "pGazeHelp": "移动鼠标到预览区域查看效果。0 为关闭，1 为默认；保存并应用后影响桌宠。",
     "pVoice": "实时语音",
     "pWorkspaces": "工作目录",
     "pTitle": "角色配置",
@@ -113,6 +119,12 @@ export const PROFILE_TEXT = {
     "pInvalidConfig": "动作设置无效，请检查名称、用途和高级设置。"
   },
   "en": {
+    "pShowFullModel": "Show full model",
+    "pShowFullModelHelp": "Uncheck for an upper-body view that allows cropping. Save and apply to update the pet.",
+    "pLipSensitivity": "Speech mouth sensitivity",
+    "pLipHelp": "Adjusts speech-driven mouth opening, not audio volume. 0 disables it; 1 is the default. Save and apply to use it during speech.",
+    "pGazeSensitivity": "Gaze sensitivity",
+    "pGazeHelp": "Move the pointer over the preview to try it. 0 disables tracking; 1 is the default. Save and apply to update the pet.",
     "pVoice": "Realtime voice",
     "pWorkspaces": "Workspaces",
     "pTitle": "Characters",
@@ -224,6 +236,12 @@ export const PROFILE_TEXT = {
     "pInvalidConfig": "Invalid action configuration. Check names, uses and advanced settings."
   },
   "ja": {
+    "pShowFullModel": "モデル全体を表示",
+    "pShowFullModelHelp": "オフにすると上半身を中心に表示し、枠外の部分を切り取ります。保存して適用するとペットに反映されます。",
+    "pLipSensitivity": "発話時の口の感度",
+    "pLipHelp": "音量は変えず、音声による口の開き具合を調整します。0 は無効、1 は標準です。保存して適用すると発話時に反映されます。",
+    "pGazeSensitivity": "視線の感度",
+    "pGazeHelp": "プレビュー上でマウスを動かして確認できます。0 は無効、1 は標準です。保存して適用するとペットに反映されます。",
     "pVoice": "リアルタイム音声",
     "pWorkspaces": "作業フォルダー",
     "pTitle": "キャラクター設定",
