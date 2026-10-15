@@ -5,8 +5,8 @@
      Voice ownership is reported through Main so Realtime can disable text input across windows. -->
 <!-- Gates token and microphone access on the active Profile snapshot; Main reconnect commands complete activation. -->
 <!--
-  桌宠窗口：组合 Live2D 舞台、唯一的 Main Agent 文字／语音连接、已交付消息气泡与窗口控制。
-  语音 clause 经 AudioWorklet 确认播放完成后，由 Electron 持久化再显示并 ACK；文字无需麦克风。
+  桌宠窗口：组合 Live2D 舞台、唯一的 Main Agent 文字／语音连接与窗口控制，不显示对话文字气泡。
+  语音 clause 经 AudioWorklet 确认播放完成后，由 Electron 持久化到对话记录并 ACK；文字无需麦克风。
   控件根据已有全局光标事件显隐，以真实麦克风状态提供持续标记；透明窗口命中与捕获由 useClickThrough 协调。
   可选调试采集订阅 Main 状态并将客户端标量事件转发 IPC；订阅先于初始读取以防竞态，卸载时释放。
   Task 业务归 Backend；Live2D 表演由实例播放器消费实际交付事件，窗口交互委托给 preload IPC。
@@ -25,10 +25,6 @@
     @pointerleave="handlePointerLeave"
     @wheel="handleWheel"
   >
-    <aside v-if="mainAgentClauseText || petStore.petActivity" class="pet-message-bubble" :aria-label="t(petStore.displayLanguage, 'petMessage')">
-      {{ mainAgentClauseText ?? petStore.petActivity?.message }}
-    </aside>
-
     <p v-if="visualError" class="pet-voice-error" role="status">{{ t(petStore.displayLanguage, 'visualUnavailable') }}：{{ visualError }}</p>
     <p v-if="voiceError" class="pet-voice-error" role="alert">{{ voiceError }}</p>
     <div class="desktop-pet-model-shell pet-vue-model-shell" data-testid="live2d-model-surface">
@@ -121,7 +117,6 @@ const isControlsFocused = ref(false);
 const isControlDragging = ref(false);
 const isVoiceConnecting = ref(false);
 const profileReady=computed(()=>Boolean(petStore.profileRuntime?.online&&!petStore.profileRuntime.activating&&petStore.profileRuntime.activeId===petStore.profile?.id&&petStore.profileRuntime.revision));
-const mainAgentClauseText = ref<string | null>(null);
 const voiceEnabled=ref(false);
 const voiceError=ref("");
 const microphoneError = ref(false);
@@ -152,11 +147,7 @@ const mainAgentRealtime = new MainAgentRealtimeClient({
   },
   onMessage: async(entry)=>{await window.aurabot.recordDelivery(entry);},
   onAgentState:state=>{void window.aurabot.reportRealtimeState(state);},
-  onVoiceState:active=>{void window.aurabot.reportRealtimeState(petStore.agentStatus,active);},
-  onClause: (text) => {
-    mainAgentClauseText.value = text;
-    if(text)setTimeout(()=>{if(mainAgentClauseText.value===text)mainAgentClauseText.value=null;},7000);
-  }
+  onVoiceState:active=>{void window.aurabot.reportRealtimeState(petStore.agentStatus,active);}
 });
 
 let debugDisposed=false;
@@ -247,7 +238,7 @@ function syncAgentState(){
   void scene.value?.setState(target);
 }
 watch(()=>petStore.agentStatus,syncAgentState);
-watch(()=>petStore.profile?.id,id=>{live2dViewTransform.value=readStoredLive2DViewTransform(window.localStorage,id);mainAgentClauseText.value=null;});
+watch(()=>petStore.profile?.id,id=>{live2dViewTransform.value=readStoredLive2DViewTransform(window.localStorage,id);});
 
 async function handleVoiceToggle() {
   const profile=petStore.profile;if(!profile)return;

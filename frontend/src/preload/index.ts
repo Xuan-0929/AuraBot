@@ -1,5 +1,6 @@
-/** Bridges resource preparation and live diagnostics through typed IPC; Main owns paths, capture
- * permission fixed at launch and bounded logging. Pet is the sole permitted source of renderer diagnostic facts. */
+/** Bridges resource preparation and live diagnostics through typed IPC; Main owns paths,
+ * launch-time capture permission and bounded logging. Pet alone reports renderer diagnostic facts.
+ * History display actions and notifications synchronize windows without deleting stored messages. */
 /** Exposes only typed desktop IPC; Pet delivery and command methods are checked by Main against its webContents.
  * Realtime status carries optional microphone ownership for global text-input gating.
  * Voice documentation forwards fixed identities to Main, never arbitrary external URLs.
@@ -37,6 +38,8 @@ const api:AuraBotApi={
  getSettings:()=>ipcRenderer.invoke(IPC_CHANNELS.getSettings),
  saveSettings:(config, clearSecrets)=>ipcRenderer.invoke(IPC_CHANNELS.saveSettings, config, clearSecrets),
  applySettings:(force)=>ipcRenderer.invoke(IPC_CHANNELS.applySettings, force),
+ clearHistoryDisplay:profileId=>ipcRenderer.invoke(IPC_CHANNELS.clearHistoryDisplay,profileId),
+ onHistoryDisplayCleared:listener=>subscribe(IPC_CHANNELS.historyDisplayCleared,listener),
  getHistory:(before,profileId)=>ipcRenderer.invoke(IPC_CHANNELS.getHistory, before,profileId),
  recordDelivery:(entry)=>ipcRenderer.invoke(IPC_CHANNELS.recordDelivery, entry),
  sendChatMessage:(input)=>ipcRenderer.invoke(IPC_CHANNELS.sendChatMessage, input),

@@ -1,4 +1,5 @@
 /**
+ * 同时验证显示清除快照和历史分页竞态，旧请求不能覆盖清除后的显示。
  * 验证 Renderer store 的普通聊天、附件与非 Task 事件订阅。
  *
  * 测试不构造 Task DTO，确认 optimistic user message 会被服务端消息替换且 preload
@@ -125,12 +126,20 @@ it('keeps reconnect waiting when a Profile event supersedes its in-flight snapsh
  expect(store.profileRuntime?.online).toBe(true);
  expect(store.profileRuntime?.activating).toBe(false);
 });
-it('does not install an old Profile history page when initialization finishes after switching',async()=>{
- setActivePinia(createPinia());let history!:(value:unknown)=>void;
- vi.stubGlobal('window',{aurabot:{getInitialState:async()=>({profile:{id:'a'}}),getHistory:()=>new Promise(resolve=>history=resolve)}});
- const store=useAuraBotStore();const initializing=store.initialize();await vi.waitFor(()=>expect(history).toBeDefined());
- store.profile={id:'b',displayName:'B',active:true,createdAt:'now',updatedAt:'now'};
- history({messages:[message('a','assistant','A private')]});await initializing;expect(store.messages).toEqual([]);
+it('initializes from the filtered snapshot without fetching unfiltered history',async()=>{
+ setActivePinia(createPinia());const getHistory=vi.fn();
+ vi.stubGlobal('window',{aurabot:{getInitialState:async()=>({profile:{id:'a'},messages:[],historyCursor:65}),getHistory}});
+ const store=useAuraBotStore();await store.initialize();
+ expect(store.messages).toEqual([]);expect(store.historyCursor).toBe(65);expect(getHistory).not.toHaveBeenCalled();
+});
+it('discards older history fetched before a clear or profile refresh and prevents overlapping pagination',async()=>{
+ setActivePinia(createPinia());let resolve!:(value:unknown)=>void;
+ const getHistory=vi.fn(()=>new Promise(done=>resolve=done));
+ vi.stubGlobal('window',{aurabot:{getHistory,getInitialState:async()=>({profile:{id:'a'},messages:[],historyCursor:90})}});
+ const store=useAuraBotStore();await store.loadInitialState();
+ const loading=store.loadOlderHistory();await store.loadOlderHistory();expect(getHistory).toHaveBeenCalledOnce();
+ await store.loadInitialState();resolve({messages:[message('old','user','old')],nextCursor:10});await loading;
+ expect(store.messages).toEqual([]);expect(store.historyCursor).toBe(90);expect(store.historyLoading).toBe(false);
 });
 
 it('updates history rows and pagination cursor together on Profile and generation snapshots',async()=>{
@@ -138,4 +147,21 @@ it('updates history rows and pagination cursor together on Profile and generatio
  vi.stubGlobal('window',{aurabot:{getInitialState:async()=>({profile,messages:[message('latest','user','visible')],historyCursor:cursor})}});
  const store=useAuraBotStore();store.historyCursor=10;await store.loadInitialState();expect(store.historyCursor).toBe(80);
  cursor=undefined;await store.loadInitialState();expect(store.historyCursor).toBeUndefined();
+});
+
+it('refreshes filtered history on display-cleared events from another window',async()=>{
+ setActivePinia(createPinia());let cleared!:(profileId:string)=>void;
+ const subscribe=()=>()=>{};
+ const getInitialState=vi.fn(async()=>({profile:{id:'a'},messages:[],historyCursor:80}));
+ vi.stubGlobal('window',{aurabot:{getInitialState,onHistoryDisplayCleared:(listener:typeof cleared)=>{cleared=listener;return subscribe();},onRealtimeError:subscribe,onPetSettingsChanged:subscribe,onPetActivity:subscribe,onLive2DModelStateChanged:subscribe,onPetCursorPosition:subscribe,onAgentStatusChanged:subscribe,onChatMessageUpdated:subscribe}});
+ const store=useAuraBotStore();await store.loadInitialState();store.messages=[message('old','user','old')];
+ const stop=store.subscribeToPetEvents();cleared('other');expect(getInitialState).toHaveBeenCalledOnce();
+ cleared('a');await vi.waitFor(()=>expect(store.messages).toEqual([]));expect(store.historyCursor).toBe(80);stop();
+});
+it('does not resurrect a cleared message when its pending send acknowledgement arrives',async()=>{
+ setActivePinia(createPinia());let acknowledge!:(value:SendChatMessageResult)=>void;
+ vi.stubGlobal('window',{aurabot:{getInitialState:async()=>({profile:{id:'profile-1'},messages:[],historyCursor:80}),sendChatMessage:()=>new Promise(resolve=>acknowledge=resolve)}});
+ const store=useAuraBotStore();await store.loadInitialState();const sending=store.sendMessage('hello');
+ await store.loadInitialState();acknowledge({userMessage:message('accepted','user','hello'),agentStatus:'idle'});await sending;
+ expect(store.messages).toEqual([]);
 });

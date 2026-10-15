@@ -1,4 +1,5 @@
 /** Exercises settings draft/apply IPC and compact advanced controls through the real Vue form.
+ * History display clearing invokes its own immediate IPC without saving or discarding settings drafts.
  * Controlled desktop configuration fixtures verify save safety, native invalid-field revelation,
  * recoverable server errors, and masked-key preservation/replacement/deletion through the real save
  * store, separate workspace and pet status navigation with actionable runtime reminders and localized status labels and native search-provider dropdown selection, including length-matched first/last-four previews and launch-gated debug actions that preserve unrelated drafts, without starting Electron or a backend.
@@ -14,6 +15,7 @@ import { join } from 'node:path';
 import SettingsWindow from '../../../src/features/settings/SettingsWindow.vue';
 import { DesktopConfigStore } from '../../../src/main/desktopConfigStore';
 import { t } from '../../../src/i18n';
+import {useAuraBotStore} from '../../../src/app/store';
 let dispose:()=>void=()=>{};
 afterEach(()=>{dispose();vi.unstubAllGlobals();});
 it('preserves untouched keys and lets password inputs replace or delete every saved key',async()=>{
@@ -106,4 +108,20 @@ it.each([false,true])('shows debug actions only for a debug launch (%s), without
  expect(host.querySelector('input')!.value).toBe('https://draft.example/v1');
  expect(host.querySelector<HTMLButtonElement>('button[type=submit]')!.disabled).toBe(false);
  expect(saveSettings).not.toHaveBeenCalled();
+});
+
+it('clears only the current profile history display immediately while keeping settings drafts',async()=>{
+ const root=mkdtempSync(join(tmpdir(),'aura-history-setting-'));const config=new DesktopConfigStore(root);
+ const clearHistoryDisplay=vi.fn(async()=>{}),saveSettings=vi.fn();
+ Object.assign(window,{aurabot:{getSettings:async()=>config.status(),onSettingsChanged:()=>()=>{},clearHistoryDisplay,saveSettings}});
+ const host=document.createElement('div');document.body.append(host);const app=createApp(SettingsWindow),pinia=createPinia();app.use(pinia);
+ useAuraBotStore(pinia).profile={id:'current',displayName:'Current',active:true,createdAt:'now',updatedAt:'now'};
+ app.mount(host);dispose=()=>{app.unmount();host.remove();rmSync(root,{recursive:true,force:true});};
+ await vi.waitFor(()=>expect(host.querySelector('input')).not.toBeNull());
+ const address=host.querySelector('input')!;address.value='https://draft.example/v1';address.dispatchEvent(new Event('input',{bubbles:true}));await nextTick();
+ const navigation=host.querySelectorAll<HTMLButtonElement>('nav button');navigation[1]!.click();await nextTick();
+ [...host.querySelectorAll('button')].find(button=>button.textContent==='清除历史会话记录显示')!.click();
+ await vi.waitFor(()=>expect(clearHistoryDisplay).toHaveBeenCalledExactlyOnceWith('current'));
+ await vi.waitFor(()=>expect(host.textContent).toContain('原始记录仍保留'));expect(saveSettings).not.toHaveBeenCalled();
+ navigation[0]!.click();await nextTick();expect(host.querySelector('input')!.value).toBe('https://draft.example/v1');
 });

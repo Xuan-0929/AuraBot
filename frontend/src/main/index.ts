@@ -4,6 +4,7 @@
  * Profile activation sends frozen conversation settings; IPC redacts every saved/applied voice secret.
  * Main owns sequential speech downloads and profile readiness; migrates configuration, serves owned model packages, serializes selection/application and
  * opens only a repository-owned Profile SOUL path through shell; fences history receipts by their original Profile/generation. Pet alone owns realtime media;
+ * History display cutoffs persist independently; explicit clears and Profile switches hide existing rows.
  * Backend exclusively owns Context, Memory, task state and the active business lifecycle.
  * Authenticated Pet voice-state reports gate typed sends in all windows while Realtime is active.
  * Voice documentation requests resolve only allowlisted official URLs and open in the system browser. */
@@ -95,7 +96,7 @@ async function bootstrap(){
    if(!BrowserWindow.fromWebContents(event.sender)||event.senderFrame!==event.sender.mainFrame)throw new Error('未知窗口');
    return listener(event,...args);
  });
- handle(C.getInitialState,()=>{const profile=(applied??profileStore.get(runtime.selectedId).saved).profile;const page=history!.list(profile.id);return {profile,profileRuntime:runtime,mainSessionId:`main:${profile.id}`,messages:page.messages,historyCursor:page.nextCursor,agentStatus:agentState,chatError:realtimeError,petSettings:config.current().desktop.pet,live2dModelState:modelState()};});
+ handle(C.getInitialState,()=>{const profile=(applied??profileStore.get(runtime.selectedId).saved).profile;const page=history!.visible(profile.id);return {profile,profileRuntime:runtime,mainSessionId:`main:${profile.id}`,messages:page.messages,historyCursor:page.nextCursor,agentStatus:agentState,chatError:realtimeError,petSettings:config.current().desktop.pet,live2dModelState:modelState()};});
  handle(C.openConsoleWindow,()=>{openConsoleWindow();});
  handle(C.openSettingsWindow,()=>{openSettingsWindow();});
  handle(C.getSettings,()=>config.status());
@@ -133,6 +134,7 @@ async function bootstrap(){
    if(!result.busy){applyPetSettings(config.current().desktop.pet);if(previous.backendPending||!previous.online||!runtime.online||!runtime.activeId)await activate(runtime.selectedId,true,false,true);}
    return result;
  });
+ handle(C.clearHistoryDisplay,(_event,profileId)=>{if(profileId!==runtime.selectedId)throw new Error('历史 Profile 已切换');history!.clearDisplay(profileId);broadcast(C.historyDisplayCleared,profileId);});
  handle(C.getHistory,(_event,before,profileId)=>{if(profileId!==undefined&&profileId!==runtime.selectedId)throw new Error('历史 Profile 已切换');return history!.list(runtime.selectedId,before);});
  handle(C.recordDelivery,(event,entry:HistoryEntry)=>{
    assertPet(event);if(!runtime.online||entry.profileId!==runtime.activeId||entry.generation!==runtime.generation)throw new Error('已撤销的 Profile 交付');const saved=history!.record(entry.profileId,entry);broadcastChatMessageUpdated(saved);
@@ -176,14 +178,14 @@ async function bootstrap(){
    if(!force&&runtime.online&&agentState!=='idle')return {runtime,busy:true};
    switching=true;const beforeRuntime={...runtime};let revoked=false;
    try {
-     if(!config.online){profileStore.select(id);applied=detail.applied;runtime={activating:false,selectedId:id,activeId:null,revision:applied?.revision??null,generation:runtime.generation+1,online:false,error:'已选中；Backend 离线，配置尚未激活'};broadcastLive2DModelState(modelState());profilesChanged();return {runtime};}
+     if(!config.online){profileStore.select(id);if(id!==beforeRuntime.selectedId)history!.clearDisplay(id);applied=detail.applied;runtime={activating:false,selectedId:id,activeId:null,revision:applied?.revision??null,generation:runtime.generation+1,online:false,error:'已选中；Backend 离线，配置尚未激活'};broadcastLive2DModelState(modelState());profilesChanged();return {runtime};}
      if(!force){const check=await backendJson('/api/v1/main-agent/profile/activation-check');if(check.busy)return {runtime,busy:true};}
      runtime={...runtime,activating:true};profilesChanged();
      await petRequest('disconnect');revoked=true;
      runtime={...runtime,activeId:null,online:false,generation:runtime.generation+1};
      profilesChanged();tasks?.stop();
      const result=await backendJson('/api/v1/main-agent/profile/activate',{method:'POST',body:JSON.stringify({profile_id:id,revision:target.revision,soul:target.soulText,display_name:target.profile.displayName,adaptor:target.adaptor,model_version:target.modelVersion,voice:target.voice,force}),signal:AbortSignal.timeout(40000)});
-     profileStore.select(id);applied=target;
+     profileStore.select(id);if(id!==beforeRuntime.selectedId)history!.clearDisplay(id);applied=target;
      if(result.capabilities)config.capabilities={...config.capabilities!,...result.capabilities};
      broadcast(C.settingsChanged,config.status());
      runtime={activating:false,selectedId:id,activeId:id,revision:target.revision,generation:result.generation,online:result.runtime_active===true,visualStatus:result.visual_status,capabilityNames:result.capability_names};

@@ -1,6 +1,7 @@
 /** Owns Profile configuration files and model packages inside the configured shared profiles root.
  * Validates and persists bounded Profile-local gaze and speech-mouth settings and framing preference alongside the adaptor.
  * Profile-local voice settings commit with identity and revision; renderer details redact all saved/applied secrets.
+ * New identities receive a concise named SOUL template; legacy personas retain their existing text.
  * SOUL.md is the only editable persona; fingerprints detect external changes.
  * A replayable journal commits SOUL/adaptor/identity together; immutable applied snapshots isolate
  * running conversations from edits. Legacy SQLite is backed up consistently before import. Context,
@@ -160,7 +161,7 @@ export class ProfileRepository {
   get(id:string):ProfileDetail{const saved=this.read(id);let resources:AvatarResource[]=[];if(saved.modelVersion){try{resources=this.discover(id);}catch{/* Missing visuals never prevent Soul editing. */}}
     return {saved,applied:this.applied(id),selected:id===this.selectedId(),memory:{directory:join(this.directory(id),'memory'),initialized:existsSync(join(this.directory(id),'memory/memory.sqlite3'))||existsSync(join(this.directory(id),'memory.sqlite3'))},resources};}
   list():ProfileSummary[]{return this.ids().map(id=>{const detail=this.get(id);let invalid=false;try{this.validate(detail.saved.adaptor,detail.saved);}catch{invalid=true;}return {id,displayName:detail.saved.profile.displayName,selected:detail.selected,revision:detail.saved.revision,appliedRevision:detail.applied?.revision??null,modelName:detail.saved.adaptor.model?basename(detail.saved.adaptor.model.manifest):null,visualStatus:!detail.saved.modelVersion?'unconfigured':invalid?'invalid':detail.applied?.revision===detail.saved.revision?'ready':'pending'};});}
-  create(name:string,language='zh'):ProfileDetail{if(typeof name!=='string'||!name.trim()||name.length>128)throw new Error('invalid_name');const seed=createDefaultProfile();const id='profile_'+randomUUID().replaceAll('-','');const profile={...seed.profile,id,displayName:name.trim(),active:false};this.write(this.canonical({profile,soulText:defaultSoulMarkdown(language),revision:1,adaptor:emptyAvatarAdaptor(),modelVersion:''}));return this.get(id);}
+  create(name:string,language='zh'):ProfileDetail{if(typeof name!=='string'||!name.trim()||name.length>128)throw new Error('invalid_name');const seed=createDefaultProfile();const id='profile_'+randomUUID().replaceAll('-','');const profile={...seed.profile,id,displayName:name.trim(),active:false};this.write(this.canonical({profile,soulText:defaultSoulMarkdown(language,profile.displayName),revision:1,adaptor:emptyAvatarAdaptor(),modelVersion:''}));return this.get(id);}
   save(id:string,input:ProfileSaveInput):ProfileDetail{
     const previous=this.read(id);const {soul:ignored,...profile}=profileSchema.parse(input.profile);
     profile.displayName=profile.displayName.trim();if(!profile.displayName||profile.displayName.length>128)throw new Error('invalid_name');if(profile.id!==id)throw new Error('invalid_profile_id');

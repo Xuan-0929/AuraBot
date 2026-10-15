@@ -1,4 +1,5 @@
-/** Exercises canonical SOUL files and optimistic saves through the repository using only temporary roots. */
+/** Exercises canonical SOUL files and optimistic saves through the repository using only temporary roots.
+ * New profiles use three concise persona fields and their chosen display name without legacy proactive controls. */
 import {afterEach,expect,it} from 'vitest';
 import {mkdtempSync,readFileSync,writeFileSync,rmSync} from 'node:fs';
 import {tmpdir} from 'node:os';
@@ -38,4 +39,12 @@ it('migrates saved and applied legacy files independently, preserves an existing
  expect(migrated.saved.soulText).toBe('external document wins\n');expect(migrated.applied?.soulText).toContain('applied private');
  expect(readFileSync(join(dir,'.soul-v1-backup/soul.json'),'utf8')).toContain('all fields retained');
  await repo.initialize();expect(repo.get(id).saved.revision).toBe(migrated.saved.revision);
+});
+
+it('creates a short named persona with only origin and attitude alongside the name',async()=>{
+ const repo=await setup();const soul=repo.create('深蓝').saved.soulText;
+ expect(soul.match(/^## /gm)).toHaveLength(3);
+ expect(soul).toContain('## 称呼\n深蓝');expect(soul).toContain('## 来历');
+ expect(soul).toContain('深海的休眠仓');expect(soul).toContain('## 对用户的态度');
+ expect(soul).not.toContain('主动程度');expect(soul.length).toBeLessThan(200);
 });

@@ -1,4 +1,5 @@
-/** Checks saved/applied configuration separation, secret redaction and durable delivered history. */
+/** Checks saved/applied configuration separation, secret redaction and durable delivered history.
+ * History display cutoffs persist per Profile while pagination retains all original messages. */
 import { mkdtempSync, readFileSync, rmSync, statSync } from 'node:fs';
 import { tmpdir } from 'node:os';
 import { join } from 'node:path';
@@ -38,5 +39,29 @@ it('deduplicates delivered records, scopes profiles and paginates after reopen',
   expect(history.list('p', page.nextCursor,2).messages.map(m=>m.content)).toEqual(['said 0','said 1']);
   history.close(); history = new ConversationHistory(root);
   expect(history.list('p').messages).toHaveLength(4);
+  history.close();
+});
+
+it('persists per-profile display clearing without removing history or hiding new messages', () => {
+  const root=directory();let history=new ConversationHistory(root);
+  for(let n=0;n<65;n++)history.record('p',{id:`old-${n}`,role:'user',content:`old ${n}`});
+  history.record('q',{id:'other',role:'assistant',content:'other profile'});
+  history.clearDisplay('p');
+  expect(history.visible('p').messages).toEqual([]);
+  const cursor=history.visible('p').nextCursor;
+  expect(cursor).toBeDefined();
+  const older=history.list('p',cursor);
+  expect(older.messages).toHaveLength(50);
+  expect(history.list('p',older.nextCursor).messages).toHaveLength(15);
+  expect(history.visible('q').messages).toHaveLength(1);
+  history.close();history=new ConversationHistory(root);
+  expect(history.visible('p').messages).toEqual([]);
+  history.record('p',{id:'new',role:'assistant',content:'new reply'});
+  const visible=history.visible('p');
+  expect(visible.messages.map(m=>m.id)).toEqual(['new']);
+  expect(history.list('p',visible.nextCursor).messages.map(m=>m.id)).not.toContain('new');
+  history.clearDisplay('empty');expect(history.visible('empty')).toEqual({messages:[],nextCursor:undefined});
+  history.record('empty',{id:'first',role:'user',content:'first'});
+  expect(history.visible('empty').messages).toHaveLength(1);
   history.close();
 });

@@ -1,4 +1,5 @@
 <!-- Owns global Task/search, desktop and workspace settings with explicit save/apply.
+     History display clearing calls Main immediately and preserves stored conversations and Backend memory.
      Profile editing owns conversation models and voice; navigation preserves its dirty drafts.
      Main validates settings and masked secrets, while busy restart confirmation fences live work. -->
 <template>
@@ -44,6 +45,12 @@
                 <label class="settings-page-field"><span>{{ t(displayLanguage, 'displayLanguage') }}</span><select v-model="draft.desktop.pet.displayLanguage"><option value="zh">中文</option><option value="en">English</option><option value="ja">日本語</option></select></label>
                 <label class="settings-page-toggle"><input v-model="draft.desktop.pet.clickThroughPet" type="checkbox" /> {{ t(displayLanguage, 'clickThroughPet') }}</label>
 
+                <section>
+                  <h3>{{ t(displayLanguage, 'conversationHistory') }}</h3>
+                  <p class="settings-hint">{{ t(displayLanguage, 'clearHistoryDisplayHint') }}</p>
+                  <button type="button" :disabled="clearingHistory || !store.profile" @click="clearHistoryDisplay">{{ t(displayLanguage, 'clearHistoryDisplay') }}</button>
+                  <p v-if="historyCleared" role="status" class="settings-hint">{{ t(displayLanguage, 'historyDisplayCleared') }}</p>
+                </section>
                 <section v-if="state.launchOptions?.debug" data-debug-settings>
                   <h3>{{ debugText(displayLanguage, 'launchMode') }}</h3>
                   <p class="settings-hint">{{ debugText(displayLanguage, 'hint') }}</p>
@@ -112,6 +119,14 @@ const pageContainer=ref<HTMLElement>();
 const profilesPage=ref<InstanceType<typeof ProfilesPage>>();
 async function changePage(target:string){if(page.value==='profiles'&&target!=='profiles'&&!await profilesPage.value?.canLeave())return;page.value=target;await nextTick();if(pageContainer.value)pageContainer.value.scrollTop=0;}
 const page=ref('model');const state=ref<SettingsState>();const draft=ref<DesktopConfig>();const baseline=ref('');const clearSecrets=ref<string[]>([]);
+const clearingHistory=ref(false);const historyCleared=ref(false);
+watch(()=>store.profile?.id,()=>{historyCleared.value=false;});
+async function clearHistoryDisplay(){
+ if(!store.profile)return;clearingHistory.value=true;historyCleared.value=false;
+ try{await window.aurabot.clearHistoryDisplay(store.profile.id);historyCleared.value=true;}
+ catch(e){error.value=String(e);}
+ finally{clearingHistory.value=false;}
+}
 const working=ref(false);const error=ref('');const busy=ref<BusyState>();const cancelButton=ref<HTMLButtonElement>();
 const dirty=computed(()=>JSON.stringify(draft.value)!==baseline.value||clearSecrets.value.length>0);
 const displayLanguage=computed(()=>draft.value?.desktop.pet.displayLanguage ?? store.displayLanguage);

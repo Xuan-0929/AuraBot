@@ -5,6 +5,7 @@
  * Task 列表/详情/debug，也不订阅或调用任何 Task IPC。
  * 并发角色快照只应用最新结果；所有等待者等待最新刷新落地后再继续，
  * 防止 Main 配置应用后的桌宠重连读取仍在激活中的旧状态。
+ * Main 提供已应用显示清除位置的历史快照；显式加载早期记录不改变后端上下文或记忆。
  * 等待记录以稳定的 $state 为键，跨 Pinia 开发工具为每次 action 创建的代理共享。
  */
 
@@ -36,6 +37,7 @@ interface AuraBotState {
   mainSessionId?: string;
   messages: Message[];
   historyCursor?:number;
+  historyLoading:boolean;
   chatError?:string;
   agentStatus: AgentStatus;
   petSettings: PetSettings;
@@ -57,6 +59,7 @@ export const useAuraBotStore = defineStore("auraBot", {
     petActivity:undefined,
     petCursorPosition:undefined,
     messages: [],
+    historyLoading:false,
     historyCursor: undefined as number|undefined,
     chatError: undefined as string|undefined,
     agentStatus: "idle",
@@ -104,7 +107,6 @@ export const useAuraBotStore = defineStore("auraBot", {
     },
     async initialize() {
       await this.loadInitialState();
-      const owner=this.profile?.id;const page=await window.aurabot.getHistory(undefined,owner);if(owner!==this.profile?.id)return;this.messages=page.messages;this.historyCursor=page.nextCursor;
     },
     subscribeToPetEvents(): Unsubscribe {
       const unsubscribers: Unsubscribe[] = [
@@ -128,13 +130,22 @@ export const useAuraBotStore = defineStore("auraBot", {
           this.messages = upsertMessage(this.messages, value);
         })
       ];
+      if(window.aurabot.onHistoryDisplayCleared)unsubscribers.push(window.aurabot.onHistoryDisplayCleared(profileId=>{if(profileId===this.profile?.id)void this.loadInitialState();}));
       if(window.aurabot.onProfilesChanged)unsubscribers.push(window.aurabot.onProfilesChanged(value=>{if(value.selectedId!==this.profile?.id||value.generation!==this.profileRuntime?.generation||value.revision!==this.profileRuntime?.revision)void this.loadInitialState();else this.profileRuntime=value;}));
       return () => unsubscribers.forEach((unsubscribe) => unsubscribe());
     },
     async loadOlderHistory(){
-      if(!this.historyCursor)return;const owner=this.profile?.id;const page=await window.aurabot.getHistory(this.historyCursor,owner);
-      if(owner!==this.profile?.id)return;
-      this.messages=[...page.messages.filter(m=>!this.messages.some(old=>old.id===m.id)),...this.messages];this.historyCursor=page.nextCursor;
+      if(!this.historyCursor||this.historyLoading)return;
+      const owner=this.profile?.id,request=this.snapshotRequest;
+      this.historyLoading=true;
+      try {
+        const page=await window.aurabot.getHistory(this.historyCursor,owner);
+        if(owner!==this.profile?.id||request!==this.snapshotRequest)return;
+        this.messages=[...page.messages.filter(m=>!this.messages.some(old=>old.id===m.id)),...this.messages];
+        this.historyCursor=page.nextCursor;
+      } catch(error) {
+        if(owner===this.profile?.id&&request===this.snapshotRequest)this.chatError=String(error);
+      } finally { this.historyLoading=false; }
     },
     async openConsoleWindow() {
       await window.aurabot.openConsoleWindow();
@@ -166,6 +177,7 @@ export const useAuraBotStore = defineStore("auraBot", {
         createdAt: new Date().toISOString()
       };
       const generation=this.profileRuntime?.generation;
+      const historyRequest=this.snapshotRequest;
       this.chatError=undefined;
       this.agentStatus = "thinking";
       this.messages = [...this.messages, pending];
@@ -175,7 +187,7 @@ export const useAuraBotStore = defineStore("auraBot", {
           source
         });
         if(this.profile?.id!==pending.profileId||generation!==this.profileRuntime?.generation)return;
-        this.messages = reconcileMessages(this.messages, pending.id, result);
+        if(historyRequest===this.snapshotRequest)this.messages = reconcileMessages(this.messages, pending.id, result);
         this.agentStatus = result.agentStatus;
       } catch (error) {
         if(this.profile?.id!==pending.profileId||generation!==this.profileRuntime?.generation)return;

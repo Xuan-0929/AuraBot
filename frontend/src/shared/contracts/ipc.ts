@@ -1,6 +1,7 @@
 /** Defines typed IPC for desktop settings, visible history and Pet-owned realtime.
  * Live debug uses startup-gated capture, bounded Pet reports and read-only timeline updates;
  * Main owns immediate preferences, log paths and clearing. Speech assets accept no arbitrary destinations.
+ * History display clearing broadcasts to all windows while Main retains every persisted message.
  * Electron validates callers and payloads; Task is read-only and Memory has no renderer surface.
  * Pet voice-state reports let Main block typed input globally for an active Realtime session.
  * Voice help accepts fixed documentation identities; Main alone opens their official URLs.
@@ -23,7 +24,7 @@ export const IPC_CHANNELS = {
  openProfileSoul:'profiles:open-soul',listProfiles:'profiles:list',getProfile:'profiles:get',createProfile:'profiles:create',saveProfile:'profiles:save',activateProfile:'profiles:activate',deleteProfile:'profiles:delete',importProfileModel:'profiles:import-model',verifyProfileResources:'profiles:verify-resources',profilesChanged:'profiles:changed',getRealtimeToken:'profiles:realtime-token',
  getInitialState:'app:get-initial-state',openConsoleWindow:'window:open-console',openSettingsWindow:'window:open-settings',
  getSettings:'settings:get',saveSettings:'settings:save',applySettings:'settings:apply',settingsChanged:'settings:changed',
- getHistory:'history:list',recordDelivery:'history:delivered',sendChatMessage:'chat:send-message',
+ clearHistoryDisplay:'history:clear-display',historyDisplayCleared:'history:display-cleared',getHistory:'history:list',recordDelivery:'history:delivered',sendChatMessage:'chat:send-message',
  petCommand:'pet:command',petCommandResult:'pet:command-result',petReady:'pet:ready',realtimeStatus:'pet:realtime-status',realtimeError:'pet:realtime-error',
  taskSubscribe:'tasks:subscribe',tasksChanged:'tasks:changed',getLive2DModelState:'live2d:get-model-state',
  setPetMousePassthrough:'pet:set-mouse-passthrough',movePetWindowBy:'pet:move-window-by',resizePetWindowCorner:'pet:resize-window-corner',
@@ -65,6 +66,7 @@ export interface AuraBotApi {
  getSpeechAssets():Promise<SpeechAssetsState>; prepareSpeechAssets():Promise<SpeechAssetsState>; cancelSpeechAssets():Promise<SpeechAssetsState>; onSpeechAssetsChanged(listener:(value:SpeechAssetsState)=>void):()=>void;
  getSettings():Promise<SettingsState>; saveSettings(config:DesktopConfig,clearSecrets?:string[]):Promise<SettingsState>;
  applySettings(force?:boolean):Promise<ApplyResult>; onSettingsChanged(listener:(value:SettingsState)=>void):()=>void;
+ clearHistoryDisplay(profileId:string):Promise<void>; onHistoryDisplayCleared(listener:(profileId:string)=>void):()=>void;
  getHistory(before?:number,profileId?:string):Promise<HistoryPage>; recordDelivery(entry:HistoryEntry):Promise<Message>;
  sendChatMessage(input:SendChatMessageInput):Promise<SendChatMessageResult>;
  onPetCommand(listener:(command:PetCommand)=>void):()=>void;

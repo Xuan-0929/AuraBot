@@ -1,6 +1,7 @@
 /** Stores only accepted user messages and delivered say_to_user clauses in an independent SQLite file.
  * Electron Main validates delivery sources before calling record; stable per-profile IDs deduplicate
- * receipts. Cursor pagination avoids loading all history, and nothing here is fed back into Context.
+ * receipts. Per-profile display cutoffs hide old rows without deleting them; explicit pagination can
+ * still retrieve them. Backend Context and Memory remain independent of these display preferences.
  */
 import Database from 'better-sqlite3';
 import { mkdirSync } from 'node:fs';
@@ -17,6 +18,16 @@ export class ConversationHistory {
     mkdirSync(root,{recursive:true}); this.db=new Database(join(root,'conversation-history.sqlite3'));
     this.db.pragma('journal_mode = WAL');
     this.db.exec('CREATE TABLE IF NOT EXISTS messages(sequence INTEGER PRIMARY KEY AUTOINCREMENT,profile_id TEXT NOT NULL,id TEXT NOT NULL,role TEXT NOT NULL,content TEXT NOT NULL,created_at TEXT NOT NULL,UNIQUE(profile_id,id)); CREATE INDEX IF NOT EXISTS messages_profile_sequence ON messages(profile_id,sequence)');
+    this.db.exec('CREATE TABLE IF NOT EXISTS display_cutoffs(profile_id TEXT PRIMARY KEY,sequence INTEGER NOT NULL)');
+  }
+  clearDisplay(profile:string):void {
+    this.db.prepare('INSERT INTO display_cutoffs(profile_id,sequence) SELECT ?,COALESCE(MAX(sequence),0) FROM messages WHERE profile_id=? ON CONFLICT(profile_id) DO UPDATE SET sequence=excluded.sequence').run(profile,profile);
+  }
+  visible(profile:string):HistoryPage {
+    const cutoff=(this.db.prepare('SELECT sequence FROM display_cutoffs WHERE profile_id=?').get(profile) as {sequence:number}|undefined)?.sequence??0;
+    const rows=this.db.prepare('SELECT * FROM messages WHERE profile_id=? AND sequence>? ORDER BY sequence DESC LIMIT 51').all(profile,cutoff) as Row[];
+    const page=rows.slice(0,50).reverse();
+    return {messages:page.map(message),nextCursor:rows.length>50||cutoff>0?(page[0]?.sequence??cutoff+1):undefined};
   }
   record(profile:string,input:HistoryEntry):Message {
     const entry=entrySchema.parse(input);

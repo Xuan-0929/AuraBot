@@ -1,6 +1,7 @@
 /** Localizes desktop controls and Backend activity states, including acoustic silence, for all windows. */
 /** Localizes the complete Profile workflow and desktop shell and simplified Backend-projected agent states. Includes capability integrations, Pipeline conversation model configuration, search configuration and actionable pet runtime reminders. No runtime state is derived here. */
 /**
+ * 提供任务清除、会话显示清除及恢复早期记录的三语文案，由控制台和设置共享。
  * 提供 Renderer 当前保留界面的英中日文案与 Agent 状态标签。
  *
  * 文案服务覆盖 Chat、Profile、Live2D、模型与桌宠设置，以及 Realtime 语音进行中的输入替代提示；聊天输入提示与
@@ -175,7 +176,8 @@ const UI_TEXT = {
     seeds: "Seeds",
     expanded: "Expanded",
     returned: "Returned",
-    taskSidebarExpand: "Expand task list", taskSidebarCollapse: "Collapse task list", taskList: "Tasks", closeTaskList: "Close task list", noTasks: "No tasks yet", loadEarlierHistory: "Load earlier history",
+    taskSidebarExpand: "Expand task list", taskSidebarCollapse: "Collapse task list", taskList: "Tasks", closeTaskList: "Close task list", noTasks: "No tasks yet", loadEarlierHistory: "Show earlier conversations",
+    clearTask: "Clear", conversationHistory: "Conversation history", clearHistoryDisplay: "Clear displayed conversation history", clearHistoryDisplayHint: "Hide the current character’s displayed history. Conversations remain available for context and memory. Use “Show earlier conversations” in chat to view them again.", historyDisplayCleared: "History display cleared. Saved conversations are retained.",
     taskQueued: "Queued", taskRunning: "Running", taskWaiting: "Waiting for input", taskPaused: "Paused", taskCompleted: "Completed", taskFailed: "Failed", taskCancelled: "Cancelled",
     taskModel: "Task model", apiAddress: "API URL", modelName: "Model name", advancedConnectionSettings: "Advanced connection settings", requestTimeoutSeconds: "Request timeout (seconds)",
     voiceCaptureHint: "Audio is captured only while the pet microphone is on.", voiceTone: "Voice", voiceModelsAndResources: "Voice models and resources",
@@ -342,7 +344,8 @@ const UI_TEXT = {
     seeds: "种子",
     expanded: "扩展",
     returned: "返回",
-    taskSidebarExpand: "展开任务列表", taskSidebarCollapse: "收起任务列表", taskList: "任务", closeTaskList: "关闭任务列表", noTasks: "暂无任务", loadEarlierHistory: "加载更早记录",
+    taskSidebarExpand: "展开任务列表", taskSidebarCollapse: "收起任务列表", taskList: "任务", closeTaskList: "关闭任务列表", noTasks: "暂无任务", loadEarlierHistory: "显示更早对话",
+    clearTask: "清除", conversationHistory: "历史会话", clearHistoryDisplay: "清除历史会话记录显示", clearHistoryDisplayHint: "隐藏当前角色已显示的会话，记录仍保留用于上下文与记忆整理。可在对话页点击“显示更早对话”重新查看。", historyDisplayCleared: "已清除历史会话显示，原始记录仍保留。",
     taskQueued: "排队中", taskRunning: "执行中", taskWaiting: "等待回答", taskPaused: "已暂停", taskCompleted: "已完成", taskFailed: "失败", taskCancelled: "已取消",
     taskModel: "任务模型", apiAddress: "API 地址", modelName: "模型名称", advancedConnectionSettings: "高级连接设置", requestTimeoutSeconds: "请求超时（秒）",
     voiceCaptureHint: "仅在开启桌宠麦克风后采集声音。", voiceTone: "音色", voiceModelsAndResources: "语音模型与资源",
@@ -513,6 +516,7 @@ const JAPANESE_UI_TEXT: Record<UiTextKey, string> = {
   expanded: "展開",
   returned: "返却",
   taskSidebarExpand: "タスクリストを開く", taskSidebarCollapse: "タスクリストを閉じる", taskList: "タスク", closeTaskList: "タスクリストを閉じる", noTasks: "タスクはまだありません", loadEarlierHistory: "以前の履歴を読み込む",
+  clearTask: "クリア", conversationHistory: "会話履歴", clearHistoryDisplay: "会話履歴の表示をクリア", clearHistoryDisplayHint: "現在のキャラクターの履歴表示を隠します。会話はコンテキストと記憶のために保持され、会話画面から以前の履歴を再表示できます。", historyDisplayCleared: "履歴の表示をクリアしました。会話記録は保持されています。",
   taskQueued: "待機中", taskRunning: "実行中", taskWaiting: "回答待ち", taskPaused: "一時停止中", taskCompleted: "完了", taskFailed: "失敗", taskCancelled: "キャンセル済み",
   taskModel: "タスクモデル", apiAddress: "API URL", modelName: "モデル名", advancedConnectionSettings: "詳細な接続設定", requestTimeoutSeconds: "リクエストのタイムアウト（秒）",
   voiceCaptureHint: "音声はデスクトップペットのマイクが有効な間だけ取得されます。", voiceTone: "声", voiceModelsAndResources: "音声モデルとリソース",

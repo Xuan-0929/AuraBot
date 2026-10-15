@@ -1,4 +1,5 @@
 <!--
+  已结束和暂停的任务可清除展示，本地保存清除状态；任务恢复或状态变化时重新显示，不改变后端任务。
   主聊天窗口：以稳定的标题栏、可收起任务列表和连续对话组织现有聊天功能。
   Pinia 负责消息与设置入口，任务由既有 IPC 推送；侧栏显隐仅属于窗口内的展示状态，
   标题复用 i18n 三语文案，任务状态使用无外圈 SVG；Vue Transition 配合共享 CSS 横向收展任务面板。
@@ -28,13 +29,13 @@
       <aside v-show="sidebarOpen" id="console-tasks" ref="sidebar" class="console-tasks" :class="{'console-tasks-overlay': narrow}" :inert="!sidebarOpen ? true : undefined" :aria-hidden="!sidebarOpen ? true : undefined" :role="overlayOpen ? 'dialog' : undefined" aria-labelledby="tasks-heading" tabindex="-1">
         <div class="console-tasks-heading"><h2 id="tasks-heading">{{ t(store.displayLanguage, 'taskList') }}</h2><button v-if="narrow" type="button" class="icon-button" :aria-label="t(store.displayLanguage, 'closeTaskList')" :title="t(store.displayLanguage, 'closeTaskList')" @click="closeSidebar"><Icon icon="solar:close-circle-linear" aria-hidden="true" /></button></div>
         <p v-if="taskError" role="status" class="inline-error">{{ taskError }}</p>
-        <p v-else-if="!tasks.length" class="task-empty">{{ t(store.displayLanguage, 'noTasks') }}</p>
-        <ul class="task-list"><li v-for="task in tasks" :key="task.id"><strong>{{ task.title }}</strong><span class="task-status" :data-status="task.status"><svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.7" stroke-linecap="round" stroke-linejoin="round" aria-hidden="true"><path :d="taskPaths[task.status] ?? taskPaths.queued" /></svg>{{ taskLabel(task.status) }}</span></li></ul>
+        <p v-else-if="!visibleTasks.length" class="task-empty">{{ t(store.displayLanguage, 'noTasks') }}</p>
+        <ul class="task-list"><li v-for="task in visibleTasks" :key="task.id"><strong>{{ task.title }}</strong><span class="task-status" :data-status="task.status"><svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.7" stroke-linecap="round" stroke-linejoin="round" aria-hidden="true"><path :d="taskPaths[task.status] ?? taskPaths.queued" /></svg>{{ taskLabel(task.status) }}</span><button v-if="canDismiss(task)" type="button" class="task-dismiss" :aria-label="t(store.displayLanguage, 'clearTask') + ' · ' + task.title" @click="dismissTask(task)">{{ t(store.displayLanguage, 'clearTask') }}</button></li></ul>
       </aside>
       </Transition>
       <section class="console-chat" :inert="overlayOpen ? true : undefined" :aria-label="t(store.displayLanguage, 'mainConversation')">
         <div v-if="store.historyCursor || store.chatError" class="console-chat-notices">
-          <button v-if="store.historyCursor" type="button" class="history-button" @click="store.loadOlderHistory()"><Icon icon="solar:history-linear" aria-hidden="true" />{{ t(store.displayLanguage, 'loadEarlierHistory') }}</button>
+          <button v-if="store.historyCursor" type="button" class="history-button" :disabled="store.historyLoading" @click="store.loadOlderHistory()"><Icon icon="solar:history-linear" aria-hidden="true" />{{ t(store.displayLanguage, 'loadEarlierHistory') }}</button>
           <p v-if="store.chatError" role="alert" class="inline-error">{{ store.chatError }}</p>
         </div>
         <MessageList :messages="store.messages" :display-language="store.displayLanguage" />
@@ -61,6 +62,23 @@ addCollection(solarIcons);
 const store = useAuraBotStore();
 const tasks = ref<TaskSummary[]>([]);
 const taskError = ref('');
+const dismissedTasks = ref<Record<string,string>>(readDismissedTasks());
+const visibleTasks = computed(()=>tasks.value.filter(task=>dismissedTasks.value[task.id]!==task.status));
+function canDismiss(task:TaskSummary){return ['completed','paused','failed','cancelled'].includes(task.status);}
+function readDismissedTasks():Record<string,string>{
+  try {
+    const saved=JSON.parse(localStorage.getItem('aurabot.dismissedTasks')??'{}');
+    return saved&&typeof saved==='object'&&!Array.isArray(saved)?Object.fromEntries(Object.entries(saved).filter(([,status])=>typeof status==='string')):{};
+  } catch { return {}; }
+}
+function saveDismissedTasks(){
+  try { localStorage.setItem('aurabot.dismissedTasks',JSON.stringify(dismissedTasks.value)); } catch { /* Keep this window usable if local storage is unavailable. */ }
+}
+function dismissTask(task:TaskSummary){
+  if(!canDismiss(task))return;
+  dismissedTasks.value={...dismissedTasks.value,[task.id]:task.status};
+  saveDismissedTasks();
+}
 const media = window.matchMedia('(max-width: 959px)');
 const narrow = ref(media.matches);
 const sidebarOpen = ref(!media.matches);
@@ -98,13 +116,10 @@ function handleSidebarKeydown(event: KeyboardEvent) {
   if (!overlayOpen.value) return;
   if (event.key === 'Escape') { event.preventDefault(); void closeSidebar(); }
   if (event.key === 'Tab') {
-    // Keep both dismissal controls reachable while the chat and settings are inert.
+    const controls=[sidebarToggle.value,...Array.from(sidebar.value?.querySelectorAll<HTMLButtonElement>('button:not(:disabled)')??[])].filter((control):control is HTMLButtonElement=>Boolean(control));
     event.preventDefault();
-    if (document.activeElement === sidebarToggle.value) {
-      sidebar.value?.querySelector<HTMLButtonElement>('button')?.focus();
-    } else {
-      sidebarToggle.value?.focus();
-    }
+    const current=controls.indexOf(document.activeElement as HTMLButtonElement);
+    controls[(current+(event.shiftKey?-1:1)+controls.length)%controls.length]?.focus();
   }
 }
 function resizeSidebar(event: MediaQueryListEvent) {
@@ -115,7 +130,10 @@ function resizeSidebar(event: MediaQueryListEvent) {
 }
 function visibility() { void window.aurabot.subscribeTasks(!document.hidden); }
 onMounted(() => {
-  unsubscribe = window.aurabot.onTasksChanged(value => { tasks.value = value.tasks; taskError.value = value.error ?? ''; });
+  unsubscribe = window.aurabot.onTasksChanged(value => { tasks.value = value.tasks; taskError.value = value.error ?? '';
+    let changed=false;
+    for(const task of value.tasks)if(dismissedTasks.value[task.id]&&dismissedTasks.value[task.id]!==task.status){delete dismissedTasks.value[task.id];changed=true;}
+    if(changed)saveDismissedTasks(); });
   visibility();
   document.addEventListener('visibilitychange', visibility);
   media.addEventListener('change', resizeSidebar);
@@ -129,6 +147,8 @@ onBeforeUnmount(() => {
 </script>
 
 <style scoped>
+.task-list li { position:relative; padding-right:52px; }
+.task-dismiss { position:absolute; right:0; bottom:12px; padding:4px 8px; font-size:12px; }
 .realtime-voice-status {
   display: grid;
   place-items: center;
