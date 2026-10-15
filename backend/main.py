@@ -8,14 +8,15 @@ snapshot as user-provided names and paths without scanning directories. WebTools
 LaunchOptions gates diagnostics and selects isolated Profile storage for fixed-memory runs.
 The production lifespan opens speech log files only for an explicit debug launch.
 Lazy SeedDuplex adaptors share the Profile debug scope for bounded connection/upload diagnostics.
-Global voice mode selects lazy Pipeline or SeedDuplex resources; only microphone sessions activate them, independent of legacy enabled flags. Realtime readiness and activation
-use independent credentials and never probe DashScope, VAD or SmartTurn assets."""
+Applied Profile voice mode selects lazy Pipeline or SeedDuplex resources; only microphone sessions activate them, independent of legacy enabled flags. Realtime readiness and activation
+use independent credentials and never probe Pipeline STT/TTS, VAD or SmartTurn assets."""
 
 from __future__ import annotations
 
 import asyncio
 import importlib.util
 import logging
+from dataclasses import replace
 from collections.abc import AsyncIterator
 from contextlib import AsyncExitStack, asynccontextmanager
 from pathlib import Path
@@ -47,11 +48,11 @@ from .main_agent.observations import (
 from .main_agent.provider import build_chat_provider
 from .main_agent.realtime import RealtimeHub, router as main_agent_realtime_router
 from .main_agent.runtime import MainAgentRuntime
-from .main_agent.settings import MainAgentSettings
+from .main_agent.settings import MainAgentSettings, ChatModelSettings, SpeechSettings
 from .main_agent.snapshot import SnapshotProjector
 from .main_agent.speech import (
-    DashScopeSpeechOutputProvider,
-    DashScopeStreamingSttProvider,
+    VolcengineSpeechOutputProvider,
+    VolcengineStreamingSttProvider,
     SileroVadDetector,
     SmartTurnDetector,
     SpeechService,
@@ -80,7 +81,7 @@ def voice_available(settings: MainAgentSettings) -> bool:
         and speech.api_key
         and SileroVadDetector(speech.silero_model_path, speech.silero_license_path).status().available
         and SmartTurnDetector(speech.smart_turn_model_path, speech.smart_turn_license_path).status().available
-        and all(importlib.util.find_spec(name) is not None for name in ("dashscope", "onnxruntime", "numpy", "transformers")))
+        and all(importlib.util.find_spec(name) is not None for name in ("websockets", "httpx", "onnxruntime", "numpy", "transformers")))
 
 
 def build_task_manager() -> TaskManager:
@@ -132,16 +133,19 @@ def create_app(
         settings = MainAgentSettings.from_config(config, config.path)
         profiles = profile_manager
         if profiles is None:
-            async def factory(profile_id: str, path: Path, soul: str) -> ProfileResources:
+            async def factory(profile_id: str, path: Path, soul: str, *, voice: dict[str, Any] | None = None) -> ProfileResources:
                 if profile_factory is not None:
                     return await profile_factory(profile_id, path, soul)
+                profile_settings = settings if voice is None else replace(settings,
+                    chat_model=ChatModelSettings.from_config(voice["chat_model"]),
+                    speech=SpeechSettings.from_config(voice["speech"], config_root=config.path.parent))
                 return await _build_profile(
                     profile_id=profile_id,
                     path=path,
                     soul=soul,
                     manager=manager,
                     hub=hub,
-                    settings=settings,
+                    settings=profile_settings,
                     metrics=metric_sink,
                     provider_factory=provider_factory,
                     speech_factory=speech_factory,
@@ -271,6 +275,7 @@ async def _build_profile(
         resources = ProfileResources(
             profile_id, runtime, None, memory, closeables=tuple(closeables), voice_mode=settings.speech.mode
         )
+        resources.voice_available = voice_available(settings)
         def create_speech() -> Any:
             if speech_factory is not None:
                 return speech_factory(settings.speech, hub, runtime)
@@ -298,7 +303,7 @@ def _prepare_speech(settings: Any) -> tuple[SileroVadDetector, SmartTurnDetector
         if reason != "ready_to_load":
             raise RuntimeError(f"speech_{name}_{reason}")
     for module_name in (
-        "dashscope.audio.asr", "dashscope.audio.tts_v2", "onnxruntime", "numpy", "transformers",
+        "websockets.sync.client", "httpx", "onnxruntime", "numpy", "transformers",
     ):
         try:
             available = importlib.util.find_spec(module_name) is not None
@@ -320,15 +325,15 @@ def _build_speech(
     vad: SileroVadDetector,
     eou: SmartTurnDetector,
 ) -> SpeechService:
-    """Build the single production async DashScope/VAD/EOU speech shape."""
+    """Build the single production async Volcengine/VAD/EOU speech shape."""
 
     return SpeechService.compose(
         hub,
         runtime,
-        stt_provider=DashScopeStreamingSttProvider(
+        stt_provider=VolcengineStreamingSttProvider(
             settings.stt_model_name, api_key=settings.api_key
         ),
-        output_provider=DashScopeSpeechOutputProvider(
+        output_provider=VolcengineSpeechOutputProvider(
             settings.tts_model_name, voice=settings.tts_voice, api_key=settings.api_key
         ),
         vad=vad,

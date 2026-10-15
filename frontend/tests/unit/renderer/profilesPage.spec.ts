@@ -1,5 +1,5 @@
 /** Mounts the actual editor/workbench and controlled IPC to verify drafts, three-language text,
- * Profile-local framing, gaze and speech-mouth drafts, conflict decisions, click-to-loop resource selection, modal resident bindings and stable action IDs.
+ * Voice mode, credentials and chat drafts persist across editor tabs without activating; Profile-local framing, gaze and speech-mouth drafts, conflict decisions, click-to-loop resource selection, modal resident bindings and stable action IDs.
  * Controlled IPC and GPU preview isolate the editor; per-dialog shims supply native methods absent
  * from jsdom, while tests exercise the actual Add/select/Done workflow and saved adaptor. */
 // @vitest-environment jsdom
@@ -11,14 +11,15 @@ import type {ProfileDetail} from '../../../src/shared/contracts/profiles';
 import {t,type DisplayLanguage} from '../../../src/i18n';
 const playback=vi.hoisted(()=>({play:vi.fn(),active:0}));
 vi.mock('../../../src/features/live2d/Live2DPreview.vue',()=>({default:defineComponent({setup(_,ctx){onMounted(()=>{playback.active++;ctx.emit('ready');});onUnmounted(()=>playback.active--);ctx.expose({play:playback.play,stop:vi.fn(),setState:vi.fn(),validate:async()=>{},diagnostics:()=>({active:playback.active})});return()=>h('div',{'data-test':'preview'});}})}));
+import {defaultProfileVoice} from '../../../src/shared/contracts/voice';
 import ProfilesPage from '../../../src/features/profiles/ProfilesPage.vue';
 let dispose=()=>{};
 afterEach(()=>{dispose();vi.restoreAllMocks();});
 const copy=<T,>(v:T):T=>JSON.parse(JSON.stringify(v));
-function fixture():ProfileDetail{const seed=createDefaultProfile();return {saved:{profile:{...seed.profile,id:'b',active:false,displayName:'B'},soulText:'# Private B\n',soulFingerprint:'original',revision:1,adaptor:emptyAvatarAdaptor(),modelVersion:''},applied:null,selected:false,memory:{directory:'/temporary/b/memory',initialized:false},resources:[]};}
+function fixture():ProfileDetail{const seed=createDefaultProfile();return {saved:{voice:defaultProfileVoice(),profile:{...seed.profile,id:'b',active:false,displayName:'B'},soulText:'# Private B\n',soulFingerprint:'original',revision:1,adaptor:emptyAvatarAdaptor(),modelVersion:''},applied:null,selected:false,memory:{directory:'/temporary/b/memory',initialized:false},resources:[]};}
 function mount(detail:ProfileDetail,currentId='a',language:DisplayLanguage='zh'){
  let current=copy(detail);const runtime={selectedId:currentId,activeId:currentId,revision:1,generation:1,online:true};
- const api={listProfiles:async()=>({runtime,profiles:[{id:'a',displayName:'A',selected:true,revision:1,appliedRevision:1,modelName:'Hiyori.model3.json',visualStatus:'ready'},{id:'b',displayName:'B',selected:false,revision:1,appliedRevision:null,modelName:null,visualStatus:'unconfigured'}]}),getProfile:vi.fn(async()=>copy(current)),onProfilesChanged:()=>()=>{},activateProfile:vi.fn(async()=>({runtime})),openProfileSoul:vi.fn(async()=>{}),saveProfile:vi.fn(async(_id,input)=>{current={...current,saved:{...current.saved,profile:copy(input.profile),soulText:input.soulText,adaptor:copy(input.adaptor),soulFingerprint:'saved',revision:current.saved.revision+1}};return copy(current);}),verifyProfileResources:vi.fn(async(_id,_version,files)=>{current.resources=current.resources.map(r=>({...r,verified:files.includes(r.file)||r.verified}));return copy(current);})};
+ const api={onSpeechAssetsChanged:()=>()=>{},getSpeechAssets:async()=>({phase:'idle',assets:[],paths:{},received:0,total:1}),openVoiceDocumentation:vi.fn(async(_document:string)=>{}),listProfiles:async()=>({runtime,profiles:[{id:'a',displayName:'A',selected:true,revision:1,appliedRevision:1,modelName:'Hiyori.model3.json',visualStatus:'ready'},{id:'b',displayName:'B',selected:false,revision:1,appliedRevision:null,modelName:null,visualStatus:'unconfigured'}]}),getProfile:vi.fn(async()=>copy(current)),onProfilesChanged:()=>()=>{},activateProfile:vi.fn(async()=>({runtime})),openProfileSoul:vi.fn(async()=>{}),saveProfile:vi.fn(async(_id,input)=>{current={...current,saved:{...current.saved,profile:copy(input.profile),soulText:input.soulText,adaptor:copy(input.adaptor),voice:copy(input.voice),soulFingerprint:'saved',revision:current.saved.revision+1}};return copy(current);}),verifyProfileResources:vi.fn(async(_id,_version,files)=>{current.resources=current.resources.map(r=>({...r,verified:files.includes(r.file)||r.verified}));return copy(current);})};
  Object.assign(window,{aurabot:api});const host=document.createElement('div');document.body.append(host);const app=createApp(ProfilesPage,{displayLanguage:language});const instance=app.mount(host) as unknown as {canLeave:()=>Promise<boolean>};dispose=()=>{app.unmount();host.remove();};return {host,api,instance};
 }
 function button(host:HTMLElement,text:string){const found=[...host.querySelectorAll('button')].find(b=>b.textContent?.trim()===text);if(!found)throw new Error('Missing button: '+text);return found;}
@@ -107,4 +108,25 @@ it.each(['zh','en','ja'] as const)('saves optional full-model framing in %s with
  const {host,api}=mount(detail,'a',language);await openB(host,language);button(host,t(language,'pModelTab')).click();await nextTick();
  const checkbox=host.querySelector<HTMLInputElement>('.full-model-setting input')!;expect(checkbox.checked).toBe(true);expect(host.textContent).toContain(t(language,'pShowFullModel'));
  checkbox.click();await nextTick();expect(checkbox.checked).toBe(false);button(host,t(language,'pSave')).click();await vi.waitFor(()=>expect(api.saveProfile).toHaveBeenCalledOnce());expect(api.saveProfile.mock.calls[0]![1].adaptor.show_full_model).toBe(false);expect(api.activateProfile).not.toHaveBeenCalled();expect(playback.active).toBe(1);
+});
+
+it.each(['zh','en','ja'] as const)('edits Profile voice independently and retains both modes and clear intent across tabs in %s',async language=>{
+ const detail=fixture();detail.secrets={'speech.realtime.api_key':true};detail.secretPreviews={'speech.realtime.api_key':'seed••••test'};
+ const {host,api}=mount(detail,'a',language);await openB(host,language);
+ expect(host.querySelectorAll('[role=tab]')).toHaveLength(3);button(host,t(language,'pVoice')).click();await nextTick();
+ expect(host.textContent).toContain(t(language,'chatModel'));
+ expect(host.textContent).not.toContain('DashScope');
+ host.querySelector<HTMLButtonElement>('.settings-field-help button')!.click();await vi.waitFor(()=>expect(api.openVoiceDocumentation).toHaveBeenCalledWith('volcengine-key'));
+ const model=[...host.querySelectorAll('label')].find(label=>label.textContent===t(language,'modelName'))!.querySelector('input')!;
+ input(model,'profile-b-model');await nextTick();
+ const toggle=host.querySelector<HTMLButtonElement>('[name=voice-mode]')!;toggle.click();
+ await vi.waitFor(()=>expect(host.querySelector('[name=realtime-voice]')).not.toBeNull());
+ input(host.querySelector('[name=realtime-voice]')!,'profile-b-voice');
+ const key=host.querySelector<HTMLInputElement>('[data-secret-input]')!;expect(key.value).toBe('seed••••test');input(key,'');await nextTick();
+ host.querySelector<HTMLButtonElement>('.settings-field-help button')!.click();await vi.waitFor(()=>expect(api.openVoiceDocumentation).toHaveBeenCalledWith('seeduplex-key'));
+ button(host,t(language,'pRole')).click();await nextTick();button(host,t(language,'pVoice')).click();await nextTick();
+ expect(host.querySelector<HTMLInputElement>('[data-secret-input]')!.value).toBe('');
+ expect(host.querySelector<HTMLInputElement>('[name=realtime-voice]')!.value).toBe('profile-b-voice');
+ button(host,t(language,'pSave')).click();await vi.waitFor(()=>expect(api.saveProfile).toHaveBeenCalledOnce());
+ const saved=api.saveProfile.mock.calls[0]![1];expect(saved.voice.chat_model.model_name).toBe('profile-b-model');expect(saved.voice.speech.mode).toBe('realtime');expect(saved.voice.speech.realtime.voice).toBe('profile-b-voice');expect(saved.clearSecrets).toEqual(['speech.realtime.api_key']);expect(api.activateProfile).not.toHaveBeenCalled();
 });

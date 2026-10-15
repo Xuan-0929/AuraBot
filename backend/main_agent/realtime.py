@@ -15,6 +15,7 @@ HTTP diagnostics require debug permission fixed at process startup. Opt-in playb
 # Cumulative source-consumption receipts bound PCM in flight to two seconds; they never commit history.
 
 # Activation validates the whole UTF-8 SOUL document and adds only controlled name metadata.
+# Profile activation carries frozen conversation settings to lifecycle; readiness follows the active owner.
 from __future__ import annotations
 
 import asyncio
@@ -715,6 +716,7 @@ class ProfileActivationRequest(BaseModel):
     adaptor: dict[str, Any] = Field(default_factory=dict)
     model_version: str = Field(default="", max_length=128)
     force: bool = False
+    voice: dict[str, Any] | None = None
 
 
 class RealtimeTokenRequest(BaseModel):
@@ -819,7 +821,8 @@ async def activate_profile(body: ProfileActivationRequest, request: Request) -> 
         soul = body.soul if body.display_name is None else (
             "Character name (identity data): " + json.dumps(body.display_name, ensure_ascii=False) + "\n\n" + body.soul)
         generation = await hub.activate(body.profile_id, soul, revision=body.revision,
-            adaptor=body.adaptor, model_version=body.model_version, force=body.force)
+            adaptor=body.adaptor, model_version=body.model_version, force=body.force,
+            **({"voice": body.voice} if body.voice is not None else {}))
     except ValueError as error:
         raise HTTPException(422, str(error)) from None
     except RuntimeError as error:
@@ -833,7 +836,10 @@ async def activate_profile(body: ProfileActivationRequest, request: Request) -> 
     enabled = sum(1 for entry in body.adaptor.get("entries", {}).values() if entry.get("agent_enabled"))
     visual_status = "unconfigured" if not body.adaptor.get("model") else (
         "degraded" if not capabilities or not capabilities.model_available or enabled > len(names["motions"]) + len(names["expressions"]) else "ready")
-    return {"profile_id": body.profile_id, "revision": body.revision, "generation": generation,
+    conversation_capabilities = {"text": bool(getattr(hub.runtime, "text_available", False)),
+        "voice": bool(getattr(hub.profile, "voice_available", False))}
+    request.app.state.capabilities = {**getattr(request.app.state, "capabilities", {}), **conversation_capabilities}
+    return {"capabilities": conversation_capabilities, "profile_id": body.profile_id, "revision": body.revision, "generation": generation,
         "runtime_active": True, "visual_status": visual_status, "capability_names": names}
 
 

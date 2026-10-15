@@ -19,9 +19,9 @@
 
 | 字段 | 用途 |
 | --- | --- |
-| Profile 配置 | 人格/Soul 与视觉配置位于独立 Profile 目录；不再放在全局 settings。 |
-| `backend.chat_model` | Main Agent 与内部 Memory 提炼使用的模型地址、名称、密钥、超时。 |
-| `backend.main_agent.speech` | 语音开关、DashScope、STT/TTS 型号及本地模型/许可证路径。 |
+| Profile 配置 | 人格/SOUL、视觉和语音对话配置位于独立 Profile 目录。 |
+| `profiles/<id>/profile.json` → `voice.chat_model` | 此角色的文字聊天、Pipeline 语音与内部 Memory 提炼使用的模型地址、名称、密钥、超时。 |
+| `profiles/<id>/profile.json` → `voice.speech` | 此角色的 Pipeline / Realtime 二选一模式、独立密钥、音色、STT/TTS 型号及本地模型/许可证路径。 |
 | `backend.main_agent.web` | 可选 Tavily 密钥；未配置则不开放 Web 工具。 |
 | `backend.app.workspaces` | 用户提供的目录名称/ID 和绝对路径，直接进入 Main Agent 上下文，供理解项目与选择 Task 起始目录；不是 Pi 文件访问白名单。 |
 | `backend.task` | Pi 模型、Node、默认超时及应用管理的数据/安装路径。 |
@@ -30,9 +30,29 @@
 
 Electron 通过 `AURABOT_CONFIG_PATH` 把 JSON 路径交给 Backend；Python 只在启动时读取 `backend` 段与版本，不写文件、不热加载、不进行环境变量字符串插值。正常桌面启动不读取仓库 `config.yaml`、`config.example.yaml` 或旧 Electron `config.json`。
 
+## 角色语音对话
+
+设置侧栏不再包含“实时语音”。入口为 **角色配置 → 编辑 → 语音对话**，与“角色”“模型与动作”并列。每个角色保存独立的会话模型和两套语音参数，`mode` 只允许 `pipeline` 或 `realtime`；切换模式保留另一套参数，真实会话同时只使用一种引擎。Realtime 期间的文字输入互斥也读取当前已应用角色的模式。
+
+旧 `settings.json` 中的 `backend.chat_model` 和 `backend.main_agent.speech` 仅保留文件兼容性，桌面激活角色时始终提交该角色自己的配置，不继承旧全局密钥。已有无语音字段的角色和新角色使用空密钥默认值，需要逐个配置；无需删除人格、模型或历史数据。
+
+保存将 voice 与角色 revision 一起原子提交，已应用快照保持不变。应用或切换角色先关闭旧媒体会话；语音/会话模型发生变化时完整关闭旧角色运行资源并重新创建，只有 SOUL/动作变化时沿用原来的轻量更新。忙碌时沿用中断确认，后台进程无需重启。调试模式记录 `profile.voice.applied`，含模式与版本，不记录密钥。
+
+```mermaid
+flowchart TD
+    E[角色编辑：语音对话] -->|保存| S[角色 profile.json / voice]
+    S -->|应用或切换角色| A[关闭旧会话并激活角色快照]
+    A --> M{voice.speech.mode}
+    M -->|pipeline| P[STT → 角色会话模型 → TTS]
+    M -->|realtime| R[SeedDuplex 全双工语音]
+    A --> T[文字聊天使用角色会话模型]
+```
+
+密钥在 Main 保存，发给 Renderer 的 saved/applied 配置均脱敏；未编辑保留、输入替换、明确删除清空。资源下载缓存仍按安装目录共享，但下载完成只填入当前角色草稿中的资源路径。Backend 启动统一准备 speech 依赖，以便角色间随时切换引擎；VAD/断句模型加载及云端语音连接仍延迟到打开麦克风。
+
 ## 保存与应用
 
-“保存”原子写入 JSON 和新 revision，当前运行不变。“应用”处理已保存版本：全局 Backend 配置变化需要重启；Profile 人格/视觉变化走独立的会话激活通路，不重启 Python；只有桌面偏好变化时直接应用。启动/重启期间不能并发修改启动配置或再次启动 Backend。
+“保存”原子写入 JSON 和新 revision，当前运行不变。“应用”处理已保存版本：全局 Backend 配置变化需要重启；Profile 人格/视觉/语音变化走独立的会话激活通路，不重启 Python；只有桌面偏好变化时直接应用。启动/重启期间不能并发修改启动配置或再次启动 Backend。
 
 ~~~mermaid
 sequenceDiagram
@@ -73,7 +93,7 @@ Electron Main 在启动时冻结 `{debug, lockMemory}`，通过只读设置状�
 
 锁定模式的临时目录由 Electron 创建和持有；Backend 只在该目录下打开按 Profile 分区的 Memory/Context，不读取日常记忆。固定语料在首次激活时初始化，检索正常，禁止所有 Memory 业务修改及审计写入，不运行归档/提炼。应用配置重启 Backend 和 Profile 切换保留临时数据；退出时先等待 Backend 关闭，再清理目录。创建或初始化失败不会回退到正常存储；新启动不复用残留目录。Task、Profile/Soul 配置、语音资源与桌面可见历史维持原有存储路径。
 
-Backend startup 只创建 Task 控制面、RealtimeHub 和 Profile owner。Main 通过显式 Profile activation 提交冻结 Soul/adaptor，才打开目标 Context、Memory 和文字 Runtime；Pet token 仅携带当前 `profileId` 与 `revision`，不隐式选择 Profile。连接默认文字；语音资源延迟到 `voice.start`。未配置模型或语音不阻止桌面/设置启动，调用不可用能力会明确拒绝。
+Backend startup 只创建 Task 控制面、RealtimeHub 和 Profile owner。Main 通过显式 Profile activation 提交冻结 SOUL/adaptor/voice，才打开目标 Context、Memory 和文字 Runtime；Pet token 仅携带当前 `profileId` 与 `revision`，不隐式选择 Profile。连接默认文字；语音资源延迟到 `voice.start`。未配置模型或语音不阻止桌面/设置启动，调用不可用能力会明确拒绝。
 
 `GET /health` 精确返回 `{"ok":true,"service":"backend"}`。`GET /api/v1/readiness` 返回生命周期、实例/配置版本和本地能力状态；不向 Provider 发健康探测。
 

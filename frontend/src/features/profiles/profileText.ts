@@ -1,14 +1,16 @@
 /** Supplies complete Chinese, English and Japanese text for the Profile workflow.
- * Includes model framing, preview gaze and speech-mouth controls; i18n.ts merges these keys into the shared t() interface; user-authored SOUL and labels are never translated. */
+ * Voice conversation labels identify the Profile-owned configuration tab. Includes accessible preview controls, model framing, preview gaze and speech-mouth controls; i18n.ts merges these keys into the shared t() interface; user-authored SOUL and labels are never translated. */
 export const PROFILE_TEXT = {
   "zh": {
+    "pInvalidVoice": "语音配置无效，请检查会话模型地址、超时和语音字段。",
+    "pPreviewSettings": "预览设置",
     "pShowFullModel": "显示完整模型",
-    "pShowFullModelHelp": "取消勾选后采用上半身取景，允许模型超出显示框。保存并应用后影响桌宠。",
+    "pShowFullModelHelp": "取消勾选后按宽度填满、顶部对齐，裁切超出的下方部分。保存并应用后影响桌宠。",
     "pLipSensitivity": "说话口型灵敏度",
     "pLipHelp": "仅调整语音驱动的嘴部开合，不改变音量。0 为关闭，1 为默认；保存并应用后在说话时生效。",
     "pGazeSensitivity": "查看方向灵敏度",
     "pGazeHelp": "移动鼠标到预览区域查看效果。0 为关闭，1 为默认；保存并应用后影响桌宠。",
-    "pVoice": "实时语音",
+    "pVoice": "语音对话",
     "pWorkspaces": "工作目录",
     "pTitle": "角色配置",
     "pRole": "角色",
@@ -119,13 +121,15 @@ export const PROFILE_TEXT = {
     "pInvalidConfig": "动作设置无效，请检查名称、用途和高级设置。"
   },
   "en": {
+    "pInvalidVoice": "Invalid voice configuration. Check the conversation model URL, timeout and speech fields.",
+    "pPreviewSettings": "Preview settings",
     "pShowFullModel": "Show full model",
-    "pShowFullModelHelp": "Uncheck for an upper-body view that allows cropping. Save and apply to update the pet.",
+    "pShowFullModelHelp": "Uncheck to fit the model width, align the top and crop any overflow below. Save and apply to update the pet.",
     "pLipSensitivity": "Speech mouth sensitivity",
     "pLipHelp": "Adjusts speech-driven mouth opening, not audio volume. 0 disables it; 1 is the default. Save and apply to use it during speech.",
     "pGazeSensitivity": "Gaze sensitivity",
     "pGazeHelp": "Move the pointer over the preview to try it. 0 disables tracking; 1 is the default. Save and apply to update the pet.",
-    "pVoice": "Realtime voice",
+    "pVoice": "Voice conversation",
     "pWorkspaces": "Workspaces",
     "pTitle": "Characters",
     "pRole": "Character",
@@ -236,13 +240,15 @@ export const PROFILE_TEXT = {
     "pInvalidConfig": "Invalid action configuration. Check names, uses and advanced settings."
   },
   "ja": {
+    "pInvalidVoice": "音声設定が無効です。会話モデルの URL、タイムアウトと音声項目を確認してください。",
+    "pPreviewSettings": "プレビュー設定",
     "pShowFullModel": "モデル全体を表示",
-    "pShowFullModelHelp": "オフにすると上半身を中心に表示し、枠外の部分を切り取ります。保存して適用するとペットに反映されます。",
+    "pShowFullModelHelp": "オフにすると横幅に合わせて上端を揃え、下にはみ出す部分を切り取ります。保存して適用するとペットに反映されます。",
     "pLipSensitivity": "発話時の口の感度",
     "pLipHelp": "音量は変えず、音声による口の開き具合を調整します。0 は無効、1 は標準です。保存して適用すると発話時に反映されます。",
     "pGazeSensitivity": "視線の感度",
     "pGazeHelp": "プレビュー上でマウスを動かして確認できます。0 は無効、1 は標準です。保存して適用するとペットに反映されます。",
-    "pVoice": "リアルタイム音声",
+    "pVoice": "音声会話",
     "pWorkspaces": "作業フォルダー",
     "pTitle": "キャラクター設定",
     "pRole": "キャラクター",
@@ -357,7 +363,7 @@ export type ProfileTextKey = keyof typeof PROFILE_TEXT.zh;
 /** Maps stable service codes, including Electron's error wrapper, to shared localized messages. */
 export function profileErrorKey(error:unknown):ProfileTextKey {
  const message=error instanceof Error?error.message:String(error);
- const codes:Record<string,ProfileTextKey>={soul_empty:'pSoulEmpty',soul_too_large:'pSoulLarge',soul_open_failed:'pSoulOpenFailed',soul_conflict:'pConflict',invalid_name:'pInvalidName',entry_limit:'pLimit',model_not_ready:'pNotReady',stale_preview:'pVersionChanged',config_changed:'pVersionChanged',profile_busy:'pWorking',activation_in_progress:'pWorking',active_profile:'pCurrentDelete',last_profile:'pLastDelete',unfinished_tasks:'pDeleteBlocked',unarchived_context:'pDeleteBlocked',context_state_unavailable:'pDeleteBlocked',profile_cleanup_incomplete:'pDeleteBlocked',offline_delete:'pOfflineDelete',invalid_resource:'pVerifyFailed',resource_unverified:'pVerifyFailed',invalid_adaptor:'pInvalidConfig',import_failed:'pImportFailed'};
+ const codes:Record<string,ProfileTextKey>={invalid_voice:'pInvalidVoice',soul_empty:'pSoulEmpty',soul_too_large:'pSoulLarge',soul_open_failed:'pSoulOpenFailed',soul_conflict:'pConflict',invalid_name:'pInvalidName',entry_limit:'pLimit',model_not_ready:'pNotReady',stale_preview:'pVersionChanged',config_changed:'pVersionChanged',profile_busy:'pWorking',activation_in_progress:'pWorking',active_profile:'pCurrentDelete',last_profile:'pLastDelete',unfinished_tasks:'pDeleteBlocked',unarchived_context:'pDeleteBlocked',context_state_unavailable:'pDeleteBlocked',profile_cleanup_incomplete:'pDeleteBlocked',offline_delete:'pOfflineDelete',invalid_resource:'pVerifyFailed',resource_unverified:'pVerifyFailed',invalid_adaptor:'pInvalidConfig',import_failed:'pImportFailed'};
  for(const [code,key] of Object.entries(codes))if(message===code||message.endsWith(': '+code))return key;
  return 'pError';
 }

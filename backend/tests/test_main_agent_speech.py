@@ -1,6 +1,6 @@
 """Check production callback speech normalization, PREPARE admission, and physical delivery.
 
-The tests protect mutable-only DashScope partials through the real coordinator and Runtime admission limit,
+The tests protect mutable-only Volcengine partials through the real coordinator and Runtime admission limit,
 stable segment identity, authoritative playback events, first-chunk TTS streaming, Speech Ledger phases,
 ACK serialization, cancellation, and SpeechService ownership without real providers or microphones.
 VAD-only onset qualification through volume dips, lossless burst spooling, log rotation and cancellation while awaiting playback
@@ -23,8 +23,8 @@ from backend.main_agent import ContextStore, SnapshotProjector
 from backend.main_agent.runtime import MainAgentRuntime, PrepareAdmissionPolicy, RendererClause
 from backend.main_agent.speech import (
     ClauseSpeechDelivery,
-    DashScopeSpeechOutputProvider,
-    DashScopeStreamingSttProvider,
+    VolcengineSpeechOutputProvider,
+    VolcengineStreamingSttProvider,
     SpeechInputCoordinator,
     SpeechService,
     SileroVadDetector,
@@ -53,13 +53,13 @@ class CallbackTransport:
         self.release.set()
 
 
-class DashScopeTtsTests(unittest.IsolatedAsyncioTestCase):
+class VolcengineTtsTests(unittest.IsolatedAsyncioTestCase):
     async def test_spool_limit_cancels_provider_and_closes_temporary_audio(self):
         transport = CallbackTransport()
         spool = tempfile.TemporaryFile()
         with patch("backend.main_agent.speech.MAX_TTS_SPOOL_BYTES", 2), patch("backend.main_agent.speech.tempfile.TemporaryFile", return_value=spool):
             with self.assertRaisesRegex(RuntimeError, "streaming failed"):
-                _ = [chunk async for chunk in DashScopeSpeechOutputProvider(
+                _ = [chunk async for chunk in VolcengineSpeechOutputProvider(
                     "test", voice="test", transport_factory=lambda **_: transport).synthesize("hello")]
         self.assertTrue(transport.cancelled)
         self.assertTrue(spool.closed)
@@ -87,7 +87,7 @@ class DashScopeTtsTests(unittest.IsolatedAsyncioTestCase):
                 completed.set()
             def cancel(self):
                 pass
-        provider = DashScopeSpeechOutputProvider("test", voice="test", transport_factory=lambda **_: BurstTransport())
+        provider = VolcengineSpeechOutputProvider("test", voice="test", transport_factory=lambda **_: BurstTransport())
         stream = provider.synthesize("burst")
         try:
             first = await anext(stream)
@@ -98,48 +98,6 @@ class DashScopeTtsTests(unittest.IsolatedAsyncioTestCase):
             self.assertLessEqual(max(map(len, chunks)), 9600)
         finally:
             await stream.aclose()
-    async def test_default_transport_configures_sdk_key_before_synthesizer_creation(self) -> None:
-        class FakeDashScope:
-            api_key: str | None = None
-
-        dashscope = FakeDashScope()
-
-        class FakeTts:
-            class AudioFormat:
-                PCM_24000HZ_MONO_16BIT = object()
-
-            class ResultCallback:
-                pass
-
-            class SpeechSynthesizer:
-                def __init__(self, model: str, voice: str, format: object, callback: Any) -> None:
-                    if dashscope.api_key != "speech-key":
-                        raise RuntimeError("DashScope API key was not configured")
-                    self.callback = callback
-
-                def streaming_call(self, _text: str) -> None:
-                    self.callback.on_data(b"audio")
-
-                def streaming_complete(self) -> None:
-                    self.callback.on_complete()
-
-                def streaming_cancel(self) -> None:
-                    return None
-
-        def load_module(name: str) -> Any:
-            if name == "dashscope":
-                return dashscope
-            if name == "dashscope.audio.tts_v2":
-                return FakeTts
-            raise ModuleNotFoundError(name)
-
-        with patch("backend.main_agent.speech.importlib.import_module", side_effect=load_module):
-            chunks = [chunk async for chunk in DashScopeSpeechOutputProvider(
-                "cosyvoice", voice="Aura", api_key="speech-key",
-            ).synthesize("hello")]
-
-        self.assertEqual(chunks, [b"audio"])
-
     async def test_completed_callback_does_not_cancel_closed_transport(self) -> None:
         class CompletedTransport:
             def __init__(self) -> None:
@@ -155,8 +113,8 @@ class DashScopeTtsTests(unittest.IsolatedAsyncioTestCase):
                 raise ConnectionError("transport already closed")
 
         transport = CompletedTransport()
-        chunks = [chunk async for chunk in DashScopeSpeechOutputProvider(
-            "cosyvoice", voice="Aura", transport_factory=lambda **_kwargs: transport,
+        chunks = [chunk async for chunk in VolcengineSpeechOutputProvider(
+            "seed-tts-2.0", voice="Aura", transport_factory=lambda **_kwargs: transport,
         ).synthesize("hello")]
 
         self.assertEqual(chunks, [b"audio"])
@@ -164,8 +122,8 @@ class DashScopeTtsTests(unittest.IsolatedAsyncioTestCase):
 
     async def test_first_callback_chunk_is_yielded_before_stream_completion(self) -> None:
         transport = CallbackTransport()
-        provider = DashScopeSpeechOutputProvider(
-            "cosyvoice", voice="Aura", transport_factory=lambda **_kwargs: transport,
+        provider = VolcengineSpeechOutputProvider(
+            "seed-tts-2.0", voice="Aura", transport_factory=lambda **_kwargs: transport,
         )
         stream = provider.synthesize("hello").__aiter__()
         self.assertEqual(await asyncio.wait_for(anext(stream), 0.2), b"first")
@@ -177,8 +135,8 @@ class DashScopeTtsTests(unittest.IsolatedAsyncioTestCase):
 
     async def test_generator_close_cancels_its_own_transport(self) -> None:
         transport = CallbackTransport()
-        provider = DashScopeSpeechOutputProvider(
-            "cosyvoice", voice="Aura", transport_factory=lambda **_kwargs: transport,
+        provider = VolcengineSpeechOutputProvider(
+            "seed-tts-2.0", voice="Aura", transport_factory=lambda **_kwargs: transport,
         )
         stream = provider.synthesize("hello")
         iterator = stream.__aiter__()
@@ -223,7 +181,7 @@ class FakeStt:
         return session
 
 
-class FakeDashScopeSttTransport:
+class FakeVolcengineSttTransport:
     def __init__(self, on_event: Any) -> None:
         self.on_event = on_event
         self.frames: list[bytes] = []
@@ -239,7 +197,7 @@ class FakeDashScopeSttTransport:
         self.stopped = True
 
     def emit_partial(self, text: str) -> None:
-        self.on_event({"sentence": {"text": text, "sentence_end": False}})
+        self.on_event({"result": {"text": text}})
 
 
 class FakeInputRuntime:
@@ -398,13 +356,13 @@ class SpeechInputTests(unittest.IsolatedAsyncioTestCase):
     async def test_delayed_final_transcript_survives_normal_finish(self):
         for delay in (.15, .3, .6):
             with self.subTest(delay=delay):
-                class Transport(FakeDashScopeSttTransport):
+                class Transport(FakeVolcengineSttTransport):
                     def stop(self):
                         threading.Event().wait(delay)
-                        self.on_event({"sentence": {"text": "final words", "sentence_end": True}})
+                        self.on_event({"result": {"text": "final words"}, "final": True})
                 runtime = FakeInputRuntime()
                 coordinator = SpeechInputCoordinator(runtime,
-                    stt_provider=DashScopeStreamingSttProvider("test", transport_factory=lambda **kw: Transport(kw["on_event"])),
+                    stt_provider=VolcengineStreamingSttProvider("test", transport_factory=lambda **kw: Transport(kw["on_event"])),
                     vad=FakeVad([1.0]), speech_confirm_ms=20)
                 try:
                     await coordinator.accept_mic_frame(NEAR_PCM)
@@ -415,14 +373,14 @@ class SpeechInputTests(unittest.IsolatedAsyncioTestCase):
 
     async def test_finish_and_close_share_one_transport_stop(self):
         entered, release = threading.Event(), threading.Event()
-        class Transport(FakeDashScopeSttTransport):
+        class Transport(FakeVolcengineSttTransport):
             stops = 0
             def stop(self):
                 self.stops += 1
                 entered.set()
                 release.wait(1)
         transport = Transport(lambda _: None)
-        session = await DashScopeStreamingSttProvider("test", transport_factory=lambda **_: transport).start(AsyncMock())
+        session = await VolcengineStreamingSttProvider("test", transport_factory=lambda **_: transport).start(AsyncMock())
         finishing = asyncio.create_task(session.finish())
         try:
             self.assertTrue(await asyncio.to_thread(entered.wait, 1))
@@ -549,7 +507,7 @@ class SpeechInputTests(unittest.IsolatedAsyncioTestCase):
         finally:
             await coordinator.close()
 
-    async def test_cancelled_dashscope_close_keeps_transport_cleanup_owned(self) -> None:
+    async def test_cancelled_volcengine_close_keeps_transport_cleanup_owned(self) -> None:
         entered, cleaning, release = asyncio.Event(), asyncio.Event(), asyncio.Event()
         transports = []
         async def sink(_update):
@@ -560,10 +518,10 @@ class SpeechInputTests(unittest.IsolatedAsyncioTestCase):
                 cleaning.set()
                 await release.wait()
         def factory(**kwargs):
-            transport = FakeDashScopeSttTransport(kwargs["on_event"])
+            transport = FakeVolcengineSttTransport(kwargs["on_event"])
             transports.append(transport)
             return transport
-        session = await DashScopeStreamingSttProvider("test", transport_factory=factory).start(sink)
+        session = await VolcengineStreamingSttProvider("test", transport_factory=factory).start(sink)
         transports[0].emit_partial("partial")
         await entered.wait()
         closing = asyncio.create_task(session.close())
@@ -580,7 +538,7 @@ class SpeechInputTests(unittest.IsolatedAsyncioTestCase):
         from backend.main_agent.realtime import RealtimeHub
         entered, release = threading.Event(), threading.Event()
         transports = []
-        class ClosingTransport(FakeDashScopeSttTransport):
+        class ClosingTransport(FakeVolcengineSttTransport):
             def stop(self):
                 entered.set()
                 release.wait(1)
@@ -591,7 +549,7 @@ class SpeechInputTests(unittest.IsolatedAsyncioTestCase):
             return transport
         hub = RealtimeHub()
         coordinator = SpeechInputCoordinator(FakeInputRuntime(),
-            stt_provider=DashScopeStreamingSttProvider("test", transport_factory=factory),
+            stt_provider=VolcengineStreamingSttProvider("test", transport_factory=factory),
             vad=FakeVad([1.0, 0.0]), vad_stop_ms=20, speech_confirm_ms=20)
         service = SpeechService(hub, coordinator, SimpleNamespace(startup=AsyncMock(), shutdown=AsyncMock()))
         await service.startup()
@@ -613,7 +571,7 @@ class SpeechInputTests(unittest.IsolatedAsyncioTestCase):
                 await closing
             await service.shutdown()
 
-    async def test_dashscope_callbacks_keep_arrival_order_across_confirmation_await(self) -> None:
+    async def test_volcengine_callbacks_keep_arrival_order_across_confirmation_await(self) -> None:
         entered, release = asyncio.Event(), asyncio.Event()
         class BlockedRuntime(FakeInputRuntime):
             async def update_transcript(self, text, **kwargs):
@@ -623,18 +581,18 @@ class SpeechInputTests(unittest.IsolatedAsyncioTestCase):
                 await super().update_transcript(text, **kwargs)
         transports = []
         def factory(**kwargs):
-            transport = FakeDashScopeSttTransport(kwargs["on_event"])
+            transport = FakeVolcengineSttTransport(kwargs["on_event"])
             transports.append(transport)
             return transport
         runtime = BlockedRuntime()
         coordinator = SpeechInputCoordinator(runtime,
-            stt_provider=DashScopeStreamingSttProvider("test", transport_factory=factory),
+            stt_provider=VolcengineStreamingSttProvider("test", transport_factory=factory),
             vad=FakeVad([1.0]), speech_confirm_ms=20, playback_lifecycle=FakePlayback())
         try:
             await coordinator.accept_mic_frame(NEAR_PCM)
             transports[0].emit_partial("old partial")
             await entered.wait()
-            transports[0].on_event({"sentence": {"text": "complete final words", "sentence_end": True}})
+            transports[0].on_event({"result": {"text": "complete final words"}, "final": True})
             await asyncio.sleep(0)
             release.set()
             self.assertTrue(await coordinator._close_stt(finalize=True))
@@ -643,12 +601,12 @@ class SpeechInputTests(unittest.IsolatedAsyncioTestCase):
             release.set()
             await coordinator.close()
 
-    async def test_dashscope_mutable_partials_request_bounded_prepare_before_endpoint(self) -> None:
+    async def test_volcengine_mutable_partials_request_bounded_prepare_before_endpoint(self) -> None:
         with tempfile.TemporaryDirectory() as directory:
-            transports: list[FakeDashScopeSttTransport] = []
+            transports: list[FakeVolcengineSttTransport] = []
 
-            def transport_factory(**kwargs: Any) -> FakeDashScopeSttTransport:
-                transport = FakeDashScopeSttTransport(kwargs["on_event"])
+            def transport_factory(**kwargs: Any) -> FakeVolcengineSttTransport:
+                transport = FakeVolcengineSttTransport(kwargs["on_event"])
                 transports.append(transport)
                 return transport
 
@@ -682,8 +640,8 @@ class SpeechInputTests(unittest.IsolatedAsyncioTestCase):
             )
             coordinator = SpeechInputCoordinator(
                 runtime,
-                stt_provider=DashScopeStreamingSttProvider(
-                    "paraformer-realtime",
+                stt_provider=VolcengineStreamingSttProvider(
+                    "volc.seedasr.sauc.duration",
                     transport_factory=transport_factory,
                 ),
                 vad=FakeVad([1.0]),

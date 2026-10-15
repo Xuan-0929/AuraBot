@@ -1,11 +1,13 @@
 /** Composes the desktop shell and one Backend process around a controlled Profile repository.
  * Immutable launch options gate Debug UI/collection and own temporary Memory/Context data until Backend exits.
  * AURABOT_USER_DATA_DIR selects the installation/data root independently of source code.
+ * Profile activation sends frozen conversation settings; IPC redacts every saved/applied voice secret.
  * Main owns sequential speech downloads and profile readiness; migrates configuration, serves owned model packages, serializes selection/application and
  * opens only a repository-owned Profile SOUL path through shell; fences history receipts by their original Profile/generation. Pet alone owns realtime media;
  * Backend exclusively owns Context, Memory, task state and the active business lifecycle.
  * Authenticated Pet voice-state reports gate typed sends in all windows while Realtime is active.
  * Voice documentation requests resolve only allowlisted official URLs and open in the system browser. */
+import {speechAssetPaths} from './speechAssetManifest';
 import {SpeechAssets} from './speechAssets';
 import {LiveDebugService} from './liveDebug';
 import {LaunchSession,readLaunchOptions} from './launchOptions';
@@ -15,7 +17,7 @@ import { join, resolve, dirname } from 'node:path';
 import { randomUUID } from 'node:crypto';
 import { existsSync,readFileSync } from 'node:fs';
 import { createLive2DModelRegistry } from '@core/live2d/modelRegistry';
-import { ProfileRepository, findModelManifests } from '@core/profiles/profileRepository';
+import { ProfileRepository, findModelManifests, publicProfileDetail } from '@core/profiles/profileRepository';
 import { t } from '../i18n';
 import { validateSoul } from '@core/profiles/soulPrompt';
 import { registerProfileResourceScheme, installProfileResourceProtocol } from './profileResources';
@@ -57,7 +59,7 @@ async function bootstrap(){
  history=new ConversationHistory(root);
  const shared=config.snapshot().backend;
  const dataRoot=resolve(dirname(config.path),shared.app.data_dir);
- const profileStore=new ProfileRepository({profilesRoot:resolve(dataRoot,shared.main_agent.profile_dir),legacyDatabasePath:join(root,'profile.sqlite3'),legacySettingsPath:config.path});
+ const profileStore=new ProfileRepository({profilesRoot:resolve(dataRoot,shared.main_agent.profile_dir),legacyDatabasePath:join(root,'profile.sqlite3'),legacySettingsPath:config.path,speechAssetPaths:speechAssetPaths(root)});
  await profileStore.initialize();
  const bundledRoot=app.isPackaged?join(__dirname,'../renderer/assets/live2d'):join(projectRoot,'frontend/public/assets/live2d');
  const bundled=createLive2DModelRegistry({modelRootPath:bundledRoot});
@@ -140,7 +142,7 @@ async function bootstrap(){
  handle(C.petReady,event=>{assertPet(event);petReady=true;});
  handle(C.petCommandResult,(event,result)=>{assertPet(event);const waiting=pending.get(result.id);if(!waiting)return;clearTimeout(waiting.timer);pending.delete(result.id);result.error?waiting.reject(new Error(result.error)):waiting.resolve(result);});
  handle(C.realtimeError,(event,error)=>{assertPet(event);if(typeof error!=='string'||error.length>1024)throw new Error('无效错误状态');realtimeError=error;broadcast(C.realtimeError,error);});
- handle(C.realtimeStatus,(event,state,voiceActive)=>{assertPet(event);if(!['idle','no_audio','listening','thinking','typing','speaking'].includes(state))throw new Error('无效状态');if(voiceActive!==undefined){if(typeof voiceActive!=='boolean')throw new Error('无效语音状态');runtime={...runtime,textInputBlocked:voiceActive&&config.current().backend.main_agent.speech.mode==='realtime'};profilesChanged();}agentState=state;broadcastAgentStatus(state);});
+ handle(C.realtimeStatus,(event,state,voiceActive)=>{assertPet(event);if(!['idle','no_audio','listening','thinking','typing','speaking'].includes(state))throw new Error('无效状态');if(voiceActive!==undefined){if(typeof voiceActive!=='boolean')throw new Error('无效语音状态');runtime={...runtime,textInputBlocked:voiceActive&&applied?.voice.speech.mode==='realtime'};profilesChanged();}agentState=state;broadcastAgentStatus(state);});
  handle(C.sendChatMessage,async(_event,input)=>{
    if(runtime.textInputBlocked)throw new Error('请先关闭 Realtime 语音，再发送文字消息。');
    if(!config.online||!runtime.online||switching)throw new Error('Backend 未就绪，请先在设置中应用配置。');
@@ -180,8 +182,10 @@ async function bootstrap(){
      await petRequest('disconnect');revoked=true;
      runtime={...runtime,activeId:null,online:false,generation:runtime.generation+1};
      profilesChanged();tasks?.stop();
-     const result=await backendJson('/api/v1/main-agent/profile/activate',{method:'POST',body:JSON.stringify({profile_id:id,revision:target.revision,soul:target.soulText,display_name:target.profile.displayName,adaptor:target.adaptor,model_version:target.modelVersion,force}),signal:AbortSignal.timeout(40000)});
+     const result=await backendJson('/api/v1/main-agent/profile/activate',{method:'POST',body:JSON.stringify({profile_id:id,revision:target.revision,soul:target.soulText,display_name:target.profile.displayName,adaptor:target.adaptor,model_version:target.modelVersion,voice:target.voice,force}),signal:AbortSignal.timeout(40000)});
      profileStore.select(id);applied=target;
+     if(result.capabilities)config.capabilities={...config.capabilities!,...result.capabilities};
+     broadcast(C.settingsChanged,config.status());
      runtime={activating:false,selectedId:id,activeId:id,revision:target.revision,generation:result.generation,online:result.runtime_active===true,visualStatus:result.visual_status,capabilityNames:result.capability_names};
      realtimeError='';agentState='idle';broadcastAgentStatus(agentState);
      const savedBounds=bounds.getBounds(id);if(savedBounds)restorePetWindowBounds(pet,savedBounds);
@@ -193,10 +197,10 @@ async function bootstrap(){
    finally{switching=false;}
  };
  handle(C.listProfiles,()=>({profiles:profileStore.list(),runtime}));
- handle(C.getProfile,(_event,id)=>profileStore.get(id));
- handle(C.createProfile,(_event,name,language='zh')=>{let result=profileStore.create(name,language);try{result=seedModel(result.saved.profile.id);}catch{/* Created identity remains editable without an optional bundled model. */}profilesChanged();return result;});
+ handle(C.getProfile,(_event,id)=>publicProfileDetail(profileStore.get(id)));
+ handle(C.createProfile,(_event,name,language='zh')=>{let result=profileStore.create(name,language);try{result=seedModel(result.saved.profile.id);}catch{/* Created identity remains editable without an optional bundled model. */}profilesChanged();return publicProfileDetail(result);});
  handle(C.openProfileSoul,async(_event,id,reveal=false)=>{profileStore.get(id);const path=profileStore.soulPath(id);if(reveal===true){shell.showItemInFolder(path);return;}const error=await shell.openPath(path);if(error)throw new Error('soul_open_failed');});
- handle(C.saveProfile,(_event,id,input)=>{if(switching)throw new Error('activation_in_progress');const result=profileStore.save(id,input);profilesChanged();return result;});
+ handle(C.saveProfile,(_event,id,input)=>{if(switching)throw new Error('activation_in_progress');const result=profileStore.save(id,input);profilesChanged();return publicProfileDetail(result);});
  handle(C.activateProfile,(_event,id,force=false,applyOnly=false)=>{if(typeof force!=='boolean'||typeof applyOnly!=='boolean')throw new Error('无效激活请求');return activate(id,force,applyOnly);});
  handle(C.deleteProfile,async(_event,id)=>{
    profileStore.get(id);if(switching)throw new Error('activation_in_progress');
@@ -215,10 +219,10 @@ async function bootstrap(){
    if(!manifests.length)throw new Error('import_failed');
    let index=0;
    if(manifests.length>1){const pick=await dialog.showMessageBox(BrowserWindow.fromWebContents(event.sender)!,{type:'question',title:t(config.current().desktop.pet.displayLanguage,'pSelectManifest'),message:t(config.current().desktop.pet.displayLanguage,'pManifestHelp'),buttons:[...manifests,t(config.current().desktop.pet.displayLanguage,'pCancel')],cancelId:manifests.length,noLink:true});index=pick.response;if(index===manifests.length)return null;}
-   const result=profileStore.importModel(id,folder,manifests[index]!);profilesChanged();return result;
+   const result=profileStore.importModel(id,folder,manifests[index]!);profilesChanged();return publicProfileDetail(result);
    }finally{switching=false;}
  });
- handle(C.verifyProfileResources,(_event,id,version,files)=>{if(switching)throw new Error('activation_in_progress');const result=profileStore.verifyResources(id,version,files);profilesChanged();return result;});
+ handle(C.verifyProfileResources,(_event,id,version,files)=>{if(switching)throw new Error('activation_in_progress');const result=profileStore.verifyResources(id,version,files);profilesChanged();return publicProfileDetail(result);});
  handle(C.getRealtimeToken,async event=>{assertPet(event);if(runtime.activating||!runtime.online||!runtime.activeId)throw new Error('Profile 尚未激活');const owner=runtime.activeId,generation=runtime.generation,revision=runtime.revision;const token=await backendJson('/api/v1/main-agent/realtime-token',{method:'POST',body:JSON.stringify({profileId:owner,revision})});if(owner!==runtime.activeId||generation!==runtime.generation||revision!==runtime.revision)throw new Error('Profile 已切换');runtime={...runtime,generation:token.generation};profilesChanged();return token;});
  handle(C.getLive2DModelState,()=>modelState());
  handle(C.setPetMousePassthrough,(event,enabled)=>{assertPet(event);if(typeof enabled==='boolean')setPetMousePassthrough(enabled);});

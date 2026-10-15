@@ -179,19 +179,19 @@ class DesktopContractTests(unittest.IsolatedAsyncioTestCase):
         await self._disconnect_voice('refresh')
 
     async def _endpoint_final_transcript(self, *, partial: bool):
-        from backend.main_agent.speech import SpeechInputCoordinator, DashScopeStreamingSttProvider
-        from backend.tests.test_main_agent_speech import FakeDashScopeSttTransport, FakeVad, NEAR_PCM
+        from backend.main_agent.speech import SpeechInputCoordinator, VolcengineStreamingSttProvider
+        from backend.tests.test_main_agent_speech import FakeVolcengineSttTransport, FakeVad, NEAR_PCM
         transports = []
-        class FinalTransport(FakeDashScopeSttTransport):
+        class FinalTransport(FakeVolcengineSttTransport):
             def stop(self):
-                self.on_event({'sentence': {'text': 'complete final words', 'sentence_end': True}})
+                self.on_event({'result': {'text': 'complete final words'}, 'final': True})
                 self.stopped = True
         def factory(**kwargs):
             transport = FinalTransport(kwargs['on_event'])
             transports.append(transport)
             return transport
         coordinator = SpeechInputCoordinator(self.runtime,
-            stt_provider=DashScopeStreamingSttProvider('test', transport_factory=factory),
+            stt_provider=VolcengineStreamingSttProvider('test', transport_factory=factory),
             vad=FakeVad([1.0, 0.0] if partial else [1.0, 1.0, 0.0]), vad_stop_ms=20, speech_confirm_ms=20,
             eou=SimpleNamespace(completion_probability=lambda _audio: 1.0),
             playback_lifecycle=self.hub)

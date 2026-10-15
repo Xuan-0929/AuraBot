@@ -1,7 +1,9 @@
-/** Checks real responsive chat/settings geometry in both themes without desktop processes.
+/** Voice settings are exercised inside the Profile editor; other layout checks retain their fixtures.
+ * Checks real responsive chat/settings geometry in both themes without desktop processes.
  * Compiled Vue/CSS consumes the read-only IPC fixture; native Pet hover/navigation stays in app-launch.
  * Screenshots are optional artifacts and all pass/fail decisions use observable layout assertions.
  * Voice switching checks stable control geometry, draft retention and rapid transitions in real CSS.
+ * Model preview controls must scroll independently while the preview and save footer remain fixed.
  * Form bounds and help alignment keep fields and text clear of the scrolling edge at both viewport sizes. */
 import { type Page } from '@playwright/test';
 import { test, expect, capture } from './fixtures';
@@ -12,7 +14,9 @@ test('voice mode keeps its switch position and draft through animated and rapid 
     getSpeechAssets: async () => ({ phase: 'idle', assets: [], paths: {}, received: 0, total: 1 }),
     onSpeechAssetsChanged: () => () => {}
   }));
-  await page.getByRole('button', { name: '实时语音', exact: true }).click();
+  await page.getByRole('button', { name: '角色配置', exact: true }).click();
+  await page.getByRole('button', { name: '编辑', exact: true }).click();
+  await page.getByRole('tab', { name: '语音对话', exact: true }).click();
   const toggle = page.getByRole('switch');
   const voice = page.locator('input[name="realtime-voice"]');
   async function checkVoiceLayout() {
@@ -105,4 +109,32 @@ test('chat, settings and profile footers stay usable at compact sizes in both th
   await capture(settings,'profile-detail-dark');
   await resize(settings,620,560);await checkLayout(settings);
   await capture(settings,'profile-detail-dark-compact');
+});
+
+test('model preview settings scroll to both sliders without moving the preview or footer',async({page})=>{
+ await page.goto('/#settings');
+ await page.evaluate(()=>{
+  const get=window.aurabot.getProfile;
+  window.aurabot.getProfile=async id=>{const detail=await get(id);detail.saved.adaptor.model={manifest:'model/Layout.model3.json'};detail.saved.modelVersion='layout';return detail;};
+ });
+ await page.getByRole('button',{name:'角色配置',exact:true}).click();
+ await page.locator('.profile-list-row').first().getByRole('button',{name:'编辑',exact:true}).click();
+ await page.getByRole('tab',{name:'模型与动作',exact:true}).click();
+ for(const size of [{width:1280,height:820},{width:1280,height:600},{width:620,height:560}]){
+  await page.setViewportSize(size);
+  const controls=page.getByRole('region',{name:'预览设置'}),preview=page.locator('.avatar-preview'),footer=page.locator('.profile-save-bar');
+  await expect(controls).toBeVisible();
+  await expect.poll(()=>controls.evaluate(e=>e.scrollHeight>e.clientHeight)).toBe(true);
+  await controls.evaluate(e=>{e.scrollTop=0;});
+  const before=await preview.boundingBox(),bar=await footer.boundingBox();
+  const slider=controls.locator('.lip-setting input');
+  await slider.scrollIntoViewIfNeeded();const initial=Number(await slider.inputValue());await slider.focus();await slider.press('ArrowRight');await expect(slider).toHaveValue((initial+0.1).toFixed(1));
+  const bounds=await slider.boundingBox(),region=await controls.boundingBox();
+  expect(bounds!.y).toBeGreaterThanOrEqual(region!.y);expect(bounds!.y+bounds!.height).toBeLessThanOrEqual(region!.y+region!.height);
+  expect(bounds!.y+bounds!.height).toBeLessThan(bar!.y);expect(await preview.boundingBox()).toEqual(before);expect(await footer.boundingBox()).toEqual(bar);
+  expect(await controls.evaluate(e=>e.scrollTop)).toBeGreaterThan(0);
+  await page.mouse.move(bounds!.x+bounds!.width*0.3,bounds!.y+bounds!.height/2);await page.mouse.down();
+  await page.mouse.move(bounds!.x+bounds!.width*0.7,bounds!.y+bounds!.height/2,{steps:6});await page.mouse.up();
+  expect(Number(await slider.inputValue())).toBeGreaterThan(8);
+ }
 });

@@ -1,5 +1,5 @@
 /** Exercises the real resource UI, pinned upstream downloads and local ONNX voice startup.
- * Uses isolated app data and a silent fake microphone; no cloud provider or real device is claimed.
+ * Profile voice setup saves and applies its own draft. Uses isolated app data and a silent fake microphone; no cloud provider or real device is claimed.
  * Opt in with AURABOT_SPEECH_DOWNLOAD_SMOKE=1 because this test downloads official model assets. */
 import {mkdtempSync,rmSync,writeFileSync} from 'node:fs';
 import {tmpdir} from 'node:os';
@@ -14,17 +14,16 @@ test('prepares resources in settings, applies and toggles voice with real local 
  try{
   const pet=await app.firstWindow();
   await expect.poll(()=>pet.evaluate(async()=>Boolean(window.aurabot)&&(await window.aurabot.listProfiles()).runtime.online),{timeout:45000}).toBe(true);
-  await pet.evaluate(async()=>{const {config}=await window.aurabot.getSettings();config.backend.chat_model={api_key:'unused-silent-smoke',base_url:'http://127.0.0.1:1/v1',model_name:'unused',timeout_seconds:60};config.backend.main_agent.speech.api_key='unused-silent-smoke';await window.aurabot.saveSettings(config);});
+  await pet.evaluate(async()=>{const {runtime}=await window.aurabot.listProfiles();const {saved}=await window.aurabot.getProfile(runtime.selectedId);saved.voice.chat_model={api_key:'unused-silent-smoke',base_url:'http://127.0.0.1:1/v1',model_name:'unused',timeout_seconds:60};saved.voice.speech.api_key='unused-silent-smoke';await window.aurabot.saveProfile(runtime.selectedId,{...saved,expectedSoulFingerprint:saved.soulFingerprint});});
   const opened=app.waitForEvent('window');await pet.evaluate(()=>window.aurabot.openSettingsWindow());const settings=await opened;
-  await settings.getByRole('button',{name:'实时语音',exact:true}).click();
+  await settings.getByRole('button',{name:'角色配置',exact:true}).click();await settings.getByRole('button',{name:'编辑',exact:true}).first().click();await settings.getByRole('tab',{name:'语音对话',exact:true}).click();
   await settings.getByRole('button',{name:'一键准备',exact:true}).click();
   await expect(settings.locator('progress')).toBeVisible();
   await settings.screenshot({path:'/private/tmp/aurabot-speech-download.png'});
   await expect(settings.getByText('资源已准备，请保存并应用。',{exact:true})).toBeVisible({timeout:180000});
-  await settings.getByLabel('启用语音能力').check();
   await settings.getByRole('button',{name:'保存',exact:true}).click();
   await settings.getByRole('button',{name:'应用',exact:true}).click();
-  await expect(settings.locator('.settings-save-bar [role=status]')).toHaveText('已应用',{timeout:45000});
+  await expect(settings.locator('.profile-save-bar [role=status]')).toHaveText('已应用',{timeout:45000});
   await expect.poll(()=>pet.evaluate(async()=>(await window.aurabot.listProfiles()).runtime.online)).toBe(true);
   await settings.screenshot({path:'/private/tmp/aurabot-speech-ready.png'});
   const mic=pet.locator('.pet-action-voice');await mic.click({force:true});

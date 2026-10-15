@@ -33,8 +33,8 @@ export const IPC_CHANNELS = {
 export const VOICE_DOCUMENTATION_URLS = {
  'seeduplex-key':'https://docs.volcengine.com/docs/DoubaoVoice/console-guidance?lang=zh',
  'seeduplex-voices':'https://docs.volcengine.com/docs/DoubaoVoice/Tonelist-1?lang=zh',
- 'dashscope-key':'https://help.aliyun.com/zh/model-studio/get-api-key',
- 'cosyvoice-voices':'https://help.aliyun.com/zh/model-studio/cosyvoice-voice-list',
+ 'volcengine-key':'https://docs.volcengine.com/docs/DoubaoVoice/console-guidance?lang=zh',
+ 'volcengine-voices':'https://www.volcengine.com/docs/6561/1257544',
 } as const;
 export type VoiceDocumentation = keyof typeof VOICE_DOCUMENTATION_URLS;
 export interface PetCursorPosition {

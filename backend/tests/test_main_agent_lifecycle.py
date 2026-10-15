@@ -1,5 +1,6 @@
 """Verify single-active-Profile resource isolation and token-generation switching.
 
+Voice changes rebuild the sole owner while unchanged voice retains the Soul refresh path.
 Focused lifecycle tests use resource fakes for ordering; the A→B→A regression composes real ContextStore,
 SQLiteMemoryStore, MemoryService, and MainAgentRuntime around an in-memory derived vector index. No test
 recreates deleted Backend Profile, personality, or Main-Agent-specific Memory management surfaces.
@@ -87,6 +88,45 @@ class ResourceVectorStore:
 
 
 class ActiveProfileManagerTests(unittest.IsolatedAsyncioTestCase):
+    async def test_voice_snapshots_rebuild_same_profile_and_remain_isolated(self) -> None:
+        calls = []
+        hub = Hub(calls)
+        built = []
+
+        async def build(profile_id, path, soul, *, voice):
+            calls.append(f"build:{profile_id}:{voice['speech']['mode']}")
+            resources = ProfileResources(profile_id, Runtime(profile_id, soul, calls),
+                Owner("speech", profile_id, calls), Owner("memory", profile_id, calls),
+                voice_mode=voice["speech"]["mode"])
+            built.append(resources)
+            return resources
+
+        a = {"chat_model": {"model_name": "A-chat", "api_key": "A-chat-key"},
+             "speech": {"mode": "pipeline", "api_key": "A-pipeline-key"}}
+        b = {"chat_model": {"model_name": "B-chat", "api_key": "B-chat-key"},
+             "speech": {"mode": "realtime", "realtime": {"api_key": "B-realtime-key", "voice": "B-voice"}}}
+        with tempfile.TemporaryDirectory() as directory:
+            manager = ActiveProfileManager(Path(directory), hub, build, generation_seed=0)
+            await manager.activate("a", "Soul A", revision=1, voice=a)
+            await manager.activate("a", "Edited Soul A", revision=2, voice=a)
+            self.assertEqual(len(built), 1)
+            await manager.activate("a", "Edited Soul A", revision=3, voice=b)
+            self.assertEqual(len(built), 2)
+            self.assertLess(calls.index("speech:stop:a"), calls.index("build:a:realtime"))
+            self.assertEqual(built[-1].voice_config, b)
+            self.assertEqual(built[-1].voice_mode, "realtime")
+            generation = hub.active_generation
+            with self.assertRaises(ValueError):
+                await manager.activate("a", "Invalid", revision=4,
+                    voice={"chat_model": {}, "speech": {"mode": "both"}})
+            self.assertEqual(hub.active_generation, generation)
+            await manager.activate("b", "Soul B", revision=1, voice=b)
+            await manager.activate("a", "Soul A", revision=3, voice=a)
+            self.assertEqual(built[-1].voice_config, a)
+            a["speech"]["api_key"] = "later-edit"
+            self.assertEqual(built[-1].voice_config["speech"]["api_key"], "A-pipeline-key")
+            await manager.shutdown()
+
     async def test_profile_switch_waits_for_inflight_memory_recall_before_closing_resources(self) -> None:
         calls: list[str] = []
         hub = Hub(calls)

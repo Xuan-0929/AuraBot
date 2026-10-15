@@ -1,6 +1,7 @@
 /** Defines desktop-owned configuration, delivered history and the read-only Task projection.
  * LaunchOptions is read-only process state, separate from persisted settings. ProfileRuntimeState exposes activation in progress to fence Pet media controls. Main validates and persists these DTOs; renderer forms never own runtime configuration or saved secrets. Legacy Tavily fields normalize into provider/api_key before validation; SettingsState carries masked
  * first/last-four previews separately from redacted configuration for editable key fields.
+ * Legacy desktop speech fields remain readable for old settings files; active Profiles supply all conversation settings.
  * Speech settings migrate absent engine choices to Pipeline, strip legacy enabled flags, and keep SeedDuplex credentials independent; the Pet microphone owns session activation.
  * ProfileRuntimeState projects Realtime text-input ownership to every desktop window.
  */
@@ -8,8 +9,7 @@ import { z } from 'zod';
 import type { Message } from '../schemas/message';
 import { petSettingsSchema } from '../schemas/petSettings';
 
-const model = z.object({ base_url:z.string().max(2048), model_name:z.string().max(256), api_key:z.string().max(8192), timeout_seconds:z.number().positive().max(600) });
-const realtimeVoice = z.object({provider:z.literal('seeduplex'),api_key:z.string().max(8192),model:z.literal('1.2.6.1'),voice:z.string().max(256)});
+import {chatModelSchema as model, speechConfigSchema} from './voice';
 const webSettings = z.preprocess((raw) => {
   if (!raw || typeof raw !== 'object' || Array.isArray(raw)) return raw;
   const web = raw as Record<string, unknown>;
@@ -20,12 +20,7 @@ export const desktopConfigSchema = z.object({
   backend:z.object({
     app:z.object({data_dir:z.string().min(1),workspaces:z.array(z.object({id:z.string().min(1).max(128),path:z.string().min(1)})).max(100)}),
     chat_model:model,
-    main_agent:z.object({profile_dir:z.string().min(1),web:webSettings,speech:z.object({
-      mode:z.enum(['pipeline','realtime']).default('pipeline'),
-      realtime:realtimeVoice.default({provider:'seeduplex',api_key:'',model:'1.2.6.1',voice:''}),
-      api_key:z.string().max(8192),stt_model_name:z.string().min(1),tts_model_name:z.string().min(1),tts_voice:z.string().min(1),
-      silero_model_path:z.string(),silero_license_path:z.string(),smart_turn_model_path:z.string(),smart_turn_license_path:z.string()
-    })}),
+    main_agent:z.object({profile_dir:z.string().min(1),web:webSettings,speech:speechConfigSchema}),
     memory:z.object({embedding:z.object({provider:z.literal('hash'),dimension:z.literal(384)})}),
     task:z.object({user_data_dir:z.string(),pi_runtime_dir:z.string(),node_executable:z.string().min(1),default_timeout_seconds:z.number().int().min(1).max(86400),model:model})
   }),

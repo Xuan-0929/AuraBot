@@ -1,11 +1,39 @@
 # Main Agent 语音资源准备
 
-语音由 DashScope STT/TTS 与本地 Silero VAD、Smart Turn 断句模型共同完成。仅填写 API key 和音色并不足以开启语音；还需要模型、完整许可证和 Python speech 依赖。
+本发行版的两种语音模式均使用火山引擎。Pipeline 使用豆包流式语音识别（STT）、对话模型和豆包语音合成（TTS），配合本地 Silero VAD、Smart Turn 断句；Realtime 使用现有 SeedDuplex 实时语音服务，不加载 Pipeline 的本地模型。
+
+```mermaid
+flowchart LR
+    Mic[麦克风] --> Mode{语音模式}
+    Mode -->|Pipeline| VAD[本地 VAD / Smart Turn]
+    VAD --> ASR[火山引擎 STT]
+    ASR --> Agent[Main Agent / 对话模型]
+    Agent --> TTS[火山引擎 TTS]
+    Mode -->|Realtime| RT[火山引擎 SeedDuplex]
+    TTS --> Play[播放]
+    RT --> Play
+```
+
+## 火山引擎首次配置
+
+在[豆包语音控制台指南](https://docs.volcengine.com/docs/DoubaoVoice/console-guidance?lang=zh)中开通流式语音识别和语音合成，创建具备这两项服务权限的 **语音 API Key**。本版 Pipeline 使用新版控制台的 `X-Api-Key` 鉴权，不使用旧版 App ID / Access Token，也不要填写火山账号 AccessKey/SecretKey 或方舟文本模型的 Key。
+
+| Pipeline 设置 | 默认值 | 含义 |
+| --- | --- | --- |
+| STT 资源 ID | `volc.seedasr.sauc.duration` | 豆包流式语音识别 2.0 小时版 |
+| TTS 资源 ID | `seed-tts-2.0` | 豆包语音合成 2.0 |
+| TTS 音色 | `zh_female_vv_uranus_bigtts` | 与 TTS 2.0 资源匹配的音色 |
+
+资源 ID 位于语音设置的高级选项，持久化字段沿用 `stt_model_name` / `tts_model_name`。音色需与实际开通的资源匹配，见[官方音色列表](https://www.volcengine.com/docs/6561/1257544)。Pipeline 的对话模型仍单独配置，可使用火山方舟模型的兼容接口和对应凭据；语音 Key 不自动复用于文本模型。Realtime 保留独立的 Key 和受支持的全双工音色。
+
+旧配置若仍指定 `fun-asr` / `paraformer` / `qwen` STT 或 `cosyvoice` / `sambert` / `qwen` TTS，会在读取时换为上述默认值并清空旧 Pipeline Key；本地资源路径、模式和 Realtime 凭据保留。升级后需重新填写火山语音 Key、保存并应用。历史备份文件不在迁移中改写。
+
+实现遵循[官方流式识别协议](https://docs.volcengine.com/docs/DoubaoVoice/LargemodelstreamingautomaticspeechrecognitionAPI?lang=zh)及[HTTP 流式合成协议](https://docs.volcengine.com/docs/DoubaoVoice/HTTPChunkedSSEUnidirectionalStreaming-V3?lang=zh)：STT 上传 16 kHz PCM，每包 100 ms；TTS 按 clause 请求并流式接收 24 kHz PCM。识别停止时发送末包并等待最终文本；连接中断或服务错误不会当成识别成功。调试日志记录连接、音频字节数、首音频耗时和关闭状态，不记录密钥、转写正文或音频。
 
 ## 设置页操作
 
-1. 打开设置 → 实时语音，点击“一键准备”。下载期间显示总进度、已下载大小，可取消并重试。
-2. 完成后四个资源路径写入当前设置草稿。填写 DashScope key、音色并开启语音能力，点击“保存”，再点击“应用”。
+1. 打开设置 → 角色配置 → 编辑 → 语音对话，点击“一键准备”。下载期间显示总进度、已下载大小，可取消并重试。
+2. 完成后四个资源路径写入当前设置草稿。填写火山引擎语音 API Key 和音色，点击“保存”，再点击“应用”。
 3. 等待角色激活完成，在桌宠侧点击“打开语音”。此时才申请麦克风并加载、验证本地模型。
 
 下载不会修改密钥或自动保存/应用设置。设置窗口关闭后下载继续；重新打开可查看资源状态，再点击“一键准备”会复用已校验文件并填入草稿，不重复下载。退出应用会取消下载。取消或失败后保留已完成文件，清理当前临时文件；重试从未完成文件开头开始。
@@ -37,7 +65,7 @@ uv sync --project backend --extra speech
 - Silero：16 kHz 单声道 PCM；每次 512 个新样本，加 64 个上下文样本；state 为 float32 `[2, 1, 128]`。
 - Smart Turn：最近 8 秒 16 kHz 单声道音频，经本地 Whisper feature extractor 得到 float32 `[1, 80, 800]`。不需要下载 Whisper 权重或安装 PyTorch。
 - ONNX 使用 CPU、单线程、顺序执行；已加载会话在进程内复用。显式开启语音时先进行最小推理检查，成功后才确认开启。
-- 下载资源不调用 DashScope；模型加载与依赖安装不代表云端凭据或麦克风已验证。
+- 下载资源不调用火山引擎语音服务；模型加载与依赖安装不代表云端凭据或麦克风已验证。
 
 ## 排查
 
@@ -56,9 +84,11 @@ npm run rebuild:native
 AURABOT_SPEECH_DOWNLOAD_SMOKE=1 npx playwright test --config configs/playwright.config.ts speech-setup.spec.ts
 ```
 
-真实 DashScope STT/TTS 与物理麦克风/扬声器的验收分别记录，模拟设备不能证明真实设备已通过。发行安装脚本自动准备资源的后续工作见 `TODO.md`。
+真实火山引擎 STT/TTS 与物理麦克风/扬声器的验收分别记录，模拟设备不能证明真实设备已通过。发行安装脚本自动准备资源的后续工作见 `TODO.md`。
 
-### 本次验收记录（2026-09-14）
+### 历史验收记录（2026-09-14，旧 DashScope 实现）
+
+以下仅记录迁移前结果，不能作为火山引擎接口的云端验收。本次迁移通过协议模拟与自动化回归验证；火山引擎真实账户调用和设备听感仍需另行验收。
 
 - 本地固定版本 VAD 与 Smart Turn 的真实 ONNX 推理通过。
 - 使用已配置的 DashScope 模型/音色，对合成测试句完成 TTS→STT 检查：TTS 返回 162240 字节 PCM，STT 收到非空转写。没有记录或输出 API key。
@@ -77,7 +107,7 @@ AURABOT_SPEECH_DOWNLOAD_SMOKE=1 npx playwright test --config configs/playwright.
 
 ```mermaid
 flowchart LR
-    TTS["SDK 合成回调"] --> S["有大小上限的临时 PCM 文件"]
+    TTS["火山引擎流式音频回调"] --> S["有大小上限的临时 PCM 文件"]
     S --> W["后端最多领先 2 秒"]
     W --> P["Worklet 播放"]
     P -->|"累计消费进度，约每 200 ms"| W
@@ -87,7 +117,7 @@ flowchart LR
 
 - `renderer.progress` 消息携带 `clause_id` 和累计 `consumed_samples`（24 kHz 源采样数）。它只释放缓存额度，不能确认历史交付；前后端随应用一起更新。
 - 后端每块最多发送 4,800 个采样点，未消费上限 48,000 个。10 秒没有消费进展则取消当前句，保留会话。最终仍使用 `renderer.ack` 确认设备播放完成。
-- SDK 回调使用临时文件暂存，单句上限 120 秒 PCM，约 5.76 MB；不是常驻内存缓存。完成、取消及错误都会关闭暂存文件，取消会等待合成迭代器清理。没有新增常驻线程或依赖。
+- 流式音频回调使用临时文件暂存，单句上限 120 秒 PCM，约 5.76 MB；不是常驻内存缓存。完成、取消及错误都会关闭暂存文件，取消会等待合成迭代器清理。未新增第三方依赖；识别连接只在活跃回合内持有接收线程。
 - 取消标记之后不再发送旧 PCM；前端本地中止后丢弃在途旧音频，直到下一个有序 offer。迟到进度或 ACK 不会误结算下一句，也不会仅因此关闭连接。
 
 ## 内容无关的语音诊断

@@ -1,10 +1,13 @@
 /** Owns Profile configuration files and model packages inside the configured shared profiles root.
  * Validates and persists bounded Profile-local gaze and speech-mouth settings and framing preference alongside the adaptor.
+ * Profile-local voice settings commit with identity and revision; renderer details redact all saved/applied secrets.
  * SOUL.md is the only editable persona; fingerprints detect external changes.
  * A replayable journal commits SOUL/adaptor/identity together; immutable applied snapshots isolate
  * running conversations from edits. Legacy SQLite is backed up consistently before import. Context,
  * Memory and Qdrant remain Backend-owned: this repository only reports their paths and existence.
  */
+import type {SpeechAssetPaths} from '../../shared/contracts/speechAssets';
+import {defaultProfileVoice,profileVoiceSchema,voiceSecretPaths,voiceSecret} from '../../shared/contracts/voice';
 import Database from 'better-sqlite3';
 import { closeSync, copyFileSync, existsSync, lstatSync, mkdirSync, openSync, readFileSync, readSync, readdirSync, realpathSync, renameSync, rmSync, writeFileSync } from 'node:fs';
 import { basename, dirname, isAbsolute, join, relative, resolve, sep } from 'node:path';
@@ -66,7 +69,7 @@ function manifestReferences(root:string,manifest:string):Map<string,'motion'|'ex
   if(refs.Expressions){if(!Array.isArray(refs.Expressions))throw new Error('invalid_adaptor');refs.Expressions.forEach((e:any)=>add(e.File,'expression'));}
   return resources;
 }
-export interface ProfileRepositoryOptions {profilesRoot:string;legacyDatabasePath?:string;legacySettingsPath?:string}
+export interface ProfileRepositoryOptions {profilesRoot:string;legacyDatabasePath?:string;legacySettingsPath?:string;speechAssetPaths?:SpeechAssetPaths}
 export class ProfileRepository {
   readonly root:string;
   /** Check every existing repository-owned path segment, including dangling links and .tmp files. */
@@ -102,16 +105,17 @@ export class ProfileRepository {
   select(id:string):void{this.get(id);this.atomic(join(this.root,'index.json'),{selectedId:id});}
   private recover(id:string):void{const journal=join(this.directory(id),'.save-journal.json');if(existsSync(journal)){const config=this.json<ProfileConfig>(journal);if(config.profile.id!==id)throw new Error('invalid_resource');if(config.adaptor.schema_version!==2)this.backupAdaptor(journal);this.commit(config);}}
   private fingerprint(text:string):string{return createHash('sha256').update(text).digest('hex');}
-  private canonical(config:Omit<ProfileConfig,'soulText'|'soulFingerprint'> & {soulText?:string}):ProfileConfig {
+  private defaultVoice(){const voice=defaultProfileVoice();Object.assign(voice.speech,this.options.speechAssetPaths);return voice;}
+  private canonical(config:Omit<ProfileConfig,'soulText'|'soulFingerprint'|'voice'> & {soulText?:string;voice?:ProfileConfig['voice']}):ProfileConfig {
     const {soul,...profile}=config.profile;const soulText=config.soulText??legacySoulMarkdown(soul,profile.displayName);
-    return {...config,adaptor:adaptorSchema.parse(upgradeAvatarAdaptor(config.adaptor)),profile,soulText,soulFingerprint:this.fingerprint(soulText)};
+    return {...config,voice:profileVoiceSchema.parse(config.voice??this.defaultVoice()),adaptor:adaptorSchema.parse(upgradeAvatarAdaptor(config.adaptor)),profile,soulText,soulFingerprint:this.fingerprint(soulText)};
   }
   private commit(input:ProfileConfig):void {
     const oldPath=join(this.directory(input.profile.id),'live2d/adaptor.json');if(existsSync(oldPath)&&this.json<AvatarAdaptor>(oldPath).schema_version!==2)this.backupAdaptor(oldPath);
     const config=this.canonical(input);this.checkConfigWrites(config.profile.id);const directory=this.directory(config.profile.id);
     const path=this.soulPath(config.profile.id);mkdirSync(directory,{recursive:true});writeFileSync(path+'.tmp',config.soulText,{mode:0o600});renameSync(path+'.tmp',path);
     this.atomic(join(directory,'live2d/adaptor.json'),config.adaptor);
-    this.atomic(join(directory,'profile.json'),{...config.profile,soulFormat:2,soulFingerprint:config.soulFingerprint,revision:config.revision,modelVersion:config.modelVersion});
+    this.atomic(join(directory,'profile.json'),{...config.profile,voice:config.voice,soulFormat:2,soulFingerprint:config.soulFingerprint,revision:config.revision,modelVersion:config.modelVersion});
     rmSync(join(directory,'.save-journal.json'),{force:true});
   }
   private write(config:ProfileConfig):void{this.checkConfigWrites(config.profile.id);this.atomic(join(this.directory(config.profile.id),'.save-journal.json'),config);this.commit(config);}
@@ -135,7 +139,7 @@ export class ProfileRepository {
     const journal=join(directory,'.save-journal.json');
     if(existsSync(journal)&&before.soulFormat!==2){const pending=this.json<ProfileConfig>(journal);if(pending.profile.id!==id)throw new Error('invalid_profile_id');const config=this.canonical(pending);if(existsSync(this.soulPath(id)))config.soulText=readFileSync(this.soulPath(id),'utf8');this.commit(config);}
     else this.recover(id);
-    const {revision,modelVersion,soulFormat,soulFingerprint,...identity}=this.json<any>(join(directory,'profile.json'));
+    const {revision,modelVersion,soulFormat,soulFingerprint,voice:storedVoice,...identity}=this.json<any>(join(directory,'profile.json'));
     if(soulFormat!==2){
       const legacyPath=this.owned(join(directory,'soul.json'));const soul=existsSync(legacyPath)?this.json<Profile['soul']>(legacyPath):identity.soul;
       const config=this.canonical({profile:{...identity,soul},revision,modelVersion,adaptor:this.json(join(directory,'live2d/adaptor.json')),soulText:existsSync(this.soulPath(id))?readFileSync(this.soulPath(id),'utf8'):undefined});
@@ -145,12 +149,12 @@ export class ProfileRepository {
     const soulText=readFileSync(this.soulPath(id),'utf8'),fingerprint=this.fingerprint(soulText);
     const changed=fingerprint!==soulFingerprint;const nextRevision=revision+Number(changed);
     const adaptor=this.readAdaptor(join(directory,'live2d/adaptor.json'));
-    if(changed){adaptor.revision=nextRevision;this.atomic(join(directory,'live2d/adaptor.json'),adaptor);this.atomic(join(directory,'profile.json'),{...identity,soulFormat:2,soulFingerprint:fingerprint,revision:nextRevision,modelVersion});}
-    return {profile:identity,soulText,soulFingerprint:fingerprint,revision:nextRevision,modelVersion,adaptor};
+    if(changed){adaptor.revision=nextRevision;this.atomic(join(directory,'live2d/adaptor.json'),adaptor);this.atomic(join(directory,'profile.json'),{...identity,voice:storedVoice,soulFormat:2,soulFingerprint:fingerprint,revision:nextRevision,modelVersion});}
+    return {profile:identity,voice:profileVoiceSchema.parse(storedVoice??this.defaultVoice()),soulText,soulFingerprint:fingerprint,revision:nextRevision,modelVersion,adaptor};
   }
   applied(id:string):ProfileConfig|null {
     const path=join(this.directory(id),'applied.json');if(!existsSync(path))return null;
-    const original=this.json<ProfileConfig>(path);const adaptor=adaptorSchema.parse(upgradeAvatarAdaptor(original.adaptor));if(original.adaptor.schema_version!==2){this.backupAdaptor(path);original.adaptor=adaptor;this.atomic(path,original);}if(typeof original.soulText==='string')return original;
+    const original=this.json<ProfileConfig>(path);const adaptor=adaptorSchema.parse(upgradeAvatarAdaptor(original.adaptor));if(original.adaptor.schema_version!==2){this.backupAdaptor(path);original.adaptor=adaptor;this.atomic(path,original);}if(typeof original.soulText==='string')return this.canonical(original);
     this.backupSoulFiles(id);const converted=this.canonical(original);this.atomic(path,converted);return converted;
   }
   get(id:string):ProfileDetail{const saved=this.read(id);let resources:AvatarResource[]=[];if(saved.modelVersion){try{resources=this.discover(id);}catch{/* Missing visuals never prevent Soul editing. */}}
@@ -163,10 +167,14 @@ export class ProfileRepository {
     if(input.soulText!==undefined&&(typeof input.soulText!=='string'||input.expectedSoulFingerprint!==previous.soulFingerprint))throw new Error('soul_conflict');
     const soulText=input.soulText??previous.soulText;if(Buffer.byteLength(soulText,'utf8')>SOUL_MAX_BYTES)throw new Error('soul_too_large');
     profile.createdAt=previous.profile.createdAt;profile.updatedAt=previous.profile.updatedAt;profile.active=previous.profile.active;
+    const parsedVoice=profileVoiceSchema.safeParse(input.voice??previous.voice);if(!parsedVoice.success)throw new Error('invalid_voice');
+    const voice=parsedVoice.data;
+    for(const path of voiceSecretPaths)if(!voiceSecret(voice,path))voiceSecret(voice,path,input.clearSecrets?.includes(path)?'':voiceSecret(previous.voice,path));
+    if(voice.chat_model.base_url&&!/^https?:\/\//.test(voice.chat_model.base_url))throw new Error('invalid_voice');
     const adaptor=JSON.stringify(input.adaptor)===JSON.stringify(previous.adaptor)?structuredClone(previous.adaptor):this.validate(input.adaptor,previous);adaptor.revision=previous.revision;
-    if(JSON.stringify({profile,adaptor,soulText})===JSON.stringify({profile:previous.profile,adaptor:previous.adaptor,soulText:previous.soulText}))return this.get(id);
+    if(JSON.stringify({profile,adaptor,soulText,voice})===JSON.stringify({profile:previous.profile,adaptor:previous.adaptor,soulText:previous.soulText,voice:previous.voice}))return this.get(id);
     if(this.fingerprint(readFileSync(this.soulPath(id),'utf8'))!==previous.soulFingerprint)throw new Error('soul_conflict');
-    const revision=previous.revision+1;profile.updatedAt=new Date().toISOString();this.write(this.canonical({...previous,profile,soulText,revision,adaptor:{...adaptor,revision}}));return this.get(id);
+    const revision=previous.revision+1;profile.updatedAt=new Date().toISOString();this.write(this.canonical({...previous,profile,soulText,voice,revision,adaptor:{...adaptor,revision}}));return this.get(id);
   }
   /** One-time legacy model adoption preserves the last applied Soul and any separately saved edits. */
   adoptMigratedModel(id:string):void{const old=this.applied(id),saved=this.read(id);if(old&&!old.adaptor.model&&saved.adaptor.model)this.atomic(join(this.directory(id),'applied.json'),{...old,modelVersion:saved.modelVersion,adaptor:{...saved.adaptor,revision:old.revision}});}
@@ -205,4 +213,16 @@ export class ProfileRepository {
     }
     // Backend performs its own closed-handle Memory migration before opening a Profile runtime.
   }
+}
+
+/** Convert only at the Main IPC seam; runtime snapshots keep their original credentials. */
+export function publicProfileDetail(detail:ProfileDetail):ProfileDetail {
+ const result=structuredClone(detail);result.secrets={};result.secretPreviews={};
+ for(const path of voiceSecretPaths){
+  const key=voiceSecret(result.saved.voice,path),characters=Array.from(key);
+  result.secrets[path]=Boolean(key);
+  result.secretPreviews[path]=characters.length<=8?key:characters.slice(0,4).join('')+'•'.repeat(characters.length-8)+characters.slice(-4).join('');
+  voiceSecret(result.saved.voice,path,'');if(result.applied)voiceSecret(result.applied.voice,path,'');
+ }
+ return result;
 }

@@ -1,4 +1,5 @@
-/** Drives the real two-tab editor, SOUL files and production Cubism preview in a temporary data root.
+/** Drives the real three-tab editor, SOUL files and production Cubism preview in a temporary data root.
+ * Voice snapshots cover A/B and same-Profile engine switching, secret redaction and applied-mode restart restoration.
  * Checks A/B isolation, model import and resident playback, externally edited SOUL, preview teardown and restart.
  * Editor permutations and translations belong to profilesPage.spec.ts; this suite retains real IPC/GPU coverage.
  * No paid provider, microphone or real user directory participates in this test. */
@@ -72,4 +73,38 @@ test('Profile workbench edits SOUL and actions without switching, releases previ
   const restoredPet=await app.firstWindow();await expect.poll(()=>restoredPet.evaluate(async()=>{if(!window.aurabot)return null;const r=(await window.aurabot.listProfiles()).runtime;return r.online?r.activeId:null;}),{timeout:45000}).toBe(b);
   const restored=await restoredPet.evaluate(id=>window.aurabot.getProfile(id),b);expect(restored.saved.soulText).toContain('TAIL_RULE');expect(restored.applied?.soulText).toBe(restored.saved.soulText);expect(restored.applied?.adaptor.entries[id].agent_enabled).toBe(true);
  }finally{await app.close();await expect.poll(async()=>{try{await fetch('http://127.0.0.1:6401/api/v1/readiness');return true;}catch{return false;}},{timeout:15000}).toBe(false);rmSync(userDataDir,{recursive:true,force:true});}
+});
+
+test('Profile voice snapshots switch engines independently and restore the applied mode',async()=>{
+ const root=mkdtempSync(join(tmpdir(),'aurabot-profile-voice-e2e-'));
+ const launch=()=>electron.launch({args:[join(appRoot,'out/main/index.js')],cwd:appRoot,env:{...process.env,AURABOT_USER_DATA_DIR:root}});
+ let app=await launch();
+ try{
+  const pet=await app.firstWindow();
+  await expect.poll(()=>pet.evaluate(async()=>Boolean(window.aurabot)&&(await window.aurabot.listProfiles()).runtime.online),{timeout:45000}).toBe(true);
+  const before=await(await fetch('http://127.0.0.1:6401/api/v1/readiness')).json();
+  const ids=await pet.evaluate(async()=>{
+   const a=(await window.aurabot.listProfiles()).runtime.selectedId;
+   const b=(await window.aurabot.createProfile('Realtime B')).saved;
+   b.voice.speech.mode='realtime';b.voice.speech.realtime.api_key='fixture-realtime-secret';b.voice.speech.realtime.voice='fixture-voice';
+   const detail=await window.aurabot.saveProfile(b.profile.id,{...b,expectedSoulFingerprint:b.soulFingerprint});
+   if(detail.saved.voice.speech.realtime.api_key!=='')throw new Error('secret leaked');
+   await window.aurabot.activateProfile(b.profile.id);
+   return {a,b:b.profile.id};
+  });
+  expect((await pet.evaluate(()=>window.aurabot.getSettings())).capabilities?.voice).toBe(true);
+  await pet.evaluate(id=>window.aurabot.activateProfile(id),ids.a);
+  expect((await pet.evaluate(()=>window.aurabot.getSettings())).capabilities?.voice).toBe(false);
+  await pet.evaluate(id=>window.aurabot.activateProfile(id),ids.b);
+  // Applying a different engine on the same Profile must retire the previous resources too.
+  await pet.evaluate(async id=>{const {saved}=await window.aurabot.getProfile(id);saved.voice.speech.mode='pipeline';await window.aurabot.saveProfile(id,{...saved,expectedSoulFingerprint:saved.soulFingerprint});await window.aurabot.activateProfile(id,false,true);},ids.b);
+  expect((await pet.evaluate(()=>window.aurabot.getSettings())).capabilities?.voice).toBe(false);
+  await pet.evaluate(async id=>{const {saved}=await window.aurabot.getProfile(id);saved.voice.speech.mode='realtime';await window.aurabot.saveProfile(id,{...saved,expectedSoulFingerprint:saved.soulFingerprint});await window.aurabot.activateProfile(id,false,true);},ids.b);
+  expect((await pet.evaluate(()=>window.aurabot.getSettings())).capabilities?.voice).toBe(true);
+  expect((await(await fetch('http://127.0.0.1:6401/api/v1/readiness')).json()).processId).toBe(before.processId);
+  await app.close();app=await launch();const restored=await app.firstWindow();
+  await expect.poll(()=>restored.evaluate(async()=>Boolean(window.aurabot)&&(await window.aurabot.listProfiles()).runtime.online),{timeout:45000}).toBe(true);
+  expect((await restored.evaluate(()=>window.aurabot.listProfiles())).runtime.activeId).toBe(ids.b);
+  expect((await restored.evaluate(()=>window.aurabot.getSettings())).capabilities?.voice).toBe(true);
+ }finally{await app.close();rmSync(root,{recursive:true,force:true});}
 });

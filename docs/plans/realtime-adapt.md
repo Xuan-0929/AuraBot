@@ -151,7 +151,7 @@ flowchart TB
 | 动作 | 先音频后动作、取消后动作、无效动作名 | 音频不等待；过期动作丢弃；只执行有效能力 |
 | 生命周期 | 关闭语音、切模式、切 Profile、后端重启 | 无旧回调污染；关闭语音不取消已接受的 Task 或归档 |
 | 网络 | 建连失败、连接中断、工具执行中断线 | 停止本次播放与收音；提示手动恢复；不重复执行任务 |
-| 配置 | 旧配置迁移、缺少密钥、Realtime 模式启动 | 默认仍为 Pipeline；Realtime 不要求 DashScope 或本地 VAD 模型资产 |
+| 配置 | 旧配置迁移、缺少密钥、Realtime 模式启动 | 默认仍为 Pipeline；Realtime 不要求 Pipeline STT/TTS 或本地 VAD 模型资产 |
 
 真实语音验收还必须验证：
 
@@ -187,7 +187,7 @@ flowchart TB
 
 | 边界 | 当前代码落点 | 行为 |
 |---|---|---|
-| 配置及资源创建 | `settings.py`、`main.py`、前端语音设置 | Realtime 不检查文本模型、DashScope 或本地 VAD/SmartTurn 资产；文本模型仍供文字聊天、记忆提取使用 |
+| 配置及资源创建 | `settings.py`、`main.py`、前端语音设置 | Realtime 不检查文本模型、Pipeline STT/TTS 或本地 VAD/SmartTurn 资产；文本模型仍供文字聊天、记忆提取使用 |
 | 模型协议适配 | `backend/main_agent/seeduplex.py` | WebSocket 鉴权、JSON 音频、静音保活、扁平工具 schema、真实 call_id 结果回传、会话配置和历史更新 |
 | Realtime 引擎 | `backend/main_agent/realtime_voice.py` | 独立输入与输出、流式文本、回复/问题隔离、播放排队、打断及云端上下文修正、断线清理 |
 | 共享能力 | `backend/main_agent/capabilities.py` | Pipeline 与 Realtime 共用检索、预取、空闲归档、工具校验、调用去重及 Task 操作；业务操作不随语音等待者取消 |

@@ -4,6 +4,7 @@ Electron sends one saved/applied Soul and adaptor snapshot. Activation revokes t
 before changing resources; same-Profile application waits for cancelled invokes before freezing new tools.
 Token issuance only checks the active snapshot. Failed retirement blocks every activation until the
 remaining owners close; completed shutdown steps are never repeated. Dormant Profiles own no active handles.
+Applied voice settings participate in snapshot identity; changes rebuild Profile owners after old media closes.
 The selected voice engine is lazy and has a shorter lifetime than the Profile's shared capabilities.
 """
 
@@ -17,10 +18,12 @@ import re
 import secrets
 from collections.abc import Awaitable, Callable
 from dataclasses import dataclass
+from copy import deepcopy
 from pathlib import Path
 from typing import Any
 
 from .avatar import AvatarCapabilities
+from .settings import ChatModelSettings, SpeechSettings
 
 
 _PROFILE_ID = re.compile(r"^[A-Za-z0-9][A-Za-z0-9_-]{0,127}$")
@@ -41,6 +44,8 @@ class ProfileResources:
     speech_factory: Callable[[], Any] | None = None
     _shutdown_stage: int = 0
     voice_mode: str = "pipeline"
+    voice_config: dict[str, Any] | None = None
+    voice_available: bool = False
 
     @property
     def capabilities(self) -> Any:
@@ -86,7 +91,7 @@ class ProfileResources:
             self._shutdown_stage += 1
 
 
-ProfileFactory = Callable[[str, Path, str], Awaitable[ProfileResources]]
+ProfileFactory = Callable[..., Awaitable[ProfileResources]]
 
 
 class ActiveProfileManager:
@@ -115,9 +120,15 @@ class ActiveProfileManager:
         return self._active.memory if self._active is not None else None
 
     async def activate(self, profile_id: str, soul: str, *, revision: int = 0,
-                       adaptor: dict[str, Any] | None = None, model_version: str = "", force: bool = False) -> int:
+                       adaptor: dict[str, Any] | None = None, model_version: str = "", force: bool = False, voice: dict[str, Any] | None = None) -> int:
         """Activate or refresh one Electron-owned Profile and replace its voice generation."""
 
+        voice = deepcopy(voice)
+        if voice is not None:
+            if not isinstance(voice, dict) or set(voice) != {"chat_model", "speech"}:
+                raise ValueError("invalid_voice")
+            ChatModelSettings.from_config(voice["chat_model"])
+            SpeechSettings.from_config(voice["speech"], config_root=self.profile_root.parent)
         identifier = self.validate_profile_id(profile_id)
         effective_soul = str(soul).strip()
         if not effective_soul or len(effective_soul.encode("utf-8")) > 34 * 1024:
@@ -138,7 +149,7 @@ class ActiveProfileManager:
         effective_adaptor = adaptor or {"schema_version": 1, "revision": max(revision, 1), "model": None, "entries": {}, "states": {}}
         capabilities = AvatarCapabilities.compile(effective_adaptor, profile_id=identifier, revision=revision,
             live2d_root=live2d_root)
-        snapshot_key = json.dumps([effective_soul, revision, adaptor or {}, model_version], sort_keys=True, ensure_ascii=True)
+        snapshot_key = json.dumps([effective_soul, revision, adaptor or {}, model_version, voice], sort_keys=True, ensure_ascii=True)
         if self._lock.locked():
             raise RuntimeError("activation_in_progress")
         async with self._lock:
@@ -151,7 +162,7 @@ class ActiveProfileManager:
             self._next_generation += 1
             generation = self._next_generation
             current = self._active
-            if current is not None and current.profile_id == identifier:
+            if current is not None and current.profile_id == identifier and current.voice_config == voice:
                 await self.hub.clear_active(current.profile_id, current.generation)
                 disconnect = getattr(current.runtime, "renderer_disconnected", None)
                 if disconnect is not None:
@@ -179,9 +190,10 @@ class ActiveProfileManager:
             path.mkdir(parents=True, exist_ok=True)
             resources: ProfileResources | None = None
             try:
-                resources = await self.factory(identifier, path, effective_soul)
+                resources = await self.factory(identifier, path, effective_soul, **({"voice": voice} if voice is not None else {}))
                 if resources.profile_id != identifier:
                     raise RuntimeError("Profile factory returned a mismatched identity")
+                resources.voice_config = voice
                 resources.generation = generation
                 resources.runtime.generation = generation
                 resources.revision = revision
@@ -197,6 +209,9 @@ class ActiveProfileManager:
                     await self.hub.clear_active(resources.profile_id, resources.generation)
                     await self._finish_retiring()
                 raise
+            debug = getattr(resources.runtime, "debug", None)
+            if debug is not None:
+                debug.emit("system", "profile.voice.applied", mode=resources.voice_mode, revision=revision)
             self._active = resources
             return generation
 

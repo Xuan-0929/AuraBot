@@ -1,3 +1,4 @@
+<!-- Uses shared Pet minimum dimensions so renderer layout follows the native resize limits. -->
 <!-- Connects realtime voice/state delivery to the resident Live2D scene and desktop controls.
      Backend no_audio maps to Profile idle; only Backend VAD selects listening. Scene actions
      and state requests share the opt-in Live Debug log to trace acoustic-to-animation handoffs.
@@ -13,6 +14,7 @@
 <template>
   <main
     class="desktop-pet pet-vue-root"
+    :style="{ minWidth: PET_WINDOW_MIN_SIZE.width + 'px', minHeight: PET_WINDOW_MIN_SIZE.height + 'px' }"
     :data-agent-status="petStore.agentStatus"
     :data-click-through="petStore.petSettings.clickThroughPet ? 'true' : 'false'"
     :data-resizing="resizeDraggingDirection ? 'true' : 'false'"
@@ -88,6 +90,7 @@
 
 <script setup lang="ts">
 import { computed, nextTick, onBeforeUnmount, onMounted, ref, watch } from "vue";
+import { PET_WINDOW_MIN_SIZE } from "@shared/contracts/petWindow";
 import type { PetResizeDirection } from "@shared/contracts/ipc";
 import type { DebugScalar } from "@shared/contracts/liveDebug";
 import {
@@ -344,9 +347,9 @@ function handleLive2DViewTransformChange(transform: Live2DViewTransform) {
 </script>
 
 <style>
+/* The shared body minimum is for other windows; Pet owns its smaller minimum. */
+body:has(.pet-vue-root) { min-width: 0; }
 .pet-vue-root {
-  min-width: 270px;
-  min-height: 380px;
   /* Fill the pet window so the model shell (and anchored controls) track the resizable frame. */
   place-items: stretch;
 }

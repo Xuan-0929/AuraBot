@@ -1,4 +1,5 @@
-/** Runs the real Electron windows, Python child and SQLite delivery path with isolated application data.
+/** Profile conversation changes replace runtime resources without restarting Backend.
+ * Runs the real Electron windows, Python child and SQLite delivery path with isolated application data.
  * A local deterministic Chat Completions server checks transport integration without claiming real model,
  * Pi or microphone acceptance. The first launch also exercises the packaged AudioWorklet and Pet controls.
  * Saved/applied revisions, busy restart cancellation and port ownership cross real desktop interfaces;
@@ -74,13 +75,13 @@ test('fresh desktop renders Hiyori, exposes unavailable models and applies saved
   await settings.getByRole('button',{name:'保存',exact:true}).click();
   await settings.getByRole('button',{name:'应用',exact:true}).click();
   await expect(settings.getByRole('status')).toHaveText('已应用');
-  await settings.getByRole('button',{name:'实时语音',exact:true}).click();
+  await settings.getByRole('button',{name:'角色配置',exact:true}).click();await settings.getByRole('button',{name:'编辑',exact:true}).first().click();await settings.getByRole('tab',{name:'语音对话',exact:true}).click();
   await settings.getByLabel('模型名称',{exact:true}).first().fill('unconfigured-smoke');
   await settings.getByRole('button',{name:'保存',exact:true}).click();
-  await expect(settings.getByRole('status')).toHaveText('已保存');
+  await expect(settings.locator('.profile-save-bar [role=status]')).toHaveText('已保存，待应用');
   await settings.getByRole('button',{name:'应用',exact:true}).click();
-  await expect(settings.getByRole('status')).toHaveText('已应用',{timeout:40000});
-  expect((await status()).processId).not.toBe(initial.processId);
+  await expect(settings.locator('.profile-save-bar [role=status]')).toHaveText('已应用',{timeout:40000});
+  expect((await status()).processId).toBe(initial.processId);
   const consolePromise=electronApp.waitForEvent('window');await pet.evaluate(()=>window.aurabot.openConsoleWindow());const consolePage=await consolePromise;
   await pet.bringToFront();await pet.locator('.pet-action-console').focus();
   await expect(pet.locator('.pet-action-console')).toHaveCSS('opacity','1');
@@ -114,7 +115,7 @@ test('real Python text delivery persists only say_to_user and busy restart cance
  let {electronApp,pet,userDataDir}=await launch();
  try{
   await ready(pet);
-  await pet.evaluate(async(port)=>{const s=await window.aurabot.getSettings();s.config.backend.chat_model={base_url:`http://127.0.0.1:${port}/v1`,model_name:'local-smoke',api_key:'local-fixture-key',timeout_seconds:60};await window.aurabot.saveSettings(s.config);await window.aurabot.applySettings();},port);
+  await pet.evaluate(async(port)=>{const {runtime}=await window.aurabot.listProfiles();const {saved}=await window.aurabot.getProfile(runtime.selectedId);saved.voice.chat_model={base_url:`http://127.0.0.1:${port}/v1`,model_name:'local-smoke',api_key:'local-fixture-key',timeout_seconds:60};await window.aurabot.saveProfile(runtime.selectedId,{...saved,expectedSoulFingerprint:saved.soulFingerprint});await window.aurabot.activateProfile(runtime.selectedId,false,true);},port);
   const before=await status();
   let sendError='';
   const sending=pet.evaluate(()=>window.aurabot.sendChatMessage({content:'你好'})).catch(error=>{sendError=String(error);throw error;});
@@ -122,7 +123,7 @@ test('real Python text delivery persists only say_to_user and busy restart cance
   try{await expect.poll(()=>requestCount,{timeout:18000}).toBe(1);}catch(error){
     console.log('TEXT_DIAGNOSTIC',JSON.stringify({sendError,pet:await pet.locator('body').innerText(),history:await pet.evaluate(()=>window.aurabot.getHistory()),readiness:await status(),metrics:await(await fetch('http://127.0.0.1:6401/api/v1/metrics')).json()}));throw error;
   }
-  await pet.evaluate(async()=>{const s=await window.aurabot.getSettings();s.config.backend.chat_model.timeout_seconds=61;await window.aurabot.saveSettings(s.config);});
+  await pet.evaluate(async()=>{const s=await window.aurabot.getSettings();s.config.backend.task.model.timeout_seconds=61;await window.aurabot.saveSettings(s.config);});
   const settingsPromise=electronApp.waitForEvent('window');await pet.evaluate(()=>window.aurabot.openSettingsWindow());const settings=await settingsPromise;
   await settings.getByRole('button',{name:'应用',exact:true}).click();
   await expect(settings.getByRole('alertdialog')).toContainText('正在处理对话');

@@ -97,7 +97,7 @@ ActiveInput。ActiveInput 保留：
 
 Context 写入 `user_segment {segment_id,input_id,text}`。Fold 后唯一对话表示是
 `conversation_turns`；没有 `transcript` 或 `delivered_clauses` 兼容副本。Production speech coordinator
-会让每个非空 normalized transcript update 请求 PREPARE admission；即使 DashScope partial 的
+会让每个非空 normalized transcript update 请求 PREPARE admission；即使 火山引擎 partial 的
 `stable_prefix` 为空也一样，实际 admission、合并和每 input 次数上限仍完全由 Runtime 现有策略决定。
 
 ### 3.2 Invoke 调度
@@ -241,11 +241,11 @@ Mic queue 满时丢最旧 frame，不发送诊断事件。服务器发送只有�
 SpeechService 只拥有 SpeechInputCoordinator、ClauseSpeechDelivery 和一个 mic consumer task；它不
 关闭 Runtime。speech 未配置或资产/依赖不可用时，不创建 disabled object，token 请求返回 unavailable。
 
-STT、VAD、EOU 和 Runtime port 只支持生产 async 契约。DashScope TTS 只支持官方 callback streaming：
+STT、VAD、EOU 和 Runtime port 只支持生产 async 契约。火山引擎 TTS 使用 HTTP 流式输出，transport 将 PCM 传入既有 callback spool：
 
 - 每 clause 独立 transport/cancel handle。
-- SDK 阻塞调用在 worker thread。
-- callback 写入最多 32 chunks 的 asyncio queue。
+- HTTP 阻塞读取在 worker thread；ASR 使用 WebSocket 双向流。
+- callback 写入上限 120 秒 PCM 的临时文件，消费端每次读取最多 200 ms 音频。
 - 第一块 callback 数据立即 yield。
 - overflow、error、cancel、complete 只收敛一次。
 

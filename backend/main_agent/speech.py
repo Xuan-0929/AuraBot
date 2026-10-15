@@ -1,7 +1,7 @@
 """Own the active Profile's async speech providers, local VAD/EOU, input coordinator, and delivery.
 
 The Pet microphone owns activation; there is no separate configuration enable switch.
-DashScope-specific callback fields and credentials terminate inside the adapters and become normalized
+Volcengine-specific callback fields and credentials terminate inside the adapters and become normalized
 ``TranscriptUpdate`` facts before Main Agent Core can observe them; every non-empty production snapshot,
 including a mutable-only partial, requests existing PREPARE admission. Session callbacks enter Core in arrival
 order; SAY-scoped protocol cancellation removes only that utterance from the existing delivery queue;
@@ -22,7 +22,7 @@ Delivery explicitly closes synthesis when playback-credit waits are cancelled, j
 Hub-owned frozen diagnostic scopes observe 500 ms acoustic windows, VAD readiness and
 session-specific STT finalization alongside EOU/TTS transitions synchronously;
 they never retain audio, provider payloads, exceptions, or add workers to the speech pipeline.
-STT sends and finalization share one coordinator lock; the adapter serializes actual SDK calls and
+STT sends and finalization share one coordinator lock; the adapter serializes actual transport calls and
 owns one stop task even after timeout. Failed recognition retires Runtime input instead of using partials.
 SpeechService implements the same voice lifecycle and renderer ACK interface as RealtimeVoiceEngine;
 Pipeline keeps its local turn policy while Profile capabilities own shared business effects.
@@ -118,7 +118,7 @@ class SpeechProviderUnavailable(RuntimeError):
     """Stable optional-provider failure suitable for capability degradation and diagnostics."""
 
 
-class _DashScopeSttSession:
+class _VolcengineSttSession:
     """Fence one provider callback generation onto its owner loop and drain sink work on close."""
 
     def __init__(
@@ -137,7 +137,7 @@ class _DashScopeSttSession:
         self._stop_task: asyncio.Task[None] | None = None
 
     def _transport_call(self, method: Callable[..., Any], *args: Any) -> None:
-        # Cancelling to_thread does not stop its thread. Serialize the actual SDK operations here.
+        # Cancelling to_thread does not stop its thread. Serialize the actual transport operations here.
         with self._io_lock:
             method(*args)
 
@@ -150,11 +150,11 @@ class _DashScopeSttSession:
         await asyncio.wait_for(asyncio.shield(self._stop_task), timeout)
 
     def provider_event(self, event: Any) -> None:
-        """Accept an SDK-thread event only for this still-open session generation."""
+        """Accept a transport-thread event only for this still-open session generation."""
 
         if self._closed:
             return
-        update = _normalize_dashscope_event(event)
+        update = _normalize_volcengine_event(event)
         if update is None:
             return
         try:
@@ -223,7 +223,7 @@ class _DashScopeSttSession:
             raise RuntimeError("STT session is closed")
         try:
             await self._stop(_STT_FINISH_TIMEOUT_SECONDS)
-            # SDK-thread callbacks are scheduled before stop returns; let their sink tasks enter the set.
+            # transport-thread callbacks are scheduled before stop returns; let their sink tasks enter the set.
             await asyncio.sleep(0)
             if self._closed:
                 raise RuntimeError("STT finalization was aborted")
@@ -265,8 +265,8 @@ class _DashScopeSttSession:
             pass
 
 
-class DashScopeStreamingSttProvider:
-    """Adapt DashScope Recognition callbacks to normalized transcript snapshots."""
+class VolcengineStreamingSttProvider:
+    """Adapt Volcengine ASR callbacks to normalized transcript snapshots."""
 
     def __init__(
         self,
@@ -281,14 +281,14 @@ class DashScopeStreamingSttProvider:
             raise ValueError("AuraBot streaming STT requires 16000 Hz audio")
         self.sample_rate_hz = sample_rate_hz
         self._api_key = api_key.strip()
-        self._transport_factory = transport_factory or _dashscope_stt_transport
+        self._transport_factory = transport_factory or _volcengine_stt_transport
 
     async def start(self, on_update: TranscriptSink) -> StreamingSttSession:
         if not callable(on_update):
             raise TypeError("transcript sink must be callable")
 
         owner_loop = asyncio.get_running_loop()
-        session: _DashScopeSttSession | None = None
+        session: _VolcengineSttSession | None = None
         transport: Any | None = None
 
         def on_event(event: Any) -> None:
@@ -304,7 +304,7 @@ class DashScopeStreamingSttProvider:
             if self._api_key:
                 options["api_key"] = self._api_key
             transport = self._transport_factory(**options)
-            session = _DashScopeSttSession(transport, owner_loop, on_update)
+            session = _VolcengineSttSession(transport, owner_loop, on_update)
             await asyncio.to_thread(transport.start)
         except BaseException as exc:
             if transport is not None:
@@ -321,15 +321,15 @@ class DashScopeStreamingSttProvider:
                 raise
             if isinstance(exc, (ImportError, ModuleNotFoundError)):
                 raise SpeechProviderUnavailable(
-                    "DashScope STT dependency is unavailable"
+                    "Volcengine STT dependency is unavailable"
                 ) from exc
-            raise SpeechProviderUnavailable("DashScope STT failed to start") from exc
+            raise SpeechProviderUnavailable("Volcengine STT failed to start") from exc
         assert session is not None
         return session
 
 
-class DashScopeSpeechOutputProvider:
-    """Create one independent callback-streaming DashScope transport per synthesized clause."""
+class VolcengineSpeechOutputProvider:
+    """Create one independent callback-streaming Volcengine transport per synthesized clause."""
 
     def __init__(
         self,
@@ -342,7 +342,7 @@ class DashScopeSpeechOutputProvider:
         self.model_name = _required_text(model_name, "TTS model name")
         self.voice = _required_text(voice, "TTS voice")
         self._api_key = api_key.strip()
-        self._transport_factory = transport_factory or _dashscope_tts_transport
+        self._transport_factory = transport_factory or _volcengine_tts_transport
 
     async def synthesize(self, text: str):
         clause = _required_text(text, "TTS clause")
@@ -352,7 +352,7 @@ class DashScopeSpeechOutputProvider:
                 options["api_key"] = self._api_key
             transport = self._transport_factory(**options)
         except (ImportError, ModuleNotFoundError) as exc:
-            raise SpeechProviderUnavailable("DashScope TTS dependency is unavailable") from exc
+            raise SpeechProviderUnavailable("Volcengine TTS dependency is unavailable") from exc
         source = self._callback_stream(transport, clause)
         try:
             async for chunk in source:
@@ -361,9 +361,9 @@ class DashScopeSpeechOutputProvider:
             await source.aclose()
 
     async def _callback_stream(self, transport: Any, clause: str):
-        """Spool fast SDK callbacks to a bounded temporary file while playback applies backpressure.
+        """Spool fast transport callbacks to a bounded temporary file while playback applies backpressure.
 
-        The existing SDK thread writes PCM; the event loop reads at most one 200 ms chunk at a time.
+        The transport worker writes PCM; the event loop reads at most one 200 ms chunk at a time.
         A single wakeup flag coalesces callback notifications. No audio survives generator cleanup.
         """
         loop = asyncio.get_running_loop()
@@ -415,7 +415,7 @@ class DashScopeSpeechOutputProvider:
             except BaseException as exc:
                 publish("error", exc)
 
-        worker = asyncio.create_task(asyncio.to_thread(run_stream), name="dashscope-tts-stream")
+        worker = asyncio.create_task(asyncio.to_thread(run_stream), name="volcengine-tts-stream")
         try:
             while True:
                 changed.clear()
@@ -426,7 +426,7 @@ class DashScopeSpeechOutputProvider:
                     chunk = spool.read(min(9_600, written - read))
                     read += len(chunk)
                 if error is not None:
-                    raise SpeechProviderUnavailable("DashScope TTS streaming failed") from error
+                    raise SpeechProviderUnavailable("Volcengine TTS streaming failed") from error
                 if chunk:
                     yield chunk
                 elif done:
@@ -1522,105 +1522,38 @@ class ClauseSpeechDelivery:
         self._worker = None
 
 
-def _normalize_dashscope_event(event: Any) -> TranscriptUpdate | None:
-    if isinstance(event, Mapping):
-        sentence = event.get("sentence", event)
-        outer = event
-    else:
-        getter = getattr(event, "get_sentence", None)
-        sentence = getter() if callable(getter) else None
-        outer = {}
-    if not isinstance(sentence, Mapping):
+def _normalize_volcengine_event(event: Any) -> TranscriptUpdate | None:
+    """Normalize a full ASR snapshot; only consecutive definite utterances are stable."""
+    if not isinstance(event, Mapping):
         return None
-    text = sentence.get("text")
+    result = event.get("result", {})
+    if not isinstance(result, Mapping):
+        return None
+    text = result.get("text")
     if not isinstance(text, str) or not text:
         return None
-    ended = bool(sentence.get("sentence_end", sentence.get("is_sentence_end", False)))
-    stable = sentence.get("stable_prefix", sentence.get("stable_text", ""))
-    if not isinstance(stable, str) or not text.startswith(stable):
-        stable = ""
+    stable = ""
+    for utterance in result.get("utterances", []):
+        if not isinstance(utterance, Mapping) or utterance.get("definite") is not True:
+            break
+        part = utterance.get("text")
+        if not isinstance(part, str) or not text.startswith(stable + part):
+            break
+        stable += part
+    ended = event.get("final") is True
     if ended:
         stable = text
-    stability = outer.get("stability") if isinstance(outer, Mapping) else None
-    if not isinstance(stability, (int, float)) or isinstance(stability, bool):
-        stability = None
-    return TranscriptUpdate(
-        text, stable, text[len(stable):], "sentence_end" if ended else "partial",
-        float(stability) if stability is not None else None,
-    )
+    return TranscriptUpdate(text, stable, text[len(stable):], "sentence_end" if ended else "partial")
 
 
-def _dashscope_stt_transport(**kwargs: Any) -> Any:
-    asr = importlib.import_module("dashscope.audio.asr")
-    on_event = kwargs["on_event"]
-
-    class Callback(asr.RecognitionCallback):
-        def on_event(self, result: Any) -> None:
-            sentence = result.get_sentence()
-            on_event({
-                "sentence": {
-                    "text": sentence.get("text", ""),
-                    "sentence_end": bool(asr.RecognitionResult.is_sentence_end(sentence)),
-                }
-            })
-
-    return asr.Recognition(
-        model=kwargs["model_name"], format="pcm",
-        sample_rate=kwargs["sample_rate_hz"], callback=Callback(),
-        semantic_punctuation_enabled=False,
-        **({"api_key": kwargs["api_key"]} if kwargs.get("api_key") else {}),
-    )
+def _volcengine_stt_transport(**kwargs: Any) -> Any:
+    from .volcengine_speech import VolcengineSttTransport
+    return VolcengineSttTransport(**kwargs)
 
 
-class _DashScopeTtsTransport:
-    """Own one callback-mode DashScope synthesizer per streamed clause."""
-
-    def __init__(self, module: Any, options: dict[str, Any]) -> None:
-        self._module = module
-        self._options = options
-        self._synthesizer: Any | None = None
-
-    def stream(self, text: str, on_data: Any, on_complete: Any, on_error: Any) -> None:
-        module = self._module
-
-        class Callback(module.ResultCallback):
-            def on_open(self) -> None:
-                return None
-
-            def on_complete(self) -> None:
-                on_complete()
-
-            def on_error(self, message: Any) -> None:
-                on_error(RuntimeError(str(message)))
-
-            def on_close(self) -> None:
-                return None
-
-            def on_data(self, data: bytes) -> None:
-                on_data(data)
-
-        self._synthesizer = module.SpeechSynthesizer(
-            callback=Callback(), **self._options
-        )
-        self._synthesizer.streaming_call(text)
-        self._synthesizer.streaming_complete()
-
-    def cancel(self) -> None:
-        if self._synthesizer is not None:
-            self._synthesizer.streaming_cancel()
-
-
-def _dashscope_tts_transport(**kwargs: Any) -> _DashScopeTtsTransport:
-    dashscope = importlib.import_module("dashscope")
-    tts = importlib.import_module("dashscope.audio.tts_v2")
-    if kwargs.get("api_key"):
-        dashscope.api_key = kwargs["api_key"]
-    audio_format = tts.AudioFormat.PCM_24000HZ_MONO_16BIT
-    return _DashScopeTtsTransport(tts, {
-        "model": kwargs["model_name"],
-        "voice": kwargs["voice"],
-        "format": audio_format,
-    })
+def _volcengine_tts_transport(**kwargs: Any) -> Any:
+    from .volcengine_speech import VolcengineTtsTransport
+    return VolcengineTtsTransport(**kwargs)
 
 
 def _smart_turn_feature_extractor() -> Any:
@@ -1641,7 +1574,7 @@ def _audio_chunk(value: Any) -> bytes:
 
 
 __all__ = [
-    "ClauseSpeechDelivery", "DashScopeSpeechOutputProvider", "DashScopeStreamingSttProvider", "SileroVadDetector",
+    "ClauseSpeechDelivery", "VolcengineSpeechOutputProvider", "VolcengineStreamingSttProvider", "SileroVadDetector",
     "SmartTurnDetector", "SpeechCapabilityStatus", "SpeechInputCoordinator", "SpeechOutputProvider",
     "SpeechService",
     "SpeechProviderUnavailable", "StreamingSttProvider", "StreamingSttSession",

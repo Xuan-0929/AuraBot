@@ -1,5 +1,6 @@
 // Validates saved/applied status labels and the current combined settings navigation.
-/** Exercises the actual local Provider → Python SAY stream → Pet AvatarPlayer production chain.
+/** Conversation fixtures are configured on the active Profile through real IPC.
+ * Exercises the actual local Provider → Python SAY stream → Pet AvatarPlayer production chain.
  * Startup waits for the first applied Profile before saving settings. Settings locates roles by their displayed fixture names and verifies a bundled motion through the SDK
  * before exposing its user-selected semantic name; internal Profile IDs remain only in IPC assertions.
  * A controlled SSE server gates internal clauses, proving one gesture per SAY, repeatability across SAYs,
@@ -99,11 +100,12 @@ test('verified Profile ability reaches the real Pet once per SAY and stale Profi
     const pet = await app.firstWindow();
     await ready(pet);
     await pet.evaluate(async port => {
-      const settings = await window.aurabot.getSettings();
-      settings.config.backend.chat_model = { base_url: `http://127.0.0.1:${port}/v1`,
+      const {runtime} = await window.aurabot.listProfiles();
+      const {saved} = await window.aurabot.getProfile(runtime.selectedId);
+      saved.voice.chat_model = { base_url: `http://127.0.0.1:${port}/v1`,
         model_name: 'local-avatar-fixture', api_key: 'local-fixture-key', timeout_seconds: 60 };
-      await window.aurabot.saveSettings(settings.config);
-      await window.aurabot.applySettings();
+      await window.aurabot.saveProfile(runtime.selectedId,{...saved,expectedSoulFingerprint:saved.soulFingerprint});
+      await window.aurabot.activateProfile(runtime.selectedId,false,true);
     }, port);
     await ready(pet);
     const initialProfiles = await pet.evaluate(() => window.aurabot.listProfiles());

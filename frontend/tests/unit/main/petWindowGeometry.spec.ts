@@ -1,4 +1,5 @@
 /** Verifies desktop window placement, drag/resize bounds and platform workspace behavior.
+ * Pet tests cover the 135×190 minimum while leaving default size and other windows unchanged.
  * The Electron double includes navigation guards; controlled screens verify Pet geometry and debug initial/minimum sizes on small or offset displays. */
 import { beforeEach, describe, expect, test, vi } from "vitest";
 
@@ -125,8 +126,8 @@ describe("pet window geometry", () => {
     expect(electronMock.instances[0]?.options).toMatchObject({
       width: 300,
       height: 430,
-      minWidth: 270,
-      minHeight: 380
+      minWidth: 135,
+      minHeight: 190
     });
   });
 
@@ -139,10 +140,10 @@ describe("pet window geometry", () => {
     resizePetWindowCorner("nw", { x: 999, y: 999 });
 
     expect(electronMock.instances[0]?.getBounds()).toEqual({
-      x: 130,
-      y: 150,
-      width: 270,
-      height: 380
+      x: 265,
+      y: 340,
+      width: 135,
+      height: 190
     });
   });
 
@@ -166,16 +167,16 @@ describe("pet window geometry", () => {
     const { createPetWindow } = await loadWindowModule();
 
     createPetWindow({
-      savedBounds: { x: 100, y: 100, width: 240, height: 320 }
+      savedBounds: { x: 100, y: 100, width: 100, height: 150 }
     });
 
     expect(electronMock.instances[0]?.options).toMatchObject({
       x: 100,
       y: 100,
-      width: 270,
-      height: 380,
-      minWidth: 270,
-      minHeight: 380
+      width: 135,
+      height: 190,
+      minWidth: 135,
+      minHeight: 190
     });
   });
 

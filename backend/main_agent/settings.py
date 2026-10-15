@@ -5,6 +5,7 @@ WorkspaceRegistry 只接受由配置声明的真实目录，TaskManager 用它�
 内部 cwd。聊天与语音设置只记录 Provider 地址、密钥、模型名及本地模型/许可证路径，
 真正的网络连接、可选 SDK 和 ONNX 资产由 composition/provider 模块按需检查加载，因此
 缺少密钥或未安装语音能力时 Backend 仍能正常启动。语音开闭仅由桌宠麦克风会话控制，旧 enabled 字段不再生效。语音模式默认沿用 Pipeline；
+Pipeline 仅支持火山引擎，新版 API Key 与资源 ID 交由 speech adapter 使用；旧 DashScope 配置清空凭据并迁移默认值。
 Realtime 设置独立保存 SeedDuplex 凭据和音色，不依赖流水线的密钥或本地推理资产。
 """
 
@@ -180,6 +181,12 @@ class SpeechSettings:
                 raise ValueError(f"main_agent.speech.{key} must be non-empty text.")
             return value.strip()
 
+        # Never send a legacy provider credential to the new provider.
+        if (str(raw.get("stt_model_name", "")).startswith(("fun-asr", "paraformer", "qwen"))
+                or str(raw.get("tts_model_name", "")).startswith(("cosyvoice", "sambert", "qwen"))):
+            raw = {**raw, "api_key": "", "stt_model_name": "volc.seedasr.sauc.duration",
+                   "tts_model_name": "seed-tts-2.0", "tts_voice": "zh_female_vv_uranus_bigtts"}
+
         mode = raw.get("mode", "pipeline")
         if mode not in ("pipeline", "realtime"):
             raise ValueError("main_agent.speech.mode must be pipeline or realtime.")
@@ -188,9 +195,9 @@ class SpeechSettings:
             mode=mode,
             realtime=RealtimeVoiceSettings.from_config(raw.get("realtime", {})),
             api_key=str(raw.get("api_key", "")).strip(),
-            stt_model_name=text("stt_model_name", "fun-asr-realtime"),
-            tts_model_name=text("tts_model_name", "cosyvoice-v3-flash"),
-            tts_voice=text("tts_voice", "longanyang"),
+            stt_model_name=text("stt_model_name", "volc.seedasr.sauc.duration"),
+            tts_model_name=text("tts_model_name", "seed-tts-2.0"),
+            tts_voice=text("tts_voice", "zh_female_vv_uranus_bigtts"),
             silero_model_path=_path(text("silero_model_path", "assets/models/silero-vad.onnx"), config_root),
             silero_license_path=_path(text("silero_license_path", "assets/licenses/silero-vad.txt"), config_root),
             smart_turn_model_path=_path(text("smart_turn_model_path", "assets/models/smart-turn-v3.2.onnx"), config_root),

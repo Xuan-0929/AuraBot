@@ -1,11 +1,12 @@
 /** Loads the compiled Renderer with typed, read-only desktop fixtures instead of Electron/Python.
- * Each test gets isolated settings and pages; real Vue/CSS layout runs in Chromium. Debug updates
+ * Profile fixtures include independent conversation drafts and speech resource IPC. Each test gets isolated settings and pages; real Vue/CSS layout runs in Chromium. Debug updates
  * cross the same subscription seam as preload. Unexpected renderer errors fail the test, while
  * optional screenshots are artifacts only, not visual regression assertions. */
 import { mkdtempSync, mkdirSync, rmSync } from 'node:fs';
 import { tmpdir } from 'node:os';
 import { join } from 'node:path';
 import { test as base, expect, type Page } from '@playwright/test';
+import {defaultProfileVoice} from '../../src/shared/contracts/voice';
 import { DesktopConfigStore } from '../../src/main/desktopConfigStore';
 import { createDefaultProfile } from '../../src/core/profiles/soulService';
 import { emptyAvatarAdaptor } from '../../src/shared/contracts/avatar';
@@ -22,10 +23,10 @@ export const test = base.extend<{ renderer: void }>({
       const config = new DesktopConfigStore(root);
       config.markApplied(config.snapshot());
       config.online = true;
-      await context.addInitScript(({ settings, profile, adaptor }) => {
+      await context.addInitScript(({ settings, profile, adaptor, voice }) => {
         const runtime = { selectedId: profile.id, activeId: profile.id, revision: 1, generation: 1, online: true };
         const detail: ProfileDetail = {
-          saved: { profile, soulText: '# Aura\nA private persona.\n', soulFingerprint: 'fixture', revision: 1, adaptor, modelVersion: '' },
+          saved: { profile, voice, soulText: '# Aura\nA private persona.\n', soulFingerprint: 'fixture', revision: 1, adaptor, modelVersion: '' },
           applied: null, selected: true, memory: { directory: 'profiles/fixture/memory', initialized: false }, resources: []
         };
         const messages = ['帮我梳理一下今天的工作。', '我们先把最重要的部分做好。\n\n统一颜色和操作层级。',
@@ -38,6 +39,7 @@ export const test = base.extend<{ renderer: void }>({
         if (language === 'zh' || language === 'en' || language === 'ja') settings.config.desktop.pet.displayLanguage = language;
         const api = {
           getSettings: async () => settings,
+          onSpeechAssetsChanged: subscribe, getSpeechAssets: async () => ({phase:'idle',assets:[],paths:{silero_model_path:'',silero_license_path:'',smart_turn_model_path:'',smart_turn_license_path:''},received:0,total:1}),
           getInitialState: async () => ({ profile, profileRuntime: runtime, mainSessionId: 'layout', messages,
             agentStatus: 'idle' as const, petSettings: settings.config.desktop.pet,
             live2dModelState: { currentModelId: '', currentModelPath: '', models: [] }, }),
@@ -63,7 +65,7 @@ export const test = base.extend<{ renderer: void }>({
           onChatMessageUpdated: subscribe
         } satisfies Partial<AuraBotApi>;
         Object.defineProperty(window, 'aurabot', { value: api });
-      }, { settings: config.status(), profile: createDefaultProfile('2025-01-01T00:00:00Z').profile, adaptor: emptyAvatarAdaptor() });
+      }, { settings: config.status(), profile: createDefaultProfile('2025-01-01T00:00:00Z').profile, adaptor: emptyAvatarAdaptor(), voice:defaultProfileVoice() });
       await use();
       expect(errors, 'Renderer must not call unsupported IPC or throw').toEqual([]);
     } finally {
