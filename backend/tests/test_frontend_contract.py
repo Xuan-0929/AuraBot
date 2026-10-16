@@ -4,6 +4,7 @@ Controlled speech failures preserve text sessions and redact unknown errors. Rea
 that desktop history receives accepted inputs and say_to_user only, while restart fences all admissions.
 Speech lifecycle fixtures use near-field PCM and an explicit short confirmation window; production
 acoustic thresholds are exercised separately by the speech coordinator tests.
+Transcript fixtures update input only; explicit endpoint calls authorize the model response.
 """
 from __future__ import annotations
 
@@ -86,8 +87,8 @@ class DesktopContractTests(unittest.IsolatedAsyncioTestCase):
         self.assertEqual(self.context.fold().conversation_turns[-1]['content'], 'Hello')
 
     async def test_partial_voice_transcript_stays_private_until_endpoint(self):
-        await self.runtime.update_transcript('partial', segment_id='voice-1', request_prepare=False)
-        await self.runtime.update_transcript('final words', segment_id='voice-1', request_prepare=False)
+        await self.runtime.update_transcript('partial', segment_id='voice-1')
+        await self.runtime.update_transcript('final words', segment_id='voice-1')
         self.assertFalse(any(e.get('type') == 'user.message' for e in self.socket.sent))
         await self.runtime.eou_complete()
         user = next(e for e in self.socket.sent if e.get('type') == 'user.message')

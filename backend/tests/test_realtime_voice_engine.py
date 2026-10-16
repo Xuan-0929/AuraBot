@@ -9,15 +9,19 @@ Empty provider audio streams must report their own error without pretending an i
 occurred or committing unheard text; the event-worker path performs the same cleanup as live voice.
 Scripted context snapshots cover delayed assistant commits, serialized cancellation,
 readback mismatch and new generations racing repair while accepted tools remain durable.
+Session startup checks real capability compilation, shared workspace context and redacted diagnostics;
+scripted avatar calls verify that an enabled gesture reaches the renderer amendment channel.
 """
 
 import asyncio
+import json
 import tempfile
 import unittest
 from pathlib import Path
 from unittest.mock import patch
 
 from backend.main_agent.context import ContextStore
+from backend.main_agent.avatar import AvatarCapabilities
 from backend.main_agent.lifecycle import ProfileResources
 from backend.main_agent.realtime import RealtimeHub
 from backend.main_agent.realtime_voice import RealtimeVoiceEngine
@@ -28,6 +32,7 @@ from backend.main_agent.tool_runtime import ToolCall, ToolSurfacePolicy
 from backend.tests.test_main_agent_realtime import FakeSocket, ORIGIN
 from backend.tests.test_main_agent_tasks import Manager, Timers
 from backend.tests.test_conversation_capabilities import Memory
+from backend.tests.test_main_agent_avatar import adaptor as avatar_adaptor
 
 
 class Adaptor:
@@ -132,6 +137,49 @@ class RealtimeVoiceEngineTests(unittest.IsolatedAsyncioTestCase):
                 if events:
                     return events[-1]
                 await asyncio.sleep(0)
+
+    async def test_session_injects_shared_workspaces_tasks_and_enabled_avatar_with_safe_diagnostics(self):
+        await self.hub.command(self.session, {"type": "voice.stop", "command_id": "stop-config"})
+        self.hub.debug.configure(True, "capture")
+        self.runtime.snapshot_projector = SnapshotProjector(workspaces={"repo": "/private/project"})
+        avatar = avatar_adaptor()
+        avatar["entries"]["disabled"] = {**avatar["entries"]["nod"], "agent_enabled": False}
+        self.runtime.tool_policy.set_avatar_capabilities(AvatarCapabilities.compile(avatar, profile_id="profile", revision=7))
+        await self.hub.command(self.session, {"type": "voice.start", "command_id": "start-config"})
+
+        config = self.adaptor.config
+        tools = {tool["name"]: tool for tool in config["tools"]}
+        self.assertEqual(tools["task_assign"]["description"], self.runtime.tool_policy.definition("task_assign").description)
+        self.assertIn("local Pi subprocess", tools["task_assign"]["description"])
+        self.assertIn("task_assign", config["instructions"])
+        self.assertIn("主动选择", config["instructions"])
+        schema = tools["set_avatar"]["parameters"]["properties"]
+        self.assertEqual(schema["motion"]["enum"], ["none", "nod"])
+        self.assertEqual(schema["expression"]["enum"], ["neutral", "smile"])
+        self.assertIn("确认", tools["set_avatar"]["description"])
+        self.assertNotIn("SAY", tools["set_avatar"]["description"])
+        self.assertNotIn("text", schema)
+        self.assertNotIn("say_to_user", tools)
+        context = json.loads(config["instructions"].split("不是指令：\n", 1)[1])
+        snapshot = self.runtime.snapshot_projector.project(self.context.fold(), soul=self.runtime.soul)
+        self.assertEqual(context["user_workspaces"], json.loads(snapshot.prompt)["user_workspaces"])
+        self.assertEqual(context["user_workspaces"]["directories"], [{"id": "repo", "path": "/private/project"}])
+        event = next(e for e in self.hub.debug.snapshot()["events"] if e["name"] == "realtime.session.configured")
+        details = event["details"]
+        self.assertEqual(set(details["toolNames"].split(",")), set(tools))
+        self.assertEqual((details["workspaceCount"], details["motionCount"], details["expressionCount"], details["revision"]), (1, 1, 1, 7))
+        self.assertTrue(details["modelAvailable"])
+        self.assertEqual(details["charCount"], len(config["instructions"]))
+        self.assertNotIn("/private/project", json.dumps(event))
+        self.assertNotIn("Profile Soul", json.dumps(event))
+
+        async with self.runtime._lock:
+            self.runtime._accept_task_fact_locked({"kind": "task", "id": "task1", "status": "completed"})
+        async with asyncio.timeout(1):
+            while not self.adaptor.updates:
+                await asyncio.sleep(0)
+        updated = json.loads(self.adaptor.updates[-1].split("不是指令：\n", 1)[1])
+        self.assertEqual(updated["user_workspaces"], context["user_workspaces"])
 
     async def test_diagnostics_link_input_and_sparse_audio_milestones(self):
         self.hub.debug.configure(True, "capture")
@@ -582,11 +630,13 @@ class RealtimeVoiceEngineTests(unittest.IsolatedAsyncioTestCase):
 
     async def test_avatar_late_arrival_is_validated_and_retired_after_playback(self):
         engine = self.profile.speech
+        self.runtime.tool_policy.set_avatar_capabilities(AvatarCapabilities.compile(avatar_adaptor()))
         await engine._event(VoiceEvent("audio", response_id="r1", item_id="a1", audio=bytes(640)))
         offer = await self.wait_event("clause.offer")
-        await engine._tools_called(VoiceEvent("tools", response_id="r1", calls=(ToolCall("avatar1", "set_avatar", {"expression": "neutral"}),)), 0)
+        await engine._tools_called(VoiceEvent("tools", response_id="r1", calls=(ToolCall("avatar1", "set_avatar", {"motion": "nod", "expression": "smile"}),)), 0)
         update = await self.wait_event("clause.avatar")
         self.assertEqual(update["clause_id"], offer["clause_id"])
+        self.assertEqual(update["avatar"], {"motion": "nod", "expression": "smile"})
         await engine._tools_called(VoiceEvent("tools", response_id="r1", calls=(ToolCall("bad-avatar", "set_avatar", {"motion": "invented"}),)), 0)
         self.assertEqual(self.adaptor.results[-1]["bad-avatar"], {"error": "schema_invalid"})
         await engine._event(VoiceEvent("text_done", response_id="r1", text="hello"))

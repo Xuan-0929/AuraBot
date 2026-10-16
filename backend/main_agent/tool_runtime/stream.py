@@ -1,8 +1,10 @@
 """Decode bounded SAY envelopes and assemble indexed OpenAI tool deltas without field-order assumptions.
 
-The finite top-level scanner identifies only text/avatar, while the incremental string decoder emits text
-at punctuation boundaries, with soft splitting after 24 Unicode code points and a hard limit of 80
-code points (not model tokens). Spaces and tabs remain within clauses. Strict final decoding rejects
+The finite top-level scanner identifies only text/avatar. The incremental string decoder releases a
+complete first sentence after four speech units, then groups complete sentences to at least 45 units;
+English words count as two, other non-punctuation characters as one, and whitespace counts as zero.
+There is no length-based sentence cut. Closing the text string flushes its tail immediately, even
+before trailing avatar fields or other tools finish. Spaces and punctuation remain lossless. Strict final decoding rejects
 duplicate keys and malformed envelopes, including
 errors discovered after early delivery. Avatar stays optional and is frozen by the authorized Harness.
 """
@@ -11,6 +13,7 @@ from __future__ import annotations
 
 import json
 import re
+import unicodedata
 from collections.abc import Mapping
 from dataclasses import dataclass, field
 from typing import Any
@@ -18,8 +21,11 @@ from typing import Any
 from .definitions import ToolCall
 
 
-_CLAUSE_END = frozenset("。！？!?；;\n")
-_SOFT_END = frozenset("，,、：:—-")
+_SENTENCE_END = frozenset("。！？!?.")
+_SENTENCE_CLOSE = frozenset('”’」』）)]}»"\'')
+_SPEECH_UNITS = re.compile(r"[A-Za-z]+|[^A-Za-z]", re.DOTALL)
+FIRST_SENTENCE_UNITS = 4
+FOLLOWING_SENTENCE_UNITS = 45
 _ESCAPES = {'"': '"', "\\": "\\", "/": "/", "b": "\b", "f": "\f", "n": "\n", "r": "\r", "t": "\t"}
 
 
@@ -68,7 +74,6 @@ class SayTextStream:
             return ()
         if self.position is None:
             return ()
-        clauses: list[str] = []
         while not self.closed and self.position < len(self.raw):
             character = self.raw[self.position]
             if character == '"':
@@ -94,10 +99,11 @@ class SayTextStream:
                 self.error_code = "schema_invalid"
                 break
             self.decoded += value
-            while length := _next_clause_length(self.remaining_text):
-                clauses.append(self.remaining_text[:length])
-                self.emitted += length
-        return () if self.invalid else tuple(clauses)
+        if self.invalid:
+            return ()
+        clauses = segment_say_text(self.remaining_text, final=self.closed, first=self.emitted == 0)
+        self.emitted += sum(map(len, clauses))
+        return clauses
 
     def _escape(self) -> tuple[str, int] | None:
         assert self.position is not None
@@ -286,11 +292,29 @@ class ToolCallAssembler:
         return tuple(result)
 
 
-def segment_say_text(text: str, *, final: bool) -> tuple[str, ...]:
+def speech_units(text: str) -> int:
+    """Count English letter runs as two; punctuation and spaces are separators, never units."""
+    return sum(
+        2 if token[0].isascii() and token[0].isalpha() else
+        int(not token.isspace() and not unicodedata.category(token).startswith("P"))
+        for token in _SPEECH_UNITS.findall(text)
+    )
+
+
+def clause_flush_reason(text: str, *, first: bool) -> str:
+    """Explain the shared segmentation policy for content-free Harness diagnostics."""
+    target = FIRST_SENTENCE_UNITS if first else FOLLOWING_SENTENCE_UNITS
+    tail = text.rstrip().rstrip("".join(_SENTENCE_CLOSE))
+    if tail and tail[-1] in _SENTENCE_END and speech_units(text) >= target:
+        return "first_sentence" if first else "sentence_target"
+    return "text_end"
+
+
+def segment_say_text(text: str, *, final: bool, first: bool = True) -> tuple[str, ...]:
     clauses: list[str] = []
     position = 0
     while position < len(text):
-        length = _next_clause_length(text[position:])
+        length = _next_clause_length(text[position:], first=first and not clauses, final=final)
         if length is None:
             break
         clauses.append(text[position:position + length])
@@ -300,14 +324,26 @@ def segment_say_text(text: str, *, final: bool) -> tuple[str, ...]:
     return tuple(clauses)
 
 
-def _next_clause_length(text: str) -> int | None:
+def _next_clause_length(text: str, *, first: bool, final: bool) -> int | None:
+    target = FIRST_SENTENCE_UNITS if first else FOLLOWING_SENTENCE_UNITS
     for index, character in enumerate(text, 1):
-        if character in _CLAUSE_END:
-            return index
-        if index >= 24 and character in _SOFT_END:
-            return index
-        if index >= 80:
-            return 80
+        if character not in _SENTENCE_END:
+            continue
+        # A dot within a version, decimal or domain is not a sentence boundary.
+        if character == "." and index < len(text) and text[index].isascii() and (
+            text[index].isalnum() or text[index] in "_/"
+        ):
+            continue
+        end = index
+        while end < len(text) and text[end] in _SENTENCE_END | _SENTENCE_CLOSE:
+            end += 1
+        # One-character lookahead retains closing quotes and punctuation clusters across chunks.
+        if not text[end:].strip():
+            if not final:
+                return None
+            end = len(text)  # Keep trailing whitespace with speech, never synthesize it alone.
+        if speech_units(text[:end]) >= target:
+            return end
     return None
 
 
@@ -410,4 +446,4 @@ def _contains_surrogate(value: Any) -> bool:
     return isinstance(value, list) and any(_contains_surrogate(item) for item in value)
 
 
-__all__ = ["SayClause", "SayTextStream", "ToolCallAssembler", "segment_say_text"]
+__all__ = ["SayClause", "SayTextStream", "ToolCallAssembler", "segment_say_text", "speech_units", "clause_flush_reason"]

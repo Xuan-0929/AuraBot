@@ -1,4 +1,4 @@
-"""Check production callback speech normalization, PREPARE admission, and physical delivery.
+"""Check callback speech normalization, weak-pause PREPARE admission, and physical delivery.
 
 The tests protect mutable-only Volcengine partials through the real coordinator and Runtime admission limit,
 stable segment identity, authoritative playback events, first-chunk TTS streaming, Speech Ledger phases,
@@ -209,8 +209,8 @@ class FakeInputRuntime:
     async def confirm_speech(self) -> None: pass
     async def reject_speech_candidate(self) -> None: pass
     async def vad_stop_candidate(self) -> None: pass
-    async def update_transcript(self, text: str, *, segment_id: str | None, request_prepare: bool) -> None:
-        self.updates.append((text, segment_id, request_prepare))
+    async def update_transcript(self, text: str, *, segment_id: str | None) -> None:
+        self.updates.append((text, segment_id, False))
 
 
 class FakePlayback:
@@ -601,7 +601,7 @@ class SpeechInputTests(unittest.IsolatedAsyncioTestCase):
             release.set()
             await coordinator.close()
 
-    async def test_volcengine_mutable_partials_request_bounded_prepare_before_endpoint(self) -> None:
+    async def test_volcengine_mutable_partials_only_update_input_until_weak_pause(self) -> None:
         with tempfile.TemporaryDirectory() as directory:
             transports: list[FakeVolcengineSttTransport] = []
 
@@ -655,7 +655,10 @@ class SpeechInputTests(unittest.IsolatedAsyncioTestCase):
                     await asyncio.sleep(0)
                     await runtime.wait_until_idle()
 
-                self.assertEqual(len(requests), 2)
+                self.assertEqual(requests, [])
+                await runtime.eou_incomplete()
+                await runtime.wait_until_idle()
+                self.assertEqual(len(requests), 1)
                 self.assertTrue(all(request.mode is InvokeMode.PREPARE for request in requests))
                 self.assertTrue(all(request.response_grant is None for request in requests))
                 self.assertIsNone(runtime.current_response_grant)

@@ -1,7 +1,8 @@
 /** Exercises bounded debug collection, bounded diagnostics, and real rotating files.
  * Main's collector is tested with an injected HTTP boundary, including acoustic windows
  * and VAD-only onset identity surviving sanitization and disk writes, never a second voice connection.
- * Realtime identities and timing summaries must also survive the real collector and JSONL writer. */
+ * Realtime identities, session capability counts and timing summaries must also survive the real
+ * collector and JSONL writer while credentials, prompts and workspace paths are filtered out. */
 import { mkdtempSync, mkdirSync, readFileSync, readdirSync, rmSync, writeFileSync, statSync } from 'node:fs';
 import { join } from 'node:path';
 import { tmpdir } from 'node:os';
@@ -34,7 +35,8 @@ it('preserves acoustic window and teardown facts from backend polling to JSONL',
   vadWarmupFrames:1,vadUnavailableFrames:0,vadErrorFrames:0,operation:'send_audio',finalizing:true,
   endpointPending:true,exceptionType:'RuntimeError',connectionId:'conn',responseId:'r1',questionId:'q1',eventId:'e1',
   charCount:25,modelName:'1.2.6.1',flushReason:'object_closed',providerCode:429,receivedBytes:4800,
-  playbackWaitMs:15,contextWaitMs:10,firstAudioMs:100,droppedEvents:3};
+  playbackWaitMs:15,contextWaitMs:10,firstAudioMs:100,droppedEvents:3,
+  toolNames:'task_assign,set_avatar',workspaceCount:1,motionCount:4,expressionCount:0,modelAvailable:true};
  let capture='';
  const service=new LiveDebugService(root(),async(path,init)=>{
   if(path.endsWith('/configure')){
@@ -42,7 +44,7 @@ it('preserves acoustic window and teardown facts from backend polling to JSONL',
    return {instanceId:'backend',captureId:capture,cursor:0,events:[],state:{},dropped:0,enabled:body.enabled};
   }
   return {instanceId:'backend',captureId:capture,cursor:1,events:[{...event(1,capture),source:'backend',instanceId:'backend',
-   stage:'input',name:'acoustics',details:{...details,api_key:'secret',pcm:'private audio'}}],state:{},dropped:0,enabled:true};
+   stage:'input',name:'acoustics',details:{...details,api_key:'secret',pcm:'private audio',instructions:'private prompt',workspaces:'/private/project'}}],state:{},dropped:0,enabled:true};
  },()=>{},()=>{});
  service.setIdentity({profileId:'p',generation:1,configRevision:1});
  try{

@@ -84,7 +84,7 @@ flowchart LR
 
 `provider.request_started` 包含实际请求的 `modelName`；`first_chunk` 仍是已有的首个解析后 SSE 数据块。`say.first_text` 表示增量解析出首段非空 SAY 文本，尚不代表授权交付。`say.clause_ready` 表示该分句已满足工具身份与顺序要求、即将检查执行权限；`say.authorized` 位于权限检查之后、交付调用之前。多个事件可以来自同一个 SSE 数据块，不应据此推算服务端逐 token 时间。
 
-分句事件记录 `charCount` 和 `flushReason`：`hard_punctuation`、`soft_boundary`、`length_limit`、`object_closed`。现有 24/80 字符阈值保持不变。SAY 事件的 `elapsedMs` 起点是本次 Harness 开始消费流；跨阶段比较优先使用同一调用内事件差值，不把首 SSE 到首分句的全部时间称作分句等待。
+分句事件记录原始字符数 `charCount`、加权计数字 `count` 和 `flushReason`：`first_sentence`（首个有效整句）、`sentence_target`（后续累计至少 45 字后到达句末）、`text_end`（文本结束立即交付尾段）。首段最低 4 个计数字；英文单词每个算 2 字，空格和标点不计，其余字符计 1 字。逗号等软标点不切分，也没有长度强制切分。SAY 事件的 `elapsedMs` 起点是本次 Harness 开始消费流；跨阶段比较优先使用同一调用内事件差值，不把首 SSE 到首分句的全部时间称作分句等待。
 
 STT 正常收尾先停止接收新发送并等待在途发送，再等待最终回调；正常完成预算暂为 1 秒，取消清理仍为 250ms。`finish_ended.elapsedMs` 用于后续真机校准。收尾或提交期间新到的讲话会等待当前端点结算，再开始新 segment；现有麦克风队列保留最多 50 帧，复测时仍需检查 `droppedFrames`，尤其是极慢服务与连续插话场景。
 

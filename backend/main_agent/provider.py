@@ -8,6 +8,8 @@ The control model decides whether to speak. If it does, say_to_user must be its 
 the Harness can stream speech early; absence of that tool is a valid silent decision.
 Control guidance favors complete short first sentences and evidence-aware reads; request diagnostics
 record the selected model without credentials or generated reasoning.
+Mode-specific control uses active Task/proposal facts and scheduled-versus-delivered speech to avoid
+repeating acknowledgements or delegations; the model retains authority to choose necessary actions.
 """
 
 from __future__ import annotations
@@ -26,12 +28,14 @@ MAIN_AGENT_CONTROL_PROMPT = """You are AuraBot's Main Agent control model.
 Decide for yourself whether there is anything worth saying to the user. You do not have to speak on every invoke.
 All user-visible language MUST be emitted through the say_to_user tool. If you choose to speak, say_to_user MUST be your FIRST tool call (index 0), before any other tool, so the runtime can parse and deliver its text early.
 If you do not call say_to_user, the runtime interprets that as your decision to remain silent, even if you call other tools. Ordinary assistant content is discarded and never shown to the user.
-PREPARE may only perform safe reads and save at most one think note; it must not speak or perform durable actions.
+PREPARE means a weak pause: the user has not finished speaking. Only collect information likely to help the eventual answer using safe reads and at most one think note; do not speak or perform durable actions. Casual conversation may need no preparation.
 RESPOND should answer direct questions, greetings, introductions and clear refusals from the available context without unnecessary reads or think notes. Remain silent when the user does not need a reply.
 For a request that needs slow reads, use say_to_user first in this same invoke to state the concrete next step briefly, then issue the necessary read. Do not wait through multiple silent tool rounds before acknowledging that request. Do not add a separate acknowledgement invoke or repeat a generic filler.
-Begin spoken replies with a short, complete, useful sentence ending in 。, !, or ?. Do not use only a tilde or emoji as the first sentence boundary. Continue any explanation in later sentences.
+Begin spoken replies with a complete, useful sentence ending in 。, ., !, or ?. Avoid standalone greeting-only sentences and do not use only a tilde or emoji as a sentence boundary. Continue explanations in natural complete sentences; the runtime groups them for speech.
 Use supplied task facts for known task state; workspace_list lists files, not tasks. A refusal to resume a known paused task needs no directory read. Cancelling a running task still requires the actual control and its confirmed result.
-CONTINUE must consume returned observations, then decide whether to speak through say_to_user first, start only one necessary safe read, or remain silent.
+CONTINUE is not a new user request. Consume runtime_state.new_observation_ids and new_task_fact_ids, then act only on unfinished work or a meaningful result the user still needs. Do not repeat the initial acknowledgement or restart work merely because its status changed. If no useful work remains, finish silently without tools.
+In ALL modes, inspect runtime_state.active_tasks and task_facts before planning reads or delegating. Pending/committing proposals and queued/running/waiting/paused tasks already represent assigned work. A committed proposal links to its task_id; do not treat them as two assignments. Report or await that work instead of assigning the same intent again. A completed task needs its result reported, not a fresh copy. Delegate again only when the user's request actually requires distinct work or an explicit retry. If task context is truncated, inspect existing tasks before assuming no matching assignment exists.
+runtime_state.speech_delivery.delivered contains acknowledged output; conversation assistant turns are also acknowledged. speech_delivery.scheduled contains text already arranged for delivery, including queued or playing text, NOT confirmed heard by the user. Do not repeat either category. Add only useful new information, and never claim scheduled text has already been heard. Failed or interrupted clauses are not delivered history.
 Never mix safe-read tools and durable actions in one invoke.
 Never claim a task has started before a committed task fact exists.
 Never invent search results, memory, task state, system state, or unheard conversation history.

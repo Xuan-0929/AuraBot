@@ -4,8 +4,10 @@ The tests cover ActiveInput causality, trigger priority, StrongPause, grants/eff
 Observation continuation, seal-time retirement, non-cancellable new-input archive ownership, same-boundary
 retry, bounded real Snapshots, and physical Renderer ACK through public Runtime behavior.
 No-say invocations remain silent; tool receipts are retained only in content-free backend diagnostics.
-Public SAY segmentation checks preserve mixed-language whitespace and enforce Unicode code-point limits.
+Public SAY segmentation checks preserve text, count English words as two units, and group at complete sentence ends without forced length cuts.
 Recognition failure retires uncertain input and prevents it leaking into the next request's context.
+Weak pauses alone start speculation; duplicate endpoints, batched results, task notifications and
+pending speech snapshots exercise the production scheduler without network or model calls.
 """
 
 from __future__ import annotations
@@ -370,11 +372,134 @@ class ConversationMemoryLifecycleTests(RuntimeTestCase):
 
 
 class ActiveInputAndSchedulingTests(RuntimeTestCase):
+    async def test_transcripts_wait_for_weak_pause_and_duplicate_endpoints_respond_once(self):
+        provider = ScriptedProvider()
+        runtime = self.runtime(provider)
+        for text in ("我想", "我想查一下上海明天的天气。"):
+            await runtime.update_transcript(text, segment_id="voice")
+            await runtime.wait_until_idle()
+        self.assertEqual(provider.requests, [])
+        await runtime.vad_stop_candidate()
+        await runtime.eou_incomplete()
+        await runtime.wait_until_idle()
+        self.assertEqual([r.mode for r in provider.requests], [InvokeMode.PREPARE])
+        self.assertNotIn("say_to_user", provider.requests[0].tool_surface.names)
+        self.assertNotIn("task_assign", provider.requests[0].tool_surface.names)
+        grants = await asyncio.gather(runtime.eou_complete(), runtime.endpoint_fallback())
+        await runtime.wait_until_idle()
+        await runtime.update_transcript("我想查一下上海明天的天气。", segment_id="voice")
+        again = await runtime.eou_complete()
+        await runtime.wait_until_idle()
+        self.assertEqual(grants[0], grants[1])
+        self.assertEqual(again, grants[0])
+        self.assertEqual([r.mode for r in provider.requests], [InvokeMode.PREPARE, InvokeMode.RESPOND])
+
+    async def test_speculation_reuses_completed_results_without_waiting_for_slow_reads(self):
+        release = asyncio.Event()
+        async def search(call):
+            if call.arguments["query"] == "slow":
+                await release.wait()
+            return {"answer": call.arguments["query"]}
+        calls = [tool_delta("fast", "web_search", '{"query":"fast"}'),
+                 tool_delta("slow", "web_search", '{"query":"slow"}')]
+        calls[1]["choices"][0]["delta"]["tool_calls"][0]["index"] = 1
+        provider = ScriptedProvider(calls, (), ())
+        runtime = self.runtime(provider, executors={"web_search": search})
+        await runtime.update_transcript("查询信息", segment_id="voice")
+        await runtime.eou_incomplete()
+        await runtime.wait_until_idle()
+        async with asyncio.timeout(1):
+            while not any(o.get("status") == "completed" for o in self.store.fold().observations):
+                await asyncio.sleep(0)
+        self.assertEqual(len(provider.requests), 1)  # No CONTINUE before a strong pause.
+        await asyncio.wait_for(runtime.eou_complete(), .5)
+        await asyncio.wait_for(runtime.wait_until_idle(), .5)
+        response = provider.requests[1]
+        self.assertEqual(response.mode, InvokeMode.RESPOND)
+        self.assertEqual({o["status"] for o in response.snapshot.observations}, {"completed", "running"})
+        release.set()
+        await runtime.harness.wait_for_observations()
+        await runtime.wait_until_idle()
+        self.assertEqual([r.mode for r in provider.requests], [InvokeMode.PREPARE, InvokeMode.RESPOND, InvokeMode.CONTINUE])
+        self.assertEqual(len(provider.requests[-1].snapshot.runtime_state["new_observation_ids"]), 1)
+
+    async def test_completed_read_batch_and_speech_delivery_state_are_consumed_once(self):
+        release = asyncio.Event()
+        async def search(call):
+            await release.wait()
+            return {"query": call.arguments["query"]}
+        calls = [tool_delta("say", "say_to_user", '{"text":"我来查一下。结果稍后告诉你。"}')]
+        for index in (1, 2):
+            call = tool_delta(f"read-{index}", "web_search", '{"query":"' + str(index) + '"}')
+            call["choices"][0]["delta"]["tool_calls"][0]["index"] = index
+            calls.append(call)
+        provider = ScriptedProvider(calls, ())
+        runtime = self.runtime(provider, executors={"web_search": search})
+        await runtime.submit_text("查两份资料")
+        await runtime.wait_until_idle()
+        await runtime.renderer_ack(self.offers[0].clause_id, complete=True, mode="text")
+        release.set()
+        await runtime.harness.wait_for_observations()
+        await runtime.wait_until_idle()
+        self.assertEqual(len(provider.requests), 2)
+        state = provider.requests[1].snapshot.runtime_state
+        self.assertEqual(len(state["new_observation_ids"]), 2)
+        self.assertEqual([c["text"] for c in state["speech_delivery"]["delivered"]], ["我来查一下。"])
+        self.assertEqual([c["text"] for c in state["speech_delivery"]["scheduled"]], ["结果稍后告诉你。"])
+        self.assertNotIn("结果稍后告诉你。", str(provider.requests[1].snapshot.conversation_turns))
+        await runtime.wait_until_idle()
+        self.assertEqual(len(provider.requests), 2)
+
+    async def test_late_read_from_old_input_does_not_wake_new_conversation(self):
+        release = asyncio.Event()
+        async def search(_call):
+            await release.wait()
+            return {"answer": "old"}
+        provider = ScriptedProvider((tool_delta("read", "web_search", '{"query":"old"}'),), ())
+        runtime = self.runtime(provider, executors={"web_search": search})
+        await runtime.submit_text("old")
+        await runtime.wait_until_idle()
+        # Seal the old scope just as the existing memory owner does before a later conversation.
+        runtime._retire_sealed_input_locked()
+        await runtime.submit_text("new")
+        await runtime.wait_until_idle()
+        release.set()
+        await runtime.harness.wait_for_observations()
+        await runtime.wait_until_idle()
+        self.assertEqual(len(provider.requests), 2)
+
+    async def test_task_progress_updates_context_without_waking_and_completion_is_new_work(self):
+        provider = ScriptedProvider()
+        runtime = self.runtime(provider)
+        await runtime.submit_text("安排任务")
+        await runtime.wait_until_idle()
+        fact = {"id": "task:t", "kind": "task", "task_id": "t", "title": "探索目录"}
+        for version, status in enumerate(("queued", "running"), 1):
+            async with runtime._lock:
+                runtime._accept_task_fact_locked({**fact, "version": version, "status": status})
+            await runtime.wait_until_idle()
+        self.assertEqual(len(provider.requests), 1)
+        complete = {**fact, "version": 3, "status": "completed", "result": "已完成"}
+        async with runtime._lock:
+            runtime._accept_task_fact_locked(complete)
+        await runtime.wait_until_idle()
+        self.assertEqual(len(provider.requests), 2)
+        self.assertEqual(provider.requests[-1].snapshot.runtime_state["new_task_fact_ids"], ["task:t"])
+        async with runtime._lock:
+            runtime._accept_task_fact_locked(complete)
+        await runtime.wait_until_idle()
+        self.assertEqual(len(provider.requests), 2)
+        await runtime.renderer_disconnected()
+        async with runtime._lock:
+            runtime._accept_task_fact_locked({**complete, "version": 4, "status": "failed"})
+        await runtime.wait_until_idle()
+        self.assertEqual(len(provider.requests), 2)
+
     async def test_stt_start_failure_after_previous_input_is_visible(self):
         runtime = self.runtime(ScriptedProvider())
         from unittest.mock import AsyncMock
         runtime.error_listener = AsyncMock()
-        await runtime.update_transcript("previous words", segment_id="previous", request_prepare=False)
+        await runtime.update_transcript("previous words", segment_id="previous")
         await runtime.confirm_speech()
         await runtime.speech_input_failed("new", has_transcript=False)
         self.assertIsNone(runtime.active_input)
@@ -386,7 +511,7 @@ class ActiveInputAndSchedulingTests(RuntimeTestCase):
         async def report(code):
             errors.append(code)
         runtime.error_listener = report
-        await runtime.update_transcript("uncertain command", segment_id="old", request_prepare=False)
+        await runtime.update_transcript("uncertain command", segment_id="old")
         self.store.append_event("think_note", {"text": "act on uncertain command"})
         old_id = runtime.active_input.input_id
         await runtime.speech_input_failed("old")
@@ -394,7 +519,7 @@ class ActiveInputAndSchedulingTests(RuntimeTestCase):
         await runtime.wait_until_idle()
         self.assertNotIn("uncertain command", str(self.store.fold().conversation_turns))
         self.assertFalse(self.store.fold().think_note)
-        await runtime.update_transcript("new words", segment_id="new", request_prepare=False)
+        await runtime.update_transcript("new words", segment_id="new")
         self.assertNotEqual(runtime.active_input.input_id, old_id)
         await runtime.speech_input_failed("old")
         self.assertEqual(runtime.active_input.latest_transcript, "new words")
@@ -402,9 +527,9 @@ class ActiveInputAndSchedulingTests(RuntimeTestCase):
 
     async def test_stable_segment_replaces_in_place_and_new_utterance_appends(self) -> None:
         runtime = self.runtime(ScriptedProvider())
-        await runtime.update_transcript("我想", segment_id="seg-1", request_prepare=False)
-        await runtime.update_transcript("我想查天气", segment_id="seg-1", request_prepare=False)
-        await runtime.update_transcript("再看看上海", segment_id="seg-2", request_prepare=False)
+        await runtime.update_transcript("我想", segment_id="seg-1")
+        await runtime.update_transcript("我想查天气", segment_id="seg-1")
+        await runtime.update_transcript("再看看上海", segment_id="seg-2")
 
         active = runtime.active_input
         self.assertIsNotNone(active)
@@ -425,7 +550,7 @@ class ActiveInputAndSchedulingTests(RuntimeTestCase):
 
         provider = ScriptedProvider(held_prepare, ())
         runtime = self.runtime(provider)
-        await runtime.update_transcript("first", segment_id="seg-1", request_prepare=False)
+        await runtime.update_transcript("first", segment_id="seg-1")
         await runtime.request_prepare("checkpoint", high_priority=True)
         await asyncio.wait_for(started.wait(), 1)
         await runtime.submit_text("second")
@@ -451,10 +576,10 @@ class ActiveInputAndSchedulingTests(RuntimeTestCase):
 
         provider = ScriptedProvider(held_prepare, ())
         runtime = self.runtime(provider)
-        await runtime.update_transcript("先说一半", segment_id="seg-1", request_prepare=False)
+        await runtime.update_transcript("先说一半", segment_id="seg-1")
         await runtime.request_prepare("checkpoint", high_priority=True)
         await asyncio.wait_for(started.wait(), 1)
-        await runtime.update_transcript("完整问题", segment_id="seg-1", request_prepare=False)
+        await runtime.update_transcript("完整问题", segment_id="seg-1")
 
         grant = await runtime.eou_complete()
         await runtime.wait_until_idle()
@@ -681,7 +806,7 @@ class EffectsObservationAndDeliveryTests(RuntimeTestCase):
 
     async def test_only_complete_playing_ack_commits_assistant_text(self) -> None:
         provider = ScriptedProvider((
-            tool_delta("say-1", "say_to_user", '{"text":"first。second"}'),
+            tool_delta("say-1", "say_to_user", '{"text":"First sentence。second"}'),
         ))
         runtime = self.runtime(provider)
         await runtime.submit_text("hello")
@@ -697,7 +822,7 @@ class EffectsObservationAndDeliveryTests(RuntimeTestCase):
 
         conversation = self.store.fold().conversation_turns
         self.assertEqual([(turn["role"], turn["content"]) for turn in conversation], [
-            ("user", "hello"), ("assistant", "first。"),
+            ("user", "hello"), ("assistant", "First sentence。"),
         ])
 
     async def test_silent_invoke_and_ordinary_content_never_create_speech(self) -> None:
@@ -714,23 +839,44 @@ class EffectsObservationAndDeliveryTests(RuntimeTestCase):
 
 
 class ClauseSegmentationTests(unittest.TestCase):
-    def test_mixed_language_whitespace_does_not_end_a_clause(self) -> None:
+    def test_soft_punctuation_and_whitespace_never_cut_a_sentence(self):
+        text = "Codex 更新完成，已经从 0.147.0 升级到 0.153.4：可以查看 backend、frontend——然后重启；\n接着使用"
         for whitespace in (" ", "\t"):
-            with self.subTest(whitespace=repr(whitespace)):
-                text = "Codex 更新完成啦～已经从 0.147.0 升级到最新的 0.153.4 版本，你可以重启 Codex 看看啦😊".replace(" ", whitespace)
-                # The comma remains a soft boundary; spaces around versions and names do not.
-                head, tail = text.split("，", 1)
-                self.assertEqual(segment_say_text(text, final=False), (head + "，",))
-                self.assertEqual(segment_say_text(text, final=True), (head + "，", tail))
+            value = text.replace(" ", whitespace)
+            self.assertEqual(segment_say_text(value, final=False), ())
+            self.assertEqual(segment_say_text(value, final=True), (value,))
 
-    def test_hard_limit_counts_unicode_codepoints(self) -> None:
-        for character in ("a", "中", "😊"):
-            with self.subTest(character=character):
-                self.assertEqual(segment_say_text(character * 79, final=False), ())
-                self.assertEqual(segment_say_text(character * 81, final=True), (character * 80, character))
+    def test_long_sentences_have_no_forced_length_cut(self):
+        for text in ("中" * 500, "hello " * 200, "😊" * 200):
+            self.assertEqual(segment_say_text(text, final=False), ())
+            self.assertEqual(segment_say_text(text, final=True), (text,))
+            self.assertEqual(segment_say_text(text + "。尾段", final=True), (text + "。", "尾段"))
 
-    def test_natural_boundaries_preserve_every_codepoint(self) -> None:
-        text = "你好！This is a longer clause, with 3.14 and example.com/path. 最后一句"
+    def test_first_greeting_merges_and_following_sentences_accumulate_45_units(self):
+        head = "你好！我来帮你检查这个项目。"
+        second = "甲" * 20 + "。" + "乙" * 24 + "。" + "丙。"
+        tail = "结束。"
+        self.assertEqual(segment_say_text(head + second + tail, final=True), (head, second, tail))
+        self.assertEqual(segment_say_text("你好！", final=True), ("你好！",))
+        self.assertEqual(segment_say_text("Hello! I can help you. Short tail", final=True),
+                         ("Hello! I can help you.", " Short tail"))
+
+    def test_english_words_count_as_two_and_only_sentence_ends_release(self):
+        from backend.main_agent.tool_runtime.stream import speech_units
+        self.assertEqual(speech_units("Hello, world!你好。"), 6)
+        self.assertEqual(speech_units("alpha-beta:gamma/delta"), 8)
+        self.assertEqual(speech_units("one\ttwo\nthree"), 6)
+        first = "准备开始。"
+        under = "word " * 22 + "."  # 44 units: keep waiting across this sentence end.
+        ready = " 中。"  # Reaches 45 units only at this complete sentence end.
+        self.assertEqual(segment_say_text(first + under + ready + "尾段", final=True),
+                         (first, under + ready, "尾段"))
+        over = "word " * 23 + "."
+        self.assertEqual(segment_say_text(first + over + "尾段", final=True), (first, over, "尾段"))
+
+    def test_sentence_closers_domains_and_decimals_preserve_every_codepoint(self):
+        text = '他说：“现在已经准备好了！”This version is 3.14 at example.com/path. 最后一句'
         clauses = segment_say_text(text, final=True)
+        self.assertEqual(clauses[0], '他说：“现在已经准备好了！”')
         self.assertEqual("".join(clauses), text)
         self.assertTrue(all(clauses))

@@ -15,6 +15,9 @@ the existing error listener asks the user to retry without admitting a response 
 Read-only Memory keeps normal recall while suppressing idle timers and archive workers.
 ConversationCapabilities owns shared tools; ConversationMemory owns recall and archive scheduling. Pipeline supplies only settlement and
 causal-scope retirement hooks, allowing a Realtime engine to use the same Profile memory owner.
+Pipeline transcripts only update input; weak pauses admit PREPARE, and each final input revision
+receives one initial RESPOND. Relevant unread results coalesce into authorized CONTINUE requests.
+Snapshots expose pending speech and active Tasks separately from acknowledged conversation history.
 """
 
 from __future__ import annotations
@@ -205,10 +208,14 @@ class MainAgentRuntime:
         self._task_bridge = TaskBridge(task_manager, owner_profile_id) if task_manager is not None else None
 
         self._lock = asyncio.Lock()
+        self._strong_pause_lock = asyncio.Lock()
         self._active_input: ActiveInput | None = None
         self._has_external_commit = False
         self._latest_context_version = 0
         self._response_grant: ResponseGrant | None = None
+        self._initial_response: ResponseGrant | None = None
+        self._continuation_observations: set[str] = set()
+        self._continuation_tasks: set[str] = set()
         self._pending_trigger: PendingTrigger | None = None
         self._active_invoke: _ActiveInvoke | None = None
         self._drain_task: asyncio.Task[None] | None = None
@@ -350,29 +357,27 @@ class MainAgentRuntime:
             self.soul = effective
 
     async def update_transcript(
-        self, text: str, *, segment_id: str | None = None, request_prepare: bool = True
+        self, text: str, *, segment_id: str | None = None
     ) -> bool:
-        """Update one stable utterance, advance revision, and optionally checkpoint."""
+        """Update one stable utterance without starting speculative model work."""
 
         transcript = _required_text(text, "transcript")
         async with self._lock:
             if not self.accepting or self._shutdown:
                 raise RuntimeError("backend_restarting")
-            self._cancel_memory_idle_task_locked()
-            self._cancel_pending_proposals_locked("confirmed_speech")
-            self._user_speaking = True
-            self._speech_candidate = False
-            self._confirmed_speech = True
             identifier = self._segment_id_locked(segment_id)
             if (
                 self._active_input is not None
                 and any(item.segment_id == identifier and item.text == transcript for item in self._active_input.segments)
             ):
                 return False
+            self._cancel_memory_idle_task_locked()
+            self._cancel_pending_proposals_locked("confirmed_speech")
+            self._user_speaking = True
+            self._speech_candidate = False
+            self._confirmed_speech = True
             self._advance_input_locked(transcript, identifier)
-            admitted = request_prepare and self._request_prepare_locked("stable_transcript", False)
-            self._kick_locked()
-            return bool(admitted)
+            return True
 
     async def submit_text(self, text: str, *, segment_id: str | None = None) -> ResponseGrant:
         """Accept an explicit silent-text submission and grant exactly its current RESPOND coordinates."""
@@ -389,6 +394,7 @@ class MainAgentRuntime:
             self._speech_candidate = False
             self._confirmed_speech = False
             grant = self._create_grant_locked()
+            self._initial_response = grant
             await self._publish_user_segments("text")
             self._merge_trigger_locked(InvokeMode.RESPOND, "explicit_text_submit")
             self._kick_locked()
@@ -453,6 +459,7 @@ class MainAgentRuntime:
             self._confirmed_speech = False
             self._resume_pending_proposals_locked()
             self._resume_memory_idle_locked()
+            self._request_continue_locked("speech_candidate_rejected")
 
     async def speech_input_failed(self, segment_id: str | None, *, has_transcript: bool = True) -> None:
         """Retire failed recognition without letting its partial text authorize a later action."""
@@ -534,6 +541,11 @@ class MainAgentRuntime:
         return await self.strong_pause("endpoint_fallback")
 
     async def strong_pause(self, reason: str) -> ResponseGrant:
+        """Serialize duplicate endpoint notifications for the same final input revision."""
+        async with self._strong_pause_lock:
+            return await self._strong_pause(reason)
+
+    async def _strong_pause(self, reason: str) -> ResponseGrant:
         """Settle PREPARE, then grant RESPOND against the latest post-barrier coordinates."""
 
         normalized_reason = _required_text(reason, "reason")
@@ -544,6 +556,12 @@ class MainAgentRuntime:
                 raise RuntimeError("backend_restarting")
             if self._active_input is None:
                 raise RuntimeError("StrongPause requires an active input")
+            previous = self._initial_response
+            if previous is not None and (previous.input_id, previous.revision) == (
+                self._active_input.input_id, self._active_input.revision,
+            ):
+                self._debug("trigger_suppressed", mode="RESPOND", reason="already_responded")
+                return previous
             if self._speech_candidate or self._confirmed_speech:
                 self._cancel_pending_proposals_locked("confirmed_speech")
             self._barrier_intent = intent
@@ -566,6 +584,7 @@ class MainAgentRuntime:
                 self._speech_candidate = False
                 self._confirmed_speech = False
                 grant = self._create_grant_locked()
+                self._initial_response = grant
                 self._pending_trigger = None
                 self._merge_trigger_locked(InvokeMode.RESPOND, normalized_reason)
                 self._barrier_intent = None
@@ -717,6 +736,7 @@ class MainAgentRuntime:
             self._active_input = ActiveInput(self._new_id("input"), 1, transcript, segments)
             self._has_external_commit = False
             self._reset_prepare_admission_locked()
+            self._continuation_observations.clear()
             if previous is not None:
                 self._retire_proposals_for_input_locked(previous.input_id)
         else:
@@ -732,6 +752,7 @@ class MainAgentRuntime:
                 previous.input_id, previous.revision + 1, composed, tuple(segments)
             )
         self._response_grant = None
+        self._initial_response = None
         self._pending_trigger = None
         self.context_store.append_event("user_segment", {
             "segment_id": segment_id,
@@ -796,6 +817,19 @@ class MainAgentRuntime:
             self._debug("trigger_admitted", mode=mode.value, reason=reason)
         else:
             self._debug("trigger_suppressed", mode=mode.value, reason="higher_priority_pending")
+
+    def _request_continue_locked(self, reason: str) -> None:
+        """Wake only for unconsumed, relevant facts while a response grant is usable."""
+        if not (self._continuation_observations or self._continuation_tasks):
+            self._debug("trigger_suppressed", mode="CONTINUE", reason="no_new_results")
+            return
+        if (self._shutdown or not self.accepting or self.external_voice_active
+                or self._refresh_grant_locked() is None
+                or self._user_speaking or self._speech_candidate or self._confirmed_speech):
+            self._debug("trigger_suppressed", mode="CONTINUE", reason="response_not_authorized")
+            return
+        self._merge_trigger_locked(InvokeMode.CONTINUE, reason)
+        self._kick_locked()
 
     def _prepare_barrier_locked(self) -> asyncio.Event | None:
         active = self._active_invoke
@@ -891,6 +925,9 @@ class MainAgentRuntime:
         current_task = asyncio.current_task()
         try:
             while True:
+                # Batch near-simultaneous local read completions without waiting for slow siblings.
+                if self._pending_trigger is not None and self._pending_trigger.mode is InvokeMode.CONTINUE:
+                    await asyncio.sleep(0.03)
                 async with self._lock:
                     if (
                         self._shutdown or not self.accepting
@@ -919,6 +956,13 @@ class MainAgentRuntime:
                         grant = None
                     else:
                         grant = self._refresh_grant_locked()
+                        if trigger.mode is InvokeMode.CONTINUE and (
+                            grant is None or self._user_speaking or self._speech_candidate or self._confirmed_speech
+                            or not (self._continuation_observations or self._continuation_tasks)
+                        ):
+                            self._debug("trigger_suppressed", mode="CONTINUE", reason="no_authorized_new_results")
+                            self._settle_preinvoke_locked(preinvoke_settled)
+                            continue
                     recall_identity = (
                         active_input.input_id,
                         active_input.revision,
@@ -964,6 +1008,13 @@ class MainAgentRuntime:
                         self._merge_trigger_locked(trigger.mode, trigger.reason)
                         self._settle_preinvoke_locked(preinvoke_settled)
                         continue
+                    if trigger.mode is InvokeMode.CONTINUE and (
+                        self._refresh_grant_locked() is None or self._user_speaking
+                        or self._speech_candidate or self._confirmed_speech
+                    ):
+                        self._debug("trigger_suppressed", mode="CONTINUE", reason="response_not_authorized")
+                        self._settle_preinvoke_locked(preinvoke_settled)
+                        continue
                     surface = self.harness.freeze_surface(
                         trigger.mode,
                         input_id=active_input.input_id,
@@ -984,6 +1035,14 @@ class MainAgentRuntime:
                             segment.segment_id for segment in active_input.segments
                         ),
                     )
+                    if trigger.mode is not InvokeMode.PREPARE:
+                        self._continuation_observations.clear()
+                        self._continuation_tasks.clear()
+                        if self._pending_trigger is not None and self._pending_trigger.mode is InvokeMode.CONTINUE:
+                            self._pending_trigger = None
+                    self._debug("snapshot_ready", mode=trigger.mode.value,
+                        revision=active_input.revision, count=len(snapshot.observations),
+                        queuedClauses=len(self._clause_origins))
                     request = InvokeRequest(
                         invoke_id=self._new_id("invoke"),
                         input_id=active_input.input_id,
@@ -1180,10 +1239,14 @@ class MainAgentRuntime:
         self._context_changed_locked()
         if self.task_fact_listener is not None:
             self.task_fact_listener()
-        should_continue = fact.get("kind") == "task" or fact.get("status") == "failed"
-        if should_continue and self._active_input is not None and not self._shutdown and not self.external_voice_active:
-            self._merge_trigger_locked(InvokeMode.CONTINUE, "task_fact_updated")
-            self._kick_locked()
+        # Created/running facts inform the next prompt but do not ask the model to act again.
+        should_continue = fact.get("status") in {"completed", "failed", "waiting", "paused", "cancelled"}
+        if should_continue and not fact.get("deleted") and self._active_input is not None and not self.external_voice_active:
+            self._continuation_tasks.add(str(fact["id"]))
+            self._request_continue_locked("task_fact_updated")
+        else:
+            self._continuation_tasks.discard(str(fact["id"]))
+            self._debug("trigger_suppressed", mode="CONTINUE", reason="task_state_only")
 
     async def _task_error(self, code: str) -> None:
         if self.error_listener is not None:
@@ -1284,9 +1347,11 @@ class MainAgentRuntime:
                 payload["result"] = terminal["result"]
             self.context_store.append_event("observation", payload)
             self._context_changed_locked()
-            if self._active_input is not None and not self._shutdown:
-                self._merge_trigger_locked(InvokeMode.CONTINUE, "observation_settled")
-                self._kick_locked()
+            if self._active_input is not None and terminal["origin_input_id"] == self._active_input.input_id:
+                self._continuation_observations.add(outcome.observation_id)
+                self._request_continue_locked("observation_settled")
+            else:
+                self._debug("trigger_suppressed", mode="CONTINUE", reason="observation_old_input")
 
     def _effect_fence(self) -> EffectFence:
         active = self._active_invoke
@@ -1331,6 +1396,9 @@ class MainAgentRuntime:
             "speech_candidate": self._speech_candidate,
             "confirmed_speech": self._confirmed_speech,
             "response_grant_id": grant.grant_id if grant else None,
+            "new_observation_ids": sorted(self._continuation_observations),
+            "new_task_fact_ids": sorted(self._continuation_tasks),
+            "speech_delivery": self.context_store.speech_delivery_state(),
         }
 
     @property
@@ -1415,6 +1483,9 @@ class MainAgentRuntime:
         self._active_input = None
         self._has_external_commit = False
         self._response_grant = None
+        self._initial_response = None
+        self._continuation_observations.clear()
+        self._continuation_tasks.clear()
         self._pending_trigger = None
         self._control_generation += 1
         self._reset_prepare_admission_locked()

@@ -5,6 +5,7 @@ mode/grant state, and validates the small emitted JSON-Schema subset. ToolSurfac
 records directly; it does not serialize and re-validate its own trusted construction on every invoke.
 Cancellation schemas admit a Profile-owned proposal identity so the shared Task owner can resolve
 the grace-window/commit race before delegating to the durable TaskManager.
+Task guidance describes local Pi delegation and evidence-based results for both voice engines.
 """
 
 from __future__ import annotations
@@ -302,7 +303,17 @@ def _catalog(
                 }, ("workspace_id", "path")),
             ),
             ToolDefinition(
-                "task_assign", "Create a three-second Task proposal.", EffectClass.DURABLE_ACTION,
+                "task_assign", (
+                    "Delegate a user-requested job to a local Pi subprocess, which can use local file and shell tools "
+                    "to inspect files (including listing Desktop files), run commands, create or edit files, and complete multi-step work. "
+                    "Use this when the request needs local execution or work beyond the available direct read tools; "
+                    "do not refuse solely because the conversational model cannot directly see the computer. "
+                    "Choose an exposed workspace_id as Pi's starting directory, not as its filesystem access boundary; "
+                    "put the user's goal, relevant paths and constraints in prompt. Actual access depends on operating-system permissions "
+                    "and installed tools; do not promise screen capture or other access before execution confirms it. "
+                    "Returns a pending proposal with a three-second cancellation window, not proof that work has started or finished. "
+                    "Report progress and results only from confirmed task facts; do not duplicate an already accepted task."
+                ), EffectClass.DURABLE_ACTION,
                 _object({
                     "title": _text(maximum=200),
                     "prompt": _text(maximum=200_000),

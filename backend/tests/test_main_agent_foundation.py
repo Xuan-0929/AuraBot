@@ -3,6 +3,7 @@ Protect canonical Context folding, minimal archive boundaries, and prompt projec
 
 The tests verify stable user segments, Renderer-ACK-only assistant language, current pending archive boundaries,
 canonical boundary reconstruction, atomic archive cleanup, Observation ordering, and bounded JSON snapshots.
+Pipeline projection keeps active assignments and new results ahead of stale context under budget pressure.
 """
 
 from __future__ import annotations
@@ -255,6 +256,38 @@ class ContextStoreTests(unittest.TestCase):
 
 
 class SnapshotProjectorTests(unittest.TestCase):
+    def test_all_pipeline_modes_keep_active_tasks_when_old_facts_are_evicted(self):
+        tasks = (
+            {"id": "task:running", "kind": "task", "task_id": "running", "title": "探索目录", "status": "running"},
+            {"id": "proposal:p", "kind": "task_proposal", "proposal_id": "p", "title": "读取说明", "status": "pending", "origin_input_id": "input"},
+        )
+        context = FoldedContext(
+            ({"role": "user", "content": "继续", "segment_id": "current"},), (), None,
+            (*tasks, {"id": "old", "kind": "task", "status": "completed", "result": "old" * 4000}),
+        )
+        for mode in ("PREPARE", "RESPOND", "CONTINUE"):
+            with self.subTest(mode=mode):
+                snapshot = SnapshotProjector(SnapshotBudget(max_prompt_chars=1500)).project(
+                    context, soul="Aura", runtime_state={"mode": mode, "input_id": "input"},
+                    protected_segment_ids=("current",),
+                )
+                self.assertEqual({t["id"] for t in snapshot.runtime_state["active_tasks"]}, {"task:running", "proposal:p"})
+                self.assertFalse(snapshot.runtime_state["active_tasks_truncated"])
+                self.assertLessEqual(len(snapshot.prompt), 1500)
+
+    def test_new_results_survive_before_old_conversation_and_tasks(self):
+        context = FoldedContext(
+            ({"role": "assistant", "content": "old" * 400}, {"role": "user", "content": "现在结果呢", "segment_id": "current"}),
+            ({"id": "new", "status": "completed", "result": "new result"},), None,
+            ({"id": "old", "status": "completed", "result": "old" * 400},),
+        )
+        snapshot = SnapshotProjector(SnapshotBudget(max_prompt_chars=700)).project(
+            context, soul="Aura", runtime_state={"mode": "CONTINUE", "new_observation_ids": ["new"]},
+            protected_segment_ids=("current",),
+        )
+        self.assertEqual(snapshot.observations[0]["result"], "new result")
+        self.assertLessEqual(len(snapshot.prompt), 700)
+
     def test_user_workspace_locations_enter_model_context_without_directory_scanning(self) -> None:
         directories = {"default": "/user-selected/install", "home": "/Users/example"}
         projector = SnapshotProjector(workspaces=directories)

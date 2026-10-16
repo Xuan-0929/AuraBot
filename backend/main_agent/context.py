@@ -7,6 +7,7 @@ boundary across retry/restart. A successful Memory result is committed atomicall
 cleanup, terminal Speech Ledger cleanup, pending deletion, and conditional idle-metadata removal.
 Realtime may register an empty streaming clause before text arrives, then update it while nonterminal;
 the complete renderer ACK remains the only path that promotes its final text into conversation history.
+Pipeline also reads bounded delivery state, separating scheduled text from acknowledged history.
 """
 
 from __future__ import annotations
@@ -493,6 +494,34 @@ class ContextStore:
                 return False
             db.execute("DELETE FROM context_metadata WHERE key='last_user_activity'")
             return True
+
+    def speech_delivery_state(self) -> dict[str, Any]:
+        """Describe recent delivered and outstanding text without committing scheduled speech."""
+        result: dict[str, Any] = {}
+        with self._lock:
+            for key, states, budget in (
+                ("delivered", ("delivered",), 1000),
+                ("scheduled", ("draft", "tts_queued", "playing"), 2000),
+            ):
+                placeholders = ",".join("?" for _ in states)
+                rows = self._connection.execute(
+                    f"SELECT text,state FROM speech_clauses WHERE state IN ({placeholders}) ORDER BY sequence DESC",
+                    states,
+                )
+                items = []
+                used = 0
+                truncated = False
+                for row in rows:
+                    item = {"text": row["text"], "state": row["state"]}
+                    size = len(json.dumps(item, ensure_ascii=False))
+                    if used + size > budget:
+                        truncated = True
+                        break
+                    items.append(item)
+                    used += size
+                result[key] = list(reversed(items))
+                result[key + "_truncated"] = truncated
+        return result
 
     def has_unsettled_clauses(self) -> bool:
         """Report whether physically audible assistant text can still change the conversation batch."""

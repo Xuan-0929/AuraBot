@@ -5,6 +5,9 @@ and supplies Memory plus the frozen tool surface. The projector preserves curren
 facts, deterministically truncates it only when required, and always keeps runtime/tool authority. Soul is a
 separate complete system message with its own bound; an insufficient budget raises instead of truncating it. User-provided workspace names and absolute paths are static location context,
 not Pi filesystem permissions; projection does not scan those directories.
+Both voice engines reuse the same workspace context so directory identity and meaning stay consistent.
+Pipeline modes retain a compact active Task/proposal summary in runtime state even when older
+variable facts are evicted; explicit truncation prevents missing entries from implying no assigned work.
 """
 
 from __future__ import annotations
@@ -63,6 +66,12 @@ class SnapshotProjector:
         self.budget = budget or SnapshotBudget()
         self.workspaces = dict(workspaces or {})
 
+    def workspace_context(self) -> dict[str, Any]:
+        return {
+            "purpose": "User-provided directory references for understanding projects and choosing Task starting locations; not Pi filesystem access boundaries.",
+            "directories": [{"id": key, "path": path} for key, path in self.workspaces.items()],
+        }
+
     def project(
         self,
         context: FoldedContext,
@@ -90,6 +99,24 @@ class SnapshotProjector:
         memory = _records(memory_facts, self.budget.memory_chars)
         task_facts = _copy(context.task_facts)
         runtime = _object(runtime_state or {})
+        if runtime.get("mode") in {"PREPARE", "RESPOND", "CONTINUE"}:
+            active = [fact for fact in task_facts if not fact.get("deleted") and (
+                fact.get("status") in {"pending", "committing", "queued", "running", "waiting", "paused"}
+                or (fact.get("kind") == "task_proposal"
+                    and fact.get("origin_input_id") == runtime.get("input_id"))
+            )]
+            # Running work comes first when an unusually large queue exceeds the compact budget.
+            active.sort(key=lambda fact: fact.get("status") != "running")
+            compact = []
+            for fact in active:
+                item = {key: fact[key] for key in (
+                    "id", "kind", "title", "status", "task_id", "proposal_id", "workspace_id", "origin_input_id",
+                ) if key in fact}
+                if len(_encode([*compact, item])) > 2400:
+                    break
+                compact.append(item)
+            runtime["active_tasks"] = compact
+            runtime["active_tasks_truncated"] = len(compact) < len(active)
         tools = _copy(allowed_tools)
         sections: dict[str, Any] = {
             "conversation": conversation,
@@ -102,10 +129,7 @@ class SnapshotProjector:
             "allowed_tool_surface": tools,
         }
         if self.workspaces:
-            sections["user_workspaces"] = {
-                "purpose": "User-provided directory references for understanding projects and choosing Task starting locations; not Pi filesystem access boundaries.",
-                "directories": [{"id": key, "path": path} for key, path in self.workspaces.items()],
-            }
+            sections["user_workspaces"] = self.workspace_context()
         _fit(sections, self.budget.max_prompt_chars, protected)
         prompt = _encode(sections)
         return Snapshot(
@@ -361,13 +385,18 @@ def _fit(
     variable_lists = (
         "conversation_summaries", "memory_facts", "observations", "task_facts",
     )
+    runtime = sections["runtime_state"]
+    new_facts = set(runtime.get("new_observation_ids", ())) | set(runtime.get("new_task_fact_ids", ()))
     while len(_encode(sections)) > limit:
         changed = False
         for key in variable_lists:
             values = sections[key]
-            if values:
-                values.pop(0)
-                changed = True
+            for index, value in enumerate(values):
+                if value.get("id") not in new_facts:
+                    values.pop(index)
+                    changed = True
+                    break
+            if changed:
                 break
         if not changed:
             conversation = sections["conversation"]
@@ -379,6 +408,14 @@ def _fit(
         if not changed and sections["think_note"]:
             sections["think_note"] = None
             changed = True
+        if not changed:
+            # Required input and tool authority still take precedence under extreme prompt pressure.
+            for key in ("observations", "task_facts"):
+                if sections[key]:
+                    sections[key].pop(0)
+                    runtime["new_facts_truncated"] = True
+                    changed = True
+                    break
         if not changed and sections["conversation"]:
             current = [
                 value for value in sections["conversation"]

@@ -2,8 +2,8 @@
 
 The Pet microphone owns activation; there is no separate configuration enable switch.
 Volcengine-specific callback fields and credentials terminate inside the adapters and become normalized
-``TranscriptUpdate`` facts before Main Agent Core can observe them; every non-empty production snapshot,
-including a mutable-only partial, requests existing PREPARE admission. Session callbacks enter Core in arrival
+``TranscriptUpdate`` facts before Main Agent Core can observe them; transcripts only update input,
+while incomplete EOU decisions admit weak-pause PREPARE work. Session callbacks enter Core in arrival
 order; SAY-scoped protocol cancellation removes only that utterance from the existing delivery queue;
 graceful finish drains provider-final text, while cancellation retains bounded transport cleanup
 ownership. TTS exposes only clause audio bytes, spooled to a bounded temporary file when playback lags.
@@ -964,7 +964,6 @@ class SpeechInputCoordinator:
         await self.runtime.update_transcript(
             update.full_text,
             segment_id=segment_id,
-            request_prepare=True,
         )
 
     def _transcript_current(self, segment_id: str | None) -> bool:

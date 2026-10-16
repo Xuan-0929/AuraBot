@@ -3,12 +3,13 @@
 The suite protects mode/grant exposure, the incremental text/avatar say parser, effect grouping, fencing,
 say-first execution before the provider finishes later tools, and detached Observation callbacks. Removed schema self-validation, motion tokens,
 alternate provider event dialects, private caches, and thread-based limiter internals are not tested.
-Debug milestones distinguish decoded SAY text, safe clause release, and authorization before execution.
+Debug milestones distinguish decoded SAY text, weighted sentence release, and authorization before execution. Text closure must release a short tail before the remaining tool envelope finishes.
 """
 
 from __future__ import annotations
 
 import asyncio
+import json
 import unittest
 from collections.abc import AsyncIterator
 from typing import Any
@@ -20,7 +21,7 @@ from backend.main_agent.tool_runtime import (
     ToolHarness,
     ToolSurfacePolicy,
 )
-from backend.main_agent.tool_runtime.stream import ToolCallAssembler, segment_say_text
+from backend.main_agent.tool_runtime.stream import SayTextStream, ToolCallAssembler, segment_say_text
 from backend.main_agent.debug import DebugRecorder
 
 
@@ -71,6 +72,35 @@ class ToolSurfaceTests(unittest.TestCase):
 
 
 class StreamingParserTests(unittest.TestCase):
+    def test_sentence_grouping_is_independent_of_json_fragment_boundaries(self):
+        text = '你好！他说：“现在已经准备好了！”Use version 3.14 at example.com. ' + "词" * 45 + "。短尾巴"
+        raw = json.dumps({"text": text, "avatar": {"motion": "nod"}}, ensure_ascii=True)
+        expected = segment_say_text(text, final=True)
+        for cut in range(len(raw) + 1):
+            stream = SayTextStream()
+            self.assertEqual(stream.feed(raw[:cut]) + stream.feed(raw[cut:]), expected, cut)
+            self.assertEqual(stream.remaining_text, "")
+        stream = SayTextStream()
+        emitted = tuple(clause for character in raw for clause in stream.feed(character))
+        self.assertEqual(emitted, expected)
+
+    def test_text_closure_flushes_short_tail_without_waiting_for_avatar_or_object_end(self):
+        stream = SayTextStream()
+        self.assertEqual(stream.feed('{"text":"我来帮你。接'), ("我来帮你。",))
+        self.assertEqual(stream.feed('着讲短尾巴'), ())
+        self.assertEqual(stream.feed('"'), ("接着讲短尾巴",))
+        self.assertTrue(stream.closed)
+        self.assertFalse(stream.object_closed)
+        self.assertEqual(stream.feed(',"avatar":{"motion":"nod"}}'), ())
+        self.assertEqual(stream.remaining_text, "")
+
+    def test_trailing_spaces_never_become_an_independent_tts_clause(self):
+        text = "I can help. \n"
+        raw = json.dumps({"text": text})
+        for cut in range(len(raw) + 1):
+            stream = SayTextStream()
+            self.assertEqual(stream.feed(raw[:cut]) + stream.feed(raw[cut:]), (text,))
+
     def test_text_only_say_streams_across_every_json_and_escape_boundary(self) -> None:
         assembler = ToolCallAssembler()
         raw = '{"text":"你好，world\\n下一句。"}'
@@ -89,7 +119,7 @@ class StreamingParserTests(unittest.TestCase):
                     assembler.accept_say_clause(0, text)
         call = assembler.finish()[0]
         self.assertEqual(call.arguments, {"text": "你好，world\n下一句。"})
-        self.assertEqual(segment_say_text(call.arguments["text"], final=True), ("你好，world\n", "下一句。"))
+        self.assertEqual(segment_say_text(call.arguments["text"], final=True), ("你好，world\n下一句。",))
 
     def test_duplicate_key_malformed_json_and_unpaired_surrogate_are_rejected(self) -> None:
         for raw, code in (
@@ -123,7 +153,7 @@ class ToolHarnessTests(unittest.IsolatedAsyncioTestCase):
         await harness.run(stream(), invoke_id="invoke", tool_surface=self.surface, debug=debug)
         events = recorder.snapshot()["events"]
         self.assertEqual([e["name"] for e in events], ["first_tool_delta", "say.first_text", "say.clause_ready", "say.authorized"])
-        self.assertEqual(events[-2]["details"]["flushReason"], "hard_punctuation")
+        self.assertEqual(events[-2]["details"]["flushReason"], "text_end")
         self.assertEqual(events[-2]["details"]["charCount"], 4)
         self.assertTrue(all(e["invokeId"] == "invoke" for e in events))
 
@@ -156,11 +186,11 @@ class ToolHarnessTests(unittest.IsolatedAsyncioTestCase):
             return {"ok": True}
 
         async def stream():
-            async for chunk in chunks((0, "say", "say_to_user", '{"text":"我查一下。')):
+            async for chunk in chunks((0, "say", "say_to_user", '{"text":"我查一下。"')):
                 yield chunk
             await release.wait()
             async for chunk in chunks(
-                (0, "say", "say_to_user", '"}'),
+                (0, "say", "say_to_user", '}'),
                 (1, "read", "web_search", '{"query":"Aura"}'),
             ):
                 yield chunk

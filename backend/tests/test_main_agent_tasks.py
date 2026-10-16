@@ -5,6 +5,7 @@ speech or Profile shutdown cancels an uncommitted proposal, TaskManager acceptan
 fact, and controls fresh-read owner/version truth. Race scaffolding for task factories, private caches,
 and projection retries was deleted with the speculative implementation branches. Explicit cancellation
 also resolves proposal identifiers across the commit race for both voice engines.
+Pipeline task updates inform later model requests without a local per-intent delegation gate.
 """
 
 from __future__ import annotations
@@ -197,6 +198,32 @@ class ProposalTests(unittest.IsolatedAsyncioTestCase):
         await self.runtime.wait_until_idle()
         self.assertEqual(next(fact["status"] for fact in self.context.fold().task_facts if fact["kind"] == "task_proposal"), "pending")
 
+    async def test_progress_does_not_reinvoke_but_model_can_delegate_distinct_followup(self):
+        async def provider(request):
+            self.requests.append(request)
+            number = len(self.requests)
+            yield delta(f"assign-{number}", "task_assign",
+                '{"title":"Step ' + str(number) + '","prompt":"Investigate","workspace_id":"repo"}')
+        self.runtime.provider = provider
+        await self._propose()
+        await self.timers.advance(3)
+        await self.runtime.wait_until_idle()
+        self.assertEqual(len(self.requests), 1)
+        self.assertEqual(len(self.manager.created), 1)
+        task = next(iter(self.manager.records.values()))
+        from backend.main_agent.tasks import task_fact
+        async with self.runtime._lock:
+            self.runtime._accept_task_fact_locked(task_fact(replace(task, status=TaskStatus.COMPLETED, version=task.version + 1)))
+        await self.runtime.wait_until_idle()
+        self.assertEqual(len(self.requests), 2)
+        self.assertIn("task_assign", self.requests[1].tool_surface.names)
+        state = self.requests[1].snapshot.runtime_state
+        self.assertTrue(any(f.get("task_id") == str(task.id) for f in state["active_tasks"]))
+        self.assertTrue(any(f.get("status") == "completed" for f in self.requests[1].snapshot.task_facts))
+        await self.timers.advance(3)
+        await self.runtime.wait_until_idle()
+        self.assertEqual(len(self.manager.created), 2)
+
     async def test_exact_three_second_proposal_commits_once_and_projects_durable_fact(self) -> None:
         await self._propose()
         await self.timers.advance(2.9)
@@ -259,13 +286,13 @@ class ProposalTests(unittest.IsolatedAsyncioTestCase):
         await self._propose()
         await self.timers.advance(3)
         await self.runtime.wait_until_idle()
-        await self.runtime.update_transcript('new', segment_id='next', request_prepare=False)
+        await self.runtime.update_transcript('new', segment_id='next')
         input_id = self.runtime.active_input.input_id
         task_id = next(iter(self.manager.records))
         self.manager.events.put_nowait(SimpleNamespace(type='task.status_changed', task_id=task_id))
         for _ in range(4):
             await asyncio.sleep(0)
-        await self.runtime.update_transcript('new words', segment_id='next', request_prepare=False)
+        await self.runtime.update_transcript('new words', segment_id='next')
         self.assertEqual(self.runtime.active_input.input_id, input_id)
         self.assertEqual(self.runtime.active_input.revision, 2)
 
@@ -281,7 +308,7 @@ class ProposalTests(unittest.IsolatedAsyncioTestCase):
             await self.timers.advance(3)
             await self.runtime.wait_until_idle()
         self.assertEqual(len(self.manager.created), 1)
-        await self.runtime.update_transcript('next', segment_id='next', request_prepare=False)
+        await self.runtime.update_transcript('next', segment_id='next')
         self.assertNotEqual(self.runtime.active_input.input_id, old_input)
 
 

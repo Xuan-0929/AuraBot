@@ -96,9 +96,9 @@ ActiveInput。ActiveInput 保留：
 - 由 segments 合成的 `latest_transcript`，仅用于 PREPARE admission、EOU 与 recall query
 
 Context 写入 `user_segment {segment_id,input_id,text}`。Fold 后唯一对话表示是
-`conversation_turns`；没有 `transcript` 或 `delivered_clauses` 兼容副本。Production speech coordinator
-会让每个非空 normalized transcript update 请求 PREPARE admission；即使 火山引擎 partial 的
-`stable_prefix` 为空也一样，实际 admission、合并和每 input 次数上限仍完全由 Runtime 现有策略决定。
+`conversation_turns`。Production speech coordinator 的 partial/stable/final 转写只更新输入，
+不会启动模型请求；VAD 停顿后的 EOU incomplete 才请求弱停顿 PREPARE。EOU complete 收尾 STT 时
+收到的最终转写也不会额外启动投机调用。
 
 ### 3.2 Invoke 调度
 
@@ -111,12 +111,33 @@ flowchart LR
   RESPOND --> RUN["下一个 control invoke"]
 ~~~
 
-优先级固定为 `RESPOND > CONTINUE > PREPARE`。PREPARE 仍受增长、间隔、标点、最大等待和
-每 input 上限约束；EOU incomplete 可请求高优先级 PREPARE，但不会创建回复授权。
+优先级固定为 `RESPOND > CONTINUE > PREPARE`。弱停顿通过 EOU incomplete 请求高优先级
+PREPARE，受每 input 次数上限约束，不创建回复授权。相同 input/revision 的重复强停顿通知
+复用初始 grant，不再次启动 RESPOND；用户续说造成 revision 更新后可以重新回复。
+
+~~~mermaid
+flowchart TD
+  STT[转写更新] --> INPUT[更新输入，不调用模型]
+  VAD[VAD 停顿] --> EOU{EOU 判断}
+  EOU -->|未说完| PREPARE[PREPARE：只读投机]
+  EOU -->|已说完| RESPOND[RESPOND：使用已完成投机结果]
+  PREPARE --> OBS[异步读取结果存入 Observation]
+  OBS -.已完成结果.-> RESPOND
+  RESPOND --> NEW[新的读取结果或有意义的任务状态]
+  NEW --> CHECK{当前有回复授权且结果尚未消费}
+  CHECK -->|是| CONTINUE[合并后 CONTINUE]
+  CHECK -->|否| SAVE[只更新上下文]
+~~~
+
+CONTINUE 只消费当前输入的未消费读取结果，或任务完成、失败、等待回答、暂停、取消等变化。
+任务 pending/committing/queued/running 只更新上下文；旧输入读取结果、重复任务版本及无回复授权时
+不启动后续模型请求。相近结果在 30 ms 窗口内合并；正式 snapshot 消费结果标识，避免已拼入上下文的
+同批结果再次唤醒模型。仍在执行的慢读取不会阻塞正式回复。
 
 StrongPause 在创建 RESPOND 前等待旧 PREPARE 完整 settlement。Provider 阻塞在下一个 async
 chunk 时，Harness 同时等待取消 Event；barge-in 或 StrongPause 撤销后会关闭 provider stream，
-不会无限等待模型再发一个 chunk。
+不会无限等待模型再发一个 chunk。该 barrier 只取消并结算投机模型调用，不等待 detached 读取任务全部结束；
+已完成结果进入正式 snapshot，晚到结果仅在当前仍有回复授权时请求 CONTINUE。
 
 ### 3.3 ResponseGrant 与 EffectFence
 
@@ -136,6 +157,16 @@ Provider 固定为 async OpenAI-compatible Chat Completions SSE。每次请求�
 1. 固定 `MAIN_AGENT_CONTROL_PROMPT` system。
 2. Electron 提供的有效 Soul system。
 3. 不可变 Snapshot JSON user。
+
+PREPARE、RESPOND、CONTINUE 都包含 `task_facts` 和受保护的 `runtime_state.active_tasks` 摘要，
+明确 pending proposal、运行中的任务及当前输入已提交的 proposal/task 关联。预算不足时明确标记截断。
+提示词要求模型先检查已有委派，不因状态变化重复派单；不增加本机按委派意图拒绝 `task_assign` 的门禁。
+
+`runtime_state.speech_delivery` 区分近期已 ACK 的 `delivered` 和尚未交付的 `scheduled`
+（draft/tts_queued/playing）。scheduled 仅用于防止重复安排回复，不写入已听完的对话历史；
+失败、中断内容不会被当作 delivered。`new_observation_ids` / `new_task_fact_ids` 指明本次新增事实，
+裁剪时优先保留这些结果而非旧事实。模型在 CONTINUE 中只处理未完成事项和用户需要的新结果，
+没有必要继续时静默结束。
 
 Main Agent 自行判断是否有话需要对用户说。需要说话时，必须将 `say_to_user` 作为该次 invoke 的第一个工具调用（index 0），供流水线提前解析与交付；不需要说话时可以只调用其他工具，也可以不调用任何工具。
 没有调用 `say_to_user` 就表示模型选择静默，不是协议故障。普通 assistant content 仍被丢弃，既不转成用户消息，也不因此向前端显示 debug 错误。
@@ -168,6 +199,14 @@ ToolSurface 是冻结的 `ToolDefinition` tuple。规则：
 
 增量 parser 只支持这一个合法顶层形态，同时保留 escape、Unicode surrogate、控制字符、duplicate
 key、chunk boundary 和最终 `json.loads` 校验。其他工具等待完整 arguments 后解析。
+
+Pipeline TTS 只在完整句末（`。！？.!?`）切分，连续句末标点与其后的闭引号留在同一段。
+逗号、顿号、冒号、破折号、分号和换行不触发切分，没有按长度强制截断的规则。
+首段在完整句末达到 4 个计数字就交付，极短的招呼/语气词与后句合并；后续段落累计达到
+45 个计数字后，在完整句末交付。英文连续字母构成的单词每个计 2 字，空格和标点不计，
+其余字符每个计 1 字；计数不改变原文。小数、版本号和域名内部的点不会作为句末。
+`text` JSON 字符串一旦闭合，剩余文本立即交付，即使不足目标长度，也不等待后续 avatar
+字段、对象闭合或其他工具；最终 envelope 校验和 SAY 取消语义保持不变。
 
 工具只在真实 executor 存在时暴露：
 

@@ -10,6 +10,7 @@ while independent RMS measurements and legacy reset counters remain available fo
 Speech-stream milestones admit only model names, character counts and flush reasons, never raw deltas.
 Realtime observations admit bounded identity and timing scalars through the same recorder;
 no provider payloads or additional collectors participate in speech control.
+Session capability summaries admit tool names and counts without exposing instructions or workspace paths.
 """
 from __future__ import annotations
 
@@ -42,6 +43,7 @@ DETAILS = frozenset({
     "connectionId", "responseId", "questionId", "eventId", "itemId", "callId", "providerCode",
     "sentFrames", "sentBytes", "receivedBytes", "droppedEvents", "firstAudioMs",
     "playbackWaitMs", "contextWaitMs", "audioMs", "hasAudio", "eventKind", "count",
+    "toolNames", "workspaceCount", "motionCount", "expressionCount", "modelAvailable",
 })
 IDENTITIES = frozenset({"segmentId", "inputId", "invokeId", "sayId", "clauseId"})
 

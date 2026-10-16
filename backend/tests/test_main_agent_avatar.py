@@ -2,7 +2,7 @@
 
 Framing is type checked; gaze and speech-mouth configuration is bounded independently of the LLM-visible capabilities.
 The tests use real policy/parser/harness implementations and deterministic provider chunks; fixtures never
-open user storage or external providers. Lifecycle tests separately cover the transport and storage owners.
+open user storage or external providers. Sentence grouping and immediate text-tail flushing preserve SAY ownership; lifecycle tests cover transport and storage owners.
 """
 from __future__ import annotations
 
@@ -40,8 +40,8 @@ class AvatarTests(unittest.TestCase):
             raw = json.dumps(value, ensure_ascii=True)
             for cut in range(len(raw) + 1):
                 stream = SayTextStream()
-                self.assertEqual(stream.feed(raw[:cut]) + stream.feed(raw[cut:]), ("你好。",))
-                self.assertEqual(stream.remaining_text, "尾巴😀")
+                self.assertEqual(stream.feed(raw[:cut]) + stream.feed(raw[cut:]), ("你好。尾巴😀",))
+                self.assertEqual(stream.remaining_text, "")
                 self.assertEqual(stream.avatar, {"motion": "nod"})
                 self.assertTrue(stream.object_closed)
         stream = SayTextStream()
@@ -62,13 +62,13 @@ class AvatarHarnessTests(unittest.IsolatedAsyncioTestCase):
         harness = ToolHarness(policy, {"say_to_user": execute}, state_provider=lambda: fence, say_closed_hook=close)
         surface = harness.freeze_surface(InvokeMode.RESPOND, input_id="i", revision=1, context_version=1, response_grant=grant, current_response_grant=grant)
         async def provider():
-            for fragment in ('{"text":"早句。', '尾句", "avatar":{"motion":"nod"}}'):
+            for fragment in ('{"text":"这是早句。尾', '句", "avatar":{"motion":"nod"}}'):
                 yield {"choices": [{"delta": {"tool_calls": [{"index": 0, "id": "say", "function": {"name": "say_to_user", "arguments": fragment}}]}}]}
             self.assertEqual(len(endings), 1)
             self.assertEqual(len(calls), 2)
             yield {"choices": [{"delta": {"content": "discard"}}]}
         result = await harness.run(provider(), invoke_id="invoke", tool_surface=surface)
-        self.assertEqual([call.arguments["text"] for call in calls], ["早句。", "尾句"])
+        self.assertEqual([call.arguments["text"] for call in calls], ["这是早句。", "尾句"])
         self.assertTrue(all(call.avatar == {} for call in calls))
         self.assertEqual(endings[0]["clause_count"], 2)
         self.assertFalse(result.cancelled)
@@ -219,7 +219,7 @@ class SayTransportTests(unittest.IsolatedAsyncioTestCase):
         tail_entered, tail_release = asyncio.Event(), asyncio.Event()
         async def provider(request):
             yield {"choices": [{"delta": {"tool_calls": [{"index": 0, "id": "say1", "function": {
-                "name": "say_to_user", "arguments": '{"avatar":{"motion":"nod","expression":"smile"},"text":"第一句。第二句。"}'}}]}}]}
+                "name": "say_to_user", "arguments": '{"avatar":{"motion":"nod","expression":"smile"},"text":"这是第一句。第二句。"}'}}]}}]}
             tail_entered.set()
             await tail_release.wait()
         with tempfile.TemporaryDirectory() as directory:
@@ -262,7 +262,7 @@ class SayTransportTests(unittest.IsolatedAsyncioTestCase):
             stale = RendererClause("old", "private B", "inv", "in", 1, "b", 2, 7, "s", "c", {})
             self.assertEqual(await port.offer_clause(stale), "stale_avatar_scope")
             self.assertFalse(any("private B" in str(event) for event in socket.sent))
-            self.assertEqual([turn["content"] for turn in context.fold().conversation_turns][-2:], ["第一句。", "第二句。"])
+            self.assertEqual([turn["content"] for turn in context.fold().conversation_turns][-2:], ["这是第一句。", "第二句。"])
             await hub.stop_accepting()
             await runtime.shutdown()
             context.close()

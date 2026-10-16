@@ -5,6 +5,8 @@ effects. Safe reads detach under one three-slot asyncio semaphore; Runtime's acc
 dedupe and canonical Observation state. Executors and provider chunks use the single production async shape.
 Frozen debug scopes measure decoded SAY text, eligible clauses and effect authorization on the same
 streaming path, without retaining model payloads or adding tasks.
+SAY segmentation shares sentence/unit rules with the parser; text closure releases the short tail
+before unrelated provider work, while envelope validation still governs final receipts and cancellation.
 """
 
 from __future__ import annotations
@@ -28,7 +30,7 @@ from .definitions import (
     ToolSurface,
     ToolSurfacePolicy,
 )
-from .stream import SayClause, ToolCallAssembler, segment_say_text
+from .stream import SayClause, ToolCallAssembler, clause_flush_reason, segment_say_text, speech_units
 
 
 Executor = Callable[[ToolCall], Any]
@@ -167,11 +169,9 @@ class ToolHarness:
             avatar = frozen.get(clause.index, surface.avatar_capabilities.validate(clause.avatar))
             if self.diagnostic_hook is not None and clause.index not in frozen and clause.avatar is not None and clause.avatar != avatar:
                 self.diagnostic_hook("main.avatar.invalid")
-            reason = ("hard_punctuation" if clause.text[-1:] in "。！？!?；;\n" else
-                      "soft_boundary" if len(clause.text) >= 24 and clause.text[-1:] in "，,、：:—-" else
-                      "length_limit" if len(clause.text) == 80 else "object_closed")
+            reason = clause_flush_reason(clause.text, first=not streamed.get(clause.index))
             trace("say.clause_ready", sayId=f"{invoke_id}:{clause.call_id}",
-                charCount=len(clause.text), flushReason=reason)
+                charCount=len(clause.text), count=speech_units(clause.text), flushReason=reason)
             code = await self._stream_say(clause, invoke_id, surface, event, avatar, trace)
             if code is None:
                 frozen.setdefault(clause.index, avatar)
@@ -213,7 +213,8 @@ class ToolHarness:
                         early_codes[call.index] = code
                         await close_say(call.call_id, call.index, True)
                         continue
-                    for text in segment_say_text(str(call.arguments["text"])[streamed.get(call.index, 0):], final=True):
+                    for text in segment_say_text(str(call.arguments["text"])[streamed.get(call.index, 0):], final=True,
+                                                 first=not streamed.get(call.index)):
                         code = await deliver(SayClause(call.index, call.call_id, text, stream.avatar))
                         if code:
                             early_codes[call.index] = code
@@ -274,7 +275,8 @@ class ToolHarness:
                 codes[call.index] = code
             elif definition.effect is EffectClass.SAY:
                 codes[call.index] = "accepted"
-                for text in segment_say_text(str(call.arguments["text"])[streamed.get(call.index, 0):], final=True):
+                for text in segment_say_text(str(call.arguments["text"])[streamed.get(call.index, 0):], final=True,
+                                             first=not streamed.get(call.index)):
                     code = await deliver(SayClause(call.index, call.call_id, text, call.arguments.get("avatar")))
                     codes[call.index] = code or "accepted"
                     if code:

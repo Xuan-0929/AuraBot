@@ -2,7 +2,8 @@
  * Startup mode and fixture identity accompany approved diagnostic fields. Only approved scalar facts cross IPC; byte/count caps apply before caching, displaying or logging.
  * Source sequence preserves local order; Main assigns id for its merged, bounded timeline.
  * Acoustic windows and Realtime identities, outcomes and monotonic timings pass the same scalar
- * whitelist into disk and UI; raw provider payloads and audio never cross this diagnostic interface. */
+ * whitelist into disk and UI; session capability names/counts survive sanitization without prompt text
+ * or workspace paths. Raw provider payloads and audio never cross this diagnostic interface. */
 export type DebugScalar = string | number | boolean | null;
 export type DebugState = Record<string, Record<string, DebugScalar>>;
 export interface LiveDebugEvent {
@@ -40,7 +41,7 @@ const fields=new Set(`debug lockMemory memoryFixture state enabled voiceEnabled 
  vadStatus vadReason vadWarmupFrames vadUnavailableFrames vadErrorFrames operation finalizing
  backendOnline connectionState recording truncation error droppedEvents instanceId source
  connectionId responseId questionId eventId itemId callId providerCode charCount modelName flushReason
- playbackWaitMs contextWaitMs audioMs hasAudio`.split(/\s+/));
+ playbackWaitMs contextWaitMs audioMs hasAudio toolNames workspaceCount motionCount expressionCount modelAvailable`.split(/\s+/));
 const encoder=new TextEncoder();
 export const debugByteLength=(value:unknown):number=>encoder.encode(JSON.stringify(value)).byteLength;
 export function sanitizeDebugDetails(raw:unknown):Record<string,DebugScalar> {
