@@ -4,6 +4,7 @@
  * Legacy desktop speech fields remain readable for old settings files; active Profiles supply all conversation settings.
  * Speech settings migrate absent engine choices to Pipeline, strip legacy enabled flags, and keep SeedDuplex credentials independent; the Pet microphone owns session activation.
  * ProfileRuntimeState projects Realtime text-input ownership to every desktop window.
+ * Settings-only task notices describe optional Windows dependencies without becoming runtime errors.
  */
 import { z } from 'zod';
 import type { Message } from '../schemas/message';
@@ -28,7 +29,7 @@ export const desktopConfigSchema = z.object({
 });
 export type DesktopConfig = z.infer<typeof desktopConfigSchema>;
 export interface LaunchOptions { readonly debug:boolean; readonly lockMemory:boolean; }
-export interface SettingsState { launchOptions:LaunchOptions; config:DesktopConfig; appliedRevision:number|null; pending:boolean; backendPending:boolean; online:boolean; capabilities?:{text:boolean;voice:boolean;tasks:boolean}; error?:string; secrets:Record<string,boolean>; secretPreviews?:Record<string,string>; }
+export interface SettingsState { launchOptions:LaunchOptions; config:DesktopConfig; appliedRevision:number|null; pending:boolean; backendPending:boolean; online:boolean; capabilities?:{text:boolean;voice:boolean;tasks:boolean}; taskNotice?:'git_bash_missing'; error?:string; secrets:Record<string,boolean>; secretPreviews?:Record<string,string>; }
 export interface BusyState { tasks:number; memoryWriting:boolean; mainAgent:boolean; }
 export interface ApplyResult { state:SettingsState; busy?:BusyState; }
 export interface HistoryEntry { profileId?:string; generation?:number; id:string; role:'user'|'assistant'; content:string; }

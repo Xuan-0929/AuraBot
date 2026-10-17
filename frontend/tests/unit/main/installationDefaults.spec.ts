@@ -24,6 +24,25 @@ it('registers installation/home defaults only for a fresh configuration', () => 
   } finally { rmSync(root,{recursive:true,force:true}); }
 });
 
+it('uses Node for Electron regardless of its executable filename and repairs the old default', () => {
+  const root=mkdtempSync(join(tmpdir(),'aura-electron-node-'));
+  const original=Object.getOwnPropertyDescriptor(process.versions,'electron');
+  Object.defineProperty(process.versions,'electron',{value:'41.0.0',configurable:true});
+  try {
+    const config=new DesktopConfigStore(root).snapshot();
+    expect(config.backend.task.node_executable).toBe('node');
+    config.backend.task.node_executable=process.execPath;
+    writeFileSync(join(root,'settings.json'),JSON.stringify(config));
+    expect(new DesktopConfigStore(root).snapshot().backend.task.node_executable).toBe('node');
+    config.backend.task.node_executable=join(root,'custom-node.exe');
+    writeFileSync(join(root,'settings.json'),JSON.stringify(config));
+    expect(new DesktopConfigStore(root).snapshot().backend.task.node_executable).toBe(config.backend.task.node_executable);
+  } finally {
+    if(original)Object.defineProperty(process.versions,'electron',original);else Reflect.deleteProperty(process.versions,'electron');
+    rmSync(root,{recursive:true,force:true});
+  }
+});
+
 
 it('normalizes legacy search secrets and persists only generic fields', () => {
   const root = realpathSync(mkdtempSync(join(tmpdir(), 'aura-search-config-')));

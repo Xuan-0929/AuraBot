@@ -72,6 +72,7 @@ class TaskManager:
         self._closing = False
         self.accepting = True
         self.capability_available = True
+        self.runtime_notice: str | None = None
         self._fatal_error: BaseException | None = None
         self._fail_stop_task: asyncio.Task[None] | None = None
 

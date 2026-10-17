@@ -1,6 +1,7 @@
 """Compose Backend Task ownership and the single active Profile for Electron realtime sessions.
 
-Startup tolerates absent chat, Pi and speech capabilities. Explicit Profile activation opens Context/Memory
+Startup tolerates absent chat, Pi and speech capabilities; absent Windows Bash disables task execution
+and appears only as a Settings readiness notice. Explicit Profile activation opens Context/Memory
 and text runtime; voice.start alone validates model inference, speech assets and providers. Shutdown fences realtime before
 closing Profile workers and the durable Task control plane. ProfileResources owns lazy speech; Runtime
 keeps Hub.render as its renderer for the entire Profile lifetime. Applied workspaces enter the model
@@ -16,6 +17,7 @@ from __future__ import annotations
 import asyncio
 import importlib.util
 import logging
+import sys
 from dataclasses import replace
 from collections.abc import AsyncIterator
 from contextlib import AsyncExitStack, asynccontextmanager
@@ -89,11 +91,13 @@ def build_task_manager() -> TaskManager:
 
     settings = TaskSettings.from_config(config, config.path)
     manager = TaskManager(settings)
+    manager.runtime_notice = "git_bash_missing" if sys.platform == "win32" and settings.shell_path is None else None
     model = config.get("task", {}).get("model", {})
-    manager.capability_available = all(model.get(key) for key in ("base_url", "model_name", "api_key"))
+    manager.capability_available = manager.runtime_notice is None and all(model.get(key) for key in ("base_url", "model_name", "api_key"))
     if manager.capability_available:
         try:
             settings.validate_runtime()
+            settings.configure_shell()
         except TaskSettingsError:
             manager.capability_available = False
             logger.info("task_capability_unavailable")
@@ -252,6 +256,7 @@ async def _build_profile(
             context_store=context,
             snapshot_projector=SnapshotProjector(workspaces={key: str(settings.workspaces.require(key)) for key in settings.workspaces.ids}),
             tool_policy=ToolSurfacePolicy(
+                tasks_available=bool(getattr(manager, "capability_available", True)),
                 workspace_ids=settings.workspaces.ids,
                 observation_tools=observation_tools,
                 task_controls=(

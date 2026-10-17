@@ -2,7 +2,9 @@
  * Every child inherits the immutable LaunchSession environment, including any temporary Profile root;
  * readiness must also match both launch flags. Both voice engines are available at launch so Profile switches do not depend on legacy global credentials and microphone activation remains lazy in Backend;
  * Realtime uses core WebSocket dependencies without local inference models. Only the child created here can be stopped. Readiness must match its instance/config revision, and a
- * busy restart must be approved by the user before Backend fences admission. No automatic restarts.
+ * busy restart must be approved by the user before Backend fences admission. A private stdin pipe
+ * requests graceful shutdown on all platforms; a bounded process-tree fallback owns only this child.
+ * No automatic restarts.
  */
 import type { LaunchSession } from './launchOptions';
 import { randomUUID } from 'node:crypto';
@@ -38,10 +40,11 @@ export class BackendProcess {
     if(this.child) throw new Error('Backend 已经启动');
     await checkPort();
     const snapshot=this.config.snapshot(); this.preparePi(snapshot);const instanceId=randomUUID();
-    const child=spawn('uv',['run','--project',join(this.projectRoot,'backend'),'--extra','speech','uvicorn','backend.main:app','--host','127.0.0.1','--port','6401','--app-dir',this.projectRoot],{
-      cwd:this.projectRoot,stdio:'ignore',env:{...process.env,...(this.launch?.backendEnvironment()??{AURABOT_DEBUG:"0",AURABOT_LOCK_MEMORY:"0",AURABOT_SESSION_DATA_DIR:""}),AURABOT_CONFIG_PATH:this.config.path,AURABOT_BACKEND_INSTANCE:instanceId,AURABOT_TASK_API_KEY:snapshot.backend.task.model.api_key}
+    const child=spawn('uv',['run','--project',join(this.projectRoot,'backend'),'--extra','speech','python','-m','backend.desktop_runner'],{
+      cwd:this.projectRoot,stdio:['pipe','ignore','ignore'],windowsHide:true,detached:process.platform!=='win32',env:{...process.env,...(this.launch?.backendEnvironment()??{AURABOT_DEBUG:"0",AURABOT_LOCK_MEMORY:"0",AURABOT_SESSION_DATA_DIR:""}),AURABOT_CONFIG_PATH:this.config.path,AURABOT_BACKEND_INSTANCE:instanceId,AURABOT_TASK_API_KEY:snapshot.backend.task.model.api_key}
     });
     this.child=child;
+    child.stdin?.on('error',()=>{/* An already-exiting Backend may close the control pipe first. */});
     let spawnError=false;
     child.once('error',()=>{spawnError=true;if(!child.pid&&this.child===child)this.child=undefined;});
     child.once('exit',()=>{if(this.child===child)this.child=undefined;this.config.online=false;if(!this.stopping)this.config.error='Backend 已退出，请检查配置后重新应用。';this.changed();});
@@ -53,7 +56,7 @@ export class BackendProcess {
           const ready=await backendJson('/api/v1/readiness');
           if(ready.ready&&ready.instanceId===instanceId&&ready.configRevision===snapshot.revision){
             const expected=this.config.launchOptions;
-            if(ready.launchOptions?.debug!==expected.debug||ready.launchOptions?.lockMemory!==expected.lockMemory)throw new Error("Backend 启动模式不匹配");this.config.online=true;this.config.capabilities={text:ready.capabilities?.text===true,voice:ready.capabilities?.voice===true,tasks:ready.capabilities?.tasks===true};this.config.markApplied(snapshot);this.changed();return;}
+            if(ready.launchOptions?.debug!==expected.debug||ready.launchOptions?.lockMemory!==expected.lockMemory)throw new Error("Backend 启动模式不匹配");this.config.online=true;this.config.capabilities={text:ready.capabilities?.text===true,voice:ready.capabilities?.voice===true,tasks:ready.capabilities?.tasks===true};this.config.taskNotice=ready.taskNotice==='git_bash_missing'?'git_bash_missing':undefined;this.config.markApplied(snapshot);this.changed();return;}
         } catch(error) { if(error instanceof Error&&error.message==="Backend 启动模式不匹配")throw error; /* Only transient startup readiness failures are retried. */ }
         await new Promise(resolve=>setTimeout(resolve,200));
       }
@@ -63,7 +66,7 @@ export class BackendProcess {
   apply(force=false):Promise<ApplyResult> {return this.exclusive(()=>this.applySaved(force));}
   private async applySaved(force:boolean):Promise<ApplyResult> {
     try {
-      if(this.config.online&&!this.config.status().backendPending){this.config.markApplied(this.config.snapshot());this.changed();return {state:this.config.status()};}
+      if(this.config.online&&!this.config.status().backendPending&&!this.config.taskNotice){this.config.markApplied(this.config.snapshot());this.changed();return {state:this.config.status()};}
       if(this.child&&this.config.online) {
         const preflight=await backendJson('/api/v1/restart/prepare',{method:'POST',body:JSON.stringify({force})});
         if(!preflight.ready) return {state:this.config.status(),busy:preflight.busy};
@@ -82,9 +85,20 @@ export class BackendProcess {
     this.stopping=true;
     try {
       await new Promise<void>((resolve,reject)=>{
-        const timer=setTimeout(()=>{child.removeListener('exit',done);reject(new Error('Backend 尚未完成退出；未启动第二个进程。'));},40000);
-        const done=()=>{clearTimeout(timer);resolve();};
-        child.once('exit',done);child.kill('SIGTERM');
+        let killTimer:ReturnType<typeof setTimeout>|undefined;
+        const timer=setTimeout(()=>{
+          if(child.pid && child.exitCode===null && child.signalCode===null){
+            if(process.platform==='win32'){
+              const killer=spawn('taskkill',['/PID',String(child.pid),'/T','/F'],{stdio:'ignore',windowsHide:true});
+              killer.once('error',()=>{/* The bounded wait below reports failed cleanup. */});
+            }else {try{process.kill(-child.pid,'SIGKILL');}catch{/* Child may have just exited. */}}
+          }
+          killTimer=setTimeout(()=>{child.removeListener('exit',done);reject(new Error('Backend 尚未完成退出；未启动第二个进程。'));},5000);
+        },40000);
+        const done=()=>{clearTimeout(timer);clearTimeout(killTimer);resolve();};
+        child.once('exit',done);
+        if(child.exitCode!==null||child.signalCode!==null){child.removeListener('exit',done);done();return;}
+        child.stdin?.end();
       });
     } finally {this.stopping=false;this.config.online=false;}
   }

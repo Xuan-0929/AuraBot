@@ -6,6 +6,7 @@ records directly; it does not serialize and re-validate its own trusted construc
 Cancellation schemas admit a Profile-owned proposal identity so the shared Task owner can resolve
 the grace-window/commit race before delegating to the durable TaskManager.
 Task guidance describes local Pi delegation and evidence-based results for both voice engines.
+Unavailable Pi execution removes assignment/resume/rerun/answer tools while retaining read and cleanup.
 """
 
 from __future__ import annotations
@@ -156,6 +157,7 @@ class ToolSurfacePolicy:
         *,
         workspace_ids: Sequence[str] = (),
         task_controls: Sequence[str] = (),
+        tasks_available: bool = True,
         observation_tools: Sequence[str] = (),
         avatar_capabilities: AvatarCapabilities | None = None,
         max_calls: int = 8,
@@ -174,6 +176,10 @@ class ToolSurfacePolicy:
         self.max_durable_calls = max_durable_calls
         self.max_note_calls = max_note_calls
         self._definitions = _catalog(tuple(sorted(set(workspace_ids))), controls, observations)
+        if not tasks_available:
+            self._definitions = tuple(d for d in self._definitions if d.name not in {
+                "task_assign", "resume_task", "rerun_task", "answer_task_question",
+            })
         self.set_avatar_capabilities(avatar_capabilities or AvatarCapabilities())
 
     def set_avatar_capabilities(self, capabilities: AvatarCapabilities) -> None:

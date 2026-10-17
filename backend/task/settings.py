@@ -2,12 +2,17 @@
 
 Settings derive durable SQLite/session/Pi-home paths and trusted workspaces, validate pinned Pi installation
 on demand, and forward configured model identity to the subprocess adapter. Missing Pi does not prevent
-Backend startup; TaskManager exposes a disabled capability until the next configured restart."""
+Backend startup; TaskManager exposes a disabled capability until the next configured restart.
+Windows shell detection and Pi's shellPath share the same verified executable; missing Bash is a
+non-fatal readiness notice rather than an application error."""
 
 from __future__ import annotations
 
 import shutil
 import subprocess
+import os
+import sys
+import json
 from collections.abc import Mapping
 from dataclasses import dataclass, field
 from pathlib import Path
@@ -17,6 +22,29 @@ from uuid import UUID
 from ..main_agent.settings import WorkspaceRegistry
 
 EXPECTED_PI_VERSION = "0.84.2"
+
+
+def find_windows_bash() -> str | None:
+    """Locate usable native Bash, excluding the legacy WSL launcher, without shell quoting."""
+    candidates = []
+    for variable in ("ProgramFiles", "ProgramFiles(x86)", "LOCALAPPDATA"):
+        if directory := os.environ.get(variable):
+            candidates.append(Path(directory) / ("Programs/Git/bin/bash.exe" if variable == "LOCALAPPDATA" else "Git/bin/bash.exe"))
+    if git := shutil.which("git.exe"):
+        candidates.append(Path(git).parent.parent / "bin/bash.exe")
+    if bash := shutil.which("bash.exe"):
+        candidates.append(Path(bash))
+    for path in dict.fromkeys(candidates):
+        if not path.is_file() or any(part.casefold() in {"system32", "sysnative"} for part in path.parts):
+            continue
+        try:
+            result = subprocess.run([str(path), "--version"], capture_output=True, timeout=3,
+                                    creationflags=getattr(subprocess, "CREATE_NO_WINDOW", 0))
+            if result.returncode == 0 and b"GNU bash" in result.stdout:
+                return str(path.resolve())
+        except (OSError, subprocess.TimeoutExpired):
+            continue
+    return None
 
 
 class TaskSettingsError(RuntimeError):
@@ -59,6 +87,7 @@ class TaskSettings:
     output_chunk_bytes: int = 16 * 1024
     workspace_registry: WorkspaceRegistry = field(default_factory=WorkspaceRegistry.empty)
     model_name: str = ""
+    shell_path: str | None = None
 
     @classmethod
     def from_mapping(
@@ -105,6 +134,7 @@ class TaskSettings:
         task_root = user_data / "task"
 
         return cls(
+            shell_path=find_windows_bash() if sys.platform == "win32" else None,
             model_name=str(raw.get("model", {}).get("model_name", "")),
             database_path=task_root / "task-runtime.sqlite3",
             session_root=task_root / "sessions",
@@ -151,6 +181,7 @@ class TaskSettings:
                 capture_output=True,
                 text=True,
                 timeout=self.startup_timeout_seconds,
+                creationflags=getattr(subprocess, "CREATE_NO_WINDOW", 0),
             )
         except (OSError, subprocess.TimeoutExpired) as exc:
             raise TaskSettingsError(f"Failed to execute pinned Pi CLI: {exc}") from exc
@@ -159,6 +190,18 @@ class TaskSettings:
             raise TaskSettingsError(
                 f"Pinned Pi CLI must report {EXPECTED_PI_VERSION}; got {reported or 'no version'}."
             )
+
+    def configure_shell(self) -> None:
+        """Preserve Main-owned model defaults while pinning the validated Bash path for Pi."""
+        if self.shell_path is None:
+            return
+        self.pi_home.mkdir(parents=True, exist_ok=True)
+        path = self.pi_home / "settings.json"
+        settings = json.loads(path.read_text(encoding="utf-8")) if path.exists() else {}
+        settings["shellPath"] = self.shell_path
+        temporary = path.with_suffix(".json.tmp")
+        temporary.write_text(json.dumps(settings, ensure_ascii=False), encoding="utf-8")
+        temporary.replace(path)
 
     def session_directory(self, task_id: UUID) -> Path:
         """返回受 UUID 约束的 Task session 目录，不创建它。"""

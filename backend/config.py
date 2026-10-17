@@ -2,11 +2,13 @@
 
 Legacy version 1 and Profile-owned version 2 snapshots share the Backend section; persona is never a
 Backend configuration source. Version/revision stay process metadata. Missing files
-produce safe blank defaults. JSON strings stay literal, and saves never hot reload a running process."""
+produce safe blank defaults beneath the platform's application-data directory. Electron's explicit
+configuration path remains authoritative. JSON strings stay literal, and saves never hot reload a running process."""
 
 from __future__ import annotations
 
 import os
+import sys
 from collections.abc import Iterator, Mapping
 from pathlib import Path
 from threading import RLock
@@ -15,7 +17,10 @@ from typing import Any
 import json
 
 PROJECT_ROOT = Path(__file__).resolve().parent.parent
-DEFAULT_CONFIG_PATH = Path.home() / "Library/Application Support/AuraBot/desktop-v2/settings.json"
+_APP_DATA = (Path(os.environ.get("APPDATA", str(Path.home() / "AppData/Roaming"))) if sys.platform == "win32"
+             else Path.home() / "Library/Application Support" if sys.platform == "darwin"
+             else Path(os.environ.get("XDG_CONFIG_HOME", str(Path.home() / ".config"))))
+DEFAULT_CONFIG_PATH = _APP_DATA / "AuraBot/desktop-v2/settings.json"
 CONFIG_PATH_ENV = "AURABOT_CONFIG_PATH"
 RETAINED_TOP_LEVEL_KEYS = frozenset(
     {"app", "dev", "memory", "ports", "chat_model", "gateway_model", "main_agent", "task"}

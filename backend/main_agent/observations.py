@@ -2,7 +2,8 @@
 
 Runtime owns one ObservationLedger for request reuse and terminal persistence. WebTools shares a small
 opaque source map across ``web_search`` and ``web_read`` and delegates public-page extraction to the selected search adapter. Producer content fits Runtime's JSON scalar boundary; WorkspaceReader also enforces no-follow,
-secret, binary, file-size, and paging boundaries beneath configured roots.
+secret, binary, file-size, and paging boundaries beneath configured roots. Windows uses pinned
+native handles instead of Unix dir_fd operations, preserving no-follow protection for junctions.
 """
 
 from __future__ import annotations
@@ -14,10 +15,13 @@ import hashlib
 import json
 import os
 import stat
+import sys
 import urllib.parse
 from collections import OrderedDict
 from collections.abc import Mapping
 from typing import Any
+from pathlib import Path
+from contextlib import contextmanager
 
 from .web_provider import ObservationExecutorError, SearchProvider
 from .settings import WorkspaceRegistry, WorkspaceRegistryError
@@ -181,6 +185,10 @@ def _relative_parts(raw_path: object, *, allow_root: bool) -> tuple[str, ...]:
     parts = tuple(part for part in raw_path.split("/") if part not in {"", "."})
     if (not allow_root and not parts) or any(part == ".." or _secret_name(part) for part in parts):
         raise ObservationSecurityError("workspace path is unavailable or unsafe")
+    if sys.platform == "win32":
+        from .windows_workspace import valid_component
+        if any(not valid_component(part) for part in parts):
+            raise ObservationSecurityError("workspace path is unavailable or unsafe")
     return parts
 
 
@@ -216,8 +224,7 @@ class WorkspaceReader:
         self._registry = registry
 
     def list(self, workspace_id: object, path: object = "") -> dict[str, Any]:
-        descriptor = self._open(workspace_id, _relative_parts(path, allow_root=True), directory=True)
-        try:
+        with self._directory(workspace_id, _relative_parts(path, allow_root=True)) as descriptor:
             items = []
             with os.scandir(descriptor) as entries:
                 for scanned, entry in enumerate(entries, 1):
@@ -226,8 +233,10 @@ class WorkspaceReader:
                     if _secret_name(entry.name):
                         continue
                     try:
-                        info = os.stat(entry.name, dir_fd=descriptor, follow_symlinks=False)
+                        info = entry.stat(follow_symlinks=False)
                     except OSError:
+                        continue
+                    if getattr(info, "st_file_attributes", 0) & 0x400:
                         continue
                     if stat.S_ISDIR(info.st_mode):
                         items.append({"name": entry.name, "type": "directory", "size": 0})
@@ -240,8 +249,22 @@ class WorkspaceReader:
                 "items": items[:_MAX_WORKSPACE_ITEMS],
                 "truncated": len(items) > _MAX_WORKSPACE_ITEMS,
             }
-        finally:
-            os.close(descriptor)
+
+    @contextmanager
+    def _directory(self, workspace_id: object, parts: tuple[str, ...]):
+        if sys.platform == "win32":
+            from .windows_workspace import open_path
+            try:
+                with open_path(self._registry.require(workspace_id).joinpath(*parts), directory=True) as path:
+                    yield path
+            except (OSError, WorkspaceRegistryError) as exc:
+                raise ObservationSecurityError("workspace path is unavailable or unsafe") from exc
+        else:
+            descriptor = self._open(workspace_id, parts, directory=True)
+            try:
+                yield descriptor
+            finally:
+                os.close(descriptor)
 
     def read(
         self,
@@ -298,6 +321,13 @@ class WorkspaceReader:
             root = self._registry.require(workspace_id)
         except WorkspaceRegistryError as exc:
             raise ObservationSecurityError("workspace is not registered") from exc
+        if sys.platform == "win32":
+            from .windows_workspace import open_path
+            try:
+                with open_path(root.joinpath(*parts), directory=directory) as descriptor:
+                    return os.dup(descriptor)
+            except OSError as exc:
+                raise ObservationSecurityError("workspace path is unavailable or unsafe") from exc
         flags = os.O_RDONLY | getattr(os, "O_CLOEXEC", 0) | getattr(os, "O_NONBLOCK", 0)
         directory_flag = getattr(os, "O_DIRECTORY", 0)
         no_follow = getattr(os, "O_NOFOLLOW", 0)
@@ -320,8 +350,12 @@ class WorkspaceReader:
             raise ObservationSecurityError("workspace path could not be opened safely") from exc
 
     @staticmethod
-    def _binary_entry(directory: int, name: str) -> bool:
+    def _binary_entry(directory: int | str, name: str) -> bool:
         try:
+            if isinstance(directory, str):
+                from .windows_workspace import open_path
+                with open_path(Path(directory) / name, directory=False) as descriptor:
+                    return _binary(os.read(descriptor, 8192))
             descriptor = os.open(
                 name,
                 os.O_RDONLY | getattr(os, "O_CLOEXEC", 0) | getattr(os, "O_NOFOLLOW", 0) | getattr(os, "O_NONBLOCK", 0),

@@ -2,6 +2,7 @@
 
 测试使用临时 Pi Home/session 加载真实 AuraBot Extension，只发送 get_state 后关闭 stdin；
 stderr 独立用 PIPE 捕获启动诊断，不复用生产 DEVNULL 或用户 ``~/.pi/agent``。
+进程组按 Windows/Unix 分别建立，因此同一离线检查可在平台 CI 中执行。
 """
 
 from __future__ import annotations
@@ -44,7 +45,9 @@ class RealPiOfflineSmokeTests(unittest.IsolatedAsyncioTestCase):
                 "--name", "offline-smoke", "--no-approve", "--extension", str(EXTENSION),
                 "--append-system-prompt", str(SYSTEM_PROMPT), cwd=root, env=environment,
                 stdin=asyncio.subprocess.PIPE, stdout=asyncio.subprocess.PIPE,
-                stderr=asyncio.subprocess.PIPE, start_new_session=True,
+                stderr=asyncio.subprocess.PIPE,
+                **({"creationflags": subprocess.CREATE_NEW_PROCESS_GROUP | subprocess.CREATE_NO_WINDOW}
+                   if os.name == "nt" else {"start_new_session": True}),
             )
             assert process.stdin and process.stdout and process.stderr
             process.stdin.write(b'{"id":"smoke-1","type":"get_state"}\n')

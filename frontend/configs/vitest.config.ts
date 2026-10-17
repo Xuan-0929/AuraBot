@@ -2,6 +2,7 @@
  * Shared aliases match production imports, while forks isolate globals and native SQLite handles. */
 import { defineConfig } from "vitest/config";
 import vue from "@vitejs/plugin-vue";
+import { fileURLToPath } from "node:url";
 
 export default defineConfig({
   plugins: [vue()],
@@ -13,9 +14,9 @@ export default defineConfig({
   },
   resolve: {
     alias: {
-      "@core": new URL("../src/core", import.meta.url).pathname,
-      "@shared": new URL("../src/shared", import.meta.url).pathname,
-      "@renderer": new URL("../src", import.meta.url).pathname
+      "@core": fileURLToPath(new URL("../src/core", import.meta.url)),
+      "@shared": fileURLToPath(new URL("../src/shared", import.meta.url)),
+      "@renderer": fileURLToPath(new URL("../src", import.meta.url))
     }
   }
 });

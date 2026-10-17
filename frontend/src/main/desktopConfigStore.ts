@@ -5,6 +5,7 @@
  * bullets; first-run defaults register the installation root and user home, and keep Pi dependencies
  * under that root independently of the source checkout. Launch options are immutable process state returned alongside settings, never persisted.
  * Legacy debug, notification and voice enable flags are stripped by the schema; microphone sessions control voice activation.
+ * Electron identity comes from process.versions, never the executable's platform-dependent filename.
  * Legacy search credentials normalize on read; secrets never leave Main except masked previews.
  * Pipeline and Realtime credentials are retained separately across engine switches and redacted equally.
  */
@@ -33,6 +34,7 @@ export class DesktopConfigStore {
   online=false;
   error?:string;
   capabilities?:SettingsState["capabilities"];
+  taskNotice?:SettingsState["taskNotice"];
   constructor(readonly root:string, readonly launchOptions:LaunchOptions=Object.freeze({debug:false,lockMemory:false})) {
     root=resolve(root);mkdirSync(root,{recursive:true});root=realpathSync(root);this.root=root;
     this.path=join(root,'settings.json');
@@ -41,10 +43,12 @@ export class DesktopConfigStore {
       app:{data_dir:root,workspaces:[{id:'default',path:root},{id:'home',path:homedir()}]},chat_model:{...blankModel},
       main_agent:{profile_dir:'profiles',web:{provider:'tavily',api_key:''},speech:{...defaultProfileVoice().speech,
         ...speechAssetPaths(root)}},
-      memory:{embedding:{provider:'hash',dimension:384}},task:{user_data_dir:root,pi_runtime_dir:join(root,'pi-runtime'),node_executable:process.execPath.includes('Electron')?'node':process.execPath,default_timeout_seconds:1800,model:{...blankModel}}
+      memory:{embedding:{provider:'hash',dimension:384}},task:{user_data_dir:root,pi_runtime_dir:join(root,'pi-runtime'),node_executable:process.versions.electron?'node':process.execPath,default_timeout_seconds:1800,model:{...blankModel}}
     },desktop:{pet:{clickThroughPet:false,displayLanguage:'zh'}}};
     const existing=existsSync(this.path)?JSON.parse(readFileSync(this.path,'utf8')):null;
     this.saved=desktopConfigSchema.parse(existing?{...existing,version:2}:defaults);
+    // Repair the previous Windows default without overwriting a user-selected Node binary.
+    if(process.versions.electron && this.saved.backend.task.node_executable.toLowerCase()===process.execPath.toLowerCase())this.saved.backend.task.node_executable='node';
     // The repository must back up and import v1 persona before the old file is replaced.
     if(!existing)this.persist();
   }
@@ -54,7 +58,7 @@ export class DesktopConfigStore {
   publicConfig():DesktopConfig { const value=this.snapshot(); for(const path of secretPaths) access(value,path,''); return value; }
   status():SettingsState {
     return {launchOptions:{...this.launchOptions},config:this.publicConfig(),appliedRevision:this.applied?.revision??null,pending:JSON.stringify(this.saved)!==JSON.stringify(this.applied),
-      backendPending:JSON.stringify(this.saved.backend)!==JSON.stringify(this.applied?.backend),online:this.online,capabilities:this.capabilities,error:this.error,
+      backendPending:JSON.stringify(this.saved.backend)!==JSON.stringify(this.applied?.backend),online:this.online,capabilities:this.capabilities,taskNotice:this.taskNotice,error:this.error,
       secretPreviews:Object.fromEntries(secretPaths.map(path=>[path,secretPreview(access(this.saved,path))])),
       secrets:Object.fromEntries(secretPaths.map(path=>[path,Boolean(access(this.saved,path))]))};
   }

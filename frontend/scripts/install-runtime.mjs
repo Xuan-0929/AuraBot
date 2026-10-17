@@ -7,6 +7,7 @@ import { cpSync, mkdirSync } from 'node:fs';
 import { spawnSync } from 'node:child_process';
 import { dirname, join, resolve } from 'node:path';
 import { fileURLToPath, pathToFileURL } from 'node:url';
+import { npmCommand } from './npm-command.mjs';
 
 const sourceRoot = resolve(dirname(fileURLToPath(import.meta.url)), '../..');
 export function prepareRuntime(installationDirectory) {
@@ -30,7 +31,8 @@ if (process.argv[1] && import.meta.url === pathToFileURL(resolve(process.argv[1]
     process.exitCode = 1;
   } else {
     for (const directory of prepareRuntime(process.argv[2])) {
-      const result = spawnSync('npm', ['ci', '--prefix', directory, '--no-audit', '--no-fund'], { stdio: 'inherit' });
+      const [node, args] = npmCommand();
+      const result = spawnSync(node, [...args, 'ci', '--prefix', directory, '--no-audit', '--no-fund'], { stdio: 'inherit', windowsHide: true });
       if (result.error || result.status !== 0) {
         console.error(result.error?.message ?? 'Pi dependency installation failed.');
         process.exitCode = result.status || 1;

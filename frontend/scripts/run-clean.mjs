@@ -1,4 +1,7 @@
+/** Launches the local Electron/Vite JS entry with an isolated temporary user-data root.
+ * Uses Node directly on every OS, avoiding npm/npx shell shims; Main owns Backend lifecycle. */
 import { mkdtempSync } from "node:fs";
+import { fileURLToPath } from "node:url";
 import { tmpdir } from "node:os";
 import { join } from "node:path";
 import { spawn } from "node:child_process";
@@ -12,15 +15,17 @@ if (mode === "--help" || mode === "-h" || !["dev", "start"].includes(mode)) {
 }
 
 const userDataDir = mkdtempSync(join(tmpdir(), `aurabot-${mode}-clean-`));
-const command = "npx";
+const command = process.execPath;
+const cli = path => fileURLToPath(new URL('../node_modules/' + path, import.meta.url));
 const args =
   mode === "dev"
-    ? ["electron-vite", "dev"]
-    : ["electron", "out/main/index.js"];
+    ? [cli("electron-vite/bin/electron-vite.js"), "dev"]
+    : [cli("electron/cli.js"), "out/main/index.js"];
 
 console.log(`AuraBot clean ${mode} userData: ${userDataDir}`);
 
 const child = spawn(command, args, {
+  cwd: new URL('../', import.meta.url),
   env: {
     ...process.env,
     AURABOT_USER_DATA_DIR: userDataDir,
@@ -29,6 +34,7 @@ const child = spawn(command, args, {
   },
   stdio: "inherit"
 });
+child.once('error', error => { console.error(error.message); process.exitCode = 1; });
 
 for (const signal of ["SIGINT", "SIGTERM"]) {
   process.on(signal, () => {

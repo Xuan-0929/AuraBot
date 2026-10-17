@@ -8,6 +8,7 @@ CLI，并把所有 Task 数据和 Pi Home 固定在 AuraBot user data 下。
 from __future__ import annotations
 
 import tempfile
+import sys
 import unittest
 from pathlib import Path
 
@@ -23,13 +24,10 @@ class TaskSettingsTests(unittest.TestCase):
         cli.parent.mkdir(parents=True)
         plugin.parent.mkdir(parents=True)
         prompt.parent.mkdir(parents=True)
-        cli.write_text("// fake cli\n", encoding="utf-8")
+        cli.write_text(f"print({version!r})\n", encoding="utf-8")
         plugin.write_text("// fake extension\n", encoding="utf-8")
         prompt.write_text("prompt\n", encoding="utf-8")
-        node = root / "node"
-        node.write_text(f"#!/bin/sh\nprintf '{version}\\n'\n", encoding="utf-8")
-        node.chmod(0o755)
-        return runtime, node
+        return runtime, Path(sys.executable)
 
     def test_derives_isolated_paths_and_defaults(self):
         with tempfile.TemporaryDirectory() as directory:
@@ -111,9 +109,7 @@ class TaskSettingsTests(unittest.TestCase):
     def test_rejects_missing_runtime_files(self):
         with tempfile.TemporaryDirectory() as directory:
             root = Path(directory)
-            node = root / "node"
-            node.write_text("#!/bin/sh\nprintf '0.84.2\\n'\n", encoding="utf-8")
-            node.chmod(0o755)
+            node = Path(sys.executable)
             settings = TaskSettings.from_mapping(
                 {
                     "task": {

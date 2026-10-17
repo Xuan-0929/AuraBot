@@ -18,6 +18,19 @@ import { t } from '../../../src/i18n';
 import {useAuraBotStore} from '../../../src/app/store';
 let dispose:()=>void=()=>{};
 afterEach(()=>{dispose();vi.unstubAllGlobals();});
+it('shows missing Git Bash only as a brief pet-status hint without an alert',async()=>{
+ const root=mkdtempSync(join(tmpdir(),'aura-bash-hint-'));const config=new DesktopConfigStore(root);
+ config.online=true;config.capabilities={text:true,voice:true,tasks:false};config.taskNotice='git_bash_missing';
+ Object.assign(window,{aurabot:{getSettings:async()=>config.status(),onSettingsChanged:()=>()=>{}}});
+ const host=document.createElement('div');document.body.append(host);const app=createApp(SettingsWindow);app.use(createPinia());app.mount(host);
+ dispose=()=>{app.unmount();host.remove();rmSync(root,{recursive:true,force:true});};
+ await vi.waitFor(()=>expect(host.querySelector('form')).not.toBeNull());
+ expect(host.textContent).not.toContain('Git Bash');expect(host.querySelector('[role=alert]')).toBeNull();
+ [...host.querySelectorAll<HTMLButtonElement>('nav button')].find(button=>button.textContent==='桌宠状态')!.click();await nextTick();
+ expect(host.textContent).toContain(t('zh','gitBashMissing'));expect(host.textContent).not.toContain(t('zh','tasksNotConfigured'));
+ expect(host.querySelector('[role=alert]')).toBeNull();expect(host.querySelector('[role=alertdialog]')).toBeNull();
+ expect([...host.querySelectorAll<HTMLButtonElement>('button')].find(button=>button.textContent==='应用')!.disabled).toBe(false);
+});
 it('preserves untouched keys and lets password inputs replace or delete every saved key',async()=>{
  const root=mkdtempSync(join(tmpdir(),'aura-secrets-'));const config=new DesktopConfigStore(root);
  const seed=config.snapshot();seed.backend.chat_model.api_key='chat-fixture';seed.backend.task.model.api_key='task-fixture';seed.backend.main_agent.web.api_key='search-fixture';seed.backend.main_agent.speech.api_key='speech-fixture';config.save(seed);

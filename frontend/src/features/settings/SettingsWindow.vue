@@ -1,7 +1,8 @@
 <!-- Owns global Task/search, desktop and workspace settings with explicit save/apply.
      History display clearing calls Main immediately and preserves stored conversations and Backend memory.
      Profile editing owns conversation models and voice; navigation preserves its dirty drafts.
-     Main validates settings and masked secrets, while busy restart confirmation fences live work. -->
+     Main validates settings and masked secrets, while busy restart confirmation fences live work.
+     Missing Windows Git Bash appears only in pet status reminders, without an error dialog. -->
 <template>
   <main class="settings-window">
     <div class="settings-window-shell settings-v2-layout" :inert="busy ? true : undefined">
@@ -83,7 +84,7 @@
               <footer class="settings-save-bar">
                 <span role="status">{{ configStatus }}</span>
                 <button type="submit" :class="{primary:dirty}" :disabled="working || !dirty">{{ t(displayLanguage, 'save') }}</button>
-                <button ref="applyButton" type="button" :class="{primary:!dirty && (state.pending || !state.online || !store.profileRuntime?.online)}" :disabled="working || dirty || (!state.pending && state.online && store.profileRuntime?.online)" @click="apply(false)">{{ t(displayLanguage, working?'processing':'apply') }}</button>
+                <button ref="applyButton" type="button" :class="{primary:!dirty && (state.pending || !state.online || !store.profileRuntime?.online || state.taskNotice)}" :disabled="working || dirty || (!state.pending && state.online && store.profileRuntime?.online && !state.taskNotice)" @click="apply(false)">{{ t(displayLanguage, working?'processing':'apply') }}</button>
               </footer>
             </form>
           </template>
@@ -140,7 +141,8 @@ const runtimeHints=computed(()=>{
   const hints=[];
   if(!capabilities.text)hints.push(t(displayLanguage.value,'chatNotConfigured'));
 
-  if(!capabilities.tasks)hints.push(t(displayLanguage.value,'tasksNotConfigured'));
+  if(current.taskNotice==='git_bash_missing')hints.push(t(displayLanguage.value,'gitBashMissing'));
+  else if(!capabilities.tasks)hints.push(t(displayLanguage.value,'tasksNotConfigured'));
   return hints;
 });
 const settingsForm=ref<HTMLFormElement>();

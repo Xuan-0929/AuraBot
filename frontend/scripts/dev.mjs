@@ -4,6 +4,7 @@
  * owns Backend processes and temporary memory data; this launcher only forwards arguments and signals. */
 import { spawn } from 'node:child_process';
 import { parseArgs } from 'node:util';
+import { fileURLToPath } from 'node:url';
 
 try {
   const {values} = parseArgs({options:{debug:{type:'boolean'}, 'lock-memory':{type:'boolean'}, help:{type:'boolean',short:'h'}}, allowPositionals:false});
@@ -18,9 +19,10 @@ try {
       child.once('error',reject);
       child.once('exit',(code,signal)=>resolve(code??(signal?1:0)));
     });
-    const rebuilt=await run('npm',['run','rebuild:native']);
+    const cli=path=>fileURLToPath(new URL('../node_modules/'+path,import.meta.url));
+    const rebuilt=await run(process.execPath,[cli('@electron/rebuild/lib/cli.js'),'-f','-w','better-sqlite3']);
     process.exitCode=rebuilt;
-    if(!rebuilt&&!stopped) process.exitCode=await run('npx',['electron-vite','dev','--',
+    if(!rebuilt&&!stopped) process.exitCode=await run(process.execPath,[cli('electron-vite/bin/electron-vite.js'),'dev','--',
       ...(values.debug?['--aurabot-debug']:[]),...(values['lock-memory']?['--aurabot-lock-memory']:[])]);
   }
 } catch(error) {

@@ -39,7 +39,7 @@ def _workspace_root(value: str | Path) -> Path:
             current = current.parent
             continue
         current /= part
-        if current.is_symlink():
+        if current.is_symlink() or (current.exists() and getattr(current.lstat(), "st_file_attributes", 0) & 0x400):
             raise WorkspaceRegistryError("workspace root must not contain a symlink.")
     return candidate.resolve()
 

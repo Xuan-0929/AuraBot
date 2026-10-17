@@ -3,6 +3,7 @@
 Manager 直接持有本模块返回的 PiProcess；``start_pi`` 构造隔离 session 和 pinned CLI，
 ``stop_pi`` 执行 abort→stdin close→wait→terminate→kill→reap，``remove_session`` 处理
 tombstone 后清理。RPC 只管理 stdin/stdout，stderr 由操作系统 DEVNULL 消费。
+Windows 在优雅退出超时后直接回收整棵进程树，避免先杀父进程导致后代丢失。
 """
 
 from __future__ import annotations
@@ -86,7 +87,7 @@ async def start_pi(
         command.extend(["--provider", "aurabot-task", "--model", settings.model_name])
     platform_options: dict[str, Any] = {}
     if os.name == "nt":
-        platform_options["creationflags"] = subprocess.CREATE_NEW_PROCESS_GROUP
+        platform_options["creationflags"] = subprocess.CREATE_NEW_PROCESS_GROUP | subprocess.CREATE_NO_WINDOW
     else:
         platform_options["start_new_session"] = True
     spawn = asyncio.create_task(
@@ -214,7 +215,7 @@ def _terminate_process_tree(process: asyncio.subprocess.Process) -> None:
         return
     with contextlib.suppress(ProcessLookupError):
         if os.name == "nt":
-            process.terminate()
+            _kill_process_tree(process)
         else:
             os.killpg(process.pid, signal.SIGTERM)
 
@@ -228,6 +229,8 @@ def _kill_process_tree(process: asyncio.subprocess.Process) -> None:
                 ["taskkill", "/PID", str(process.pid), "/T", "/F"],
                 check=False,
                 capture_output=True,
+                timeout=5,
+                creationflags=subprocess.CREATE_NO_WINDOW,
             )
         else:
             os.killpg(process.pid, signal.SIGKILL)

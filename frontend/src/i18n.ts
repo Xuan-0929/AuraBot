@@ -1,4 +1,5 @@
-/** Localizes desktop controls and Backend activity states, including acoustic silence, for all windows. */
+/** Localizes desktop controls and Backend activity states for all windows; Settings consumes the
+ * informational Git Bash message without adding application errors or interrupting startup. */
 /** Localizes the complete Profile workflow and desktop shell and simplified Backend-projected agent states. Includes capability integrations, Pipeline conversation model configuration, search configuration and actionable pet runtime reminders. No runtime state is derived here. */
 /**
  * 提供任务清除、会话显示清除及恢复早期记录的三语文案，由控制台和设置共享。
@@ -65,6 +66,7 @@ const UI_TEXT = {
     chatNotConfigured: "Chat: model not configured",
     voiceNotConfigured: "Realtime voice: disabled or missing key, SDK, model or license",
     tasksNotConfigured: "Tasks: model or Pi runtime unavailable",
+    gitBashMissing: "Git Bash not detected; task execution is unavailable. Chat and voice remain available.",
     generalSettingsHint: "Manage language and common preferences.",
     petBehavior: "Pet Behavior",
     petBehaviorSettingsHint: "Adjust Aura's desktop interactions.",
@@ -233,6 +235,7 @@ const UI_TEXT = {
     chatNotConfigured: "对话：未配置模型",
     voiceNotConfigured: "实时语音：未启用或缺少密钥、SDK、模型／许可证",
     tasksNotConfigured: "任务：模型或 Pi runtime 不可用",
+    gitBashMissing: "未检测到 Git Bash，任务执行暂不可用；聊天和语音不受影响。",
     generalSettingsHint: "设置语言和常用选项。",
     petBehavior: "桌宠行为",
     petBehaviorSettingsHint: "调整桌宠的交互方式。",
@@ -404,6 +407,7 @@ const JAPANESE_UI_TEXT: Record<UiTextKey, string> = {
   chatNotConfigured: "チャット：モデル未設定",
   voiceNotConfigured: "リアルタイム音声：無効、またはキー・SDK・モデル・ライセンスが不足",
   tasksNotConfigured: "タスク：モデルまたは Pi runtime を利用できません",
+  gitBashMissing: "Git Bash が見つからないため、タスク実行を利用できません。会話と音声は引き続き利用できます。",
   generalSettingsHint: "言語とよく使う設定を管理します。",
   petBehavior: "ペットの動き",
   petBehaviorSettingsHint: "デスクトップ上での Aura の操作方法を調整します。",
