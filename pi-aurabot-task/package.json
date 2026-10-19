@@ -3,6 +3,16 @@
   "version": "0.1.0",
   "description": "Pi-native AuraBot Task integration package.",
   "license": "MIT",
+  "keywords": ["pi-package", "aurabot", "pi-extension"],
+  "repository": {
+    "type": "git",
+    "url": "git+https://github.com/Xuan-0929/AuraBot.git",
+    "directory": "pi-aurabot-task"
+  },
+  "publishConfig": {
+    "access": "public",
+    "registry": "https://registry.npmjs.org/"
+  },
   "private": false,
   "type": "module",
   "files": [
