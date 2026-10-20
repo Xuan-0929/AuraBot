@@ -3,6 +3,7 @@
 Tests use the public async executors and filesystem results. Removed DNS-pinned HTTP parsing, deadline thread
 pools, Harness-owned dedupe caches, and limiter internals are deliberately absent because the Tavily adapter now performs
 public-page extraction and Runtime owns one canonical Observation registry.
+Workspace fixtures use explicit bytes to check paging with both LF and CRLF on every platform.
 """
 
 from __future__ import annotations
@@ -114,7 +115,7 @@ class WorkspaceReaderTests(unittest.TestCase):
     def test_list_and_page_read_hide_secrets_and_stay_under_registered_root(self) -> None:
         with tempfile.TemporaryDirectory() as directory:
             root = Path(directory).resolve()
-            (root / "safe.txt").write_text("one\ntwo\nthree\n", encoding="utf-8")
+            (root / "safe.txt").write_bytes(b"one\ntwo\nthree\n")
             (root / ".env").write_text("SECRET=yes", encoding="utf-8")
             reader = WorkspaceReader(WorkspaceRegistry({"repo": root}))
 
@@ -125,6 +126,17 @@ class WorkspaceReaderTests(unittest.TestCase):
             self.assertEqual(page["next_start_line"], 3)
             with self.assertRaises(ObservationSecurityError):
                 reader.read("repo", "../outside")
+
+    def test_page_read_preserves_lf_and_crlf(self) -> None:
+        with tempfile.TemporaryDirectory() as directory:
+            root = Path(directory).resolve()
+            reader = WorkspaceReader(WorkspaceRegistry({"repo": root}))
+            for newline in ("\n", "\r\n"):
+                with self.subTest(newline=newline):
+                    (root / "safe.txt").write_bytes(newline.join(("一", "二", "三", "")).encode("utf-8"))
+                    page = reader.read("repo", "safe.txt", start_line=2, max_lines=1)
+                    self.assertEqual(page["content"], "二" + newline)
+                    self.assertEqual(page["next_start_line"], 3)
 
     def test_symlink_binary_and_secret_paths_are_denied(self) -> None:
         with tempfile.TemporaryDirectory() as directory:

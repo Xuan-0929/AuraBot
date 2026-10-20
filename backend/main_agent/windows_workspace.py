@@ -2,7 +2,8 @@
 
 CreateFile opens every ancestor without delete/write sharing and rejects reparse points from the
 opened handle, preventing junction traversal and rename/reparse replacement during path-based
-scandir. File handles become binary CRT descriptors for the same bounded reader used on Unix.
+scandir. Directory handles request LIST_DIRECTORY as well as READ_ATTRIBUTES so Windows enforces
+share checks. File handles become binary CRT descriptors for the same bounded reader used on Unix.
 Win32 imports are lazy so other platforms never load Windows DLLs. No third-party dependency.
 """
 
@@ -58,9 +59,10 @@ def open_path(path: Path, *, directory: bool) -> Iterator[int | str]:
             value = str(current)
             if not value.startswith("\\\\?\\"):
                 value = "\\\\?\\UNC\\" + value[2:] if value.startswith("\\\\") else "\\\\?\\" + value
-            # READ_ATTRIBUTES for directories; GENERIC_READ for files. SHARE_READ only pins
-            # all traversed names and prevents concurrent conversion into a reparse point.
-            handle = create(value, 0x80 if is_directory else 0x80000000, 1, None, 3,
+            # LIST_DIRECTORY | READ_ATTRIBUTES for directories; GENERIC_READ for files.
+            # Attribute-only handles bypass share checks. Data access plus SHARE_READ only
+            # pins every traversed name and prevents concurrent reparse replacement.
+            handle = create(value, 0x81 if is_directory else 0x80000000, 1, None, 3,
                             0x00200000 | 0x02000000, None)
             if handle == ctypes.c_void_p(-1).value:
                 raise ctypes.WinError(ctypes.get_last_error())

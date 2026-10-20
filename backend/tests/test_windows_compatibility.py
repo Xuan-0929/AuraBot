@@ -2,6 +2,8 @@
 
 Portable checks run on every host. Native handle/junction checks run only on Windows and exercise
 the real WorkspaceReader; shutdown uses a real Uvicorn lifespan and an OS pipe without models.
+Rename checks exercise both directory and ancestor locks, then verify release independently of
+junction cleanup so a lock regression reports its original assertion.
 """
 
 import asyncio
@@ -82,7 +84,7 @@ class WindowsCompatibilityTests(unittest.TestCase):
             self.assertEqual(json.loads(config.read_text(encoding="utf-8")), {"defaultModel": "test", "shellPath": str(bash)})
 
     @unittest.skipUnless(sys.platform == "win32", "requires real Windows handles")
-    def test_native_reads_junction_rejection_and_rename_lock(self):
+    def test_native_reads_and_junction_rejection(self):
         with tempfile.TemporaryDirectory(prefix="aura workspace 中文 ") as directory:
             root = Path(directory).resolve()
             workspace, outside = root / "workspace", root / "outside"
@@ -104,9 +106,6 @@ class WindowsCompatibilityTests(unittest.TestCase):
                     reader.read("repo", "junction/private.txt")
                 with self.assertRaises(WorkspaceRegistryError):
                     WorkspaceRegistry({"bad": junction})
-                with open_path(workspace, directory=True):
-                    with self.assertRaises(OSError):
-                        workspace.rename(root / "replaced")
                 with self.assertRaises(ObservationSecurityError):
                     reader.read("repo", "safe.txt:stream")
                 import ctypes
@@ -122,6 +121,25 @@ class WindowsCompatibilityTests(unittest.TestCase):
                         reader.read("repo", alias)
             finally:
                 junction.rmdir()
+
+    @unittest.skipUnless(sys.platform == "win32", "requires real Windows handles")
+    def test_native_directory_handles_block_rename_until_closed(self):
+        with tempfile.TemporaryDirectory(prefix="aura locks 中文 ") as directory:
+            root = Path(directory).resolve()
+            workspace = root / "workspace"
+            nested = workspace / "nested"
+            nested.mkdir(parents=True)
+            replacement = root / "replaced"
+            for target in (workspace, nested):
+                with self.subTest(target=target.name):
+                    try:
+                        with open_path(nested, directory=True):
+                            with self.assertRaises(OSError):
+                                target.rename(replacement)
+                        target.rename(replacement)
+                    finally:
+                        if replacement.exists():
+                            replacement.rename(target)
 
 
 class DesktopShutdownTests(unittest.IsolatedAsyncioTestCase):
