@@ -1,6 +1,7 @@
 /** Composes the desktop shell and one Backend process around a controlled Profile repository.
  * Immutable launch options gate Debug UI/collection and own temporary Memory/Context data until Backend exits.
- * AURABOT_USER_DATA_DIR selects the installation/data root independently of source code.
+ * AURABOT_USER_DATA_DIR selects the installation/data root independently of source code;
+ * applicationPaths shares source setup defaults and keeps Windows persistence in LocalAppData.
  * Profile activation sends frozen conversation settings; IPC redacts every saved/applied voice secret.
  * Main owns sequential speech downloads and profile readiness; migrates configuration, serves owned model packages, serializes selection/application and
  * opens only a repository-owned Profile SOUL path through shell; fences history receipts by their original Profile/generation. Pet alone owns realtime media;
@@ -9,6 +10,7 @@
  * Authenticated Pet voice-state reports gate typed sends in all windows while Realtime is active.
  * Voice documentation requests resolve only allowlisted official URLs and open in the system browser. */
 import {speechAssetPaths} from './speechAssetManifest';
+import {applicationDataRoot} from './applicationPaths';
 import {SpeechAssets} from './speechAssets';
 import {LiveDebugService} from './liveDebug';
 import {LaunchSession,readLaunchOptions} from './launchOptions';
@@ -16,7 +18,7 @@ import {openLiveDebugWindow,broadcastLiveDebug} from './createWindow';
 import { app, net, BrowserWindow, ipcMain, dialog, shell } from 'electron';
 import { join, resolve, dirname } from 'node:path';
 import { randomUUID } from 'node:crypto';
-import { existsSync,readFileSync } from 'node:fs';
+import { existsSync,readFileSync,mkdirSync } from 'node:fs';
 import { createLive2DModelRegistry } from '@core/live2d/modelRegistry';
 import { ProfileRepository, findModelManifests, publicProfileDetail } from '@core/profiles/profileRepository';
 import { t } from '../i18n';
@@ -37,7 +39,9 @@ import { PetWindowStateStore } from './petWindowStateStore';
 import { createPetWindow, openConsoleWindow, openSettingsWindow, applyPetSettings, broadcastLive2DModelState, broadcastChatMessageUpdated, broadcastPetActivity, broadcastAgentStatus, setPetMousePassthrough, movePetWindowBy, resizePetWindowCorner, restorePetWindowBounds } from './createWindow';
 
 registerProfileResourceScheme();
-if(process.env.AURABOT_USER_DATA_DIR)app.setPath('userData',resolve(process.env.AURABOT_USER_DATA_DIR));
+if(process.env.AURABOT_USER_DATA_DIR||process.platform==='win32'){
+ const directory=applicationDataRoot();mkdirSync(directory,{recursive:true});app.setPath('userData',directory);
+}
 const projectRoot=resolve(__dirname,'../../..');
 let launch:LaunchSession|undefined;
 let backend:BackendProcess|undefined;
@@ -52,7 +56,7 @@ const broadcast=(channel:string,value:unknown)=>BrowserWindow.getAllWindows().fo
 
 async function bootstrap(){
  launch=new LaunchSession(readLaunchOptions(process.argv));
- const root=resolve(process.env.AURABOT_USER_DATA_DIR??join(app.getPath('userData'),'desktop-v2'));
+ const root=applicationDataRoot({userData:app.getPath('userData')});
  const settingsPath=join(root,'settings.json');
  const legacySettings=existsSync(settingsPath)?JSON.parse(readFileSync(settingsPath,'utf8')):null;
  const config=desktopConfig=new DesktopConfigStore(root,launch.options);

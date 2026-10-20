@@ -3,6 +3,7 @@
 测试使用临时 Pi Home/session 加载真实 AuraBot Extension，只发送 get_state 后关闭 stdin；
 stderr 独立用 PIPE 捕获启动诊断，不复用生产 DEVNULL 或用户 ``~/.pi/agent``。
 进程组按 Windows/Unix 分别建立，因此同一离线检查可在平台 CI 中执行。
+AURABOT_USER_DATA_DIR 可指定源码安装产物，验证复制后的插件而非依赖源仓库路径。
 """
 
 from __future__ import annotations
@@ -17,9 +18,10 @@ from pathlib import Path
 
 PROJECT_ROOT = Path(__file__).resolve().parents[3]
 NODE = os.environ.get("AURABOT_NODE_EXECUTABLE", "node")
-PI_CLI = PROJECT_ROOT / "pi-runtime/node_modules/@earendil-works/pi-coding-agent/dist/cli.js"
-EXTENSION = PROJECT_ROOT / "pi-aurabot-task/aurabot-task/index.ts"
-SYSTEM_PROMPT = PROJECT_ROOT / "pi-aurabot-task/prompts/task-system.md"
+RUNTIME_ROOT = Path(os.environ.get("AURABOT_USER_DATA_DIR", str(PROJECT_ROOT)))
+PI_CLI = RUNTIME_ROOT / "pi-runtime/node_modules/@earendil-works/pi-coding-agent/dist/cli.js"
+EXTENSION = RUNTIME_ROOT / "pi-aurabot-task/aurabot-task/index.ts"
+SYSTEM_PROMPT = RUNTIME_ROOT / "pi-aurabot-task/prompts/task-system.md"
 
 
 class RealPiOfflineSmokeTests(unittest.IsolatedAsyncioTestCase):

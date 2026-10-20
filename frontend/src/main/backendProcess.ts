@@ -4,6 +4,7 @@
  * Realtime uses core WebSocket dependencies without local inference models. Only the child created here can be stopped. Readiness must match its instance/config revision, and a
  * busy restart must be approved by the user before Backend fences admission. A private stdin pipe
  * requests graceful shutdown on all platforms; a bounded process-tree fallback owns only this child.
+ * Source setup owns dependency installation; uv --no-sync starts the prepared environment without downloads.
  * No automatic restarts.
  */
 import type { LaunchSession } from './launchOptions';
@@ -40,7 +41,7 @@ export class BackendProcess {
     if(this.child) throw new Error('Backend 已经启动');
     await checkPort();
     const snapshot=this.config.snapshot(); this.preparePi(snapshot);const instanceId=randomUUID();
-    const child=spawn('uv',['run','--project',join(this.projectRoot,'backend'),'--extra','speech','python','-m','backend.desktop_runner'],{
+    const child=spawn('uv',['run','--no-sync','--project',join(this.projectRoot,'backend'),'--extra','speech','python','-m','backend.desktop_runner'],{
       cwd:this.projectRoot,stdio:['pipe','ignore','ignore'],windowsHide:true,detached:process.platform!=='win32',env:{...process.env,...(this.launch?.backendEnvironment()??{AURABOT_DEBUG:"0",AURABOT_LOCK_MEMORY:"0",AURABOT_SESSION_DATA_DIR:""}),AURABOT_CONFIG_PATH:this.config.path,AURABOT_BACKEND_INSTANCE:instanceId,AURABOT_TASK_API_KEY:snapshot.backend.task.model.api_key}
     });
     this.child=child;

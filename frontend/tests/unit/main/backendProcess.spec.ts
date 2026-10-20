@@ -1,6 +1,7 @@
 /** Exercises Main's Backend ownership with process/HTTP doubles.
  * Readiness notices remain informational, stdin EOF requests graceful shutdown, and Windows
- * timeout recovery targets only the owned process tree rather than terminating a wrapper alone. */
+ * timeout recovery targets only the owned process tree rather than terminating a wrapper alone.
+ * Source startup must use the prepared environment without synchronizing dependencies. */
 import { EventEmitter } from 'node:events';
 import { mkdtempSync, rmSync } from 'node:fs';
 import { join } from 'node:path';
@@ -22,7 +23,7 @@ it.each([false,true])('uses pipe shutdown and only escalates a stuck owned Windo
  child.stdin.end.mockImplementation(()=>{if(!stuck)queueMicrotask(exit);});
  doubles.spawn.mockImplementation((command,args,options)=>{
    if(command==='taskkill'){expect(args).toEqual(['/PID','12345','/T','/F']);queueMicrotask(exit);return new EventEmitter();}
-   expect(args).toContain('backend.desktop_runner');expect(options.stdio).toEqual(['pipe','ignore','ignore']);
+   expect(args).toContain('backend.desktop_runner');expect(args).toContain('--no-sync');expect(options.stdio).toEqual(['pipe','ignore','ignore']);
    vi.stubGlobal('fetch',vi.fn(async()=>({ok:true,json:async()=>({ready:true,instanceId:options.env.AURABOT_BACKEND_INSTANCE,configRevision:0,launchOptions:{debug:false,lockMemory:false},capabilities:{text:true,voice:true,tasks:false},taskNotice:'git_bash_missing'})})));
    return child;
  });
