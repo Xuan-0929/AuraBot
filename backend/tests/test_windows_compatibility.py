@@ -2,6 +2,8 @@
 
 Portable checks run on every host. Native handle/junction checks run only on Windows and exercise
 the real WorkspaceReader; shutdown uses a real Uvicorn lifespan and an OS pipe without models.
+A fresh-process native startup check keeps the control pipe open while NumPy initializes.
+Readiness retains finite runtime error codes without exposing raw exception content or re-probing.
 Rename checks exercise both directory and ancestor locks, then verify release independently of
 junction cleanup so a lock regression reports its original assertion.
 """
@@ -26,10 +28,31 @@ from backend.main_agent.observations import WorkspaceReader, ObservationSecurity
 from backend.main_agent.settings import WorkspaceRegistry, WorkspaceRegistryError
 from backend.main_agent.tool_runtime import ToolSurfacePolicy
 from backend.main_agent.windows_workspace import open_path, valid_component
-from backend.task.settings import TaskSettings, find_windows_bash
+from backend.task.settings import TaskSettings, TaskSettingsError, find_windows_bash
 
 
 class WindowsCompatibilityTests(unittest.TestCase):
+    def test_runtime_failure_is_retained_as_safe_readiness_code(self):
+        os.environ.setdefault("AURABOT_CONFIG_PATH", str(Path(__file__).parent / "fixtures/runtime_config.json"))
+        from backend.main import build_task_manager
+        from backend.app.gateway.readiness_routes import readiness
+        from unittest.mock import Mock
+        settings = Mock(shell_path="bash")
+        settings.validate_runtime.side_effect = TaskSettingsError("secret-token in raw subprocess output", code="pi_probe_timeout")
+        config = SimpleNamespace(path=Path("settings.json"), get=lambda *args: {"model": {"base_url": "http://localhost", "model_name": "test", "api_key": "key"}})
+        with patch("backend.main.TaskSettings.from_config", return_value=settings), \
+             patch("backend.main.TaskManager", return_value=SimpleNamespace()), patch("backend.main.config", config):
+            manager = build_task_manager()
+        self.assertFalse(manager.capability_available)
+        request = SimpleNamespace(app=SimpleNamespace(state=SimpleNamespace(task_manager=manager, backend_ready=True)))
+        for _ in range(2):
+            result = asyncio.run(readiness(request))
+            self.assertTrue(result["ready"])
+            self.assertEqual(result["taskRuntimeError"], "pi_probe_timeout")
+            self.assertEqual(result["taskNotice"], "pi_probe_timeout")
+            self.assertNotIn("secret-token", json.dumps(result))
+        settings.validate_runtime.assert_called_once()
+
     def test_missing_bash_does_not_fail_backend_composition(self):
         os.environ.setdefault("AURABOT_CONFIG_PATH", str(Path(__file__).parent / "fixtures/runtime_config.json"))
         from backend.main import build_task_manager
@@ -72,6 +95,7 @@ class WindowsCompatibilityTests(unittest.TestCase):
                 with patch("backend.task.settings.subprocess.run", return_value=SimpleNamespace(returncode=0, stdout=b"GNU bash, version 5.2")) as run:
                     self.assertEqual(find_windows_bash(), str(bash.resolve()))
                     self.assertEqual(run.call_args.args[0], [str(bash), "--version"])
+                    self.assertEqual(run.call_args.kwargs["stdin"], subprocess.DEVNULL)
                 with patch("backend.task.settings.subprocess.run", side_effect=subprocess.TimeoutExpired("bash", 3)):
                     self.assertIsNone(find_windows_bash())
                 bash.unlink()
@@ -200,3 +224,40 @@ class DesktopShutdownTests(unittest.IsolatedAsyncioTestCase):
                         os.close(write_fd)
                     await asyncio.wait_for(worker, 3)
                 self.assertTrue(closed.is_set())
+
+class WindowsNativeStartupTests(unittest.IsolatedAsyncioTestCase):
+    """Keep native imports responsive while the desktop shutdown pipe remains open."""
+
+    @unittest.skipUnless(sys.platform == "win32", "requires Windows native module initialization")
+    async def test_numpy_initializes_with_open_parent_pipe(self):
+        code = """
+import asyncio, sys, uvicorn
+from contextlib import asynccontextmanager
+from fastapi import FastAPI
+from backend.desktop_runner import serve
+@asynccontextmanager
+async def lifespan(app):
+    import numpy
+    print('native-runtime-ready', flush=True)
+    yield
+    print('native-runtime-closed', flush=True)
+server = uvicorn.Server(uvicorn.Config(FastAPI(lifespan=lifespan), host='127.0.0.1', port=0, lifespan='on', log_level='critical'))
+asyncio.run(serve(server, sys.stdin))
+"""
+        child = await asyncio.create_subprocess_exec(
+            sys.executable, "-c", code, cwd=Path(__file__).resolve().parents[2],
+            stdin=asyncio.subprocess.PIPE, stdout=asyncio.subprocess.PIPE,
+            stderr=asyncio.subprocess.PIPE, creationflags=subprocess.CREATE_NO_WINDOW,
+        )
+        try:
+            line = await asyncio.wait_for(child.stdout.readline(), 10)
+            self.assertEqual(line.strip(), b"native-runtime-ready")
+        finally:
+            child.stdin.close()
+            try:
+                await asyncio.wait_for(child.wait(), 10)
+            except asyncio.TimeoutError:
+                child.kill()
+                await child.wait()
+        self.assertEqual(child.returncode, 0)
+        self.assertIn(b"native-runtime-closed", await child.stdout.read())

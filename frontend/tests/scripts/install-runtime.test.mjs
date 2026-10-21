@@ -1,6 +1,7 @@
 /** Checks source installer staging without downloads: package links stay within the selected root,
  * and repeated staging preserves user settings/Profile files. Shared platform defaults and model
  * integrity/retry behavior are checked without network access. npm owns dependency installation.
+ * Invalid CLI combinations and help must return without running installers or preparing assets.
  */
 import { test } from 'node:test';
 import assert from 'node:assert/strict';
@@ -13,6 +14,16 @@ import { spawnSync } from 'node:child_process';
 import {createHash} from 'node:crypto';
 import {applicationDataRoot} from '../../src/main/applicationPaths.ts';
 import {prepareSpeechAssets} from '../../scripts/prepare-speech-assets.mjs';
+import {fileURLToPath} from 'node:url';
+
+test('runtime CLI exposes offline/retry modes and rejects conflicting flags before installation',()=>{
+  const cli=fileURLToPath(new URL('../../scripts/install-runtime.mjs',import.meta.url));
+  const help=spawnSync(process.execPath,[cli,'--help'],{encoding:'utf8'});
+  assert.equal(help.status,0,help.stderr);
+  assert.match(help.stdout,/--check/);assert.match(help.stdout,/--runtime-only/);
+  const invalid=spawnSync(process.execPath,[cli,'--check','--runtime-only'],{encoding:'utf8'});
+  assert.equal(invalid.status,1);assert.match(invalid.stderr,/Choose either/);
+});
 
 test('runs npm as JavaScript without a shell, including Windows layouts and metacharacter paths', () => {
   const root=mkdtempSync(join(tmpdir(),'aura npm 中文 & '));

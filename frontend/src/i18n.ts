@@ -1,5 +1,5 @@
 /** Localizes desktop controls and Backend activity states for all windows; Settings consumes the
- * informational Git Bash message without adding application errors or interrupting startup. */
+ * actionable, finite Bash/Node/Pi notices without exposing raw process errors or interrupting startup. */
 /** Localizes the complete Profile workflow and desktop shell and simplified Backend-projected agent states. Includes capability integrations, Pipeline conversation model configuration, search configuration and actionable pet runtime reminders. No runtime state is derived here. */
 /**
  * 提供任务清除、会话显示清除及恢复早期记录的三语文案，由控制台和设置共享。
@@ -65,7 +65,13 @@ const UI_TEXT = {
     serviceDisconnected: "Service disconnected",
     chatNotConfigured: "Chat: model not configured",
     voiceNotConfigured: "Realtime voice: disabled or missing key, SDK, model or license",
-    tasksNotConfigured: "Tasks: model or Pi runtime unavailable",
+    tasksNotConfigured: "Tasks: complete the task model API address, model name and API key, then save and Apply.",
+    node_missing: "Tasks: Node executable not found. Install Node >=22.19, check the Node path under Workspaces → Advanced, then restart AuraBot.",
+    pi_files_missing: "Tasks: Pi files or the extension link are missing. From the source root, run node frontend/scripts/install-runtime.mjs --runtime-only with the same data directory, then Apply.",
+    pi_probe_timeout: "Tasks: Pi version check timed out. Run node frontend/scripts/install-runtime.mjs --check from the source root using the same data directory; after repair, Apply.",
+    pi_probe_failed: "Tasks: Pi could not start. Run node frontend/scripts/install-runtime.mjs --check from the source root using the same data directory; after repair, Apply.",
+    pi_version_mismatch: "Tasks: Pi version differs from the pinned version. Run node frontend/scripts/install-runtime.mjs --runtime-only from the source root using the same data directory, then Apply.",
+    task_runtime_invalid: "Tasks: runtime configuration is invalid. Check Workspaces → Advanced and the source installation guide, then Apply.",
     gitBashMissing: "Git Bash not detected; task execution is unavailable. Chat and voice remain available.",
     generalSettingsHint: "Manage language and common preferences.",
     petBehavior: "Pet Behavior",
@@ -234,7 +240,13 @@ const UI_TEXT = {
     serviceDisconnected: "服务未连接",
     chatNotConfigured: "对话：未配置模型",
     voiceNotConfigured: "实时语音：未启用或缺少密钥、SDK、模型／许可证",
-    tasksNotConfigured: "任务：模型或 Pi runtime 不可用",
+    tasksNotConfigured: "任务：请补全任务模型的 API 地址、模型名和 API Key，然后保存并应用。",
+    node_missing: "任务：找不到 Node。请安装 Node >=22.19，检查工作目录 → 高级中的 Node 路径，然后重启 AuraBot。",
+    pi_files_missing: "任务：Pi 文件或扩展链接缺失。请在源码根目录、相同数据目录环境下运行 node frontend/scripts/install-runtime.mjs --runtime-only，然后点击应用。",
+    pi_probe_timeout: "任务：Pi 版本检查超时。请在源码根目录、相同数据目录环境下运行 node frontend/scripts/install-runtime.mjs --check，修复后点击应用。",
+    pi_probe_failed: "任务：Pi 启动失败。请在源码根目录、相同数据目录环境下运行 node frontend/scripts/install-runtime.mjs --check，修复后点击应用。",
+    pi_version_mismatch: "任务：Pi 版本与项目锁定版本不一致。请在源码根目录、相同数据目录环境下运行 node frontend/scripts/install-runtime.mjs --runtime-only，然后点击应用。",
+    task_runtime_invalid: "任务：运行配置无效。请检查工作目录 → 高级配置及源码安装教程，修复后点击应用。",
     gitBashMissing: "未检测到 Git Bash，任务执行暂不可用；聊天和语音不受影响。",
     generalSettingsHint: "设置语言和常用选项。",
     petBehavior: "桌宠行为",
@@ -406,7 +418,13 @@ const JAPANESE_UI_TEXT: Record<UiTextKey, string> = {
   serviceDisconnected: "サービス未接続",
   chatNotConfigured: "チャット：モデル未設定",
   voiceNotConfigured: "リアルタイム音声：無効、またはキー・SDK・モデル・ライセンスが不足",
-  tasksNotConfigured: "タスク：モデルまたは Pi runtime を利用できません",
+  tasksNotConfigured: "タスク：タスクモデルの API アドレス、モデル名、API キーを入力し、保存して適用してください。",
+  node_missing: "タスク：Node が見つかりません。Node >=22.19 をインストールし、作業フォルダーの詳細設定で Node パスを確認して AuraBot を再起動してください。",
+  pi_files_missing: "タスク：Pi ファイルまたは拡張リンクがありません。同じデータディレクトリ設定でソースルートから node frontend/scripts/install-runtime.mjs --runtime-only を実行し、適用してください。",
+  pi_probe_timeout: "タスク：Pi バージョン確認がタイムアウトしました。同じデータディレクトリ設定でソースルートから node frontend/scripts/install-runtime.mjs --check を実行し、修復後に適用してください。",
+  pi_probe_failed: "タスク：Pi を起動できません。同じデータディレクトリ設定でソースルートから node frontend/scripts/install-runtime.mjs --check を実行し、修復後に適用してください。",
+  pi_version_mismatch: "タスク：Pi のバージョンが一致しません。同じデータディレクトリ設定でソースルートから node frontend/scripts/install-runtime.mjs --runtime-only を実行し、適用してください。",
+  task_runtime_invalid: "タスク：実行設定が無効です。作業フォルダーの詳細設定とソースインストール手順を確認し、適用してください。",
   gitBashMissing: "Git Bash が見つからないため、タスク実行を利用できません。会話と音声は引き続き利用できます。",
   generalSettingsHint: "言語とよく使う設定を管理します。",
   petBehavior: "ペットの動き",

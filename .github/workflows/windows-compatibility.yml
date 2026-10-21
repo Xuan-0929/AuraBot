@@ -32,7 +32,7 @@ jobs:
         env:
           AURABOT_CONFIG_PATH: backend/tests/fixtures/runtime_config.json
         run: |
-          node frontend/scripts/install-runtime.mjs .
+          node frontend/scripts/install-runtime.mjs . --runtime-only
           if ($LASTEXITCODE -ne 0) { exit $LASTEXITCODE }
           uv run --project backend --no-sync python -m unittest backend.tests.task.test_real_pi_smoke
           if ($LASTEXITCODE -ne 0) { exit $LASTEXITCODE }

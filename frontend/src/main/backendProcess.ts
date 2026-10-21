@@ -5,6 +5,7 @@
  * busy restart must be approved by the user before Backend fences admission. A private stdin pipe
  * requests graceful shutdown on all platforms; a bounded process-tree fallback owns only this child.
  * Source setup owns dependency installation; uv --no-sync starts the prepared environment without downloads.
+ * Only allowlisted task readiness codes reach Settings; Apply retries repaired runtimes even without config changes.
  * No automatic restarts.
  */
 import type { LaunchSession } from './launchOptions';
@@ -15,6 +16,7 @@ import { mkdirSync, writeFileSync, renameSync } from 'node:fs';
 import { join } from 'node:path';
 import type { DesktopConfigStore } from './desktopConfigStore';
 import type { ApplyResult, DesktopConfig } from '../shared/contracts/desktop';
+import { taskNoticeSchema } from '../shared/contracts/desktop';
 export const BACKEND_URL='http://127.0.0.1:6401';
 export async function backendJson(path:string,init:RequestInit={}):Promise<any> {
   const response=await fetch(BACKEND_URL+path,{...init,headers:{Origin:'http://127.0.0.1:6400','Content-Type':'application/json',...init.headers},signal:init.signal??AbortSignal.timeout(5000)});
@@ -57,7 +59,7 @@ export class BackendProcess {
           const ready=await backendJson('/api/v1/readiness');
           if(ready.ready&&ready.instanceId===instanceId&&ready.configRevision===snapshot.revision){
             const expected=this.config.launchOptions;
-            if(ready.launchOptions?.debug!==expected.debug||ready.launchOptions?.lockMemory!==expected.lockMemory)throw new Error("Backend 启动模式不匹配");this.config.online=true;this.config.capabilities={text:ready.capabilities?.text===true,voice:ready.capabilities?.voice===true,tasks:ready.capabilities?.tasks===true};this.config.taskNotice=ready.taskNotice==='git_bash_missing'?'git_bash_missing':undefined;this.config.markApplied(snapshot);this.changed();return;}
+            if(ready.launchOptions?.debug!==expected.debug||ready.launchOptions?.lockMemory!==expected.lockMemory)throw new Error("Backend 启动模式不匹配");this.config.online=true;this.config.capabilities={text:ready.capabilities?.text===true,voice:ready.capabilities?.voice===true,tasks:ready.capabilities?.tasks===true};this.config.taskNotice=taskNoticeSchema.safeParse(ready.taskNotice).data;this.config.markApplied(snapshot);this.changed();return;}
         } catch(error) { if(error instanceof Error&&error.message==="Backend 启动模式不匹配")throw error; /* Only transient startup readiness failures are retried. */ }
         await new Promise(resolve=>setTimeout(resolve,200));
       }

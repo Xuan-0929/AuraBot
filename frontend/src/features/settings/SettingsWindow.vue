@@ -2,7 +2,7 @@
      History display clearing calls Main immediately and preserves stored conversations and Backend memory.
      Profile editing owns conversation models and voice; navigation preserves its dirty drafts.
      Main validates settings and masked secrets, while busy restart confirmation fences live work.
-     Missing Windows Git Bash appears only in pet status reminders, without an error dialog. -->
+     Allowlisted Bash/Node/Pi failures appear in pet status reminders with recovery steps; Apply retries repaired runtimes. -->
 <template>
   <main class="settings-window">
     <div class="settings-window-shell settings-v2-layout" :inert="busy ? true : undefined">
@@ -142,6 +142,7 @@ const runtimeHints=computed(()=>{
   if(!capabilities.text)hints.push(t(displayLanguage.value,'chatNotConfigured'));
 
   if(current.taskNotice==='git_bash_missing')hints.push(t(displayLanguage.value,'gitBashMissing'));
+  else if(current.taskNotice)hints.push(t(displayLanguage.value,current.taskNotice));
   else if(!capabilities.tasks)hints.push(t(displayLanguage.value,'tasksNotConfigured'));
   return hints;
 });

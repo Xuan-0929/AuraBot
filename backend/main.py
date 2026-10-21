@@ -8,6 +8,7 @@ keeps Hub.render as its renderer for the entire Profile lifetime. Applied worksp
 snapshot as user-provided names and paths without scanning directories. WebTools uses the configured search adapter for search and read.
 LaunchOptions gates diagnostics and selects isolated Profile storage for fixed-memory runs.
 The production lifespan opens speech log files only for an explicit debug launch.
+Task runtime validation retains a finite readiness error code, without exposing subprocess output or secrets.
 Lazy SeedDuplex adaptors share the Profile debug scope for bounded connection/upload diagnostics.
 Applied Profile voice mode selects lazy Pipeline or SeedDuplex resources; only microphone sessions activate them, independent of legacy enabled flags. Realtime readiness and activation
 use independent credentials and never probe Pipeline STT/TTS, VAD or SmartTurn assets."""
@@ -91,6 +92,7 @@ def build_task_manager() -> TaskManager:
 
     settings = TaskSettings.from_config(config, config.path)
     manager = TaskManager(settings)
+    manager.runtime_error = None
     manager.runtime_notice = "git_bash_missing" if sys.platform == "win32" and settings.shell_path is None else None
     model = config.get("task", {}).get("model", {})
     manager.capability_available = manager.runtime_notice is None and all(model.get(key) for key in ("base_url", "model_name", "api_key"))
@@ -98,9 +100,11 @@ def build_task_manager() -> TaskManager:
         try:
             settings.validate_runtime()
             settings.configure_shell()
-        except TaskSettingsError:
+        except TaskSettingsError as error:
             manager.capability_available = False
-            logger.info("task_capability_unavailable")
+            manager.runtime_error = error.code
+            manager.runtime_notice = error.code
+            logger.info("task_capability_unavailable reason=%s", error.code)
     return manager
 
 

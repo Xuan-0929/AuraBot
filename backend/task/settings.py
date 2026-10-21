@@ -4,7 +4,10 @@ Settings derive durable SQLite/session/Pi-home paths and trusted workspaces, val
 on demand, and forward configured model identity to the subprocess adapter. Missing Pi does not prevent
 Backend startup; TaskManager exposes a disabled capability until the next configured restart.
 Windows shell detection and Pi's shellPath share the same verified executable; missing Bash is a
-non-fatal readiness notice rather than an application error."""
+non-fatal readiness notice rather than an application error. Bash probes use a closed input stream
+so they cannot inherit and block the desktop shutdown control pipe. Pi version validation also
+uses an isolated input stream because it runs while the same parent pipe remains open.
+Validation errors carry finite public codes; subprocess output and exception text stay private."""
 
 from __future__ import annotations
 
@@ -38,7 +41,7 @@ def find_windows_bash() -> str | None:
         if not path.is_file() or any(part.casefold() in {"system32", "sysnative"} for part in path.parts):
             continue
         try:
-            result = subprocess.run([str(path), "--version"], capture_output=True, timeout=3,
+            result = subprocess.run([str(path), "--version"], stdin=subprocess.DEVNULL, capture_output=True, timeout=3,
                                     creationflags=getattr(subprocess, "CREATE_NO_WINDOW", 0))
             if result.returncode == 0 and b"GNU bash" in result.stdout:
                 return str(path.resolve())
@@ -49,6 +52,10 @@ def find_windows_bash() -> str | None:
 
 class TaskSettingsError(RuntimeError):
     """Raised when the Pi Runtime configuration cannot be used safely."""
+
+    def __init__(self, message: str, *, code: str = "task_runtime_invalid"):
+        super().__init__(message)
+        self.code = code
 
 
 def _resolve_path(value: str, root: Path) -> Path:
@@ -165,30 +172,35 @@ class TaskSettings:
             else self.node_executable
         )
         if not node or not Path(node).is_file():
-            raise TaskSettingsError(f"Node executable not found: {self.node_executable}")
+            raise TaskSettingsError(f"Node executable not found: {self.node_executable}", code="node_missing")
         for label, path in (
             ("Pi CLI", self.pi_cli_path),
             ("AuraBot Pi extension", self.plugin_entry_path),
             ("AuraBot Task system prompt", self.system_prompt_path),
         ):
             if not path.is_file():
-                raise TaskSettingsError(f"{label} not found: {path}")
+                raise TaskSettingsError(f"{label} not found: {path}", code="pi_files_missing")
 
         try:
             completed = subprocess.run(
                 [str(node), str(self.pi_cli_path), "--version"],
                 check=False,
+                stdin=subprocess.DEVNULL,
                 capture_output=True,
                 text=True,
                 timeout=self.startup_timeout_seconds,
                 creationflags=getattr(subprocess, "CREATE_NO_WINDOW", 0),
             )
-        except (OSError, subprocess.TimeoutExpired) as exc:
-            raise TaskSettingsError(f"Failed to execute pinned Pi CLI: {exc}") from exc
+        except subprocess.TimeoutExpired as exc:
+            raise TaskSettingsError(f"Pi version probe timed out after {self.startup_timeout_seconds}s: {self.pi_cli_path}", code="pi_probe_timeout") from exc
+        except OSError as exc:
+            raise TaskSettingsError(f"Failed to execute pinned Pi CLI: {self.pi_cli_path}", code="pi_probe_failed") from exc
         reported = completed.stdout.strip()
-        if completed.returncode != 0 or reported != EXPECTED_PI_VERSION:
+        if completed.returncode != 0:
+            raise TaskSettingsError(f"Pi version probe failed (exit {completed.returncode}): {self.pi_cli_path}", code="pi_probe_failed")
+        if reported != EXPECTED_PI_VERSION:
             raise TaskSettingsError(
-                f"Pinned Pi CLI must report {EXPECTED_PI_VERSION}; got {reported or 'no version'}."
+                f"Pinned Pi CLI must report {EXPECTED_PI_VERSION}: {self.pi_cli_path}", code="pi_version_mismatch"
             )
 
     def configure_shell(self) -> None:

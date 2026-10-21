@@ -2,6 +2,7 @@
  * Runs the real Electron windows, Python child and SQLite delivery path with isolated application data.
  * A local deterministic Chat Completions server checks transport integration without claiming real model,
  * Pi or microphone acceptance. The first launch also exercises the packaged AudioWorklet and Pet controls.
+ * Source startup opens a visible console automatically; opening it again reuses the same window.
  * Saved/applied revisions, busy restart cancellation and port ownership cross real desktop interfaces;
  * real provider/hardware smoke remains a separate manual check.
  */
@@ -26,6 +27,11 @@ test('fresh desktop renders Hiyori, exposes unavailable models and applies saved
  const {electronApp,pet,userDataDir}=await launch();
  try{
   await ready(pet);
+  await expect.poll(()=>electronApp.windows().filter(page=>page.url().endsWith('#console')).length).toBe(1);
+  const consolePage=electronApp.windows().find(page=>page.url().endsWith('#console'))!;
+  const consoleWindow=await electronApp.browserWindow(consolePage);
+  expect(await consoleWindow.evaluate(window=>window.isVisible())).toBe(true);
+  await pet.bringToFront();
   await expect.poll(()=>pet.evaluate(()=>{
     const canvas=document.querySelector('canvas');if(!canvas)return false;
     const gl=canvas.getContext('webgl2')??canvas.getContext('webgl');if(!gl)return false;
@@ -82,7 +88,8 @@ test('fresh desktop renders Hiyori, exposes unavailable models and applies saved
   await settings.getByRole('button',{name:'应用',exact:true}).click();
   await expect(settings.locator('.profile-save-bar [role=status]')).toHaveText('已应用',{timeout:40000});
   expect((await status()).processId).toBe(initial.processId);
-  const consolePromise=electronApp.waitForEvent('window');await pet.evaluate(()=>window.aurabot.openConsoleWindow());const consolePage=await consolePromise;
+  await pet.evaluate(()=>window.aurabot.openConsoleWindow());
+  expect(electronApp.windows().filter(page=>page.url().endsWith('#console'))).toHaveLength(1);
   await pet.bringToFront();await pet.locator('.pet-action-console').focus();
   await expect(pet.locator('.pet-action-console')).toHaveCSS('opacity','1');
   await expect(pet.locator('.pet-action-console')).toHaveCSS('background-color','rgba(0, 0, 0, 0)');

@@ -1,6 +1,7 @@
 /** Installs a source checkout using Node/npm and uv without a platform-specific shell.
  * Runs frozen frontend/Python installs and prepares Electron native modules before staging
  * local Pi and verified speech assets, so first launch uses already-prepared dependencies.
+ * The runtime installer checks the actual Python/Node/Pi paths before setup can report success.
  * Shares Electron's data-root selection; existing settings/Profile data are never rewritten.
  * Requires Node >=22.19 (native TypeScript loading) and uv on PATH; no global Pi installation.
  */
@@ -8,8 +9,6 @@ import {spawnSync} from 'node:child_process';
 import {fileURLToPath} from 'node:url';
 import {parseArgs} from 'node:util';
 import {npmCommand} from './npm-command.mjs';
-import {installRuntime} from './install-runtime.mjs';
-import {applicationDataRoot} from '../src/main/applicationPaths.ts';
 
 try {
  const {values}=parseArgs({options:{help:{type:'boolean',short:'h'}},allowPositionals:false});
@@ -18,6 +17,8 @@ try {
  }else{
   const [major,minor]=process.versions.node.split('.').map(Number);
   if(major<22||(major===22&&minor<19))throw new Error('Install Node.js >=22.19 before source setup.');
+  const {installRuntime}=await import('./install-runtime.mjs');
+  const {applicationDataRoot}=await import('../src/main/applicationPaths.ts');
   const cwd=fileURLToPath(new URL('../../',import.meta.url));
   const run=(command,args,directory=cwd)=>{
    const result=spawnSync(command,args,{cwd:directory,stdio:'inherit',windowsHide:true});

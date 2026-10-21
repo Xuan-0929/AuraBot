@@ -3,14 +3,18 @@
 
 测试使用临时目录构造真实 Node/Pi/Package 路径，确保 Python 只启动配置载体中的绝对
 CLI，并把所有 Task 数据和 Pi Home 固定在 AuraBot user data 下。
+版本检测在父输入管道保持打开时也必须完成，避免桌面启动超时。
+安装器的离线 CLI 复用相同校验，报告实际路径且不读写用户配置。
 """
 
 from __future__ import annotations
 
 import tempfile
+import subprocess
 import sys
 import unittest
 from pathlib import Path
+from unittest.mock import patch
 
 from backend.task.settings import EXPECTED_PI_VERSION, TaskSettings, TaskSettingsError
 
@@ -28,6 +32,27 @@ class TaskSettingsTests(unittest.TestCase):
         plugin.write_text("// fake extension\n", encoding="utf-8")
         prompt.write_text("prompt\n", encoding="utf-8")
         return runtime, Path(sys.executable)
+
+    def test_probe_failures_have_distinct_codes_without_raw_output(self):
+        with tempfile.TemporaryDirectory() as directory:
+            root = Path(directory)
+            runtime, node = self.make_runtime(root)
+            settings = TaskSettings.from_mapping({"task": {"pi_runtime_dir": str(runtime), "node_executable": str(node)}}, config_root=root)
+            for result, code in (
+                (subprocess.TimeoutExpired("private-command", 15, output="secret-token"), "pi_probe_timeout"),
+                (OSError("secret-token"), "pi_probe_failed"),
+                (subprocess.CompletedProcess([], 1, "secret-token", "secret-token"), "pi_probe_failed"),
+                (subprocess.CompletedProcess([], 0, "secret-token", ""), "pi_version_mismatch"),
+            ):
+                with self.subTest(code=code), patch("backend.task.settings.subprocess.run") as run:
+                    if isinstance(result, Exception):
+                        run.side_effect = result
+                    else:
+                        run.return_value = result
+                    with self.assertRaises(TaskSettingsError) as raised:
+                        settings.validate_runtime()
+                    self.assertEqual(raised.exception.code, code)
+                    self.assertNotIn("secret-token", str(raised.exception))
 
     def test_derives_isolated_paths_and_defaults(self):
         with tempfile.TemporaryDirectory() as directory:
@@ -61,6 +86,53 @@ class TaskSettingsTests(unittest.TestCase):
             self.assertFalse(hasattr(settings, "concurrency_limit"))
             self.assertFalse(hasattr(settings, "waiting_process_grace_seconds"))
             self.assertFalse(hasattr(settings, "stderr_tail_bytes"))
+
+    def test_version_probe_does_not_inherit_open_parent_stdin(self):
+        with tempfile.TemporaryDirectory() as directory:
+            root = Path(directory)
+            runtime, node = self.make_runtime(root)
+            cli = runtime / "node_modules/@earendil-works/pi-coding-agent/dist/cli.js"
+            cli.write_text("import sys; sys.stdin.read(); print('0.84.2')\n", encoding="utf-8")
+            mapping = {"task": {"pi_runtime_dir": str(runtime), "node_executable": str(node)}}
+            code = (
+                "from pathlib import Path; from backend.task.settings import TaskSettings; "
+                f"TaskSettings.from_mapping({mapping!r}, config_root=Path({str(root)!r})).validate_runtime(); "
+                "print('probe-ready', flush=True)"
+            )
+            with subprocess.Popen([sys.executable, "-c", code],
+                cwd=Path(__file__).resolve().parents[3], stdin=subprocess.PIPE,
+                stdout=subprocess.PIPE, stderr=subprocess.PIPE) as child:
+                try:
+                    child.wait(timeout=10)
+                finally:
+                    child.stdin.close()
+                    try:
+                        child.wait(timeout=5)
+                    except subprocess.TimeoutExpired:
+                        child.kill()
+                        child.wait()
+                self.assertEqual(child.returncode, 0, child.stderr.read().decode(errors="replace"))
+                self.assertIn(b"probe-ready", child.stdout.read())
+
+    def test_offline_installer_check_reports_paths_and_missing_files_without_reading_settings(self):
+        with tempfile.TemporaryDirectory(prefix="aura runtime 中文 ") as directory:
+            root = Path(directory)
+            runtime, node = self.make_runtime(root)
+            saved = root / "settings.json"
+            saved.write_text("not JSON; must not read or overwrite", encoding="utf-8")
+            command = [sys.executable, "-m", "backend.task.check_runtime", "--data-dir", str(root), "--node", str(node)]
+            options = dict(cwd=Path(__file__).resolve().parents[3], stdin=subprocess.DEVNULL, capture_output=True, timeout=15)
+            result = subprocess.run(command, **options)
+            self.assertEqual(result.returncode, 0, result.stderr)
+            self.assertIn(b"local runtime check passed", result.stdout)
+            self.assertIn(b"Python:", result.stdout)
+            prompt = runtime / "node_modules/@scpz24/pi-aurabot-task/prompts/task-system.md"
+            prompt.unlink()
+            result = subprocess.run(command, **options)
+            self.assertEqual(result.returncode, 1)
+            self.assertIn(b"pi_files_missing", result.stderr)
+            self.assertIn(b"task-system.md", result.stderr)
+            self.assertEqual(saved.read_text(encoding="utf-8"), "not JSON; must not read or overwrite")
 
     def test_validates_exact_pinned_cli_version(self):
         with tempfile.TemporaryDirectory() as directory:

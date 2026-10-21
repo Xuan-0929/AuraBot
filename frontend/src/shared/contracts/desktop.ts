@@ -4,7 +4,7 @@
  * Legacy desktop speech fields remain readable for old settings files; active Profiles supply all conversation settings.
  * Speech settings migrate absent engine choices to Pipeline, strip legacy enabled flags, and keep SeedDuplex credentials independent; the Pet microphone owns session activation.
  * ProfileRuntimeState projects Realtime text-input ownership to every desktop window.
- * Settings-only task notices describe optional Windows dependencies without becoming runtime errors.
+ * Settings-only task notices allowlist dependency/validation codes, keeping subprocess output out of renderer state.
  */
 import { z } from 'zod';
 import type { Message } from '../schemas/message';
@@ -28,8 +28,9 @@ export const desktopConfigSchema = z.object({
   desktop:z.object({pet:petSettingsSchema})
 });
 export type DesktopConfig = z.infer<typeof desktopConfigSchema>;
+export const taskNoticeSchema = z.enum(['git_bash_missing', 'node_missing', 'pi_files_missing', 'pi_probe_timeout', 'pi_probe_failed', 'pi_version_mismatch', 'task_runtime_invalid']);
 export interface LaunchOptions { readonly debug:boolean; readonly lockMemory:boolean; }
-export interface SettingsState { launchOptions:LaunchOptions; config:DesktopConfig; appliedRevision:number|null; pending:boolean; backendPending:boolean; online:boolean; capabilities?:{text:boolean;voice:boolean;tasks:boolean}; taskNotice?:'git_bash_missing'; error?:string; secrets:Record<string,boolean>; secretPreviews?:Record<string,string>; }
+export interface SettingsState { launchOptions:LaunchOptions; config:DesktopConfig; appliedRevision:number|null; pending:boolean; backendPending:boolean; online:boolean; capabilities?:{text:boolean;voice:boolean;tasks:boolean}; taskNotice?:z.infer<typeof taskNoticeSchema>; error?:string; secrets:Record<string,boolean>; secretPreviews?:Record<string,string>; }
 export interface BusyState { tasks:number; memoryWriting:boolean; mainAgent:boolean; }
 export interface ApplyResult { state:SettingsState; busy?:BusyState; }
 export interface HistoryEntry { profileId?:string; generation?:number; id:string; role:'user'|'assistant'; content:string; }

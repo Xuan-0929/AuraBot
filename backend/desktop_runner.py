@@ -4,6 +4,8 @@ Electron keeps stdin open for this process and closes it on Apply/quit. A daemon
 Uvicorn's normal shutdown on EOF, including when Electron crashes, so FastAPI lifespan can close
 Profiles, voice and Task processes on Windows without relying on POSIX signals. No HTTP shutdown
 endpoint is exposed. The standalone uvicorn development entry remains available independently.
+On Windows the NumPy runtime is initialized before the blocking input watcher, avoiding native
+module initialization stalls during later Profile activation.
 """
 
 from __future__ import annotations
@@ -17,6 +19,9 @@ import uvicorn
 
 
 async def serve(server: uvicorn.Server, control: TextIO) -> None:
+    if sys.platform == "win32":
+        import numpy  # Initialize native libraries before the shutdown watcher blocks on stdin.
+
     loop = asyncio.get_running_loop()
 
     def wait_for_parent() -> None:

@@ -1,7 +1,8 @@
 /** Exercises Main's Backend ownership with process/HTTP doubles.
  * Readiness notices remain informational, stdin EOF requests graceful shutdown, and Windows
  * timeout recovery targets only the owned process tree rather than terminating a wrapper alone.
- * Source startup must use the prepared environment without synchronizing dependencies. */
+ * Source startup must use the prepared environment without synchronizing dependencies.
+ * Repaired Bash/Pi installations must be rechecked by Apply without requiring a settings edit. */
 import { EventEmitter } from 'node:events';
 import { mkdtempSync, rmSync } from 'node:fs';
 import { join } from 'node:path';
@@ -36,7 +37,7 @@ it.each([false,true])('uses pipe shutdown and only escalates a stuck owned Windo
  } finally {rmSync(root,{recursive:true,force:true});}
 });
 
-it('rechecks missing Bash on Apply even when saved configuration has not changed',async()=>{
+it.each(['git_bash_missing','pi_files_missing','pi_probe_timeout','pi_probe_failed','pi_version_mismatch','node_missing','task_runtime_invalid'])('rechecks %s on Apply even when saved configuration has not changed',async(notice)=>{
  const root=mkdtempSync(join(tmpdir(),'aura-bash-retry-'));const config=new DesktopConfigStore(root);
  let starts=0;let identity='';const pipes:Array<ReturnType<typeof vi.fn>>=[];
  doubles.spawn.mockImplementation((_command,_args,options)=>{
@@ -45,10 +46,10 @@ it('rechecks missing Bash on Apply even when saved configuration has not changed
    child.stdin.end.mockImplementation(()=>queueMicrotask(()=>{child.exitCode=0;child.emit('exit',0);}));pipes.push(child.stdin.end);
    return child;
  });
- vi.stubGlobal('fetch',vi.fn(async()=>({ok:true,json:async()=>({ready:true,instanceId:identity,configRevision:0,launchOptions:{debug:false,lockMemory:false},capabilities:{text:true,voice:true,tasks:starts>1},taskNotice:starts===1?'git_bash_missing':null})})));
+ vi.stubGlobal('fetch',vi.fn(async()=>({ok:true,json:async()=>({ready:true,instanceId:identity,configRevision:0,launchOptions:{debug:false,lockMemory:false},capabilities:{text:true,voice:true,tasks:starts>1},taskNotice:starts===1?notice:null})})));
  const backend=new BackendProcess(config,root,()=>{});
  try{
-   await backend.start();expect(config.status().backendPending).toBe(false);
+   await backend.start();expect(config.status().backendPending).toBe(false);expect(config.status().taskNotice).toBe(notice);
    await backend.apply();expect(starts).toBe(2);expect(pipes[0]).toHaveBeenCalledOnce();
    expect(config.online).toBe(true);expect(config.status().taskNotice).toBeUndefined();expect(config.capabilities?.tasks).toBe(true);
  }finally{await backend.stop();rmSync(root,{recursive:true,force:true});}

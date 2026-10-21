@@ -4,6 +4,7 @@
  * recoverable server errors, and masked-key preservation/replacement/deletion through the real save
  * store, separate workspace and pet status navigation with actionable runtime reminders and localized status labels and native search-provider dropdown selection, including length-matched first/last-four previews and launch-gated debug actions that preserve unrelated drafts, without starting Electron or a backend.
  * Global navigation excludes voice; Profile editor tests cover conversation settings and mode changes.
+ * Dependency failures expose localized recovery instructions and keep Apply available for a retry.
  * Provider help buttons dispatch fixed document identities without saving and surface browser-opening failures. */
 // @vitest-environment jsdom
 import { createApp, nextTick } from 'vue';
@@ -18,16 +19,16 @@ import { t } from '../../../src/i18n';
 import {useAuraBotStore} from '../../../src/app/store';
 let dispose:()=>void=()=>{};
 afterEach(()=>{dispose();vi.unstubAllGlobals();});
-it('shows missing Git Bash only as a brief pet-status hint without an alert',async()=>{
+it.each(['git_bash_missing','node_missing','pi_files_missing','pi_probe_timeout','pi_probe_failed','pi_version_mismatch','task_runtime_invalid'] as const)('shows %s as an actionable pet-status hint without an alert',async(notice)=>{
  const root=mkdtempSync(join(tmpdir(),'aura-bash-hint-'));const config=new DesktopConfigStore(root);
- config.online=true;config.capabilities={text:true,voice:true,tasks:false};config.taskNotice='git_bash_missing';
+ config.online=true;config.capabilities={text:true,voice:true,tasks:false};config.taskNotice=notice;
  Object.assign(window,{aurabot:{getSettings:async()=>config.status(),onSettingsChanged:()=>()=>{}}});
  const host=document.createElement('div');document.body.append(host);const app=createApp(SettingsWindow);app.use(createPinia());app.mount(host);
  dispose=()=>{app.unmount();host.remove();rmSync(root,{recursive:true,force:true});};
  await vi.waitFor(()=>expect(host.querySelector('form')).not.toBeNull());
  expect(host.textContent).not.toContain('Git Bash');expect(host.querySelector('[role=alert]')).toBeNull();
  [...host.querySelectorAll<HTMLButtonElement>('nav button')].find(button=>button.textContent==='桌宠状态')!.click();await nextTick();
- expect(host.textContent).toContain(t('zh','gitBashMissing'));expect(host.textContent).not.toContain(t('zh','tasksNotConfigured'));
+ expect(host.textContent).toContain(t('zh',notice==='git_bash_missing'?'gitBashMissing':notice));expect(host.textContent).not.toContain(t('zh','tasksNotConfigured'));
  expect(host.querySelector('[role=alert]')).toBeNull();expect(host.querySelector('[role=alertdialog]')).toBeNull();
  expect([...host.querySelectorAll<HTMLButtonElement>('button')].find(button=>button.textContent==='应用')!.disabled).toBe(false);
 });

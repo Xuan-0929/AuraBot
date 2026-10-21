@@ -6,6 +6,7 @@
  * Main owns sequential speech downloads and profile readiness; migrates configuration, serves owned model packages, serializes selection/application and
  * opens only a repository-owned Profile SOUL path through shell; fences history receipts by their original Profile/generation. Pet alone owns realtime media;
  * History display cutoffs persist independently; explicit clears and Profile switches hide existing rows.
+ * Source development opens the console so startup is visible even without a configured transparent Pet avatar.
  * Backend exclusively owns Context, Memory, task state and the active business lifecycle.
  * Authenticated Pet voice-state reports gate typed sends in all windows while Realtime is active.
  * Voice documentation requests resolve only allowlisted official URLs and open in the system browser. */
@@ -236,6 +237,7 @@ async function bootstrap(){
  handle(C.movePetWindowBy,(event,delta)=>{assertPet(event);movePetWindowBy(movement(delta));});
  handle(C.resizePetWindowCorner,(event,value)=>{assertPet(event);if(!['n','s','e','w','nw','ne','sw','se'].includes(value.direction))throw new Error('无效方向');resizePetWindowCorner(value.direction,movement(value.movement));});
  pet=createPetWindow({settings:config.current().desktop.pet,live2dModelState:modelState(),savedBounds:bounds.getBounds(runtime.selectedId),onBoundsChanged:value=>bounds.saveBounds(value,runtime.selectedId)});
+ if(!app.isPackaged)openConsoleWindow();
  if(liveDebug){await liveDebug.setEnabled(true);openLiveDebugWindow();}
  pet.webContents.on('render-process-gone',()=>{petReady=false;for(const item of pending.values()){clearTimeout(item.timer);item.reject(new Error('桌宠窗口已断开'));}pending.clear();});
  try{await backend.start();await activate(runtime.selectedId,true,false,true);}catch(error){config.error=error instanceof Error?error.message:'Backend 启动失败';changed();openSettingsWindow();}

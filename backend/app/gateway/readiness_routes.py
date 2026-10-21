@@ -2,7 +2,9 @@
 
 Unlike the exact process liveness route, readiness reflects lifespan admission and local owner state.
 It reads no model, embedding, Qdrant, provider, network, or Task subprocess health endpoint and never
-creates product Tasks. Missing Windows Bash is an informational code consumed only by Settings.
+creates product Tasks. A retained finite startup error code explains a disabled Pi runtime without
+running another probe or exposing raw exceptions, subprocess output, paths or credentials.
+Missing Windows Bash is an informational code consumed only by Settings.
 Immutable launch options and fixture identity accompany readiness, never user settings. Metrics are an optional bounded in-memory diagnostic snapshot with no content.
 """
 
@@ -40,6 +42,7 @@ async def readiness(request: Request) -> dict[str, Any]:
         "processId": os.getpid(),
         "instanceId": os.environ.get("AURABOT_BACKEND_INSTANCE", ""),
         "capabilities": getattr(application.state, "capabilities", {}),
+        "taskRuntimeError": getattr(getattr(application.state, "task_manager", None), "runtime_error", None),
         "taskNotice": getattr(getattr(application.state, "task_manager", None), "runtime_notice", None),
         "components": components,
     }
